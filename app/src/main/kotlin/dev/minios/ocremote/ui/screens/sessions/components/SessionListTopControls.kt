@@ -1,11 +1,10 @@
 package dev.minios.ocremote.ui.screens.sessions.components
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.togetherWith
-import androidx.compose.animation.using
 import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.core.tween
@@ -20,7 +19,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -95,9 +93,13 @@ fun SessionListTopControls(
                 AnimatedContent(
                     targetState = expanded,
                     transitionSpec = {
-                        (fadeIn(animationSpec = tween(300)) + expandHorizontally(animationSpec = tween(300))) togetherWith
-                            (fadeOut(animationSpec = tween(220)) + shrinkHorizontally(animationSpec = tween(300))) using
-                            SizeTransform(clip = false)
+                        ContentTransform(
+                            targetContentEnter = fadeIn(animationSpec = tween(300)) +
+                                expandHorizontally(animationSpec = tween(300)),
+                            initialContentExit = fadeOut(animationSpec = tween(220)) +
+                                shrinkHorizontally(animationSpec = tween(300)),
+                            sizeTransform = SizeTransform(clip = false),
+                        )
                     },
                     label = "session_list_search_expand",
                 ) { isExpanded ->

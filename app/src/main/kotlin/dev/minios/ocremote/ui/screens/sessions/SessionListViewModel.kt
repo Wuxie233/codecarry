@@ -188,6 +188,7 @@ class SessionListViewModel @Inject constructor(
                 )
             }
             .sortedByDescending { it.updatedAt }
+            .toList()
 
         val (rootSessions, childSessions) = serverScopedSessions.partition { it.parentId == null }
         val childBuckets = childSessions.groupBy { it.parentId!! }
