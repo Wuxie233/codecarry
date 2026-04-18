@@ -129,6 +129,12 @@
     <string name="session_changes_additions">+%1$d</string>
     <string name="session_changes_deletions">-%1$d</string>
     <string name="session_untitled">Untitled session</string>
+    <string name="sessions_active_subagents_title">Active Subagents · %1$d</string>
+    <string name="session_agent_none">agent</string>
+    <string name="session_time_now">now</string>
+    <string name="session_time_minutes">%1$dm</string>
+    <string name="session_time_hours">%1$dh</string>
+    <string name="session_time_days">%1$dd</string>
     <string name="session_unknown_error">Unknown error</string>
     
     <!-- Chat Screen -->
