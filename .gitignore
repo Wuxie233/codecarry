@@ -64,3 +64,4 @@ fastlane/readme.md
 
 # Worktrees
 .worktrees/
+.ace-tool/
