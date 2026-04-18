@@ -7,6 +7,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.shrinkHorizontally
@@ -24,6 +25,7 @@ import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -32,6 +34,9 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -55,6 +60,9 @@ import java.text.SimpleDateFormat
 import java.util.*
 import androidx.compose.animation.core.*
 import androidx.compose.ui.graphics.graphicsLayer
+import dev.minios.ocremote.ui.screens.sessions.components.ActiveSubagentBanner
+import dev.minios.ocremote.ui.screens.sessions.components.ProjectGroupHeader
+import dev.minios.ocremote.ui.screens.sessions.components.SessionListTopControls
 
 @Composable
 private fun isAmoledTheme(): Boolean {
@@ -113,7 +121,7 @@ private fun PulsingDotsIndicator(
  * Session List Screen - shows all sessions for a connected server,
  * grouped by project. Tapping a session navigates to the chat screen.
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun SessionListScreen(
     onNavigateToChat: (sessionId: String, openTerminal: Boolean) -> Unit,
@@ -122,6 +130,8 @@ fun SessionListScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val isAmoled = isAmoledTheme()
+    val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
     // Navigate to newly created session
     LaunchedEffect(viewModel) {
         viewModel.navigateToSession
@@ -206,7 +216,7 @@ fun SessionListScreen(
                     onClick = {
                         // If there are known projects, show the quick dialog first;
                         // otherwise go straight to the full directory browser.
-                        if (uiState.sessionGroups.isNotEmpty()) {
+                        if (uiState.groups.isNotEmpty()) {
                             showQuickNewSession = true
                         } else {
                             showOpenProject = true
@@ -244,7 +254,7 @@ fun SessionListScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            val allSessions = uiState.sessionGroups.flatMap { it.sessions }
+            val allSessions = uiState.groups.flatMap { it.sessions }
             when {
                 uiState.isLoading && allSessions.isEmpty() -> {
                     PulsingDotsIndicator(
@@ -304,40 +314,88 @@ fun SessionListScreen(
                     }
                 }
                 else -> {
-                    LazyColumn(
+                    Column(
                         modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        for (group in uiState.sessionGroups) {
-                            items(group.sessions, key = { it.session.id }) { item ->
-                                val untitledLabel = stringResource(R.string.session_untitled)
-                                val dirLabel = group.sessionDirLabels[item.session.id]
-                                    ?: group.directory.ifEmpty { group.projectName }
-                                SessionRow(
-                                    item = item,
-                                    projectName = dirLabel,
-                                    isSelectionMode = uiState.isSelectionMode,
-                                    isSelected = item.session.id in uiState.selectedIds,
-                                    onClick = {
-                                        if (uiState.isSelectionMode) {
-                                            viewModel.toggleSelection(item.session.id)
-                                        } else {
-                                            onNavigateToChat(item.session.id, false)
-                                        }
-                                    },
-                                    onLongClick = { viewModel.toggleSelection(item.session.id) },
-                                    onRename = {
-                                        renameSessionId = item.session.id
-                                        renameText = item.session.title ?: ""
-                                        showRenameDialog = true
-                                    },
-                                    onDelete = {
-                                        deleteSessionId = item.session.id
-                                        deleteSessionTitle = item.session.title ?: untitledLabel
-                                        showDeleteDialog = true
+                        ActiveSubagentBanner(
+                            items = uiState.activeSubagents,
+                            onClick = { sessionId -> onNavigateToChat(sessionId, false) },
+                        )
+
+                        if (!uiState.isSelectionMode) {
+                            SessionListTopControls(
+                                searchQuery = uiState.searchQuery,
+                                onSearchQueryChange = viewModel::setSearchQuery,
+                                sort = uiState.sort,
+                                onSortChange = viewModel::setSort,
+                                filter = uiState.filter,
+                                onFilterChange = viewModel::setFilter,
+                            )
+                        }
+
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            for (group in uiState.groups) {
+                                stickyHeader(key = "header_${group.directory}") {
+                                    ProjectGroupHeader(
+                                        projectName = group.projectName,
+                                        tildeDirectory = group.tildeDirectory,
+                                        sessionCount = group.sessionCount,
+                                        activeCount = group.activeCount,
+                                        additions = group.additionsSum,
+                                        deletions = group.deletionsSum,
+                                        isPinned = group.isPinned,
+                                        isCollapsed = group.isCollapsed,
+                                        onToggleCollapsed = { viewModel.toggleCollapsed(group.directory) },
+                                        onTogglePinned = { viewModel.togglePinned(group.directory) },
+                                        onNewSession = { viewModel.createNewSession(directory = group.directory) },
+                                        onCopyPath = {
+                                            clipboard.setText(AnnotatedString(group.directory))
+                                            Toast.makeText(context, context.getString(R.string.sessions_project_path_copied), Toast.LENGTH_SHORT).show()
+                                        },
+                                        onArchiveAll = { viewModel.archiveProjectSessions(group.directory) },
+                                    )
+                                }
+
+                                if (!group.isCollapsed) {
+                                    items(group.sessions, key = { it.session.id }) { item ->
+                                        val untitledLabel = stringResource(R.string.session_untitled)
+                                        val dirLabel = group.sessionDirLabels[item.session.id]
+                                            ?: group.tildeDirectory.ifEmpty { group.projectName }
+                                        SessionRowWithSubagents(
+                                            item = item,
+                                            subagents = group.subagentsByParent[item.session.id].orEmpty(),
+                                            projectName = dirLabel,
+                                            isSelectionMode = uiState.isSelectionMode,
+                                            isSelected = item.session.id in uiState.selectedIds,
+                                            onClick = {
+                                                if (uiState.isSelectionMode) {
+                                                    viewModel.toggleSelection(item.session.id)
+                                                } else {
+                                                    onNavigateToChat(item.session.id, false)
+                                                }
+                                            },
+                                            onLongClick = { viewModel.toggleSelection(item.session.id) },
+                                            onRename = {
+                                                renameSessionId = item.session.id
+                                                renameText = item.session.title ?: ""
+                                                showRenameDialog = true
+                                            },
+                                            onDelete = {
+                                                deleteSessionId = item.session.id
+                                                deleteSessionTitle = item.session.title ?: untitledLabel
+                                                showDeleteDialog = true
+                                            },
+                                            onSubagentClick = { sessionId ->
+                                                onNavigateToChat(sessionId, false)
+                                            },
+                                        )
                                     }
-                                )
+                                }
                             }
                         }
                     }
@@ -348,7 +406,7 @@ fun SessionListScreen(
 
     // Quick new session dialog (recent projects)
     if (showQuickNewSession) {
-        val allSessions = uiState.sessionGroups.flatMap { it.sessions }
+        val allSessions = uiState.groups.flatMap { it.sessions }
         NewSessionQuickDialog(
             sessions = allSessions,
             onSelectDirectory = { directory ->
@@ -505,37 +563,157 @@ fun SessionListScreen(
     }
 }
 
+
 @Composable
-private fun ProjectHeader(
-    name: String,
-    sessionCount: Int
+private fun SessionRowWithSubagents(
+    item: SessionItem,
+    subagents: List<SessionItem>,
+    projectName: String?,
+    isSelectionMode: Boolean,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+    onRename: () -> Unit,
+    onDelete: () -> Unit,
+    onSubagentClick: (sessionId: String) -> Unit,
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 16.dp, bottom = 4.dp, start = 4.dp, end = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    var expanded by rememberSaveable(item.session.id) { mutableStateOf(false) }
+    val colors = MaterialTheme.colorScheme
+
+    Column(
+        modifier = Modifier.animateContentSize(),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Icon(
-            Icons.Default.Folder,
-            contentDescription = null,
-            modifier = Modifier.size(16.dp),
-            tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+        SessionRow(
+            item = item,
+            projectName = projectName,
+            isSelectionMode = isSelectionMode,
+            isSelected = isSelected,
+            onClick = onClick,
+            onLongClick = onLongClick,
+            onRename = onRename,
+            onDelete = onDelete,
         )
-        Text(
-            text = name,
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f),
-            modifier = Modifier.weight(1f),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
+
+        if (subagents.isNotEmpty()) {
+            Row(
+                modifier = Modifier
+                    .padding(start = 16.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable { expanded = !expanded }
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Icon(
+                    imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                    contentDescription = stringResource(
+                        if (expanded) R.string.sessions_subagents_hide else R.string.sessions_subagents_show,
+                    ),
+                    modifier = Modifier.size(16.dp),
+                    tint = colors.primary.copy(alpha = 0.85f),
+                )
+                Text(
+                    text = stringResource(R.string.sessions_subagents_toggle, subagents.size),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = colors.primary.copy(alpha = 0.85f),
+                )
+            }
+
+            if (expanded) {
+                Column(
+                    modifier = Modifier.padding(start = 32.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    subagents.forEach { subagent ->
+                        SubagentSessionCard(
+                            item = subagent,
+                            enabled = !isSelectionMode,
+                            onClick = { onSubagentClick(subagent.session.id) },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SubagentSessionCard(
+    item: SessionItem,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    val colors = MaterialTheme.colorScheme
+    val isAmoled = isAmoledTheme()
+    val dateFormat = remember { SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()) }
+    val statusColor = when (item.status) {
+        is SessionStatus.Busy -> colors.primary
+        is SessionStatus.Retry -> colors.error
+        else -> colors.onSurfaceVariant.copy(alpha = 0.45f)
+    }
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Box(
+            modifier = Modifier
+                .padding(top = 10.dp)
+                .width(2.dp)
+                .height(36.dp)
+                .clip(RoundedCornerShape(999.dp))
+                .background(colors.primary.copy(alpha = 0.3f)),
         )
-        Text(
-            text = "$sessionCount",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-        )
+
+        Card(
+            modifier = Modifier
+                .weight(1f)
+                .clickable(enabled = enabled, onClick = onClick),
+            colors = CardDefaults.cardColors(
+                containerColor = if (isAmoled) colors.surfaceContainerLow else colors.surface,
+            ),
+            border = if (isAmoled) BorderStroke(1.dp, colors.outlineVariant.copy(alpha = 0.5f)) else null,
+        ) {
+            Column(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    text = item.session.title ?: stringResource(R.string.sessions_child_session_fallback),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = colors.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (item.status is SessionStatus.Busy) {
+                        PulsingDotsIndicator(
+                            dotSize = 3.dp,
+                            dotSpacing = 2.dp,
+                            color = statusColor,
+                        )
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .size(7.dp)
+                                .clip(CircleShape)
+                                .background(statusColor),
+                        )
+                    }
+
+                    Text(
+                        text = dateFormat.format(Date(item.session.time.updated)),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = colors.onSurfaceVariant.copy(alpha = 0.7f),
+                    )
+                }
+            }
+        }
     }
 }
 

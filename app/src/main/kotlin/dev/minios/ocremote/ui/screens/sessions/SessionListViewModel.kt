@@ -9,17 +9,22 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.minios.ocremote.data.api.FileNode
 import dev.minios.ocremote.data.api.OpenCodeApi
 import dev.minios.ocremote.data.api.ServerConnection
+import dev.minios.ocremote.data.preferences.SessionFilter
+import dev.minios.ocremote.data.preferences.SessionListPreferences
+import dev.minios.ocremote.data.preferences.SessionListPreferencesRepository
+import dev.minios.ocremote.data.preferences.SessionSort
 import dev.minios.ocremote.data.repository.EventReducer
 import dev.minios.ocremote.domain.model.Project
 import dev.minios.ocremote.domain.model.Session
 import dev.minios.ocremote.domain.model.SessionStatus
+import dev.minios.ocremote.ui.screens.sessions.components.ActiveSubagentItem
+import dev.minios.ocremote.ui.screens.sessions.components.SubagentStatus
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -34,13 +39,22 @@ import javax.inject.Inject
 private const val TAG = "SessionListViewModel"
 
 data class SessionListUiState(
-    val sessionGroups: List<ProjectSessionGroup> = emptyList(),
-    val projects: List<Project> = emptyList(),
     val serverName: String = "",
     val isLoading: Boolean = true,
     val error: String? = null,
+
+    val activeSubagents: List<ActiveSubagentItem> = emptyList(),
+    val groups: List<ProjectGroup> = emptyList(),
+    val sessionGroups: List<ProjectSessionGroup> = emptyList(),
+
+    val sort: SessionSort = SessionSort.RECENT_UPDATED,
+    val filter: SessionFilter = SessionFilter.ALL,
+    val searchQuery: String = "",
+
     val selectedIds: Set<String> = emptySet(),
     val isSelectionMode: Boolean = false,
+
+    val projects: List<Project> = emptyList(),
 )
 
 /** A group of sessions belonging to a project. */
@@ -53,8 +67,20 @@ data class ProjectSessionGroup(
     val sessionDirLabels: Map<String, String> = emptyMap()
 )
 
-/** Helper for session directory info. */
-private data class SessionDirInfo(val name: String, val tildePath: String)
+data class ProjectGroup(
+    val directory: String,
+    val projectName: String,
+    val tildeDirectory: String,
+    val isPinned: Boolean,
+    val isCollapsed: Boolean,
+    val sessionCount: Int,
+    val activeCount: Int,
+    val additionsSum: Int,
+    val deletionsSum: Int,
+    val sessions: List<SessionItem>,
+    val subagentsByParent: Map<String, List<SessionItem>>,
+    val sessionDirLabels: Map<String, String> = emptyMap(),
+)
 
 data class SessionItem(
     val session: Session,
@@ -65,7 +91,8 @@ data class SessionItem(
 class SessionListViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val eventReducer: EventReducer,
-    private val api: OpenCodeApi
+    private val api: OpenCodeApi,
+    private val preferencesRepo: SessionListPreferencesRepository,
 ) : ViewModel() {
 
     val serverUrl: String = URLDecoder.decode(
@@ -91,8 +118,14 @@ class SessionListViewModel @Inject constructor(
     private val _projects = MutableStateFlow<List<Project>>(emptyList())
     private val _homeDir = MutableStateFlow<String?>(null)
     private val _selectedIds = MutableStateFlow<Set<String>>(emptySet())
+    private val _searchQuery = MutableStateFlow("")
     private val _navigateToSession = MutableSharedFlow<String>(extraBufferCapacity = 1)
     val navigateToSession: SharedFlow<String> = _navigateToSession.asSharedFlow()
+    private val prefsFlow = preferencesRepo.preferences.stateIn(
+        viewModelScope,
+        SharingStarted.Eagerly,
+        SessionListPreferences.DEFAULT,
+    )
 
     @Suppress("UNCHECKED_CAST")
     val uiState: StateFlow<SessionListUiState> = combine(
@@ -105,6 +138,8 @@ class SessionListViewModel @Inject constructor(
             _projects,
             _homeDir,
             _selectedIds,
+            prefsFlow,
+            _searchQuery,
         )
     ) { values ->
         val allSessions = values[0] as List<Session>
@@ -115,57 +150,140 @@ class SessionListViewModel @Inject constructor(
         val projects = values[5] as List<Project>
         val homeDir = values[6] as String?
         val selectedIds = values[7] as Set<String>
+        val prefs = values[8] as SessionListPreferences
+        val searchQuery = values[9] as String
 
-        // Filter sessions belonging to this server
         val serverSessionIds = serverSessions[serverId] ?: emptySet()
-        val sessions = allSessions
-            .filter { it.id in serverSessionIds && !it.isArchived && it.parentId == null }
-            .sortedByDescending { it.time.updated }
-            .map { session ->
-                SessionItem(
-                    session = session,
-                    status = statuses[session.id] ?: SessionStatus.Idle
-                )
-            }
-
-        // Build a flat list sorted by time — each session carries its own
-        // tilde-path label derived from session.directory
-        val allItems = sessions.map { item ->
-            val dir = item.session.directory.trimEnd('/').ifEmpty { "/" }
-            val tildePath = if (homeDir != null && dir.startsWith(homeDir)) {
-                "~" + dir.removePrefix(homeDir)
-            } else {
-                dir
-            }
-            val dirName = dir.substringAfterLast('/').ifEmpty { "/" }
-            item to SessionDirInfo(dirName, tildePath)
+        val serverScopedSessions = allSessions.filter { it.id in serverSessionIds }
+        val sessionsById = serverScopedSessions.associateBy { it.id }
+        val itemsById = serverScopedSessions.associate { session ->
+            session.id to SessionItem(
+                session = session,
+                status = statuses[session.id] ?: SessionStatus.Idle,
+            )
         }
 
-        // Single group containing all sessions (flat, sorted by time)
-        val groups = listOf(
-            ProjectSessionGroup(
-                projectId = "",
-                projectName = "",
-                directory = "",
-                sessions = allItems.map { it.first },
-                sessionDirLabels = allItems.associate { it.first.session.id to it.second.tildePath }
-            )
-        )
+        val activeSubagents = serverScopedSessions
+            .asSequence()
+            .filter { it.parentId != null && !it.isArchived }
+            .mapNotNull { session ->
+                val status = statuses[session.id] ?: SessionStatus.Idle
+                val mappedStatus = when (status) {
+                    SessionStatus.Busy -> SubagentStatus.BUSY
+                    is SessionStatus.Retry -> SubagentStatus.RETRY
+                    else -> null
+                } ?: return@mapNotNull null
 
-        val visibleSessionIds = allItems.map { it.first.session.id }.toSet()
+                val parent = session.parentId?.let(sessionsById::get)
+                val projectDirectory = normalizeDirectory(parent?.directory ?: session.directory)
+                ActiveSubagentItem(
+                    sessionId = session.id,
+                    title = session.title ?: "",
+                    agentName = null,
+                    parentSessionId = session.parentId!!,
+                    parentTitle = parent?.title,
+                    projectName = displayNameFromDirectory(projectDirectory),
+                    status = mappedStatus,
+                    updatedAt = session.time.updated,
+                )
+            }
+            .sortedByDescending { it.updatedAt }
+            .toList()
+
+        val (rootSessions, childSessions) = serverScopedSessions.partition { it.parentId == null }
+        val childBuckets = childSessions.groupBy { it.parentId!! }
+        val projectByDirectory = projects.associateBy { normalizeDirectory(it.worktree) }
+        val allDirectories = (projects.map { normalizeDirectory(it.worktree) } + rootSessions.map { normalizeDirectory(it.directory) })
+            .distinct()
+
+        val rawGroups = allDirectories.map { directory ->
+            val project = projectByDirectory[directory]
+            val projectName = project?.displayName?.takeIf { it.isNotBlank() } ?: displayNameFromDirectory(directory)
+            val tildeDirectory = toTildePath(directory, homeDir)
+            val isPinned = directory in prefs.pinnedDirs
+            val isCollapsed = directory in prefs.collapsedDirs
+            val groupedRoots = rootSessions.filter { normalizeDirectory(it.directory) == directory }
+
+            val filteredRoots = groupedRoots
+                .filter { session -> matchesFilter(itemsById.getValue(session.id), prefs.filter) }
+                .filter { session ->
+                    matchesSearch(
+                        session = session,
+                        directory = directory,
+                        projectName = projectName,
+                        query = searchQuery,
+                    )
+                }
+                .sortedWith(rootSessionComparator(prefs.sort))
+
+            val filteredRootItems = filteredRoots.map { itemsById.getValue(it.id) }
+            val subagentsByParent = filteredRoots.associate { root ->
+                val childItems = (childBuckets[root.id] ?: emptyList())
+                    .filter { child -> matchesChildArchiveMode(child, prefs.filter) }
+                    .map { itemsById.getValue(it.id) }
+                    .sortedWith(sessionItemComparator(prefs.sort))
+                root.id to childItems
+            }
+
+            ProjectGroup(
+                directory = directory,
+                projectName = projectName,
+                tildeDirectory = tildeDirectory,
+                isPinned = isPinned,
+                isCollapsed = isCollapsed,
+                sessionCount = filteredRootItems.size,
+                activeCount = filteredRootItems.count { it.status is SessionStatus.Busy },
+                additionsSum = filteredRootItems.sumOf { it.session.summary?.additions ?: 0 },
+                deletionsSum = filteredRootItems.sumOf { it.session.summary?.deletions ?: 0 },
+                sessions = filteredRootItems,
+                subagentsByParent = subagentsByParent,
+                sessionDirLabels = filteredRootItems.associate { it.session.id to tildeDirectory },
+            )
+        }
+
+        val groups = rawGroups
+            .filter { it.sessionCount > 0 || it.isPinned }
+            .sortedWith(
+                compareBy<ProjectGroup> { group ->
+                    val pinnedIndex = prefs.pinnedDirs.indexOf(group.directory)
+                    if (pinnedIndex >= 0) 0 else 1
+                }.thenBy { group ->
+                    val pinnedIndex = prefs.pinnedDirs.indexOf(group.directory)
+                    if (pinnedIndex >= 0) pinnedIndex else Int.MAX_VALUE
+                }.thenByDescending { group ->
+                    group.sessions.maxOfOrNull { it.session.time.updated } ?: Long.MIN_VALUE
+                }.thenBy { it.projectName.lowercase() }
+            )
+
+        val legacySessionGroups = groups.map { group ->
+            ProjectSessionGroup(
+                projectId = projectByDirectory[group.directory]?.id ?: group.directory,
+                projectName = group.projectName,
+                directory = group.tildeDirectory,
+                sessions = group.sessions,
+                sessionDirLabels = group.sessionDirLabels,
+            )
+        }
+
+        val visibleSessionIds = groups.flatMap { group -> group.sessions.map { it.session.id } }.toSet()
         val validSelectedIds = selectedIds.intersect(visibleSessionIds)
         if (validSelectedIds != selectedIds) {
             _selectedIds.value = validSelectedIds
         }
 
         SessionListUiState(
-            sessionGroups = groups,
-            projects = projects,
             serverName = serverName,
             isLoading = loading,
             error = error,
+            activeSubagents = activeSubagents,
+            groups = groups,
+            sessionGroups = legacySessionGroups,
+            sort = prefs.sort,
+            filter = prefs.filter,
+            searchQuery = searchQuery,
             selectedIds = validSelectedIds,
             isSelectionMode = validSelectedIds.isNotEmpty(),
+            projects = projects,
         )
     }.stateIn(
         viewModelScope,
@@ -278,10 +396,47 @@ class SessionListViewModel @Inject constructor(
     }
 
     fun selectAll() {
-        val allIds = uiState.value.sessionGroups
+        val allIds = uiState.value.groups
             .flatMap { group -> group.sessions.map { it.session.id } }
             .toSet()
         _selectedIds.value = allIds
+    }
+
+    fun setSearchQuery(q: String) {
+        _searchQuery.value = q
+    }
+
+    fun setSort(s: SessionSort) {
+        viewModelScope.launch {
+            preferencesRepo.setSort(s)
+        }
+    }
+
+    fun setFilter(f: SessionFilter) {
+        viewModelScope.launch {
+            preferencesRepo.setFilter(f)
+        }
+    }
+
+    fun togglePinned(dir: String) {
+        viewModelScope.launch {
+            preferencesRepo.togglePinned(normalizeDirectory(dir))
+        }
+    }
+
+    fun toggleCollapsed(dir: String) {
+        viewModelScope.launch {
+            val normalized = normalizeDirectory(dir)
+            preferencesRepo.setCollapsed(
+                normalized,
+                collapsed = normalized !in prefsFlow.value.collapsedDirs,
+            )
+        }
+    }
+
+    fun archiveProjectSessions(dir: String) {
+        Log.w(TAG, "Archive not supported yet for directory=${normalizeDirectory(dir)}")
+        _error.value = "Archive not supported yet"
     }
 
     fun deleteSelected() {
@@ -428,5 +583,71 @@ class SessionListViewModel @Inject constructor(
         } catch (_: Exception) {
             false
         }
+    }
+
+    private fun matchesFilter(item: SessionItem, filter: SessionFilter): Boolean {
+        val session = item.session
+        return when (filter) {
+            SessionFilter.ALL -> !session.isArchived
+            SessionFilter.WORKING -> !session.isArchived && item.status is SessionStatus.Busy
+            SessionFilter.HAS_CHANGES -> !session.isArchived && ((session.summary?.additions ?: 0) + (session.summary?.deletions ?: 0) > 0)
+            SessionFilter.HAS_ERRORS -> !session.isArchived && item.status is SessionStatus.Retry
+            SessionFilter.ARCHIVED -> session.isArchived
+        }
+    }
+
+    private fun matchesChildArchiveMode(session: Session, filter: SessionFilter): Boolean {
+        return when (filter) {
+            SessionFilter.ARCHIVED -> session.isArchived
+            else -> !session.isArchived
+        }
+    }
+
+    private fun matchesSearch(
+        session: Session,
+        directory: String,
+        projectName: String,
+        query: String,
+    ): Boolean {
+        if (query.isBlank()) return true
+        return session.title.orEmpty().contains(query, ignoreCase = true) ||
+            directory.contains(query, ignoreCase = true) ||
+            projectName.contains(query, ignoreCase = true)
+    }
+
+    private fun rootSessionComparator(sort: SessionSort): Comparator<Session> {
+        return when (sort) {
+            SessionSort.RECENT_UPDATED -> compareByDescending<Session> { it.time.updated }
+            SessionSort.CREATED_TIME -> compareByDescending<Session> { it.time.created }
+            SessionSort.TITLE_ALPHA -> compareBy<Session> { it.title.orEmpty().lowercase() }
+                .thenByDescending { it.time.updated }
+        }
+    }
+
+    private fun sessionItemComparator(sort: SessionSort): Comparator<SessionItem> {
+        return when (sort) {
+            SessionSort.RECENT_UPDATED -> compareByDescending<SessionItem> { it.session.time.updated }
+            SessionSort.CREATED_TIME -> compareByDescending<SessionItem> { it.session.time.created }
+            SessionSort.TITLE_ALPHA -> compareBy<SessionItem> { it.session.title.orEmpty().lowercase() }
+                .thenByDescending { it.session.time.updated }
+        }
+    }
+
+    private fun normalizeDirectory(directory: String): String {
+        return directory.trimEnd('/').ifEmpty { "/" }
+    }
+
+    private fun toTildePath(directory: String, homeDir: String?): String {
+        val normalizedHome = homeDir?.let(::normalizeDirectory)
+        return if (normalizedHome != null && directory.startsWith(normalizedHome)) {
+            val suffix = directory.removePrefix(normalizedHome)
+            if (suffix.isEmpty()) "~" else "~$suffix"
+        } else {
+            directory
+        }
+    }
+
+    private fun displayNameFromDirectory(directory: String): String {
+        return if (directory == "/") "/" else directory.substringAfterLast('/').ifEmpty { directory }
     }
 }
