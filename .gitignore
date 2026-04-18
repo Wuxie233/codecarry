@@ -65,3 +65,6 @@ fastlane/readme.md
 # Worktrees
 .worktrees/
 .ace-tool/
+
+# Local agent workflow scratch (plans are committed separately; notepads stay local)
+.sisyphus/notepads/
