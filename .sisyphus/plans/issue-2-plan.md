@@ -14,6 +14,7 @@
 - `app/src/main/java/.../session/SessionListViewModel.kt`
 - `app/src/main/java/.../session/SessionListScreen.kt`
 - 仅触及 grouped row `dirLabel/projectName` 传递与渲染判定
+**QA:** 在已分组的会话列表中准备同一项目下至少 2 个 root session，启动 app 后进入 Session List，人工检查 `ProjectGroupHeader` 仍显示项目/目录信息，但每个 `SessionRow` 不再重复显示同一目录标签；预期结果：标题区无重叠，中文长项目名也只出现一次且列表行高度正常。
 
 ---
 
@@ -24,6 +25,7 @@
 - `app/src/main/java/.../session/SessionListPreferencesRepository.kt`
 - `app/src/main/java/.../session/SessionListTopControls.kt`
 - 如有需要补充 `SessionListUiState` / filter model
+**QA:** 用 debug 包运行 app，在同一 server 下依次点击 `All / Working / Has changes / Has errors / Archived` filter chip，包含一次“选到无匹配 filter 后立刻新建 session 再返回列表”的复现；必要时用 `adb logcat | grep SessionList` 辅助看 state。预期结果：无论当前 filter 是否无匹配，都不会出现永久空列表；切回 `All` 后旧会话立即恢复显示，新建会话在合理 filter 下可见或自动回到可见状态。
 
 ---
 
@@ -33,6 +35,7 @@
 - `app/src/main/res/values-zh-rCN/strings.xml`
 - 必要时对照 `app/src/main/res/values/strings.xml`
 - 仅补齐本次需求直接涉及的 key
+**QA:** 将系统语言或 app 语言切到 `简体中文`，依次打开 Session List 搜索/排序/过滤区、项目分组菜单、subagent 展开入口、Chat 的 thinking/agent picker；预期结果：本次列出的相关文案全部显示为 zh-CN，无英文 key 名、无缺失占位、无回退到英文的新增入口。
 
 ---
 
@@ -42,6 +45,7 @@
 - `app/src/main/java/.../chat/ChatScreen.kt`
 - `app/src/main/java/.../chat/components/` 下现有 picker/dialog 相关文件（如已有独立组件则优先落那里）
 - 避免改动消息发送、草稿持久化协议本身
+**QA:** 运行 app 进入 Chat，先打开现有模型选择器，再打开新抽象复用后的任一单选 picker（可临时由 thinking/agent 接入后验证）；人工比对交互骨架。预期结果：弹窗都使用列表式单选 UI，包含当前项高亮、尾部 checkmark、点击后关闭并回填选择，且模型 picker 行为未回归。
 
 ---
 
@@ -52,6 +56,7 @@
 - `app/src/main/java/.../chat/ChatScreen.kt`
 - `app/src/main/java/.../chat/components/ChatInputBar.kt`
 - `app/src/main/java/.../draft/DraftRepository.kt`（仅在需要核对现有持久化调用时）
+**QA:** 在 Chat 页面分别点击 thinking intensity 与 agent type 入口，验证它们都弹出列表式 picker 而不是循环切换；各选一个非默认项后发送消息、退出并重进当前会话。预期结果：两处入口都能直接选中指定项，选中状态在 UI 中立即更新，消息发送正常，重新进入后仍保持已持久化的 variant/agent。
 
 ---
 
@@ -61,6 +66,7 @@
 - 以上改动文件的集成收口
 - 可能补 1 个 UI state / helper 小修，不额外扩面
 - 验证命令以 Android 编译/LSP 为主
+**QA:** 先运行 `./gradlew assembleDebug`，并对改动目录执行 `lsp_diagnostics`/IDE diagnostics 确认无新增错误；然后在 Android 端按原始 4 个问题逐项手测：① grouped session 页面确认 header/row 不再重复或重叠；② 切到 zh-CN 后检查新增列表、filter、项目菜单、picker 文案；③ 打开 thinking intensity 与 agent type，确认均为列表式 picker；④ 先点一个会导致当前列表无匹配的 filter，再返回/新建 session/切回 All，确认列表不会一直为空。预期结果：Debug 构建通过，诊断干净，4 个问题均可稳定复现旧路径但在新版本中表现为已修复。
 
 ---
 
