@@ -149,6 +149,12 @@
     <string name="sessions_project_archive_all">Archive all sessions</string>
     <string name="sessions_project_expand">Expand project</string>
     <string name="sessions_project_collapse">Collapse project</string>
+    <string name="sessions_project_active_count">· %1$d active</string>
+    <string name="sessions_project_path_copied">Path copied</string>
+    <string name="sessions_subagents_toggle">%1$d subagents</string>
+    <string name="sessions_subagents_show">Show subagents</string>
+    <string name="sessions_subagents_hide">Hide subagents</string>
+    <string name="sessions_child_session_fallback">Child session</string>
     <string name="session_agent_none">agent</string>
     <string name="session_time_now">now</string>
     <string name="session_time_minutes">%1$dm</string>
