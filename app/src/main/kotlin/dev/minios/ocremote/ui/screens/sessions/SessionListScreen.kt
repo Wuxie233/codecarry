@@ -254,16 +254,15 @@ fun SessionListScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            val allSessions = uiState.groups.flatMap { it.sessions }
             when {
-                uiState.isLoading && allSessions.isEmpty() -> {
+                uiState.isLoading && !uiState.hasAnySessions -> {
                     PulsingDotsIndicator(
                         modifier = Modifier.align(Alignment.Center),
                         dotSize = 12.dp,
                         dotSpacing = 8.dp
                     )
                 }
-                uiState.error != null && allSessions.isEmpty() -> {
+                uiState.error != null && !uiState.hasAnySessions -> {
                     Column(
                         modifier = Modifier
                             .align(Alignment.Center)
@@ -287,36 +286,7 @@ fun SessionListScreen(
                         }
                     }
                 }
-                uiState.isFilteredEmpty && allSessions.isEmpty() -> {
-                    Column(
-                        modifier = Modifier
-                            .align(Alignment.Center)
-                            .padding(32.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.FilterList,
-                            contentDescription = null,
-                            modifier = Modifier.size(64.dp),
-                            tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
-                        )
-                        Text(
-                            text = stringResource(R.string.sessions_filtered_empty),
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                        )
-                        Text(
-                            text = stringResource(R.string.sessions_filtered_empty_hint),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
-                        )
-                        Button(onClick = { viewModel.clearFilter() }) {
-                            Text(stringResource(R.string.sessions_clear_filter))
-                        }
-                    }
-                }
-                allSessions.isEmpty() -> {
+                !uiState.hasAnySessions -> {
                     Column(
                         modifier = Modifier
                             .align(Alignment.Center)
@@ -363,66 +333,96 @@ fun SessionListScreen(
                             )
                         }
 
-                        LazyColumn(
-                            modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                            verticalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            for (group in uiState.groups) {
-                                stickyHeader(key = "header_${group.directory}") {
-                                    ProjectGroupHeader(
-                                        projectName = group.projectName,
-                                        tildeDirectory = group.tildeDirectory,
-                                        sessionCount = group.sessionCount,
-                                        activeCount = group.activeCount,
-                                        additions = group.additionsSum,
-                                        deletions = group.deletionsSum,
-                                        isPinned = group.isPinned,
-                                        isCollapsed = group.isCollapsed,
-                                        onToggleCollapsed = { viewModel.toggleCollapsed(group.directory) },
-                                        onTogglePinned = { viewModel.togglePinned(group.directory) },
-                                        onNewSession = { viewModel.createNewSession(directory = group.directory) },
-                                        onCopyPath = {
-                                            clipboard.setText(AnnotatedString(group.directory))
-                                            Toast.makeText(context, context.getString(R.string.sessions_project_path_copied), Toast.LENGTH_SHORT).show()
-                                        },
-                                        onArchiveAll = { viewModel.archiveProjectSessions(group.directory) },
-                                    )
+                        if (uiState.isFilteredEmpty) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(32.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.FilterList,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(64.dp),
+                                    tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
+                                )
+                                Text(
+                                    text = stringResource(R.string.sessions_filtered_empty),
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                                )
+                                Text(
+                                    text = stringResource(R.string.sessions_filtered_empty_hint),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
+                                )
+                                Button(onClick = { viewModel.clearFilter() }) {
+                                    Text(stringResource(R.string.sessions_clear_filter))
                                 }
-
-                                if (!group.isCollapsed) {
-                                    items(group.sessions, key = { it.session.id }) { item ->
-                                        val untitledLabel = stringResource(R.string.session_untitled)
-                                        val dirLabel = group.sessionDirLabels[item.session.id]
-                                            ?: group.tildeDirectory.ifEmpty { group.projectName }
-                                        SessionRowWithSubagents(
-                                            item = item,
-                                            subagents = group.subagentsByParent[item.session.id].orEmpty(),
-                                            projectName = dirLabel,
-                                            isSelectionMode = uiState.isSelectionMode,
-                                            isSelected = item.session.id in uiState.selectedIds,
-                                            onClick = {
-                                                if (uiState.isSelectionMode) {
-                                                    viewModel.toggleSelection(item.session.id)
-                                                } else {
-                                                    onNavigateToChat(item.session.id, false)
-                                                }
+                            }
+                        } else {
+                            LazyColumn(
+                                modifier = Modifier.fillMaxSize(),
+                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                for (group in uiState.groups) {
+                                    stickyHeader(key = "header_${group.directory}") {
+                                        ProjectGroupHeader(
+                                            projectName = group.projectName,
+                                            tildeDirectory = group.tildeDirectory,
+                                            sessionCount = group.sessionCount,
+                                            activeCount = group.activeCount,
+                                            additions = group.additionsSum,
+                                            deletions = group.deletionsSum,
+                                            isPinned = group.isPinned,
+                                            isCollapsed = group.isCollapsed,
+                                            onToggleCollapsed = { viewModel.toggleCollapsed(group.directory) },
+                                            onTogglePinned = { viewModel.togglePinned(group.directory) },
+                                            onNewSession = { viewModel.createNewSession(directory = group.directory) },
+                                            onCopyPath = {
+                                                clipboard.setText(AnnotatedString(group.directory))
+                                                Toast.makeText(context, context.getString(R.string.sessions_project_path_copied), Toast.LENGTH_SHORT).show()
                                             },
-                                            onLongClick = { viewModel.toggleSelection(item.session.id) },
-                                            onRename = {
-                                                renameSessionId = item.session.id
-                                                renameText = item.session.title ?: ""
-                                                showRenameDialog = true
-                                            },
-                                            onDelete = {
-                                                deleteSessionId = item.session.id
-                                                deleteSessionTitle = item.session.title ?: untitledLabel
-                                                showDeleteDialog = true
-                                            },
-                                            onSubagentClick = { sessionId ->
-                                                onNavigateToChat(sessionId, false)
-                                            },
+                                            onArchiveAll = { viewModel.archiveProjectSessions(group.directory) },
                                         )
+                                    }
+
+                                    if (!group.isCollapsed) {
+                                        items(group.sessions, key = { it.session.id }) { item ->
+                                            val untitledLabel = stringResource(R.string.session_untitled)
+                                            val dirLabel = group.sessionDirLabels[item.session.id]
+                                                ?: group.tildeDirectory.ifEmpty { group.projectName }
+                                            SessionRowWithSubagents(
+                                                item = item,
+                                                subagents = group.subagentsByParent[item.session.id].orEmpty(),
+                                                projectName = dirLabel,
+                                                isSelectionMode = uiState.isSelectionMode,
+                                                isSelected = item.session.id in uiState.selectedIds,
+                                                onClick = {
+                                                    if (uiState.isSelectionMode) {
+                                                        viewModel.toggleSelection(item.session.id)
+                                                    } else {
+                                                        onNavigateToChat(item.session.id, false)
+                                                    }
+                                                },
+                                                onLongClick = { viewModel.toggleSelection(item.session.id) },
+                                                onRename = {
+                                                    renameSessionId = item.session.id
+                                                    renameText = item.session.title ?: ""
+                                                    showRenameDialog = true
+                                                },
+                                                onDelete = {
+                                                    deleteSessionId = item.session.id
+                                                    deleteSessionTitle = item.session.title ?: untitledLabel
+                                                    showDeleteDialog = true
+                                                },
+                                                onSubagentClick = { sessionId ->
+                                                    onNavigateToChat(sessionId, false)
+                                                },
+                                            )
+                                        }
                                     }
                                 }
                             }

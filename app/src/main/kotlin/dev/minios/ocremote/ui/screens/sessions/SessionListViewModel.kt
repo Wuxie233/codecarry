@@ -264,6 +264,11 @@ class SessionListViewModel @Inject constructor(
             _selectedIds.value = validSelectedIds
         }
 
+        val emptyState = computeSessionListEmptyState(
+            rootSessionCount = rootSessions.size,
+            visibleGroupCount = groups.size,
+        )
+
         SessionListUiState(
             serverName = serverName,
             isLoading = loading,
@@ -274,6 +279,8 @@ class SessionListViewModel @Inject constructor(
             sort = prefs.sort,
             filter = filter,
             searchQuery = searchQuery,
+            hasAnySessions = emptyState.hasAnySessions,
+            isFilteredEmpty = emptyState.isFilteredEmpty,
             selectedIds = validSelectedIds,
             isSelectionMode = validSelectedIds.isNotEmpty(),
             projects = projects,
@@ -648,6 +655,22 @@ class SessionListViewModel @Inject constructor(
     private fun displayNameFromDirectory(directory: String): String {
         return if (directory == "/") "/" else directory.substringAfterLast('/').ifEmpty { directory }
     }
+}
+
+internal data class SessionListEmptyState(
+    val hasAnySessions: Boolean,
+    val isFilteredEmpty: Boolean,
+)
+
+internal fun computeSessionListEmptyState(
+    rootSessionCount: Int,
+    visibleGroupCount: Int,
+): SessionListEmptyState {
+    val hasAny = rootSessionCount > 0
+    return SessionListEmptyState(
+        hasAnySessions = hasAny,
+        isFilteredEmpty = hasAny && visibleGroupCount == 0,
+    )
 }
 
 internal fun buildActiveSubagents(
