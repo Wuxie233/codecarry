@@ -81,9 +81,20 @@ data class ProjectGroup(
     val additionsSum: Int,
     val deletionsSum: Int,
     val sessions: List<SessionItem>,
-    val subagentsByParent: Map<String, List<SessionItem>>,
+    val subagentRowsByParent: Map<String, SubagentRow>,
     val sessionDirLabels: Map<String, String> = emptyMap(),
 )
+
+data class SubagentRow(
+    val running: List<SessionItem>,
+    val historical: List<SessionItem>,
+) {
+    val total: Int get() = running.size + historical.size
+
+    companion object {
+        val EMPTY = SubagentRow(emptyList(), emptyList())
+    }
+}
 
 data class SessionItem(
     val session: Session,
@@ -210,12 +221,12 @@ class SessionListViewModel @Inject constructor(
                 .sortedWith(rootSessionComparator(prefs.sort))
 
             val filteredRootItems = filteredRoots.map { itemsById.getValue(it.id) }
-            val subagentsByParent = filteredRoots.associate { root ->
+            val subagentRowsByParent = filteredRoots.associate { root ->
                 val childItems = (childBuckets[root.id] ?: emptyList())
                     .filter { child -> matchesChildArchiveMode(child, filter) }
                     .map { itemsById.getValue(it.id) }
                     .sortedWith(sessionItemComparator(prefs.sort))
-                root.id to childItems
+                root.id to partitionSubagentsByActivity(childItems)
             }
 
             ProjectGroup(
@@ -229,7 +240,7 @@ class SessionListViewModel @Inject constructor(
                 additionsSum = filteredRootItems.sumOf { it.session.summary?.additions ?: 0 },
                 deletionsSum = filteredRootItems.sumOf { it.session.summary?.deletions ?: 0 },
                 sessions = filteredRootItems,
-                subagentsByParent = subagentsByParent,
+                subagentRowsByParent = subagentRowsByParent,
                 sessionDirLabels = filteredRootItems.associate { it.session.id to tildeDirectory },
             )
         }
@@ -671,6 +682,19 @@ internal fun computeSessionListEmptyState(
         hasAnySessions = hasAny,
         isFilteredEmpty = hasAny && visibleGroupCount == 0,
     )
+}
+
+internal fun partitionSubagentsByActivity(subagents: List<SessionItem>): SubagentRow {
+    if (subagents.isEmpty()) return SubagentRow.EMPTY
+    val running = ArrayList<SessionItem>(subagents.size)
+    val historical = ArrayList<SessionItem>(subagents.size)
+    for (item in subagents) {
+        when (item.status) {
+            is SessionStatus.Busy, is SessionStatus.Retry -> running += item
+            is SessionStatus.Idle -> historical += item
+        }
+    }
+    return SubagentRow(running = running, historical = historical)
 }
 
 internal fun buildActiveSubagents(

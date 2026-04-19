@@ -152,6 +152,8 @@
     <string name="sessions_project_active_count">· %1$d active</string>
     <string name="sessions_project_path_copied">Path copied</string>
     <string name="sessions_subagents_toggle">%1$d subagents</string>
+    <string name="sessions_subagents_running_toggle">%1$d running subagents</string>
+    <string name="sessions_subagents_historical_toggle">%1$d historical subagents</string>
     <string name="sessions_subagents_show">Show subagents</string>
     <string name="sessions_subagents_hide">Hide subagents</string>
     <string name="sessions_child_session_fallback">Child session</string>

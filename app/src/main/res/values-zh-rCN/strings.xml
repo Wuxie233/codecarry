@@ -199,6 +199,8 @@
     <string name="sessions_project_active_count">· %1$d 个活跃</string>
     <string name="sessions_project_path_copied">路径已复制</string>
     <string name="sessions_subagents_toggle">%1$d 个子代理</string>
+    <string name="sessions_subagents_running_toggle">%1$d 个运行中子代理</string>
+    <string name="sessions_subagents_historical_toggle">%1$d 个历史子代理</string>
     <string name="sessions_subagents_show">显示子代理</string>
     <string name="sessions_subagents_hide">隐藏子代理</string>
     <string name="sessions_child_session_fallback">子会话</string>

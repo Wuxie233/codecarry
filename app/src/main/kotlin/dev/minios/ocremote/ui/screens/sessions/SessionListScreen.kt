@@ -394,10 +394,11 @@ fun SessionListScreen(
                                             val untitledLabel = stringResource(R.string.session_untitled)
                                             val dirLabel = group.sessionDirLabels[item.session.id]
                                                 ?: group.tildeDirectory.ifEmpty { group.projectName }
-                                            SessionRowWithSubagents(
-                                                item = item,
-                                                subagents = group.subagentsByParent[item.session.id].orEmpty(),
-                                                projectName = dirLabel,
+                                        SessionRowWithSubagents(
+                                            item = item,
+                                            subagents = group.subagentRowsByParent[item.session.id]
+                                                ?: SubagentRow.EMPTY,
+                                            projectName = dirLabel,
                                                 isSelectionMode = uiState.isSelectionMode,
                                                 isSelected = item.session.id in uiState.selectedIds,
                                                 onClick = {
@@ -596,7 +597,7 @@ fun SessionListScreen(
 @Composable
 private fun SessionRowWithSubagents(
     item: SessionItem,
-    subagents: List<SessionItem>,
+    subagents: SubagentRow,
     projectName: String?,
     isSelectionMode: Boolean,
     isSelected: Boolean,
@@ -606,8 +607,10 @@ private fun SessionRowWithSubagents(
     onDelete: () -> Unit,
     onSubagentClick: (sessionId: String) -> Unit,
 ) {
-    var expanded by rememberSaveable(item.session.id) { mutableStateOf(false) }
-    val colors = MaterialTheme.colorScheme
+    val hasRunning = subagents.running.isNotEmpty()
+    val hasHistorical = subagents.historical.isNotEmpty()
+    var runningExpanded by rememberSaveable(item.session.id) { mutableStateOf(hasRunning) }
+    var historicalExpanded by rememberSaveable(item.session.id) { mutableStateOf(false) }
 
     Column(
         modifier = Modifier.animateContentSize(),
@@ -624,45 +627,93 @@ private fun SessionRowWithSubagents(
             onDelete = onDelete,
         )
 
-        if (subagents.isNotEmpty()) {
-            Row(
-                modifier = Modifier
-                    .padding(start = 16.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .clickable { expanded = !expanded }
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                Icon(
-                    imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                    contentDescription = stringResource(
-                        if (expanded) R.string.sessions_subagents_hide else R.string.sessions_subagents_show,
-                    ),
-                    modifier = Modifier.size(16.dp),
-                    tint = colors.primary.copy(alpha = 0.85f),
-                )
-                Text(
-                    text = stringResource(R.string.sessions_subagents_toggle, subagents.size),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = colors.primary.copy(alpha = 0.85f),
+        if (hasRunning) {
+            SubagentDisclosureRow(
+                label = stringResource(R.string.sessions_subagents_running_toggle, subagents.running.size),
+                expanded = runningExpanded,
+                onToggle = { runningExpanded = !runningExpanded },
+            )
+            if (runningExpanded) {
+                SubagentList(
+                    items = subagents.running,
+                    isSelectionMode = isSelectionMode,
+                    onSubagentClick = onSubagentClick,
                 )
             }
+        }
 
-            if (expanded) {
-                Column(
-                    modifier = Modifier.padding(start = 32.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    subagents.forEach { subagent ->
-                        SubagentSessionCard(
-                            item = subagent,
-                            enabled = !isSelectionMode,
-                            onClick = { onSubagentClick(subagent.session.id) },
-                        )
-                    }
-                }
+        if (hasHistorical) {
+            SubagentDisclosureRow(
+                label = stringResource(R.string.sessions_subagents_historical_toggle, subagents.historical.size),
+                expanded = historicalExpanded,
+                onToggle = { historicalExpanded = !historicalExpanded },
+                secondary = true,
+            )
+            if (historicalExpanded) {
+                SubagentList(
+                    items = subagents.historical,
+                    isSelectionMode = isSelectionMode,
+                    onSubagentClick = onSubagentClick,
+                )
             }
+        }
+    }
+}
+
+@Composable
+private fun SubagentDisclosureRow(
+    label: String,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    secondary: Boolean = false,
+) {
+    val colors = MaterialTheme.colorScheme
+    val tint = if (secondary) {
+        colors.onSurface.copy(alpha = 0.55f)
+    } else {
+        colors.primary.copy(alpha = 0.85f)
+    }
+    Row(
+        modifier = Modifier
+            .padding(start = if (secondary) 32.dp else 16.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onToggle)
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Icon(
+            imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+            contentDescription = stringResource(
+                if (expanded) R.string.sessions_subagents_hide else R.string.sessions_subagents_show,
+            ),
+            modifier = Modifier.size(16.dp),
+            tint = tint,
+        )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            color = tint,
+        )
+    }
+}
+
+@Composable
+private fun SubagentList(
+    items: List<SessionItem>,
+    isSelectionMode: Boolean,
+    onSubagentClick: (sessionId: String) -> Unit,
+) {
+    Column(
+        modifier = Modifier.padding(start = 32.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        items.forEach { subagent ->
+            SubagentSessionCard(
+                item = subagent,
+                enabled = !isSelectionMode,
+                onClick = { onSubagentClick(subagent.session.id) },
+            )
         }
     }
 }
