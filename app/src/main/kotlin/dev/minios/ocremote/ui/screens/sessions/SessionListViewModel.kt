@@ -119,6 +119,7 @@ class SessionListViewModel @Inject constructor(
     private val _homeDir = MutableStateFlow<String?>(null)
     private val _selectedIds = MutableStateFlow<Set<String>>(emptySet())
     private val _searchQuery = MutableStateFlow("")
+    private val _filter = MutableStateFlow(SessionFilter.ALL)
     private val _navigateToSession = MutableSharedFlow<String>(extraBufferCapacity = 1)
     val navigateToSession: SharedFlow<String> = _navigateToSession.asSharedFlow()
     private val prefsFlow = preferencesRepo.preferences.stateIn(
@@ -140,6 +141,7 @@ class SessionListViewModel @Inject constructor(
             _selectedIds,
             prefsFlow,
             _searchQuery,
+            _filter,
         )
     ) { values ->
         val allSessions = values[0] as List<Session>
@@ -152,6 +154,7 @@ class SessionListViewModel @Inject constructor(
         val selectedIds = values[7] as Set<String>
         val prefs = values[8] as SessionListPreferences
         val searchQuery = values[9] as String
+        val filter = values[10] as SessionFilter
 
         val serverSessionIds = serverSessions[serverId] ?: emptySet()
         val serverScopedSessions = allSessions.filter { it.id in serverSessionIds }
@@ -205,7 +208,7 @@ class SessionListViewModel @Inject constructor(
             val groupedRoots = rootSessions.filter { normalizeDirectory(it.directory) == directory }
 
             val filteredRoots = groupedRoots
-                .filter { session -> matchesFilter(itemsById.getValue(session.id), prefs.filter) }
+                .filter { session -> matchesFilter(itemsById.getValue(session.id), filter) }
                 .filter { session ->
                     matchesSearch(
                         session = session,
@@ -219,7 +222,7 @@ class SessionListViewModel @Inject constructor(
             val filteredRootItems = filteredRoots.map { itemsById.getValue(it.id) }
             val subagentsByParent = filteredRoots.associate { root ->
                 val childItems = (childBuckets[root.id] ?: emptyList())
-                    .filter { child -> matchesChildArchiveMode(child, prefs.filter) }
+                    .filter { child -> matchesChildArchiveMode(child, filter) }
                     .map { itemsById.getValue(it.id) }
                     .sortedWith(sessionItemComparator(prefs.sort))
                 root.id to childItems
@@ -279,7 +282,7 @@ class SessionListViewModel @Inject constructor(
             groups = groups,
             sessionGroups = legacySessionGroups,
             sort = prefs.sort,
-            filter = prefs.filter,
+            filter = filter,
             searchQuery = searchQuery,
             selectedIds = validSelectedIds,
             isSelectionMode = validSelectedIds.isNotEmpty(),
@@ -294,6 +297,9 @@ class SessionListViewModel @Inject constructor(
     init {
         loadHomeDir()
         loadSessions()
+        viewModelScope.launch {
+            preferencesRepo.setFilter(SessionFilter.ALL)
+        }
     }
 
     fun loadSessions() {
@@ -339,8 +345,8 @@ class SessionListViewModel @Inject constructor(
     fun createNewSession(directory: String? = null) {
         viewModelScope.launch {
             try {
+                _filter.value = SessionFilter.ALL
                 val session = api.createSession(conn, directory = directory)
-                // The SSE stream should pick up the new session, but also add directly
                 eventReducer.setSessions(serverId, listOf(session))
                 if (BuildConfig.DEBUG) Log.d(TAG, "Created new session: ${session.id}")
                 _navigateToSession.tryEmit(session.id)
@@ -396,9 +402,11 @@ class SessionListViewModel @Inject constructor(
     }
 
     fun setFilter(f: SessionFilter) {
-        viewModelScope.launch {
-            preferencesRepo.setFilter(f)
-        }
+        _filter.value = if (_filter.value == f && f != SessionFilter.ALL) SessionFilter.ALL else f
+    }
+
+    fun clearFilter() {
+        _filter.value = SessionFilter.ALL
     }
 
     fun togglePinned(dir: String) {
