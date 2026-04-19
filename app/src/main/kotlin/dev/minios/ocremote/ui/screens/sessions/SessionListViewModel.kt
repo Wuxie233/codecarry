@@ -50,6 +50,8 @@ data class SessionListUiState(
     val sort: SessionSort = SessionSort.RECENT_UPDATED,
     val filter: SessionFilter = SessionFilter.ALL,
     val searchQuery: String = "",
+    val hasAnySessions: Boolean = false,
+    val isFilteredEmpty: Boolean = false,
 
     val selectedIds: Set<String> = emptySet(),
     val isSelectionMode: Boolean = false,

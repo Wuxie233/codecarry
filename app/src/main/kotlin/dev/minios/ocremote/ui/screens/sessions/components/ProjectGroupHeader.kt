@@ -87,6 +87,9 @@ fun ProjectGroupHeader(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .background(
+                    if (isAmoled) Color.Black else colors.surface.copy(alpha = 0.98f)
+                )
                 .height(48.dp)
                 .combinedClickable(
                     onClick = onToggleCollapsed,
