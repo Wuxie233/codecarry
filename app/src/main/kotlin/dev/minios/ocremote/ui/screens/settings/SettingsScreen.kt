@@ -72,6 +72,7 @@ fun SettingsScreen(
     val amoledDark by viewModel.amoledDark.collectAsState()
     val compactMessages by viewModel.compactMessages.collectAsState()
     val collapseTools by viewModel.collapseTools.collectAsState()
+    val showHistoricalSubagents by viewModel.showHistoricalSubagents.collectAsState()
     val hapticFeedback by viewModel.hapticFeedback.collectAsState()
     val reconnectMode by viewModel.reconnectMode.collectAsState()
     val keepScreenOn by viewModel.keepScreenOn.collectAsState()
@@ -275,6 +276,27 @@ fun SettingsScreen(
                     )
                 },
                 modifier = Modifier.clickable { viewModel.setCollapseTools(!collapseTools) }
+            )
+
+            ListItem(
+                headlineContent = { Text(stringResource(R.string.settings_show_historical_subagents)) },
+                supportingContent = { Text(stringResource(R.string.settings_show_historical_subagents_desc)) },
+                leadingContent = {
+                    Icon(
+                        if (showHistoricalSubagents) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                        contentDescription = null
+                    )
+                },
+                trailingContent = {
+                    Switch(
+                        checked = showHistoricalSubagents,
+                        onCheckedChange = { viewModel.setShowHistoricalSubagents(it) },
+                        colors = switchColors
+                    )
+                },
+                modifier = Modifier.clickable {
+                    viewModel.setShowHistoricalSubagents(!showHistoricalSubagents)
+                }
             )
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))

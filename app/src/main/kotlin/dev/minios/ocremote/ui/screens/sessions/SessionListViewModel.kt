@@ -14,6 +14,7 @@ import dev.minios.ocremote.data.preferences.SessionListPreferences
 import dev.minios.ocremote.data.preferences.SessionListPreferencesRepository
 import dev.minios.ocremote.data.preferences.SessionSort
 import dev.minios.ocremote.data.repository.EventReducer
+import dev.minios.ocremote.data.repository.SettingsRepository
 import dev.minios.ocremote.domain.model.Project
 import dev.minios.ocremote.domain.model.Session
 import dev.minios.ocremote.domain.model.SessionStatus
@@ -95,6 +96,7 @@ class SessionListViewModel @Inject constructor(
     private val eventReducer: EventReducer,
     private val api: OpenCodeApi,
     private val preferencesRepo: SessionListPreferencesRepository,
+    private val settingsRepository: SettingsRepository,
 ) : ViewModel() {
 
     val serverUrl: String = URLDecoder.decode(
@@ -129,6 +131,11 @@ class SessionListViewModel @Inject constructor(
         SharingStarted.Eagerly,
         SessionListPreferences.DEFAULT,
     )
+    private val showHistoricalSubagentsFlow = settingsRepository.showHistoricalSubagents.stateIn(
+        viewModelScope,
+        SharingStarted.Eagerly,
+        false,
+    )
 
     @Suppress("UNCHECKED_CAST")
     val uiState: StateFlow<SessionListUiState> = combine(
@@ -144,6 +151,7 @@ class SessionListViewModel @Inject constructor(
             prefsFlow,
             _searchQuery,
             _filter,
+            showHistoricalSubagentsFlow,
         )
     ) { values ->
         val allSessions = values[0] as List<Session>
@@ -157,6 +165,7 @@ class SessionListViewModel @Inject constructor(
         val prefs = values[8] as SessionListPreferences
         val searchQuery = values[9] as String
         val filter = values[10] as SessionFilter
+        val showHistoricalSubagents = values[11] as Boolean
 
         val serverSessionIds = serverSessions[serverId] ?: emptySet()
         val serverScopedSessions = allSessions.filter { it.id in serverSessionIds }
@@ -168,32 +177,11 @@ class SessionListViewModel @Inject constructor(
             )
         }
 
-        val activeSubagents = serverScopedSessions
-            .asSequence()
-            .filter { it.parentId != null && !it.isArchived }
-            .mapNotNull { session ->
-                val status = statuses[session.id] ?: SessionStatus.Idle
-                val mappedStatus = when (status) {
-                    SessionStatus.Busy -> SubagentStatus.BUSY
-                    is SessionStatus.Retry -> SubagentStatus.RETRY
-                    else -> null
-                } ?: return@mapNotNull null
-
-                val parent = session.parentId?.let(sessionsById::get)
-                val projectDirectory = normalizeDirectory(parent?.directory ?: session.directory)
-                ActiveSubagentItem(
-                    sessionId = session.id,
-                    title = session.title ?: "",
-                    agentName = null,
-                    parentSessionId = session.parentId!!,
-                    parentTitle = parent?.title,
-                    projectName = displayNameFromDirectory(projectDirectory),
-                    status = mappedStatus,
-                    updatedAt = session.time.updated,
-                )
-            }
-            .sortedByDescending { it.updatedAt }
-            .toList()
+        val activeSubagents = buildActiveSubagents(
+            sessions = serverScopedSessions,
+            statuses = statuses,
+            showHistoricalSubagents = showHistoricalSubagents,
+        )
 
         val (rootSessions, childSessions) = serverScopedSessions.partition { it.parentId == null }
         val childBuckets = childSessions.groupBy { it.parentId!! }
@@ -660,4 +648,41 @@ class SessionListViewModel @Inject constructor(
     private fun displayNameFromDirectory(directory: String): String {
         return if (directory == "/") "/" else directory.substringAfterLast('/').ifEmpty { directory }
     }
+}
+
+internal fun buildActiveSubagents(
+    sessions: List<Session>,
+    statuses: Map<String, SessionStatus>,
+    showHistoricalSubagents: Boolean,
+): List<ActiveSubagentItem> {
+    fun normalizeDir(directory: String): String = directory.trimEnd('/').ifEmpty { "/" }
+    fun displayName(directory: String): String = if (directory == "/") "/" else directory.substringAfterLast('/').ifEmpty { directory }
+
+    val sessionsById = sessions.associateBy { it.id }
+    return sessions
+        .asSequence()
+        .filter { it.parentId != null && !it.isArchived }
+        .mapNotNull { session ->
+            val status = statuses[session.id] ?: SessionStatus.Idle
+            val mappedStatus = when (status) {
+                SessionStatus.Busy -> SubagentStatus.BUSY
+                is SessionStatus.Retry -> SubagentStatus.RETRY
+                SessionStatus.Idle -> if (showHistoricalSubagents) SubagentStatus.IDLE else null
+            } ?: return@mapNotNull null
+
+            val parent = session.parentId?.let(sessionsById::get)
+            val projectDirectory = normalizeDir(parent?.directory ?: session.directory)
+            ActiveSubagentItem(
+                sessionId = session.id,
+                title = session.title ?: "",
+                agentName = null,
+                parentSessionId = session.parentId!!,
+                parentTitle = parent?.title,
+                projectName = displayName(projectDirectory),
+                status = mappedStatus,
+                updatedAt = session.time.updated,
+            )
+        }
+        .sortedByDescending { it.updatedAt }
+        .toList()
 }
