@@ -306,26 +306,9 @@ class SessionListViewModel @Inject constructor(
                 _projects.value = projects
                 if (BuildConfig.DEBUG) Log.d(TAG, "Loaded ${projects.size} projects for multi-project session fetch")
 
-                if (projects.isEmpty()) {
-                    // Fallback: load sessions without directory header (server CWD only)
-                    val sessions = api.listSessions(conn)
-                    eventReducer.setSessions(serverId, sessions)
-                    if (BuildConfig.DEBUG) Log.d(TAG, "Loaded ${sessions.size} sessions (no projects)")
-                } else {
-                    // Load sessions for each project using its worktree as directory
-                    var totalSessions = 0
-                    for (project in projects) {
-                        try {
-                            val sessions = api.listSessions(conn, directory = project.worktree)
-                            eventReducer.setSessions(serverId, sessions)
-                            totalSessions += sessions.size
-                            if (BuildConfig.DEBUG) Log.d(TAG, "Loaded ${sessions.size} sessions for project ${project.displayName}")
-                        } catch (e: Exception) {
-                            Log.w(TAG, "Failed to load sessions for project ${project.displayName}: ${e.message}")
-                        }
-                    }
-                    if (BuildConfig.DEBUG) Log.d(TAG, "Total: loaded $totalSessions sessions across ${projects.size} projects for server $serverId")
-                }
+                val sessions = api.listSessions(conn)
+                eventReducer.setSessions(serverId, sessions)
+                if (BuildConfig.DEBUG) Log.d(TAG, "Loaded ${sessions.size} sessions (${projects.size} projects for grouping)")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to load sessions", e)
                 _error.value = e.message ?: "Failed to load sessions"
