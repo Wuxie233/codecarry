@@ -1,0 +1,159 @@
+package dev.minios.ocremote.ui.screens.sessions
+
+import dev.minios.ocremote.domain.model.Session
+import dev.minios.ocremote.domain.model.SessionStatus
+import dev.minios.ocremote.domain.model.SseEvent
+import dev.minios.ocremote.ui.screens.sessions.components.ConversationStatus
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class BuildActiveConversationsTest {
+
+    @Test
+    fun `idle root with no pending decisions is excluded`() {
+        val root = rootSession("root1", updated = 100)
+
+        val items = buildActiveConversations(
+            rootSessions = listOf(root),
+            statuses = mapOf(root.id to SessionStatus.Idle),
+            pendingQuestions = emptyMap(),
+            pendingPermissions = emptyMap(),
+        )
+
+        assertTrue(items.isEmpty())
+    }
+
+    @Test
+    fun `busy root is included with BUSY status`() {
+        val root = rootSession("root1", updated = 100)
+
+        val items = buildActiveConversations(
+            rootSessions = listOf(root),
+            statuses = mapOf(root.id to SessionStatus.Busy),
+            pendingQuestions = emptyMap(),
+            pendingPermissions = emptyMap(),
+        )
+
+        assertEquals(1, items.size)
+        assertEquals(ConversationStatus.BUSY, items[0].status)
+        assertEquals(0, items[0].pendingCount)
+    }
+
+    @Test
+    fun `retry root is included with RETRY status`() {
+        val root = rootSession("root1", updated = 100)
+        val retry = SessionStatus.Retry(attempt = 2, message = "retrying", next = 0L)
+
+        val items = buildActiveConversations(
+            rootSessions = listOf(root),
+            statuses = mapOf(root.id to retry),
+            pendingQuestions = emptyMap(),
+            pendingPermissions = emptyMap(),
+        )
+
+        assertEquals(1, items.size)
+        assertEquals(ConversationStatus.RETRY, items[0].status)
+    }
+
+    @Test
+    fun `pending question wins over busy and sets pendingCount`() {
+        val root = rootSession("root1", updated = 100)
+
+        val items = buildActiveConversations(
+            rootSessions = listOf(root),
+            statuses = mapOf(root.id to SessionStatus.Busy),
+            pendingQuestions = mapOf(root.id to listOf(questionAsked("q1"), questionAsked("q2"))),
+            pendingPermissions = emptyMap(),
+        )
+
+        assertEquals(1, items.size)
+        assertEquals(ConversationStatus.AWAITING_QUESTION, items[0].status)
+        assertEquals(2, items[0].pendingCount)
+    }
+
+    @Test
+    fun `pending permission wins over busy but loses to pending question`() {
+        val permissionOnly = rootSession("root1", updated = 100)
+        val bothPending = rootSession("root2", updated = 90)
+
+        val items = buildActiveConversations(
+            rootSessions = listOf(permissionOnly, bothPending),
+            statuses = mapOf(
+                permissionOnly.id to SessionStatus.Busy,
+                bothPending.id to SessionStatus.Idle,
+            ),
+            pendingQuestions = mapOf(
+                bothPending.id to listOf(questionAsked("q1")),
+            ),
+            pendingPermissions = mapOf(
+                permissionOnly.id to listOf(permissionAsked("p1")),
+                bothPending.id to listOf(permissionAsked("p2")),
+            ),
+        )
+
+        assertEquals(listOf("root2", "root1"), items.map { it.sessionId })
+        assertEquals(ConversationStatus.AWAITING_QUESTION, items[0].status)
+        assertEquals(ConversationStatus.AWAITING_PERMISSION, items[1].status)
+    }
+
+    @Test
+    fun `status priority comes before updated time and within-priority sorts by updated desc`() {
+        val question1 = rootSession("q1", updated = 100)
+        val question2 = rootSession("q2", updated = 200)
+        val busy1 = rootSession("b1", updated = 500)
+        val retry1 = rootSession("r1", updated = 999)
+
+        val items = buildActiveConversations(
+            rootSessions = listOf(question1, question2, busy1, retry1),
+            statuses = mapOf(
+                busy1.id to SessionStatus.Busy,
+                retry1.id to SessionStatus.Retry(1, "x", 0L),
+            ),
+            pendingQuestions = mapOf(
+                question1.id to listOf(questionAsked("qa1")),
+                question2.id to listOf(questionAsked("qa2")),
+            ),
+            pendingPermissions = emptyMap(),
+        )
+
+        assertEquals(listOf("q2", "q1", "b1", "r1"), items.map { it.sessionId })
+    }
+
+    @Test
+    fun `archived root is excluded even if it has pending decisions`() {
+        val archived = rootSession("root1", updated = 100, archivedAt = 50L)
+
+        val items = buildActiveConversations(
+            rootSessions = listOf(archived),
+            statuses = mapOf(archived.id to SessionStatus.Busy),
+            pendingQuestions = mapOf(archived.id to listOf(questionAsked("q1"))),
+            pendingPermissions = emptyMap(),
+        )
+
+        assertTrue(items.isEmpty())
+    }
+
+    private fun rootSession(id: String, updated: Long, archivedAt: Long? = null) = Session(
+        id = id,
+        slug = id,
+        projectId = "p",
+        directory = "/root/CODE/demo",
+        parentId = null,
+        title = id,
+        version = "1.0.0",
+        time = Session.Time(created = updated - 10, updated = updated, archived = archivedAt),
+    )
+
+    private fun questionAsked(id: String) = SseEvent.QuestionAsked(
+        id = id,
+        sessionId = "s",
+        questions = emptyList(),
+    )
+
+    private fun permissionAsked(id: String) = SseEvent.PermissionAsked(
+        id = id,
+        sessionId = "s",
+        permission = "p",
+    )
+}

@@ -60,7 +60,7 @@ import java.text.SimpleDateFormat
 import java.util.*
 import androidx.compose.animation.core.*
 import androidx.compose.ui.graphics.graphicsLayer
-import dev.minios.ocremote.ui.screens.sessions.components.ActiveSubagentBanner
+import dev.minios.ocremote.ui.screens.sessions.components.ActiveConversationsBanner
 import dev.minios.ocremote.ui.screens.sessions.components.ProjectGroupHeader
 import dev.minios.ocremote.ui.screens.sessions.components.SessionListTopControls
 
@@ -317,8 +317,8 @@ fun SessionListScreen(
                         modifier = Modifier.fillMaxSize(),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        ActiveSubagentBanner(
-                            items = uiState.activeSubagents,
+                        ActiveConversationsBanner(
+                            items = uiState.activeConversations,
                             onClick = { sessionId -> onNavigateToChat(sessionId, false) },
                         )
 

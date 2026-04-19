@@ -23,9 +23,14 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.HelpOutline
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -41,21 +46,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.minios.ocremote.R
 
-private val AGENT_COLORS: Map<String, Color> = mapOf(
-    "explore" to Color(0xFF4FC3F7),
-    "oracle" to Color(0xFFBA68C8),
-    "librarian" to Color(0xFFFFB74D),
-    "plan" to Color(0xFF81C784),
-    "build" to Color(0xFF64B5F6),
-    "artistry" to Color(0xFFF06292),
-    "general" to Color(0xFF90A4AE),
-    "metis" to Color(0xFFCE93D8),
-    "momus" to Color(0xFFA5D6A7),
-)
-
 @Composable
-fun ActiveSubagentBanner(
-    items: List<ActiveSubagentItem>,
+fun ActiveConversationsBanner(
+    items: List<ActiveConversationItem>,
     onClick: (sessionId: String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -77,7 +70,7 @@ fun ActiveSubagentBanner(
             }
 
             Text(
-                text = stringResource(R.string.sessions_active_subagents_title, items.size),
+                text = stringResource(R.string.sessions_active_conversations_title, items.size),
                 modifier = Modifier.padding(horizontal = 16.dp),
                 style = MaterialTheme.typography.labelMedium,
                 color = colors.onSurface.copy(alpha = 0.75f)
@@ -90,7 +83,7 @@ fun ActiveSubagentBanner(
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 items(items, key = { it.sessionId }) { item ->
-                    ActiveSubagentCard(item = item, isAmoled = isAmoled, onClick = onClick)
+                    ActiveConversationCard(item = item, isAmoled = isAmoled, onClick = onClick)
                 }
             }
 
@@ -103,19 +96,23 @@ fun ActiveSubagentBanner(
 }
 
 @Composable
-private fun ActiveSubagentCard(
-    item: ActiveSubagentItem,
+private fun ActiveConversationCard(
+    item: ActiveConversationItem,
     isAmoled: Boolean,
     onClick: (sessionId: String) -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
-    val statusColor = when (item.status) {
-        SubagentStatus.BUSY -> colors.primary
-        SubagentStatus.RETRY -> colors.error
-        SubagentStatus.IDLE -> colors.onSurface.copy(alpha = 0.35f)
+    val (statusColor, statusLabelRes) = when (item.status) {
+        ConversationStatus.AWAITING_QUESTION -> colors.tertiary to R.string.sessions_conversation_status_question
+        ConversationStatus.AWAITING_PERMISSION -> colors.secondary to R.string.sessions_conversation_status_permission
+        ConversationStatus.BUSY -> colors.primary to R.string.sessions_conversation_status_busy
+        ConversationStatus.RETRY -> colors.error to R.string.sessions_conversation_status_retry
     }
-    val agentLabel = item.agentName?.takeIf { it.isNotBlank() } ?: stringResource(R.string.session_agent_none)
-    val agentColor = item.agentName?.let { AGENT_COLORS[it.lowercase()] } ?: colors.tertiary
+    val statusLabel = if (item.pendingCount > 0) {
+        stringResource(R.string.sessions_conversation_status_pending_count, stringResource(statusLabelRes), item.pendingCount)
+    } else {
+        stringResource(statusLabelRes)
+    }
     val (timeRes, timeValue) = relativeTimeString(item.updatedAt)
     val relativeTime = if (timeValue == null) {
         stringResource(timeRes)
@@ -125,7 +122,7 @@ private fun ActiveSubagentCard(
 
     Card(
         modifier = Modifier
-            .width(210.dp)
+            .width(230.dp)
             .height(72.dp)
             .clickable { onClick(item.sessionId) },
         shape = RoundedCornerShape(14.dp),
@@ -139,10 +136,10 @@ private fun ActiveSubagentCard(
                 .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            PulsingStatusDot(
+            ConversationStatusIcon(
+                status = item.status,
                 color = statusColor,
-                animate = item.status == SubagentStatus.BUSY,
-                modifier = Modifier.size(10.dp)
+                modifier = Modifier.size(18.dp),
             )
 
             Column(
@@ -151,7 +148,7 @@ private fun ActiveSubagentCard(
                     .padding(start = 10.dp)
             ) {
                 Text(
-                    text = item.parentTitle?.takeIf { it.isNotBlank() }
+                    text = item.title?.takeIf { it.isNotBlank() }
                         ?: stringResource(R.string.session_untitled),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -165,13 +162,13 @@ private fun ActiveSubagentCard(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = agentLabel,
+                        text = statusLabel,
                         modifier = Modifier
                             .clip(RoundedCornerShape(6.dp))
-                            .background(agentColor.copy(alpha = 0.15f))
+                            .background(statusColor.copy(alpha = 0.15f))
                             .padding(horizontal = 6.dp, vertical = 2.dp),
                         style = MaterialTheme.typography.labelSmall,
-                        color = agentColor,
+                        color = statusColor,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -197,6 +194,39 @@ private fun ActiveSubagentCard(
     }
 }
 
+@Composable
+private fun ConversationStatusIcon(
+    status: ConversationStatus,
+    color: Color,
+    modifier: Modifier = Modifier,
+) {
+    when (status) {
+        ConversationStatus.AWAITING_QUESTION -> Icon(
+            imageVector = Icons.AutoMirrored.Filled.HelpOutline,
+            contentDescription = stringResource(R.string.sessions_conversation_status_question),
+            tint = color,
+            modifier = modifier,
+        )
+        ConversationStatus.AWAITING_PERMISSION -> Icon(
+            imageVector = Icons.Default.Lock,
+            contentDescription = stringResource(R.string.sessions_conversation_status_permission),
+            tint = color,
+            modifier = modifier,
+        )
+        ConversationStatus.BUSY -> PulsingStatusDot(
+            color = color,
+            animate = true,
+            modifier = modifier,
+        )
+        ConversationStatus.RETRY -> Icon(
+            imageVector = Icons.Default.Refresh,
+            contentDescription = stringResource(R.string.sessions_conversation_status_retry),
+            tint = color,
+            modifier = modifier,
+        )
+    }
+}
+
 private fun relativeTimeString(updated: Long, now: Long = System.currentTimeMillis()): Pair<Int, Int?> {
     val diff = (now - updated).coerceAtLeast(0)
     val m = diff / 60_000
@@ -212,7 +242,7 @@ private fun relativeTimeString(updated: Long, now: Long = System.currentTimeMill
 
 @Composable
 private fun PulsingStatusDot(color: Color, animate: Boolean, modifier: Modifier = Modifier) {
-    val transition = if (animate) rememberInfiniteTransition(label = "subagent_status_dot") else null
+    val transition = if (animate) rememberInfiniteTransition(label = "conversation_status_dot") else null
     val scale by if (transition != null) {
         transition.animateFloat(
             initialValue = 0.7f,
@@ -221,7 +251,7 @@ private fun PulsingStatusDot(color: Color, animate: Boolean, modifier: Modifier 
                 animation = tween(durationMillis = 1100, easing = LinearEasing),
                 repeatMode = RepeatMode.Reverse
             ),
-            label = "subagent_status_scale"
+            label = "conversation_status_scale"
         )
     } else {
         androidx.compose.runtime.remember { androidx.compose.runtime.mutableFloatStateOf(1.0f) }
@@ -234,7 +264,7 @@ private fun PulsingStatusDot(color: Color, animate: Boolean, modifier: Modifier 
                 animation = tween(durationMillis = 1100, easing = LinearEasing),
                 repeatMode = RepeatMode.Reverse
             ),
-            label = "subagent_status_alpha"
+            label = "conversation_status_alpha"
         )
     } else {
         androidx.compose.runtime.remember { androidx.compose.runtime.mutableFloatStateOf(1.0f) }
