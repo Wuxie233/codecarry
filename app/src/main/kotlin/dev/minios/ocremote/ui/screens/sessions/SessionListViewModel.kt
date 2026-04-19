@@ -307,14 +307,31 @@ class SessionListViewModel @Inject constructor(
             _isLoading.value = true
             _error.value = null
             try {
-                // Load all projects first
                 val projects = api.listProjects(conn)
                 _projects.value = projects
-                if (BuildConfig.DEBUG) Log.d(TAG, "Loaded ${projects.size} projects for multi-project session fetch")
 
-                val sessions = api.listSessions(conn)
-                eventReducer.setSessions(serverId, sessions)
-                if (BuildConfig.DEBUG) Log.d(TAG, "Loaded ${sessions.size} sessions (${projects.size} projects for grouping)")
+                val roots = api.listSessions(conn, rootsOnly = true)
+                eventReducer.setSessions(serverId, roots)
+                if (BuildConfig.DEBUG) Log.d(TAG, "Loaded ${roots.size} root sessions, fetching children across ${projects.size} projects")
+
+                coroutineScope {
+                    projects.map { project ->
+                        async {
+                            try {
+                                api.listSessions(conn, directory = project.worktree, rootsOnly = false)
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Failed to load children for project ${project.displayName}: ${e.message}")
+                                emptyList()
+                            }
+                        }
+                    }.awaitAll().flatten()
+                }.takeIf { it.isNotEmpty() }?.let { all ->
+                    val children = all.filter { it.parentId != null }
+                    if (children.isNotEmpty()) {
+                        eventReducer.setSessions(serverId, children)
+                        if (BuildConfig.DEBUG) Log.d(TAG, "Loaded ${children.size} child sessions")
+                    }
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to load sessions", e)
                 _error.value = e.message ?: "Failed to load sessions"

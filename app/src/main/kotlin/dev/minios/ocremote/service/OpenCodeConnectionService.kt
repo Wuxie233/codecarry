@@ -389,9 +389,25 @@ class OpenCodeConnectionService : Service() {
                 Log.i(TAG, "[${server.displayName}] SSE connection attempt #$attempt")
 
                 try {
-                    val sessions = api.listSessions(conn)
-                    eventReducer.setSessions(server.id, sessions)
-                    Log.i(TAG, "[${server.displayName}] Pre-loaded ${sessions.size} sessions")
+                    val roots = api.listSessions(conn, rootsOnly = true)
+                    eventReducer.setSessions(server.id, roots)
+                    Log.i(TAG, "[${server.displayName}] Pre-loaded ${roots.size} root sessions")
+
+                    val projects = try { api.listProjects(conn) } catch (_: Exception) { emptyList() }
+                    var childCount = 0
+                    for (project in projects) {
+                        try {
+                            val all = api.listSessions(conn, directory = project.worktree, rootsOnly = false)
+                            val children = all.filter { it.parentId != null }
+                            if (children.isNotEmpty()) {
+                                eventReducer.setSessions(server.id, children)
+                                childCount += children.size
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "[${server.displayName}] Failed to pre-load children for ${project.displayName}: ${e.message}")
+                        }
+                    }
+                    Log.i(TAG, "[${server.displayName}] Pre-loaded $childCount child sessions across ${projects.size} projects")
                 } catch (e: Exception) {
                     Log.w(TAG, "[${server.displayName}] Failed to pre-load sessions: ${e.message}")
                 }

@@ -113,11 +113,15 @@ class OpenCodeApi @Inject constructor(
 
     // ============ Session ============
 
-    suspend fun listSessions(conn: ServerConnection, directory: String? = null): List<Session> {
+    suspend fun listSessions(
+        conn: ServerConnection,
+        directory: String? = null,
+        rootsOnly: Boolean = true,
+    ): List<Session> {
         return httpClient.get("${conn.baseUrl}/session") {
             conn.authHeader?.let { header("Authorization", it) }
             directory?.let { header("x-opencode-directory", it) }
-            parameter("roots", "true")
+            if (rootsOnly) parameter("roots", "true")
         }.body()
     }
 

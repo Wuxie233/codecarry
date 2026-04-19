@@ -865,6 +865,8 @@ fun ChatScreen(
     }
     val listState = rememberLazyListState()
     var showModelPicker by remember { mutableStateOf(false) }
+    var showAgentPicker by remember { mutableStateOf(false) }
+    var showVariantPicker by remember { mutableStateOf(false) }
     var showRenameDialog by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
     var isTerminalMode by rememberSaveable { mutableStateOf(startInTerminalMode) }
@@ -1781,10 +1783,10 @@ fun ChatScreen(
                 onModelClick = { showModelPicker = true },
                 agents = uiState.agents,
                 selectedAgent = uiState.selectedAgent,
-                onAgentSelect = { viewModel.selectAgent(it) },
+                onAgentClick = { showAgentPicker = true },
                 variantNames = uiState.variantNames,
                 selectedVariant = uiState.selectedVariant,
-                onCycleVariant = { viewModel.cycleVariant() },
+                onVariantClick = { showVariantPicker = true },
                 commands = uiState.commands,
                 fileSearchResults = fileSearchResults,
                 confirmedFilePaths = confirmedFilePaths,
@@ -2506,6 +2508,47 @@ fun ChatScreen(
         )
     }
 
+    if (showAgentPicker) {
+        val options = uiState.agents.map { agent ->
+            ChoicePickerOption(
+                key = agent.name,
+                title = agent.name.replaceFirstChar { it.uppercase() },
+                subtitle = agent.description,
+                accentColor = agentColor(agent.name, uiState.agents),
+            )
+        }
+        ChoicePickerDialog(
+            title = stringResource(R.string.chat_agent_picker_title),
+            options = options,
+            selectedKey = uiState.selectedAgent,
+            onSelect = {
+                viewModel.selectAgent(it)
+                showAgentPicker = false
+            },
+            onDismiss = { showAgentPicker = false },
+        )
+    }
+
+    if (showVariantPicker) {
+        val defaultKey = "__default__"
+        val options = buildList {
+            add(ChoicePickerOption(key = defaultKey, title = stringResource(R.string.chat_default_variant)))
+            uiState.variantNames.forEach { variant ->
+                add(ChoicePickerOption(key = variant, title = variant.replaceFirstChar { it.uppercase() }))
+            }
+        }
+        ChoicePickerDialog(
+            title = stringResource(R.string.chat_variant_picker_title),
+            options = options,
+            selectedKey = uiState.selectedVariant ?: defaultKey,
+            onSelect = {
+                viewModel.selectVariant(it.takeUnless { key -> key == defaultKey })
+                showVariantPicker = false
+            },
+            onDismiss = { showVariantPicker = false },
+        )
+    }
+
     // Rename dialog
     if (showRenameDialog) {
         var renameText by remember { mutableStateOf(uiState.sessionTitle) }
@@ -2674,6 +2717,100 @@ private fun ModelPickerDialog(
                                         text = stringResource(R.string.chat_free_label),
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.8f)
+                                    )
+                                }
+                            }
+                            if (isSelected) {
+                                Icon(
+                                    Icons.Default.Check,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp),
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private data class ChoicePickerOption(
+    val key: String,
+    val title: String,
+    val subtitle: String? = null,
+    val accentColor: Color? = null,
+)
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ChoicePickerDialog(
+    title: String,
+    options: List<ChoicePickerOption>,
+    selectedKey: String,
+    onSelect: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val isAmoled = isAmoledTheme()
+    BasicAlertDialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = if (isAmoled) Color.Black else MaterialTheme.colorScheme.surface,
+            border = if (isAmoled) BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)) else null,
+            tonalElevation = if (isAmoled) 0.dp else 6.dp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 560.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp)
+                )
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    items(options, key = { it.key }) { option ->
+                        val isSelected = option.key == selectedKey
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(
+                                    if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+                                    else Color.Transparent
+                                )
+                                .clickable { onSelect(option.key) }
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = option.title,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = option.accentColor
+                                        ?: if (isSelected) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                option.subtitle?.takeIf { it.isNotBlank() }?.let { subtitle ->
+                                    Text(
+                                        text = subtitle,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis
                                     )
                                 }
                             }
@@ -5975,10 +6112,10 @@ private fun ChatInputBar(
     onModelClick: () -> Unit = {},
     agents: List<AgentInfo> = emptyList(),
     selectedAgent: String = "build",
-    onAgentSelect: (String) -> Unit = {},
+    onAgentClick: () -> Unit = {},
     variantNames: List<String> = emptyList(),
     selectedVariant: String? = null,
-    onCycleVariant: () -> Unit = {},
+    onVariantClick: () -> Unit = {},
     commands: List<CommandInfo> = emptyList(),
     fileSearchResults: List<String> = emptyList(),
     confirmedFilePaths: Set<String> = emptySet(),
@@ -6258,35 +6395,27 @@ private fun ChatInputBar(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        // Agent selector — single button, tap to cycle
-                        // Fixed width: all agent names rendered invisible to reserve max width
                         if (agents.size > 1) {
                             val agentColor = agentColor(selectedAgent, agents)
-                            Box(
-                                contentAlignment = Alignment.Center,
+                            Row(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(6.dp))
                                     .background(agentColor.copy(alpha = 0.18f))
-                                    .clickable {
-                                        val currentIndex = agents.indexOfFirst { it.name == selectedAgent }
-                                        val nextIndex = (currentIndex + 1) % agents.size
-                                        onAgentSelect(agents[nextIndex].name)
-                                    }
-                                    .padding(horizontal = 6.dp, vertical = 3.dp)
+                                    .clickable(onClick = onAgentClick)
+                                    .padding(horizontal = 6.dp, vertical = 3.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
-                                // Invisible ghost texts for all agent names — fixes width to the widest
-                                agents.forEach { agent ->
-                                    Text(
-                                        text = agent.name.replaceFirstChar { it.uppercase() },
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = Color.Transparent
-                                    )
-                                }
-                                // Visible label with accent color
                                 Text(
                                     text = selectedAgent.replaceFirstChar { it.uppercase() },
                                     style = MaterialTheme.typography.labelSmall,
                                     color = agentColor
+                                )
+                                Icon(
+                                    Icons.Default.UnfoldMore,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(14.dp),
+                                    tint = agentColor.copy(alpha = 0.75f)
                                 )
                             }
                         }
@@ -6322,21 +6451,31 @@ private fun ChatInputBar(
                             }
                         }
 
-                        // Variant cycle button (thinking effort) — THIRD
                         if (variantNames.isNotEmpty()) {
-                            Text(
-                                text = selectedVariant?.replaceFirstChar { it.uppercase() } ?: stringResource(R.string.chat_default_variant),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = if (selectedVariant != null) {
-                                    MaterialTheme.colorScheme.tertiary
-                                } else {
-                                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                                },
+                            Row(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(6.dp))
-                                    .clickable { onCycleVariant() }
-                                    .padding(horizontal = 3.dp, vertical = 3.dp)
-                            )
+                                    .clickable(onClick = onVariantClick)
+                                    .padding(horizontal = 3.dp, vertical = 3.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Text(
+                                    text = selectedVariant?.replaceFirstChar { it.uppercase() } ?: stringResource(R.string.chat_default_variant),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (selectedVariant != null) {
+                                        MaterialTheme.colorScheme.tertiary
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                    }
+                                )
+                                Icon(
+                                    Icons.Default.UnfoldMore,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(14.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                )
+                            }
                         }
 
                     }
