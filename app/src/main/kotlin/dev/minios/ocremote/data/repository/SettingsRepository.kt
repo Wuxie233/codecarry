@@ -35,6 +35,7 @@ class SettingsRepository @Inject constructor(
         private val AMOLED_DARK_KEY = booleanPreferencesKey("amoled_dark")
         private val COMPACT_MESSAGES_KEY = booleanPreferencesKey("compact_messages")
         private val COLLAPSE_TOOLS_KEY = booleanPreferencesKey("collapse_tools")
+        private val SHOW_HISTORICAL_SUBAGENTS_KEY = booleanPreferencesKey("show_historical_subagents")
         private val HAPTIC_FEEDBACK_KEY = booleanPreferencesKey("haptic_feedback")
         private val RECONNECT_MODE_KEY = stringPreferencesKey("reconnect_mode")
         private val KEEP_SCREEN_ON_KEY = booleanPreferencesKey("keep_screen_on")
@@ -222,6 +223,20 @@ class SettingsRepository @Inject constructor(
     suspend fun setCollapseTools(enabled: Boolean) {
         dataStore.edit { preferences ->
             preferences[COLLAPSE_TOOLS_KEY] = enabled
+        }
+    }
+
+    /**
+     * Whether idle historical subagents should also be shown in the session list banner.
+     * Default: false (show only currently working subagents).
+     */
+    val showHistoricalSubagents: Flow<Boolean> = dataStore.data.map { preferences ->
+        preferences[SHOW_HISTORICAL_SUBAGENTS_KEY] ?: false
+    }
+
+    suspend fun setShowHistoricalSubagents(enabled: Boolean) {
+        dataStore.edit { preferences ->
+            preferences[SHOW_HISTORICAL_SUBAGENTS_KEY] = enabled
         }
     }
 

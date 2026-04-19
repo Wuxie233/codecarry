@@ -81,6 +81,12 @@ class SettingsViewModel @Inject constructor(
         initialValue = false
     )
 
+    val showHistoricalSubagents = settingsRepository.showHistoricalSubagents.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = false
+    )
+
     val hapticFeedback = settingsRepository.hapticFeedback.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
@@ -252,6 +258,12 @@ class SettingsViewModel @Inject constructor(
     fun setCollapseTools(enabled: Boolean) {
         viewModelScope.launch {
             settingsRepository.setCollapseTools(enabled)
+        }
+    }
+
+    fun setShowHistoricalSubagents(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsRepository.setShowHistoricalSubagents(enabled)
         }
     }
 
