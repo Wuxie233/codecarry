@@ -318,6 +318,16 @@
     <string name="settings_silent_notifications">静默通知</string>
     <string name="settings_silent_notifications_desc">任务通知不响铃、不震动</string>
     <string name="dialog_select_reconnect_mode">选择重连模式</string>
+    <string name="settings_check_for_updates">检查更新</string>
+    <string name="settings_check_for_updates_version">当前版本：%1$s</string>
+    <string name="settings_update_api_override">更新 API 覆盖（调试）</string>
+    <string name="settings_update_checking">正在检查更新…</string>
+    <string name="settings_update_up_to_date">当前已是最新版本</string>
+    <string name="settings_update_available">发现新版本 %1$s</string>
+    <string name="settings_update_downloading">下载中…</string>
+    <string name="settings_update_ready">准备安装版本 %1$s</string>
+    <string name="settings_update_download">下载</string>
+    <string name="settings_update_install">安装</string>
     <string name="notification_channel_connection_desc">与 OpenCode 服务器保持连接</string>
     <string name="notification_channel_tasks_desc">OpenCode 任务完成时通知</string>
     <string name="notification_channel_tasks_silent">任务通知（静默）</string>

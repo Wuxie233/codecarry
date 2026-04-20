@@ -46,9 +46,11 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import dev.minios.ocremote.BuildConfig
 import dev.minios.ocremote.R
 import dev.minios.ocremote.data.repository.LocalServerManager
 import java.util.Locale
+import androidx.compose.material.icons.filled.CloudDownload
 import kotlin.math.roundToInt
 
 /**
@@ -91,6 +93,8 @@ fun SettingsScreen(
     val localServerRunInBackground by viewModel.localServerRunInBackground.collectAsState()
     val localServerAutoStart by viewModel.localServerAutoStart.collectAsState()
     val localServerStartupTimeoutSec by viewModel.localServerStartupTimeoutSec.collectAsState()
+    val appUpdateUiState by viewModel.appUpdateUiState.collectAsState()
+    val debugUpdateApiUrl by viewModel.debugUpdateApiUrl.collectAsState()
 
     var showLanguageDialog by remember { mutableStateOf(false) }
     var showThemeDialog by remember { mutableStateOf(false) }
@@ -445,6 +449,23 @@ fun SettingsScreen(
                 modifier = Modifier.clickable { showLocalLaunchOptionsDialog = true },
             )
 
+            ListItem(
+                headlineContent = { Text(stringResource(R.string.settings_check_for_updates)) },
+                supportingContent = { Text(stringResource(R.string.settings_check_for_updates_version, BuildConfig.VERSION_NAME)) },
+                leadingContent = { Icon(Icons.Default.CloudDownload, contentDescription = null) },
+                modifier = Modifier.clickable { viewModel.checkForAppUpdates() },
+            )
+
+            if (BuildConfig.DEBUG) {
+                OutlinedTextField(
+                    value = debugUpdateApiUrl,
+                    onValueChange = { viewModel.setDebugUpdateApiUrl(it) },
+                    label = { Text(stringResource(R.string.settings_update_api_override)) },
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                    singleLine = true,
+                )
+            }
+
             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
 
             // ======== Notifications ========
@@ -571,6 +592,15 @@ fun SettingsScreen(
                     showImageQualityDialog = false
                 },
                 onDismiss = { showImageQualityDialog = false }
+            )
+        }
+
+        if (appUpdateUiState !is AppUpdateUiState.Idle) {
+            AppUpdateDialog(
+                state = appUpdateUiState,
+                onCheckForUpdates = { viewModel.checkForAppUpdates() },
+                onDownload = { viewModel.downloadAvailableUpdate() },
+                onDismiss = { viewModel.dismissAppUpdateDialog() },
             )
         }
 

@@ -407,6 +407,16 @@
     <string name="settings_silent_notifications">Silent notifications</string>
     <string name="settings_silent_notifications_desc">Suppress sound and vibration for task notifications</string>
     <string name="dialog_select_reconnect_mode">Select reconnect mode</string>
+    <string name="settings_check_for_updates">Check for updates</string>
+    <string name="settings_check_for_updates_version">Current version: %1$s</string>
+    <string name="settings_update_api_override">Update API override (debug)</string>
+    <string name="settings_update_checking">Checking for updates…</string>
+    <string name="settings_update_up_to_date">Your app is up to date</string>
+    <string name="settings_update_available">Version %1$s is available</string>
+    <string name="settings_update_downloading">Downloading…</string>
+    <string name="settings_update_ready">Ready to install version %1$s</string>
+    <string name="settings_update_download">Download</string>
+    <string name="settings_update_install">Install</string>
 
     <!-- Server Settings -->
     <string name="server_settings_title">Server Settings</string>
