@@ -140,7 +140,12 @@
     <string name="session_changes_additions">+%1$d</string>
     <string name="session_changes_deletions">-%1$d</string>
     <string name="session_untitled">Untitled session</string>
-    <string name="sessions_active_subagents_title">Active Subagents · %1$d</string>
+    <string name="sessions_active_conversations_title">Active Conversations · %1$d</string>
+    <string name="sessions_conversation_status_question">Awaiting reply</string>
+    <string name="sessions_conversation_status_permission">Awaiting permission</string>
+    <string name="sessions_conversation_status_busy">Running</string>
+    <string name="sessions_conversation_status_retry">Retrying</string>
+    <string name="sessions_conversation_status_pending_count">%1$s · %2$d</string>
     <string name="sessions_project_actions">Project actions</string>
     <string name="sessions_project_new_here">New session in this project</string>
     <string name="sessions_project_pin">Pin project</string>
@@ -152,6 +157,8 @@
     <string name="sessions_project_active_count">· %1$d active</string>
     <string name="sessions_project_path_copied">Path copied</string>
     <string name="sessions_subagents_toggle">%1$d subagents</string>
+    <string name="sessions_subagents_running_toggle">%1$d running subagents</string>
+    <string name="sessions_subagents_historical_toggle">%1$d historical subagents</string>
     <string name="sessions_subagents_show">Show subagents</string>
     <string name="sessions_subagents_hide">Hide subagents</string>
     <string name="sessions_child_session_fallback">Child session</string>
@@ -171,6 +178,8 @@
     <string name="chat_abort">Abort</string>
     <string name="chat_empty">Start a conversation with OpenCode</string>
     <string name="chat_copy">Copy</string>
+    <string name="chat_bubble_menu_copy">Copy</string>
+    <string name="chat_bubble_menu_edit">Edit</string>
     <string name="chat_revert">Revert</string>
     <string name="chat_revert_title">Revert message?</string>
     <string name="chat_revert_message">This will undo this message and all subsequent messages. File changes will be reversed.</string>

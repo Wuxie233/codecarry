@@ -78,6 +78,8 @@
     <string name="session_delete_confirm">确定要删除“%1$s”？此操作无法撤销。</string>
     <string name="chat_stop">停止</string>
     <string name="chat_copy">复制</string>
+    <string name="chat_bubble_menu_copy">复制</string>
+    <string name="chat_bubble_menu_edit">编辑</string>
     <string name="chat_revert">还原</string>
     <string name="chat_revert_title">还原消息？</string>
     <string name="chat_revert_message">此操作将撤销该消息及之后所有消息，文件更改也将被回退。</string>
@@ -176,7 +178,12 @@
     <string name="home_battery_message">后台连接可能被终止。点击关闭优化。</string>
     <string name="server_invalid_url">URL 格式无效</string>
     <string name="session_untitled">无标题会话</string>
-    <string name="sessions_active_subagents_title">活跃子代理 · %1$d</string>
+    <string name="sessions_active_conversations_title">活跃对话 · %1$d</string>
+    <string name="sessions_conversation_status_question">待回复</string>
+    <string name="sessions_conversation_status_permission">待授权</string>
+    <string name="sessions_conversation_status_busy">运行中</string>
+    <string name="sessions_conversation_status_retry">重试中</string>
+    <string name="sessions_conversation_status_pending_count">%1$s · %2$d</string>
     <string name="sessions_search_hint">搜索会话</string>
     <string name="sessions_search_clear">清除搜索</string>
     <string name="sessions_sort">排序</string>
@@ -199,6 +206,8 @@
     <string name="sessions_project_active_count">· %1$d 个活跃</string>
     <string name="sessions_project_path_copied">路径已复制</string>
     <string name="sessions_subagents_toggle">%1$d 个子代理</string>
+    <string name="sessions_subagents_running_toggle">%1$d 个运行中子代理</string>
+    <string name="sessions_subagents_historical_toggle">%1$d 个历史子代理</string>
     <string name="sessions_subagents_show">显示子代理</string>
     <string name="sessions_subagents_hide">隐藏子代理</string>
     <string name="sessions_child_session_fallback">子会话</string>

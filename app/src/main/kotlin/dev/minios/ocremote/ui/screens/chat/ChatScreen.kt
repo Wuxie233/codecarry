@@ -3600,7 +3600,7 @@ private fun resolveStepsStatus(stepParts: List<Part>): String {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun ChatMessageBubble(
     chatMessage: ChatMessage,
@@ -3638,6 +3638,7 @@ private fun ChatMessageBubble(
     }
     val hapticView = LocalView.current
     val hapticOn = LocalHapticFeedbackEnabled.current
+    var showLongPressMenu by remember { mutableStateOf(false) }
 
     // Separate parts into text/reasoning (shown directly) and step parts (behind toggle)
     val visibleParts = if (isUser) {
@@ -3707,7 +3708,19 @@ private fun ChatMessageBubble(
             color = backgroundColor,
             border = bubbleBorder,
             tonalElevation = if (isAmoled || isUser) 0.dp else 1.dp,
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier
+                .fillMaxWidth()
+                .then(
+                    if (isUser) {
+                        Modifier.combinedClickable(
+                            onClick = {},
+                            onLongClick = {
+                                performHaptic(hapticView, hapticOn)
+                                showLongPressMenu = true
+                            }
+                        )
+                    } else Modifier
+                )
         ) {
             val compact = LocalCompactMessages.current
             Column(
@@ -3877,103 +3890,128 @@ private fun ChatMessageBubble(
         }
     }
 
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalAlignment = alignment
-    ) {
-        if (isUser && onRevert != null) {
-            // Swipe-to-revert for user messages with confirmation dialog
-            var showRevertConfirmation by remember { mutableStateOf(false) }
-            val hapticEnabled = LocalHapticFeedbackEnabled.current
-            val bubbleView = LocalView.current
+    Box {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalAlignment = alignment
+        ) {
+            if (isUser && onRevert != null) {
+                // Swipe-to-revert for user messages with confirmation dialog
+                var showRevertConfirmation by remember { mutableStateOf(false) }
+                val hapticEnabled = LocalHapticFeedbackEnabled.current
+                val bubbleView = LocalView.current
 
-            val dismissState = rememberSwipeToDismissBoxState(
-                confirmValueChange = { value ->
-                    if (value != SwipeToDismissBoxValue.Settled) {
-                        if (hapticEnabled) {
-                            @Suppress("DEPRECATION")
-                            bubbleView.performHapticFeedback(
-                                android.view.HapticFeedbackConstants.LONG_PRESS,
-                                android.view.HapticFeedbackConstants.FLAG_IGNORE_VIEW_SETTING or
-                                        android.view.HapticFeedbackConstants.FLAG_IGNORE_GLOBAL_SETTING
-                            )
-                        }
-                        showRevertConfirmation = true
-                    }
-                    false // don't actually dismiss; wait for dialog confirmation
-                }
-            )
-
-            if (showRevertConfirmation) {
-                AlertDialog(
-                    onDismissRequest = { showRevertConfirmation = false },
-                    title = { Text(stringResource(R.string.chat_revert_title)) },
-                    text = { Text(stringResource(R.string.chat_revert_message)) },
-                    confirmButton = {
-                        TextButton(
-                            onClick = {
-                                showRevertConfirmation = false
-                                onRevert()
+                val dismissState = rememberSwipeToDismissBoxState(
+                    confirmValueChange = { value ->
+                        if (value != SwipeToDismissBoxValue.Settled) {
+                            if (hapticEnabled) {
+                                @Suppress("DEPRECATION")
+                                bubbleView.performHapticFeedback(
+                                    android.view.HapticFeedbackConstants.LONG_PRESS,
+                                    android.view.HapticFeedbackConstants.FLAG_IGNORE_VIEW_SETTING or
+                                            android.view.HapticFeedbackConstants.FLAG_IGNORE_GLOBAL_SETTING
+                                )
                             }
-                        ) {
-                            Text(stringResource(R.string.chat_revert), color = MaterialTheme.colorScheme.error)
+                            showRevertConfirmation = true
                         }
-                    },
-                    dismissButton = {
-                        TextButton(onClick = { showRevertConfirmation = false }) {
-                            Text(stringResource(R.string.cancel))
-                        }
+                        false // don't actually dismiss; wait for dialog confirmation
                     }
                 )
-            }
 
-            SwipeToDismissBox(
-                state = dismissState,
-                backgroundContent = {
-                    val direction = dismissState.dismissDirection
-                    val bgColor = MaterialTheme.colorScheme.errorContainer
-                    val iconAlignment = if (direction == SwipeToDismissBoxValue.StartToEnd) {
-                        Alignment.CenterStart
-                    } else {
-                        Alignment.CenterEnd
-                    }
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .clip(RoundedCornerShape(
-                                topStart = 18.dp,
-                                topEnd = 4.dp,
-                                bottomStart = 18.dp,
-                                bottomEnd = 18.dp
-                            ))
-                            .background(bgColor)
-                            .padding(horizontal = 20.dp),
-                        contentAlignment = iconAlignment
-                    ) {
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                Icons.AutoMirrored.Filled.Undo,
-                                contentDescription = stringResource(R.string.chat_revert),
-                                tint = MaterialTheme.colorScheme.onErrorContainer
-                            )
-                            Text(
-                                text = stringResource(R.string.chat_revert),
-                                style = MaterialTheme.typography.labelLarge,
-                                color = MaterialTheme.colorScheme.onErrorContainer
-                            )
+                if (showRevertConfirmation) {
+                    AlertDialog(
+                        onDismissRequest = { showRevertConfirmation = false },
+                        title = { Text(stringResource(R.string.chat_revert_title)) },
+                        text = { Text(stringResource(R.string.chat_revert_message)) },
+                        confirmButton = {
+                            TextButton(
+                                onClick = {
+                                    showRevertConfirmation = false
+                                    onRevert()
+                                }
+                            ) {
+                                Text(stringResource(R.string.chat_revert), color = MaterialTheme.colorScheme.error)
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { showRevertConfirmation = false }) {
+                                Text(stringResource(R.string.cancel))
+                            }
                         }
-                    }
-                },
-                enableDismissFromStartToEnd = true,
-                enableDismissFromEndToStart = true
-            ) {
+                    )
+                }
+
+                SwipeToDismissBox(
+                    state = dismissState,
+                    backgroundContent = {
+                        val direction = dismissState.dismissDirection
+                        val bgColor = MaterialTheme.colorScheme.errorContainer
+                        val iconAlignment = if (direction == SwipeToDismissBoxValue.StartToEnd) {
+                            Alignment.CenterStart
+                        } else {
+                            Alignment.CenterEnd
+                        }
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clip(RoundedCornerShape(
+                                    topStart = 18.dp,
+                                    topEnd = 4.dp,
+                                    bottomStart = 18.dp,
+                                    bottomEnd = 18.dp
+                                ))
+                                .background(bgColor)
+                                .padding(horizontal = 20.dp),
+                            contentAlignment = iconAlignment
+                        ) {
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.Undo,
+                                    contentDescription = stringResource(R.string.chat_revert),
+                                    tint = MaterialTheme.colorScheme.onErrorContainer
+                                )
+                                Text(
+                                    text = stringResource(R.string.chat_revert),
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.onErrorContainer
+                                )
+                            }
+                        }
+                    },
+                    enableDismissFromStartToEnd = true,
+                    enableDismissFromEndToStart = true
+                ) {
+                    bubbleContent()
+                }
+            } else {
                 bubbleContent()
             }
-        } else {
-            bubbleContent()
+        }
+        if (isUser) {
+            DropdownMenu(
+                expanded = showLongPressMenu,
+                onDismissRequest = { showLongPressMenu = false }
+            ) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.chat_bubble_menu_copy)) },
+                    onClick = {
+                        showLongPressMenu = false
+                        onCopyText?.invoke()
+                    },
+                    leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) }
+                )
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.chat_bubble_menu_edit)) },
+                    onClick = {
+                        showLongPressMenu = false
+                        onRevert?.invoke()
+                    },
+                    leadingIcon = { Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = null) }
+                )
+            }
         }
     }
 }

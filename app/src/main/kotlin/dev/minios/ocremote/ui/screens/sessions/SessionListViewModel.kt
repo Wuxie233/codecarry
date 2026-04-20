@@ -18,8 +18,9 @@ import dev.minios.ocremote.data.repository.SettingsRepository
 import dev.minios.ocremote.domain.model.Project
 import dev.minios.ocremote.domain.model.Session
 import dev.minios.ocremote.domain.model.SessionStatus
-import dev.minios.ocremote.ui.screens.sessions.components.ActiveSubagentItem
-import dev.minios.ocremote.ui.screens.sessions.components.SubagentStatus
+import dev.minios.ocremote.domain.model.SseEvent
+import dev.minios.ocremote.ui.screens.sessions.components.ActiveConversationItem
+import dev.minios.ocremote.ui.screens.sessions.components.ConversationStatus
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -44,7 +45,7 @@ data class SessionListUiState(
     val isLoading: Boolean = true,
     val error: String? = null,
 
-    val activeSubagents: List<ActiveSubagentItem> = emptyList(),
+    val activeConversations: List<ActiveConversationItem> = emptyList(),
     val groups: List<ProjectGroup> = emptyList(),
     val sessionGroups: List<ProjectSessionGroup> = emptyList(),
 
@@ -81,9 +82,20 @@ data class ProjectGroup(
     val additionsSum: Int,
     val deletionsSum: Int,
     val sessions: List<SessionItem>,
-    val subagentsByParent: Map<String, List<SessionItem>>,
+    val subagentRowsByParent: Map<String, SubagentRow>,
     val sessionDirLabels: Map<String, String> = emptyMap(),
 )
+
+data class SubagentRow(
+    val running: List<SessionItem>,
+    val historical: List<SessionItem>,
+) {
+    val total: Int get() = running.size + historical.size
+
+    companion object {
+        val EMPTY = SubagentRow(emptyList(), emptyList())
+    }
+}
 
 data class SessionItem(
     val session: Session,
@@ -131,11 +143,6 @@ class SessionListViewModel @Inject constructor(
         SharingStarted.Eagerly,
         SessionListPreferences.DEFAULT,
     )
-    private val showHistoricalSubagentsFlow = settingsRepository.showHistoricalSubagents.stateIn(
-        viewModelScope,
-        SharingStarted.Eagerly,
-        false,
-    )
 
     @Suppress("UNCHECKED_CAST")
     val uiState: StateFlow<SessionListUiState> = combine(
@@ -151,7 +158,8 @@ class SessionListViewModel @Inject constructor(
             prefsFlow,
             _searchQuery,
             _filter,
-            showHistoricalSubagentsFlow,
+            eventReducer.questions,
+            eventReducer.permissions,
         )
     ) { values ->
         val allSessions = values[0] as List<Session>
@@ -165,7 +173,8 @@ class SessionListViewModel @Inject constructor(
         val prefs = values[8] as SessionListPreferences
         val searchQuery = values[9] as String
         val filter = values[10] as SessionFilter
-        val showHistoricalSubagents = values[11] as Boolean
+        val pendingQuestions = values[11] as Map<String, List<SseEvent.QuestionAsked>>
+        val pendingPermissions = values[12] as Map<String, List<SseEvent.PermissionAsked>>
 
         val serverSessionIds = serverSessions[serverId] ?: emptySet()
         val serverScopedSessions = allSessions.filter { it.id in serverSessionIds }
@@ -177,13 +186,13 @@ class SessionListViewModel @Inject constructor(
             )
         }
 
-        val activeSubagents = buildActiveSubagents(
-            sessions = serverScopedSessions,
-            statuses = statuses,
-            showHistoricalSubagents = showHistoricalSubagents,
-        )
-
         val (rootSessions, childSessions) = serverScopedSessions.partition { it.parentId == null }
+        val activeConversations = buildActiveConversations(
+            rootSessions = rootSessions,
+            statuses = statuses,
+            pendingQuestions = pendingQuestions,
+            pendingPermissions = pendingPermissions,
+        )
         val childBuckets = childSessions.groupBy { it.parentId!! }
         val projectByDirectory = projects.associateBy { normalizeDirectory(it.worktree) }
         val allDirectories = (projects.map { normalizeDirectory(it.worktree) } + rootSessions.map { normalizeDirectory(it.directory) })
@@ -210,12 +219,12 @@ class SessionListViewModel @Inject constructor(
                 .sortedWith(rootSessionComparator(prefs.sort))
 
             val filteredRootItems = filteredRoots.map { itemsById.getValue(it.id) }
-            val subagentsByParent = filteredRoots.associate { root ->
+            val subagentRowsByParent = filteredRoots.associate { root ->
                 val childItems = (childBuckets[root.id] ?: emptyList())
                     .filter { child -> matchesChildArchiveMode(child, filter) }
                     .map { itemsById.getValue(it.id) }
                     .sortedWith(sessionItemComparator(prefs.sort))
-                root.id to childItems
+                root.id to partitionSubagentsByActivity(childItems)
             }
 
             ProjectGroup(
@@ -229,7 +238,7 @@ class SessionListViewModel @Inject constructor(
                 additionsSum = filteredRootItems.sumOf { it.session.summary?.additions ?: 0 },
                 deletionsSum = filteredRootItems.sumOf { it.session.summary?.deletions ?: 0 },
                 sessions = filteredRootItems,
-                subagentsByParent = subagentsByParent,
+                subagentRowsByParent = subagentRowsByParent,
                 sessionDirLabels = filteredRootItems.associate { it.session.id to tildeDirectory },
             )
         }
@@ -264,16 +273,23 @@ class SessionListViewModel @Inject constructor(
             _selectedIds.value = validSelectedIds
         }
 
+        val emptyState = computeSessionListEmptyState(
+            rootSessionCount = rootSessions.size,
+            visibleGroupCount = groups.size,
+        )
+
         SessionListUiState(
             serverName = serverName,
             isLoading = loading,
             error = error,
-            activeSubagents = activeSubagents,
+            activeConversations = activeConversations,
             groups = groups,
             sessionGroups = legacySessionGroups,
             sort = prefs.sort,
             filter = filter,
             searchQuery = searchQuery,
+            hasAnySessions = emptyState.hasAnySessions,
+            isFilteredEmpty = emptyState.isFilteredEmpty,
             selectedIds = validSelectedIds,
             isSelectionMode = validSelectedIds.isNotEmpty(),
             projects = projects,
@@ -650,39 +666,72 @@ class SessionListViewModel @Inject constructor(
     }
 }
 
-internal fun buildActiveSubagents(
-    sessions: List<Session>,
+internal data class SessionListEmptyState(
+    val hasAnySessions: Boolean,
+    val isFilteredEmpty: Boolean,
+)
+
+internal fun computeSessionListEmptyState(
+    rootSessionCount: Int,
+    visibleGroupCount: Int,
+): SessionListEmptyState {
+    val hasAny = rootSessionCount > 0
+    return SessionListEmptyState(
+        hasAnySessions = hasAny,
+        isFilteredEmpty = hasAny && visibleGroupCount == 0,
+    )
+}
+
+internal fun partitionSubagentsByActivity(subagents: List<SessionItem>): SubagentRow {
+    if (subagents.isEmpty()) return SubagentRow.EMPTY
+    val running = ArrayList<SessionItem>(subagents.size)
+    val historical = ArrayList<SessionItem>(subagents.size)
+    for (item in subagents) {
+        when (item.status) {
+            is SessionStatus.Busy, is SessionStatus.Retry -> running += item
+            is SessionStatus.Idle -> historical += item
+        }
+    }
+    return SubagentRow(running = running, historical = historical)
+}
+
+internal fun buildActiveConversations(
+    rootSessions: List<Session>,
     statuses: Map<String, SessionStatus>,
-    showHistoricalSubagents: Boolean,
-): List<ActiveSubagentItem> {
+    pendingQuestions: Map<String, List<SseEvent.QuestionAsked>>,
+    pendingPermissions: Map<String, List<SseEvent.PermissionAsked>>,
+): List<ActiveConversationItem> {
     fun normalizeDir(directory: String): String = directory.trimEnd('/').ifEmpty { "/" }
     fun displayName(directory: String): String = if (directory == "/") "/" else directory.substringAfterLast('/').ifEmpty { directory }
 
-    val sessionsById = sessions.associateBy { it.id }
-    return sessions
+    return rootSessions
         .asSequence()
-        .filter { it.parentId != null && !it.isArchived }
+        .filter { !it.isArchived }
         .mapNotNull { session ->
+            val questionCount = pendingQuestions[session.id]?.size ?: 0
+            val permissionCount = pendingPermissions[session.id]?.size ?: 0
             val status = statuses[session.id] ?: SessionStatus.Idle
-            val mappedStatus = when (status) {
-                SessionStatus.Busy -> SubagentStatus.BUSY
-                is SessionStatus.Retry -> SubagentStatus.RETRY
-                SessionStatus.Idle -> if (showHistoricalSubagents) SubagentStatus.IDLE else null
-            } ?: return@mapNotNull null
 
-            val parent = session.parentId?.let(sessionsById::get)
-            val projectDirectory = normalizeDir(parent?.directory ?: session.directory)
-            ActiveSubagentItem(
+            val (conversationStatus, pendingCount) = when {
+                questionCount > 0 -> ConversationStatus.AWAITING_QUESTION to questionCount
+                permissionCount > 0 -> ConversationStatus.AWAITING_PERMISSION to permissionCount
+                status is SessionStatus.Busy -> ConversationStatus.BUSY to 0
+                status is SessionStatus.Retry -> ConversationStatus.RETRY to 0
+                else -> return@mapNotNull null
+            }
+
+            ActiveConversationItem(
                 sessionId = session.id,
-                title = session.title ?: "",
-                agentName = null,
-                parentSessionId = session.parentId!!,
-                parentTitle = parent?.title,
-                projectName = displayName(projectDirectory),
-                status = mappedStatus,
+                title = session.title,
+                projectName = displayName(normalizeDir(session.directory)),
+                status = conversationStatus,
+                pendingCount = pendingCount,
                 updatedAt = session.time.updated,
             )
         }
-        .sortedByDescending { it.updatedAt }
+        .sortedWith(
+            compareBy<ActiveConversationItem> { it.status.ordinal }
+                .thenByDescending { it.updatedAt }
+        )
         .toList()
 }
