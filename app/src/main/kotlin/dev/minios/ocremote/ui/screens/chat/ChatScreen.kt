@@ -114,6 +114,7 @@ import com.mikepenz.markdown.m3.Markdown
 import com.mikepenz.markdown.m3.markdownColor
 import com.mikepenz.markdown.m3.markdownTypography
 import com.mikepenz.markdown.compose.components.markdownComponents
+import com.mikepenz.markdown.compose.elements.MarkdownTable
 import com.mikepenz.markdown.coil2.Coil2ImageTransformerImpl
 import dev.minios.ocremote.domain.model.*
 import dev.minios.ocremote.data.api.AgentInfo
@@ -4327,7 +4328,12 @@ private fun MarkdownContent(
 
     val components = markdownComponents(
         codeBlock = safeHighlightedCodeBlock,
-        codeFence = safeHighlightedCodeFence
+        codeFence = safeHighlightedCodeFence,
+        table = { model ->
+            Box(modifier = Modifier.horizontalScroll(rememberScrollState())) {
+                MarkdownTable(model.content, model.node, bodyStyle)
+            }
+        },
     )
 
     SelectionContainer {
