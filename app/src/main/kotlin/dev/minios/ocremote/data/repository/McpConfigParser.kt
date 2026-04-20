@@ -14,6 +14,8 @@ import kotlinx.serialization.json.jsonPrimitive
 
 object McpConfigParser {
 
+    private val prettyJson = Json { prettyPrint = true }
+
     fun parse(filePath: String, rawJson: String): McpConfig? {
         val root = Json.parseToJsonElement(rawJson).jsonObject
         val mcpServers = root["mcpServers"]?.jsonObject ?: return null
@@ -43,6 +45,6 @@ object McpConfigParser {
         }
 
         root["mcpServers"] = JsonObject(mcpServers)
-        return Json { prettyPrint = true }.encodeToString(JsonObject(root))
+        return prettyJson.encodeToString(JsonObject(root))
     }
 }
