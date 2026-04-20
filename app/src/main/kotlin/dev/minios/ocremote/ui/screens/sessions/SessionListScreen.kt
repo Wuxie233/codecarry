@@ -213,15 +213,7 @@ fun SessionListScreen(
         floatingActionButton = {
             if (!uiState.isSelectionMode) {
                 FloatingActionButton(
-                    onClick = {
-                        // If there are known projects, show the quick dialog first;
-                        // otherwise go straight to the full directory browser.
-                        if (uiState.groups.isNotEmpty()) {
-                            showQuickNewSession = true
-                        } else {
-                            showOpenProject = true
-                        }
-                    },
+                    onClick = { showOpenProject = true },
                     containerColor = if (isAmoled) Color.Black else MaterialTheme.colorScheme.primaryContainer,
                     contentColor = if (isAmoled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onPrimaryContainer,
                     elevation = if (isAmoled) {
@@ -400,7 +392,34 @@ fun SessionListScreen(
                             }
 
                                     if (!group.isCollapsed) {
-                                        items(group.sessions, key = { it.session.id }) { item ->
+                                         if (group.sessions.isEmpty()) {
+                                             item(key = "empty_${group.directory}") {
+                                                 Row(
+                                                     modifier = Modifier
+                                                         .fillMaxWidth()
+                                                         .clip(MaterialTheme.shapes.small)
+                                                         .clickable {
+                                                             viewModel.createNewSession(directory = group.directory)
+                                                         }
+                                                         .padding(horizontal = 16.dp, vertical = 12.dp),
+                                                     verticalAlignment = Alignment.CenterVertically,
+                                                     horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                                 ) {
+                                                     Icon(
+                                                         imageVector = Icons.Default.Add,
+                                                         contentDescription = null,
+                                                         modifier = Modifier.size(16.dp),
+                                                         tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+                                                     )
+                                                     Text(
+                                                         text = stringResource(R.string.sessions_project_new_here),
+                                                         style = MaterialTheme.typography.labelMedium,
+                                                         color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+                                                     )
+                                                 }
+                                             }
+                                         }
+                                         items(group.sessions, key = { it.session.id }) { item ->
                                             val untitledLabel = stringResource(R.string.session_untitled)
                                             val dirLabel = group.sessionDirLabels[item.session.id]
                                                 ?: group.tildeDirectory.ifEmpty { group.projectName }
@@ -468,7 +487,7 @@ fun SessionListScreen(
             projects = uiState.projects,
             onSelect = { directory ->
                 showOpenProject = false
-                viewModel.createNewSession(directory = directory)
+                viewModel.pinDirectory(directory)
             },
             onDismiss = { showOpenProject = false }
         )

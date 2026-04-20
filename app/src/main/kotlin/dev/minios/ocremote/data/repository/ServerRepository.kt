@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import dev.minios.ocremote.data.api.OpenCodeApi
 import dev.minios.ocremote.data.api.ServerConnection
+import dev.minios.ocremote.domain.model.McpConfig
 import dev.minios.ocremote.domain.model.ServerConfig
 import dev.minios.ocremote.domain.model.ServerHealth
 import kotlinx.coroutines.flow.Flow
@@ -149,7 +150,48 @@ class ServerRepository @Inject constructor(
     suspend fun getServer(serverId: String): ServerConfig? {
         return servers.firstOrNull()?.find { it.id == serverId }
     }
-    
+
+    suspend fun readMcpConfig(
+        conn: ServerConnection,
+        projectDir: String
+    ): Result<McpConfig?> = runCatching {
+        val homeDir = runCatching { api.getServerPaths(conn).home }
+            .getOrNull()
+            .orEmpty()
+
+        val candidates = buildList {
+            val normalizedProjectDir = projectDir.trimEnd('/')
+            if (normalizedProjectDir.isNotEmpty()) {
+                add("$normalizedProjectDir/.opencode/config.json")
+                add("$normalizedProjectDir/opencode.json")
+            }
+
+            val normalizedHomeDir = homeDir.trimEnd('/')
+            if (normalizedHomeDir.isNotEmpty()) {
+                add("$normalizedHomeDir/.config/opencode/config.json")
+            }
+        }
+
+        for (path in candidates) {
+            val raw = runCatching { api.readFile(conn, path).content }
+                .getOrNull()
+                ?.takeIf { it.isNotBlank() }
+                ?: continue
+
+            return@runCatching McpConfigParser.parse(filePath = path, rawJson = raw)
+        }
+
+        null
+    }
+
+    suspend fun writeMcpConfig(
+        conn: ServerConnection,
+        config: McpConfig
+    ): Result<Unit> = runCatching {
+        val updatedJson = McpConfigParser.serialize(config)
+        api.writeFile(conn, path = config.filePath, content = updatedJson)
+    }
+
     // ============ Private ============
     
     private suspend fun saveServers(servers: List<ServerConfig>) {

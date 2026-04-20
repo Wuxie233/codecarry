@@ -454,6 +454,12 @@ class SessionListViewModel @Inject constructor(
         }
     }
 
+    fun pinDirectory(dir: String) {
+        viewModelScope.launch {
+            preferencesRepo.addPinned(normalizeDirectory(dir))
+        }
+    }
+
     fun toggleCollapsed(dir: String) {
         viewModelScope.launch {
             val normalized = normalizeDirectory(dir)
