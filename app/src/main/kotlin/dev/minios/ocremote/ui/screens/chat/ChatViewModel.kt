@@ -344,6 +344,17 @@ class ChatViewModel @Inject constructor(
                 currentModel = firstModel
             }
         }
+
+        // Keep raw model state in sync so sendParts()/runShellCommand() always use the displayed value
+        if (!isModelExplicitlySelected) {
+            if (_selectedProviderId.value != effectiveProviderId) {
+                _selectedProviderId.value = effectiveProviderId
+            }
+            if (_selectedModelId.value != effectiveModelId) {
+                _selectedModelId.value = effectiveModelId
+            }
+        }
+
         val availableVariants = currentModel?.variants?.keys?.toList()?.sorted() ?: emptyList()
 
         ChatUiState(
