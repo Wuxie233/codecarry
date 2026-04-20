@@ -201,6 +201,10 @@
     <string name="sessions_project_unpin">取消置顶项目</string>
     <string name="sessions_project_copy_path">复制工作路径</string>
     <string name="sessions_project_archive_all">归档全部会话</string>
+    <string name="sessions_project_hide">隐藏项目</string>
+    <string name="sessions_project_unhide">取消隐藏项目</string>
+    <string name="sessions_hidden_projects_count">%1$d 个已隐藏</string>
+    <string name="sessions_hidden_projects_showing">%1$d 个已隐藏 · 显示中</string>
     <string name="sessions_project_expand">展开项目</string>
     <string name="sessions_project_collapse">折叠项目</string>
     <string name="sessions_project_active_count">· %1$d 个活跃</string>

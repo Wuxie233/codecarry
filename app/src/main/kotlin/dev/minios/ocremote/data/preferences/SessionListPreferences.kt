@@ -17,6 +17,7 @@ enum class SessionFilter {
 data class SessionListPreferences(
     val collapsedDirs: Set<String>,
     val pinnedDirs: List<String>,
+    val hiddenDirs: Set<String>,
     val sort: SessionSort,
     val filter: SessionFilter,
 ) {
@@ -24,6 +25,7 @@ data class SessionListPreferences(
         val DEFAULT = SessionListPreferences(
             collapsedDirs = emptySet(),
             pinnedDirs = emptyList(),
+            hiddenDirs = emptySet(),
             sort = SessionSort.RECENT_UPDATED,
             filter = SessionFilter.ALL,
         )

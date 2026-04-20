@@ -59,6 +59,9 @@ data class SessionListUiState(
     val isSelectionMode: Boolean = false,
 
     val projects: List<Project> = emptyList(),
+
+    val hiddenProjectCount: Int = 0,
+    val showHiddenProjects: Boolean = false,
 )
 
 /** A group of sessions belonging to a project. */
@@ -77,6 +80,7 @@ data class ProjectGroup(
     val tildeDirectory: String,
     val isPinned: Boolean,
     val isCollapsed: Boolean,
+    val isHidden: Boolean,
     val sessionCount: Int,
     val activeCount: Int,
     val additionsSum: Int,
@@ -136,6 +140,7 @@ class SessionListViewModel @Inject constructor(
     private val _selectedIds = MutableStateFlow<Set<String>>(emptySet())
     private val _searchQuery = MutableStateFlow("")
     private val _filter = MutableStateFlow(SessionFilter.ALL)
+    private val _showHiddenProjects = MutableStateFlow(false)
     private val _navigateToSession = MutableSharedFlow<String>(extraBufferCapacity = 1)
     val navigateToSession: SharedFlow<String> = _navigateToSession.asSharedFlow()
     private val prefsFlow = preferencesRepo.preferences.stateIn(
@@ -160,6 +165,7 @@ class SessionListViewModel @Inject constructor(
             _filter,
             eventReducer.questions,
             eventReducer.permissions,
+            _showHiddenProjects,
         )
     ) { values ->
         val allSessions = values[0] as List<Session>
@@ -175,6 +181,7 @@ class SessionListViewModel @Inject constructor(
         val filter = values[10] as SessionFilter
         val pendingQuestions = values[11] as Map<String, List<SseEvent.QuestionAsked>>
         val pendingPermissions = values[12] as Map<String, List<SseEvent.PermissionAsked>>
+        val showHiddenProjects = values[13] as Boolean
 
         val serverSessionIds = serverSessions[serverId] ?: emptySet()
         val serverScopedSessions = allSessions.filter { it.id in serverSessionIds }
@@ -233,6 +240,7 @@ class SessionListViewModel @Inject constructor(
                 tildeDirectory = tildeDirectory,
                 isPinned = isPinned,
                 isCollapsed = isCollapsed,
+                isHidden = directory in prefs.hiddenDirs,
                 sessionCount = filteredRootItems.size,
                 activeCount = filteredRootItems.count { it.status is SessionStatus.Busy },
                 additionsSum = filteredRootItems.sumOf { it.session.summary?.additions ?: 0 },
@@ -243,8 +251,13 @@ class SessionListViewModel @Inject constructor(
             )
         }
 
+        val hiddenProjectCount = rawGroups.count { it.isHidden }
         val groups = rawGroups
-            .filter { it.sessionCount > 0 || it.isPinned }
+            .filter { group ->
+                val visibleByDefault = group.sessionCount > 0 || group.isPinned
+                val hiddenFilter = if (group.isHidden) showHiddenProjects else true
+                visibleByDefault && hiddenFilter
+            }
             .sortedWith(
                 compareBy<ProjectGroup> { group ->
                     val pinnedIndex = prefs.pinnedDirs.indexOf(group.directory)
@@ -293,6 +306,8 @@ class SessionListViewModel @Inject constructor(
             selectedIds = validSelectedIds,
             isSelectionMode = validSelectedIds.isNotEmpty(),
             projects = projects,
+            hiddenProjectCount = hiddenProjectCount,
+            showHiddenProjects = showHiddenProjects,
         )
     }.stateIn(
         viewModelScope,
@@ -446,6 +461,16 @@ class SessionListViewModel @Inject constructor(
                 collapsed = normalized !in prefsFlow.value.collapsedDirs,
             )
         }
+    }
+
+    fun toggleHidden(dir: String) {
+        viewModelScope.launch {
+            preferencesRepo.toggleHidden(normalizeDirectory(dir))
+        }
+    }
+
+    fun toggleShowHiddenProjects() {
+        _showHiddenProjects.value = !_showHiddenProjects.value
     }
 
     fun archiveProjectSessions(dir: String) {

@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -56,8 +57,10 @@ fun ProjectGroupHeader(
     deletions: Int,
     isPinned: Boolean,
     isCollapsed: Boolean,
+    isHidden: Boolean,
     onToggleCollapsed: () -> Unit,
     onTogglePinned: () -> Unit,
+    onToggleHidden: () -> Unit,
     onNewSession: () -> Unit,
     onCopyPath: () -> Unit,
     onArchiveAll: () -> Unit,
@@ -76,6 +79,8 @@ fun ProjectGroupHeader(
     } else {
         colors.onSurface.copy(alpha = 0.55f)
     }
+
+    val contentAlpha = if (isHidden) 0.45f else 1f
 
     Column(
         modifier = modifier
@@ -113,17 +118,26 @@ fun ProjectGroupHeader(
                     .rotate(arrowRotation),
             )
 
-            Icon(
-                imageVector = Icons.Default.Folder,
-                contentDescription = null,
-                modifier = Modifier.size(16.dp),
-                tint = colors.primary.copy(alpha = 0.7f),
-            )
+            if (isHidden) {
+                Icon(
+                    imageVector = Icons.Default.VisibilityOff,
+                    contentDescription = null,
+                    modifier = Modifier.size(14.dp),
+                    tint = colors.onSurface.copy(alpha = 0.35f),
+                )
+            } else {
+                Icon(
+                    imageVector = Icons.Default.Folder,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                    tint = colors.primary.copy(alpha = 0.7f),
+                )
+            }
 
             Text(
                 text = projectName,
                 style = MaterialTheme.typography.titleSmall,
-                color = colors.primary.copy(alpha = 0.85f),
+                color = colors.primary.copy(alpha = 0.85f * contentAlpha),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
@@ -227,6 +241,20 @@ fun ProjectGroupHeader(
                         onClick = {
                             menuExpanded = false
                             onCopyPath()
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                stringResource(
+                                    if (isHidden) R.string.sessions_project_unhide
+                                    else R.string.sessions_project_hide,
+                                ),
+                            )
+                        },
+                        onClick = {
+                            menuExpanded = false
+                            onToggleHidden()
                         },
                     )
                     HorizontalDivider()

@@ -120,7 +120,7 @@ class OpenCodeApi @Inject constructor(
     ): List<Session> {
         return httpClient.get("${conn.baseUrl}/session") {
             conn.authHeader?.let { header("Authorization", it) }
-            directory?.let { header("x-opencode-directory", it) }
+            directory?.let { header("x-opencode-directory", android.net.Uri.encode(it)) }
             if (rootsOnly) parameter("roots", "true")
         }.body()
     }
@@ -145,7 +145,7 @@ class OpenCodeApi @Inject constructor(
         }
         return httpClient.post("${conn.baseUrl}/session") {
             conn.authHeader?.let { header("Authorization", it) }
-            directory?.let { header("x-opencode-directory", it) }
+            directory?.let { header("x-opencode-directory", android.net.Uri.encode(it)) }
             contentType(ContentType.Application.Json)
             setBody(body)
         }.body()
@@ -169,7 +169,7 @@ class OpenCodeApi @Inject constructor(
     suspend fun abortSession(conn: ServerConnection, sessionId: String, directory: String? = null): Boolean {
         val response = httpClient.post("${conn.baseUrl}/session/$sessionId/abort") {
             conn.authHeader?.let { header("Authorization", it) }
-            directory?.let { header("x-opencode-directory", it) }
+            directory?.let { header("x-opencode-directory", android.net.Uri.encode(it)) }
         }
         return response.status.isSuccess()
     }
@@ -269,7 +269,7 @@ class OpenCodeApi @Inject constructor(
     ): Boolean {
         val response = httpClient.post("${conn.baseUrl}/session/$sessionId/command") {
             conn.authHeader?.let { header("Authorization", it) }
-            directory?.let { header("x-opencode-directory", it) }
+            directory?.let { header("x-opencode-directory", android.net.Uri.encode(it)) }
             contentType(ContentType.Application.Json)
             setBody(mapOf("command" to command, "arguments" to arguments))
         }
@@ -290,7 +290,7 @@ class OpenCodeApi @Inject constructor(
     ): Boolean {
         val response = httpClient.post("${conn.baseUrl}/session/$sessionId/shell") {
             conn.authHeader?.let { header("Authorization", it) }
-            directory?.let { header("x-opencode-directory", it) }
+            directory?.let { header("x-opencode-directory", android.net.Uri.encode(it)) }
             contentType(ContentType.Application.Json)
             setBody(
                 ShellRequest(
@@ -314,7 +314,7 @@ class OpenCodeApi @Inject constructor(
         }
         val response = httpClient.post("${conn.baseUrl}/pty") {
             conn.authHeader?.let { header("Authorization", it) }
-            directory?.let { header("x-opencode-directory", it) }
+            directory?.let { header("x-opencode-directory", android.net.Uri.encode(it)) }
             contentType(ContentType.Application.Json)
             setBody(PtyCreateRequest(title = title, cwd = cwd))
         }
@@ -406,7 +406,7 @@ class OpenCodeApi @Inject constructor(
         }
         val response = httpClient.put("${conn.baseUrl}/pty/$ptyId") {
             conn.authHeader?.let { header("Authorization", it) }
-            directory?.let { header("x-opencode-directory", it) }
+            directory?.let { header("x-opencode-directory", android.net.Uri.encode(it)) }
             contentType(ContentType.Application.Json)
             setBody(body)
         }
@@ -432,7 +432,7 @@ class OpenCodeApi @Inject constructor(
             method = HttpMethod.Get
             url("$wsBase/pty/$ptyId/connect?cursor=$cursor")
             conn.authHeader?.let { header("Authorization", it) }
-            directory?.let { header("x-opencode-directory", it) }
+            directory?.let { header("x-opencode-directory", android.net.Uri.encode(it)) }
         }
         return PtySocket(session)
     }
@@ -531,7 +531,7 @@ class OpenCodeApi @Inject constructor(
     ) {
         val response = httpClient.post("${conn.baseUrl}/session/$sessionId/prompt_async") {
             conn.authHeader?.let { header("Authorization", it) }
-            directory?.let { header("x-opencode-directory", it) }
+            directory?.let { header("x-opencode-directory", android.net.Uri.encode(it)) }
             contentType(ContentType.Application.Json)
             setBody(PromptRequest(
                 parts = parts,
@@ -565,7 +565,7 @@ class OpenCodeApi @Inject constructor(
         }
         val result = httpClient.post("${conn.baseUrl}/permission/$requestId/reply") {
             conn.authHeader?.let { header("Authorization", it) }
-            directory?.let { header("x-opencode-directory", it) }
+            directory?.let { header("x-opencode-directory", android.net.Uri.encode(it)) }
             contentType(ContentType.Application.Json)
             setBody(body)
         }
@@ -579,7 +579,7 @@ class OpenCodeApi @Inject constructor(
     suspend fun listPendingPermissions(conn: ServerConnection, directory: String? = null): List<PermissionRequest> {
         return httpClient.get("${conn.baseUrl}/permission") {
             conn.authHeader?.let { header("Authorization", it) }
-            directory?.let { header("x-opencode-directory", it) }
+            directory?.let { header("x-opencode-directory", android.net.Uri.encode(it)) }
         }.body()
     }
 
@@ -601,7 +601,7 @@ class OpenCodeApi @Inject constructor(
         if (BuildConfig.DEBUG) Log.d("OpenCodeApi", "replyToQuestion: POST $url, directory=$directory, bodyJson=$bodyJson")
         val result = httpClient.post(url) {
             conn.authHeader?.let { header("Authorization", it) }
-            directory?.let { header("x-opencode-directory", it) }
+            directory?.let { header("x-opencode-directory", android.net.Uri.encode(it)) }
             setBody(io.ktor.http.content.TextContent(bodyJson, ContentType.Application.Json))
         }
         val responseBody = result.bodyAsText()
@@ -622,7 +622,7 @@ class OpenCodeApi @Inject constructor(
         if (BuildConfig.DEBUG) Log.d("OpenCodeApi", "rejectQuestion: POST $url, directory=$directory")
         val result = httpClient.post(url) {
             conn.authHeader?.let { header("Authorization", it) }
-            directory?.let { header("x-opencode-directory", it) }
+            directory?.let { header("x-opencode-directory", android.net.Uri.encode(it)) }
         }
         if (BuildConfig.DEBUG) Log.d("OpenCodeApi", "rejectQuestion: status=${result.status}")
         return result.status.isSuccess()
@@ -635,7 +635,7 @@ class OpenCodeApi @Inject constructor(
     suspend fun listPendingQuestions(conn: ServerConnection, directory: String? = null): List<QuestionRequest> {
         return httpClient.get("${conn.baseUrl}/question") {
             conn.authHeader?.let { header("Authorization", it) }
-            directory?.let { header("x-opencode-directory", it) }
+            directory?.let { header("x-opencode-directory", android.net.Uri.encode(it)) }
         }.body()
     }
 
@@ -834,7 +834,7 @@ class OpenCodeApi @Inject constructor(
     suspend fun findFiles(conn: ServerConnection, query: String, type: String? = null, directory: String? = null, limit: Int? = null, dirs: String? = null): List<String> {
         return httpClient.get("${conn.baseUrl}/find/file") {
             conn.authHeader?.let { header("Authorization", it) }
-            directory?.let { header("x-opencode-directory", it) }
+            directory?.let { header("x-opencode-directory", android.net.Uri.encode(it)) }
             parameter("query", query)
             type?.let { parameter("type", it) }
             limit?.let { parameter("limit", it) }
@@ -852,7 +852,7 @@ class OpenCodeApi @Inject constructor(
     suspend fun listDirectory(conn: ServerConnection, path: String = "", directory: String? = null): List<FileNode> {
         return httpClient.get("${conn.baseUrl}/file") {
             conn.authHeader?.let { header("Authorization", it) }
-            directory?.let { header("x-opencode-directory", it) }
+            directory?.let { header("x-opencode-directory", android.net.Uri.encode(it)) }
             parameter("path", path)
         }.body()
     }

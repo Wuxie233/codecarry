@@ -333,6 +333,14 @@ fun SessionListScreen(
                             )
                         }
 
+                        if (uiState.hiddenProjectCount > 0 && !uiState.isSelectionMode) {
+                            HiddenProjectsBadge(
+                                count = uiState.hiddenProjectCount,
+                                showHidden = uiState.showHiddenProjects,
+                                onClick = viewModel::toggleShowHiddenProjects,
+                            )
+                        }
+
                         if (uiState.isFilteredEmpty) {
                             Column(
                                 modifier = Modifier
@@ -368,26 +376,28 @@ fun SessionListScreen(
                                 verticalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
                                 for (group in uiState.groups) {
-                                    stickyHeader(key = "header_${group.directory}") {
-                                        ProjectGroupHeader(
-                                            projectName = group.projectName,
-                                            tildeDirectory = group.tildeDirectory,
-                                            sessionCount = group.sessionCount,
-                                            activeCount = group.activeCount,
-                                            additions = group.additionsSum,
-                                            deletions = group.deletionsSum,
-                                            isPinned = group.isPinned,
-                                            isCollapsed = group.isCollapsed,
-                                            onToggleCollapsed = { viewModel.toggleCollapsed(group.directory) },
-                                            onTogglePinned = { viewModel.togglePinned(group.directory) },
-                                            onNewSession = { viewModel.createNewSession(directory = group.directory) },
-                                            onCopyPath = {
-                                                clipboard.setText(AnnotatedString(group.directory))
-                                                Toast.makeText(context, context.getString(R.string.sessions_project_path_copied), Toast.LENGTH_SHORT).show()
-                                            },
-                                            onArchiveAll = { viewModel.archiveProjectSessions(group.directory) },
-                                        )
-                                    }
+                        stickyHeader(key = "header_${group.directory}") {
+                                ProjectGroupHeader(
+                                    projectName = group.projectName,
+                                    tildeDirectory = group.tildeDirectory,
+                                    sessionCount = group.sessionCount,
+                                    activeCount = group.activeCount,
+                                    additions = group.additionsSum,
+                                    deletions = group.deletionsSum,
+                                    isPinned = group.isPinned,
+                                    isCollapsed = group.isCollapsed,
+                                    isHidden = group.isHidden,
+                                    onToggleCollapsed = { viewModel.toggleCollapsed(group.directory) },
+                                    onTogglePinned = { viewModel.togglePinned(group.directory) },
+                                    onToggleHidden = { viewModel.toggleHidden(group.directory) },
+                                    onNewSession = { viewModel.createNewSession(directory = group.directory) },
+                                    onCopyPath = {
+                                        clipboard.setText(AnnotatedString(group.directory))
+                                        Toast.makeText(context, context.getString(R.string.sessions_project_path_copied), Toast.LENGTH_SHORT).show()
+                                    },
+                                    onArchiveAll = { viewModel.archiveProjectSessions(group.directory) },
+                                )
+                            }
 
                                     if (!group.isCollapsed) {
                                         items(group.sessions, key = { it.session.id }) { item ->
@@ -1699,9 +1709,49 @@ private fun SessionRow(
                 }
             }
         },
-        enableDismissFromStartToEnd = !isSelectionMode,
-        enableDismissFromEndToStart = !isSelectionMode
+    enableDismissFromStartToEnd = !isSelectionMode,
+    enableDismissFromEndToStart = !isSelectionMode
     ) {
         cardContent()
+    }
+}
+
+@Composable
+private fun HiddenProjectsBadge(
+    count: Int,
+    showHidden: Boolean,
+    onClick: () -> Unit,
+) {
+    val colors = MaterialTheme.colorScheme
+    val isAmoled = isAmoledTheme()
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 2.dp),
+        horizontalArrangement = Arrangement.End,
+    ) {
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(12.dp))
+                .clickable(onClick = onClick)
+                .padding(horizontal = 10.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Default.VisibilityOff,
+                contentDescription = null,
+                modifier = Modifier.size(13.dp),
+                tint = colors.onSurface.copy(alpha = 0.4f),
+            )
+            Text(
+                text = if (showHidden)
+                    stringResource(R.string.sessions_hidden_projects_showing, count)
+                else
+                    stringResource(R.string.sessions_hidden_projects_count, count),
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.onSurface.copy(alpha = 0.45f),
+            )
+        }
     }
 }

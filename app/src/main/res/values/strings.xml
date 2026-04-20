@@ -152,6 +152,10 @@
     <string name="sessions_project_unpin">Unpin project</string>
     <string name="sessions_project_copy_path">Copy worktree path</string>
     <string name="sessions_project_archive_all">Archive all sessions</string>
+    <string name="sessions_project_hide">Hide project</string>
+    <string name="sessions_project_unhide">Unhide project</string>
+    <string name="sessions_hidden_projects_count">%1$d hidden</string>
+    <string name="sessions_hidden_projects_showing">%1$d hidden · showing</string>
     <string name="sessions_project_expand">Expand project</string>
     <string name="sessions_project_collapse">Collapse project</string>
     <string name="sessions_project_active_count">· %1$d active</string>

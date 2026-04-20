@@ -18,6 +18,7 @@ class SessionListPreferencesRepository @Inject constructor(
         private val COLLAPSED_DIRS_KEY = stringSetPreferencesKey("collapsed_dirs")
         private val PINNED_DIRS_KEY = stringSetPreferencesKey("pinned_dirs")
         private val PINNED_DIRS_ORDER_KEY = stringPreferencesKey("pinned_dirs_order")
+        private val HIDDEN_DIRS_KEY = stringSetPreferencesKey("hidden_dirs")
         private val SORT_KEY = stringPreferencesKey("sort")
         private val FILTER_KEY = stringPreferencesKey("filter")
     }
@@ -38,9 +39,11 @@ class SessionListPreferencesRepository @Inject constructor(
         val filter = prefs[FILTER_KEY]?.let {
             runCatching { SessionFilter.valueOf(it) }.getOrNull()
         } ?: SessionFilter.ALL
+        val hiddenDirs = prefs[HIDDEN_DIRS_KEY] ?: emptySet()
         SessionListPreferences(
             collapsedDirs = collapsedDirs,
             pinnedDirs = pinnedDirs,
+            hiddenDirs = hiddenDirs,
             sort = sort,
             filter = filter,
         )
@@ -87,6 +90,13 @@ class SessionListPreferencesRepository @Inject constructor(
     suspend fun clearCollapsed() {
         dataStore.edit { prefs ->
             prefs[COLLAPSED_DIRS_KEY] = emptySet()
+        }
+    }
+
+    suspend fun toggleHidden(dir: String) {
+        dataStore.edit { prefs ->
+            val current = prefs[HIDDEN_DIRS_KEY] ?: emptySet()
+            prefs[HIDDEN_DIRS_KEY] = if (dir in current) current - dir else current + dir
         }
     }
 }
