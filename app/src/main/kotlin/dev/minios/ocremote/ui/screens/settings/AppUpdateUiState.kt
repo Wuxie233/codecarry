@@ -15,6 +15,7 @@ sealed class AppUpdateUiState {
         val progressPercent: Int = 0,
         val downloadedBytes: Long = 0L,
         val totalBytes: Long? = null,
+        val speedBytesPerSec: Long = 0L,
     ) : AppUpdateUiState()
     data class ReadyToInstall(
         val apkFile: File,

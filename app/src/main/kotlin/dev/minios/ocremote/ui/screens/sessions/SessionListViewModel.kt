@@ -347,11 +347,12 @@ class SessionListViewModel @Inject constructor(
                         }
                     }.awaitAll().flatten()
                 }.takeIf { it.isNotEmpty() }?.let { all ->
-                    val children = all.filter { it.parentId != null }
-                    if (children.isNotEmpty()) {
-                        eventReducer.setSessions(serverId, children)
-                        if (BuildConfig.DEBUG) Log.d(TAG, "Loaded ${children.size} child sessions")
-                    }
+                    // Store all sessions (roots + children) so that root sessions not captured
+                    // by the global roots-only call are still shown (e.g. when the server
+                    // scopes the root-less endpoint to its own directory). setSessions merges
+                    // by ID, so duplicates from the global call are handled gracefully.
+                    eventReducer.setSessions(serverId, all)
+                    if (BuildConfig.DEBUG) Log.d(TAG, "Loaded ${all.size} project-scoped sessions (${all.count { it.parentId != null }} children, ${all.count { it.parentId == null }} roots)")
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to load sessions", e)

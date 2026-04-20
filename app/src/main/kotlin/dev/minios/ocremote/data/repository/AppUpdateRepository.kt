@@ -6,6 +6,9 @@ import dev.minios.ocremote.domain.model.GitHubRelease
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.request.get
+import io.ktor.client.statement.bodyAsChannel
+import io.ktor.http.contentLength
+import io.ktor.utils.io.readAvailable
 import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -21,15 +24,32 @@ class AppUpdateRepository @Inject constructor(
         return httpClient.get(apiUrl).body()
     }
 
-    suspend fun downloadApkAsset(asset: GitHubRelease.Asset): File {
+    suspend fun downloadApkAsset(
+        asset: GitHubRelease.Asset,
+        onProgress: (downloadedBytes: Long, totalBytes: Long?) -> Unit = { _, _ -> },
+    ): File {
         val updatesDirectory = File(context.cacheDir, "app-updates")
         if (!updatesDirectory.exists() && !updatesDirectory.mkdirs()) {
             error("Failed to create cache directory: ${updatesDirectory.absolutePath}")
         }
 
         val targetFile = File(updatesDirectory, asset.name)
-        val apkBytes: ByteArray = httpClient.get(asset.browserDownloadUrl).body()
-        targetFile.writeBytes(apkBytes)
+        val response = httpClient.get(asset.browserDownloadUrl)
+        val totalBytes = response.contentLength()
+        val channel = response.bodyAsChannel()
+        val buffer = ByteArray(8 * 1024)
+        var downloadedBytes = 0L
+
+        targetFile.outputStream().buffered().use { output ->
+            while (!channel.isClosedForRead) {
+                val read = channel.readAvailable(buffer)
+                if (read > 0) {
+                    output.write(buffer, 0, read)
+                    downloadedBytes += read
+                    onProgress(downloadedBytes, totalBytes)
+                }
+            }
+        }
         return targetFile
     }
 }
