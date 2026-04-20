@@ -87,6 +87,8 @@ fun ActiveConversationsBanner(
                 }
             }
 
+            Spacer(modifier = Modifier.height(8.dp))
+
             if (isAmoled) {
                 Spacer(modifier = Modifier.height(8.dp))
                 HorizontalDivider(color = colors.outlineVariant.copy(alpha = 0.65f), thickness = 1.dp)
