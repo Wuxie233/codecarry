@@ -97,6 +97,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.nativeCanvas
@@ -147,6 +148,9 @@ import android.util.Log
 import android.view.MotionEvent
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import dev.minios.ocremote.BuildConfig
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.res.stringResource
@@ -2390,6 +2394,7 @@ fun ChatScreen(
                                         val revertText = chatMessage.parts
                                             .filterIsInstance<Part.Text>()
                                             .joinToString("\n") { it.text }
+                                        viewModel.abortSession()
                                         viewModel.revertMessage(chatMessage.message.id, revertText) { ok ->
                                             coroutineScope.launch {
                                                 snackbarHostState.showSnackbar(
@@ -3704,6 +3709,13 @@ private fun ChatMessageBubble(
     val hasSteps = stepParts.isNotEmpty()
     val autoExpand = LocalCollapseTools.current
     var stepsExpanded by remember(autoExpand) { mutableStateOf(autoExpand) }
+    val timeFormat = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
+    val assistantMetaText = remember(assistantMessage?.modelId, assistantMessage?.time?.created) {
+        assistantMessage?.let { message ->
+            val timeText = timeFormat.format(Date(message.time.created))
+            if (!message.modelId.isNullOrBlank()) "$timeText  ·  ${message.modelId}" else timeText
+        }
+    }
 
     // Check if any tool is currently running (show spinner)
     val hasRunningTool = stepParts.any { it is Part.Tool && it.state is ToolState.Running }
@@ -3875,6 +3887,16 @@ private fun ChatMessageBubble(
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
                             )
                         }
+                    }
+
+                    if (!isUser && assistantMetaText != null) {
+                        Text(
+                            text = assistantMetaText,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f),
+                            textAlign = TextAlign.End,
+                            modifier = Modifier.fillMaxWidth()
+                        )
                     }
 
                     // If text parts are absent but server provided a summary, render it.

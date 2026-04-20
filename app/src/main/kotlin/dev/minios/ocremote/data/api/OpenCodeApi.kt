@@ -849,6 +849,14 @@ class OpenCodeApi @Inject constructor(
         }.body()
     }
 
+    suspend fun writeFile(conn: ServerConnection, path: String, content: String) {
+        httpClient.put("${conn.baseUrl}/file/content") {
+            conn.authHeader?.let { header("Authorization", it) }
+            contentType(ContentType.Application.Json)
+            setBody(WriteFileRequest(path = path, content = content))
+        }
+    }
+
     suspend fun listDirectory(conn: ServerConnection, path: String = "", directory: String? = null): List<FileNode> {
         return httpClient.get("${conn.baseUrl}/file") {
             conn.authHeader?.let { header("Authorization", it) }
@@ -972,6 +980,12 @@ data class SearchMatch(
 @Serializable
 data class FileContent(
     val type: String,
+    val content: String
+)
+
+@Serializable
+data class WriteFileRequest(
+    val path: String,
     val content: String
 )
 

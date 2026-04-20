@@ -75,6 +75,22 @@ class SessionListPreferencesRepository @Inject constructor(
         }
     }
 
+    suspend fun addPinned(dir: String) {
+        dataStore.edit { prefs ->
+            val key = PINNED_DIRS_KEY
+            val orderKey = PINNED_DIRS_ORDER_KEY
+            val currentSet = prefs[key] ?: emptySet()
+            val currentOrder = prefs[orderKey] ?: ""
+            if (dir !in currentSet) {
+                val newList = (currentOrder.split(",")
+                    .filter { it.isNotBlank() && it in currentSet } + dir)
+                    .distinct()
+                prefs[key] = newList.toSet()
+                prefs[orderKey] = newList.joinToString(",")
+            }
+        }
+    }
+
     suspend fun setSort(sort: SessionSort) {
         dataStore.edit { prefs ->
             prefs[SORT_KEY] = sort.name
