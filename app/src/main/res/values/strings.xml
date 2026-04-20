@@ -155,6 +155,9 @@
     <string name="sessions_subagents_show">Show subagents</string>
     <string name="sessions_subagents_hide">Hide subagents</string>
     <string name="sessions_child_session_fallback">Child session</string>
+    <string name="sessions_filtered_empty">No sessions match the current filter</string>
+    <string name="sessions_filtered_empty_hint">Try another filter or show all sessions.</string>
+    <string name="sessions_clear_filter">Show all</string>
     <string name="session_agent_none">agent</string>
     <string name="session_time_now">now</string>
     <string name="session_time_minutes">%1$dm</string>
@@ -266,6 +269,8 @@
     <string name="chat_expand">Expand</string>
     <string name="chat_tokens_summary">%1$s tokens</string>
     <string name="chat_default_variant">Default</string>
+    <string name="chat_agent_picker_title">Select agent</string>
+    <string name="chat_variant_picker_title">Select thinking intensity</string>
     <string name="chat_type_answer">Type your answer…</string>
     <string name="chat_image">Image</string>
     
