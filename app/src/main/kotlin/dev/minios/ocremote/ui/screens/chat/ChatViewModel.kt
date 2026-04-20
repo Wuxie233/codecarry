@@ -584,6 +584,12 @@ class ChatViewModel @Inject constructor(
 
     fun selectAgent(name: String) {
         _selectedAgent.value = name to true
+        saveDraft()
+    }
+
+    fun selectVariant(name: String?) {
+        _selectedVariant.value = name
+        saveDraft()
     }
 
     private fun loadCommands() {
@@ -613,6 +619,7 @@ class ChatViewModel @Inject constructor(
             val idx = variants.indexOf(current)
             _selectedVariant.value = if (idx == variants.lastIndex) null else variants[idx + 1]
         }
+        saveDraft()
     }
 
     fun selectModel(providerId: String, modelId: String) {
