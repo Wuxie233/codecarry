@@ -14,11 +14,13 @@ import dev.minios.ocremote.data.preferences.SessionListPreferences
 import dev.minios.ocremote.data.preferences.SessionListPreferencesRepository
 import dev.minios.ocremote.data.preferences.SessionSort
 import dev.minios.ocremote.data.repository.EventReducer
+import dev.minios.ocremote.data.repository.SettingsRepository
 import dev.minios.ocremote.domain.model.Project
 import dev.minios.ocremote.domain.model.Session
 import dev.minios.ocremote.domain.model.SessionStatus
-import dev.minios.ocremote.ui.screens.sessions.components.ActiveSubagentItem
-import dev.minios.ocremote.ui.screens.sessions.components.SubagentStatus
+import dev.minios.ocremote.domain.model.SseEvent
+import dev.minios.ocremote.ui.screens.sessions.components.ActiveConversationItem
+import dev.minios.ocremote.ui.screens.sessions.components.ConversationStatus
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -43,7 +45,7 @@ data class SessionListUiState(
     val isLoading: Boolean = true,
     val error: String? = null,
 
-    val activeSubagents: List<ActiveSubagentItem> = emptyList(),
+    val activeConversations: List<ActiveConversationItem> = emptyList(),
     val groups: List<ProjectGroup> = emptyList(),
     val sessionGroups: List<ProjectSessionGroup> = emptyList(),
 
@@ -57,6 +59,9 @@ data class SessionListUiState(
     val isSelectionMode: Boolean = false,
 
     val projects: List<Project> = emptyList(),
+
+    val hiddenProjectCount: Int = 0,
+    val showHiddenProjects: Boolean = false,
 )
 
 /** A group of sessions belonging to a project. */
@@ -75,14 +80,26 @@ data class ProjectGroup(
     val tildeDirectory: String,
     val isPinned: Boolean,
     val isCollapsed: Boolean,
+    val isHidden: Boolean,
     val sessionCount: Int,
     val activeCount: Int,
     val additionsSum: Int,
     val deletionsSum: Int,
     val sessions: List<SessionItem>,
-    val subagentsByParent: Map<String, List<SessionItem>>,
+    val subagentRowsByParent: Map<String, SubagentRow>,
     val sessionDirLabels: Map<String, String> = emptyMap(),
 )
+
+data class SubagentRow(
+    val running: List<SessionItem>,
+    val historical: List<SessionItem>,
+) {
+    val total: Int get() = running.size + historical.size
+
+    companion object {
+        val EMPTY = SubagentRow(emptyList(), emptyList())
+    }
+}
 
 data class SessionItem(
     val session: Session,
@@ -95,6 +112,7 @@ class SessionListViewModel @Inject constructor(
     private val eventReducer: EventReducer,
     private val api: OpenCodeApi,
     private val preferencesRepo: SessionListPreferencesRepository,
+    private val settingsRepository: SettingsRepository,
 ) : ViewModel() {
 
     val serverUrl: String = URLDecoder.decode(
@@ -120,8 +138,9 @@ class SessionListViewModel @Inject constructor(
     private val _projects = MutableStateFlow<List<Project>>(emptyList())
     private val _homeDir = MutableStateFlow<String?>(null)
     private val _selectedIds = MutableStateFlow<Set<String>>(emptySet())
-    private val _filter = MutableStateFlow(SessionFilter.ALL)
     private val _searchQuery = MutableStateFlow("")
+    private val _filter = MutableStateFlow(SessionFilter.ALL)
+    private val _showHiddenProjects = MutableStateFlow(false)
     private val _navigateToSession = MutableSharedFlow<String>(extraBufferCapacity = 1)
     val navigateToSession: SharedFlow<String> = _navigateToSession.asSharedFlow()
     private val prefsFlow = preferencesRepo.preferences.stateIn(
@@ -142,8 +161,11 @@ class SessionListViewModel @Inject constructor(
             _homeDir,
             _selectedIds,
             prefsFlow,
-            _filter,
             _searchQuery,
+            _filter,
+            eventReducer.questions,
+            eventReducer.permissions,
+            _showHiddenProjects,
         )
     ) { values ->
         val allSessions = values[0] as List<Session>
@@ -155,8 +177,11 @@ class SessionListViewModel @Inject constructor(
         val homeDir = values[6] as String?
         val selectedIds = values[7] as Set<String>
         val prefs = values[8] as SessionListPreferences
-        val filter = values[9] as SessionFilter
-        val searchQuery = values[10] as String
+        val searchQuery = values[9] as String
+        val filter = values[10] as SessionFilter
+        val pendingQuestions = values[11] as Map<String, List<SseEvent.QuestionAsked>>
+        val pendingPermissions = values[12] as Map<String, List<SseEvent.PermissionAsked>>
+        val showHiddenProjects = values[13] as Boolean
 
         val serverSessionIds = serverSessions[serverId] ?: emptySet()
         val serverScopedSessions = allSessions.filter { it.id in serverSessionIds }
@@ -168,34 +193,13 @@ class SessionListViewModel @Inject constructor(
             )
         }
 
-        val activeSubagents = serverScopedSessions
-            .asSequence()
-            .filter { it.parentId != null && !it.isArchived }
-            .mapNotNull { session ->
-                val status = statuses[session.id] ?: SessionStatus.Idle
-                val mappedStatus = when (status) {
-                    SessionStatus.Busy -> SubagentStatus.BUSY
-                    is SessionStatus.Retry -> SubagentStatus.RETRY
-                    else -> null
-                } ?: return@mapNotNull null
-
-                val parent = session.parentId?.let(sessionsById::get)
-                val projectDirectory = normalizeDirectory(parent?.directory ?: session.directory)
-                ActiveSubagentItem(
-                    sessionId = session.id,
-                    title = session.title ?: "",
-                    agentName = null,
-                    parentSessionId = session.parentId!!,
-                    parentTitle = parent?.title,
-                    projectName = displayNameFromDirectory(projectDirectory),
-                    status = mappedStatus,
-                    updatedAt = session.time.updated,
-                )
-            }
-            .sortedByDescending { it.updatedAt }
-            .toList()
-
         val (rootSessions, childSessions) = serverScopedSessions.partition { it.parentId == null }
+        val activeConversations = buildActiveConversations(
+            rootSessions = rootSessions,
+            statuses = statuses,
+            pendingQuestions = pendingQuestions,
+            pendingPermissions = pendingPermissions,
+        )
         val childBuckets = childSessions.groupBy { it.parentId!! }
         val projectByDirectory = projects.associateBy { normalizeDirectory(it.worktree) }
         val allDirectories = (projects.map { normalizeDirectory(it.worktree) } + rootSessions.map { normalizeDirectory(it.directory) })
@@ -222,12 +226,12 @@ class SessionListViewModel @Inject constructor(
                 .sortedWith(rootSessionComparator(prefs.sort))
 
             val filteredRootItems = filteredRoots.map { itemsById.getValue(it.id) }
-            val subagentsByParent = filteredRoots.associate { root ->
+            val subagentRowsByParent = filteredRoots.associate { root ->
                 val childItems = (childBuckets[root.id] ?: emptyList())
                     .filter { child -> matchesChildArchiveMode(child, filter) }
                     .map { itemsById.getValue(it.id) }
                     .sortedWith(sessionItemComparator(prefs.sort))
-                root.id to childItems
+                root.id to partitionSubagentsByActivity(childItems)
             }
 
             ProjectGroup(
@@ -236,19 +240,24 @@ class SessionListViewModel @Inject constructor(
                 tildeDirectory = tildeDirectory,
                 isPinned = isPinned,
                 isCollapsed = isCollapsed,
+                isHidden = directory in prefs.hiddenDirs,
                 sessionCount = filteredRootItems.size,
                 activeCount = filteredRootItems.count { it.status is SessionStatus.Busy },
                 additionsSum = filteredRootItems.sumOf { it.session.summary?.additions ?: 0 },
                 deletionsSum = filteredRootItems.sumOf { it.session.summary?.deletions ?: 0 },
                 sessions = filteredRootItems,
-                subagentsByParent = subagentsByParent,
-                sessionDirLabels = emptyMap(),
+                subagentRowsByParent = subagentRowsByParent,
+                sessionDirLabels = filteredRootItems.associate { it.session.id to tildeDirectory },
             )
         }
 
-        val hasAnySessions = rootSessions.isNotEmpty()
+        val hiddenProjectCount = rawGroups.count { it.isHidden }
         val groups = rawGroups
-            .filter { it.sessionCount > 0 || it.isPinned }
+            .filter { group ->
+                val visibleByDefault = group.sessionCount > 0 || group.isPinned
+                val hiddenFilter = if (group.isHidden) showHiddenProjects else true
+                visibleByDefault && hiddenFilter
+            }
             .sortedWith(
                 compareBy<ProjectGroup> { group ->
                     val pinnedIndex = prefs.pinnedDirs.indexOf(group.directory)
@@ -277,21 +286,28 @@ class SessionListViewModel @Inject constructor(
             _selectedIds.value = validSelectedIds
         }
 
+        val emptyState = computeSessionListEmptyState(
+            rootSessionCount = rootSessions.size,
+            visibleGroupCount = groups.size,
+        )
+
         SessionListUiState(
             serverName = serverName,
             isLoading = loading,
             error = error,
-            activeSubagents = activeSubagents,
+            activeConversations = activeConversations,
             groups = groups,
             sessionGroups = legacySessionGroups,
             sort = prefs.sort,
             filter = filter,
             searchQuery = searchQuery,
-            hasAnySessions = hasAnySessions,
-            isFilteredEmpty = filter != SessionFilter.ALL && groups.isEmpty() && hasAnySessions && searchQuery.isBlank(),
+            hasAnySessions = emptyState.hasAnySessions,
+            isFilteredEmpty = emptyState.isFilteredEmpty,
             selectedIds = validSelectedIds,
             isSelectionMode = validSelectedIds.isNotEmpty(),
             projects = projects,
+            hiddenProjectCount = hiddenProjectCount,
+            showHiddenProjects = showHiddenProjects,
         )
     }.stateIn(
         viewModelScope,
@@ -302,6 +318,9 @@ class SessionListViewModel @Inject constructor(
     init {
         loadHomeDir()
         loadSessions()
+        viewModelScope.launch {
+            preferencesRepo.setFilter(SessionFilter.ALL)
+        }
     }
 
     fun loadSessions() {
@@ -309,30 +328,31 @@ class SessionListViewModel @Inject constructor(
             _isLoading.value = true
             _error.value = null
             try {
-                // Load all projects first
                 val projects = api.listProjects(conn)
                 _projects.value = projects
-                if (BuildConfig.DEBUG) Log.d(TAG, "Loaded ${projects.size} projects for multi-project session fetch")
 
-                if (projects.isEmpty()) {
-                    // Fallback: load sessions without directory header (server CWD only)
-                    val sessions = api.listSessions(conn)
-                    eventReducer.setSessions(serverId, sessions)
-                    if (BuildConfig.DEBUG) Log.d(TAG, "Loaded ${sessions.size} sessions (no projects)")
-                } else {
-                    // Load sessions for each project using its worktree as directory
-                    var totalSessions = 0
-                    for (project in projects) {
-                        try {
-                            val sessions = api.listSessions(conn, directory = project.worktree)
-                            eventReducer.setSessions(serverId, sessions)
-                            totalSessions += sessions.size
-                            if (BuildConfig.DEBUG) Log.d(TAG, "Loaded ${sessions.size} sessions for project ${project.displayName}")
-                        } catch (e: Exception) {
-                            Log.w(TAG, "Failed to load sessions for project ${project.displayName}: ${e.message}")
+                val roots = api.listSessions(conn, rootsOnly = true)
+                eventReducer.setSessions(serverId, roots)
+                if (BuildConfig.DEBUG) Log.d(TAG, "Loaded ${roots.size} root sessions, fetching children across ${projects.size} projects")
+
+                coroutineScope {
+                    projects.map { project ->
+                        async {
+                            try {
+                                api.listSessions(conn, directory = project.worktree, rootsOnly = false)
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Failed to load children for project ${project.displayName}: ${e.message}")
+                                emptyList()
+                            }
                         }
-                    }
-                    if (BuildConfig.DEBUG) Log.d(TAG, "Total: loaded $totalSessions sessions across ${projects.size} projects for server $serverId")
+                    }.awaitAll().flatten()
+                }.takeIf { it.isNotEmpty() }?.let { all ->
+                    // Store all sessions (roots + children) so that root sessions not captured
+                    // by the global roots-only call are still shown (e.g. when the server
+                    // scopes the root-less endpoint to its own directory). setSessions merges
+                    // by ID, so duplicates from the global call are handled gracefully.
+                    eventReducer.setSessions(serverId, all)
+                    if (BuildConfig.DEBUG) Log.d(TAG, "Loaded ${all.size} project-scoped sessions (${all.count { it.parentId != null }} children, ${all.count { it.parentId == null }} roots)")
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to load sessions", e)
@@ -364,11 +384,8 @@ class SessionListViewModel @Inject constructor(
     fun createNewSession(directory: String? = null) {
         viewModelScope.launch {
             try {
-                if (_filter.value != SessionFilter.ALL) {
-                    _filter.value = SessionFilter.ALL
-                }
+                _filter.value = SessionFilter.ALL
                 val session = api.createSession(conn, directory = directory)
-                // The SSE stream should pick up the new session, but also add directly
                 eventReducer.setSessions(serverId, listOf(session))
                 if (BuildConfig.DEBUG) Log.d(TAG, "Created new session: ${session.id}")
                 _navigateToSession.tryEmit(session.id)
@@ -424,11 +441,7 @@ class SessionListViewModel @Inject constructor(
     }
 
     fun setFilter(f: SessionFilter) {
-        _filter.value = if (_filter.value == f && f != SessionFilter.ALL) {
-            SessionFilter.ALL
-        } else {
-            f
-        }
+        _filter.value = if (_filter.value == f && f != SessionFilter.ALL) SessionFilter.ALL else f
     }
 
     fun clearFilter() {
@@ -449,6 +462,16 @@ class SessionListViewModel @Inject constructor(
                 collapsed = normalized !in prefsFlow.value.collapsedDirs,
             )
         }
+    }
+
+    fun toggleHidden(dir: String) {
+        viewModelScope.launch {
+            preferencesRepo.toggleHidden(normalizeDirectory(dir))
+        }
+    }
+
+    fun toggleShowHiddenProjects() {
+        _showHiddenProjects.value = !_showHiddenProjects.value
     }
 
     fun archiveProjectSessions(dir: String) {
@@ -667,4 +690,74 @@ class SessionListViewModel @Inject constructor(
     private fun displayNameFromDirectory(directory: String): String {
         return if (directory == "/") "/" else directory.substringAfterLast('/').ifEmpty { directory }
     }
+}
+
+internal data class SessionListEmptyState(
+    val hasAnySessions: Boolean,
+    val isFilteredEmpty: Boolean,
+)
+
+internal fun computeSessionListEmptyState(
+    rootSessionCount: Int,
+    visibleGroupCount: Int,
+): SessionListEmptyState {
+    val hasAny = rootSessionCount > 0
+    return SessionListEmptyState(
+        hasAnySessions = hasAny,
+        isFilteredEmpty = hasAny && visibleGroupCount == 0,
+    )
+}
+
+internal fun partitionSubagentsByActivity(subagents: List<SessionItem>): SubagentRow {
+    if (subagents.isEmpty()) return SubagentRow.EMPTY
+    val running = ArrayList<SessionItem>(subagents.size)
+    val historical = ArrayList<SessionItem>(subagents.size)
+    for (item in subagents) {
+        when (item.status) {
+            is SessionStatus.Busy, is SessionStatus.Retry -> running += item
+            is SessionStatus.Idle -> historical += item
+        }
+    }
+    return SubagentRow(running = running, historical = historical)
+}
+
+internal fun buildActiveConversations(
+    rootSessions: List<Session>,
+    statuses: Map<String, SessionStatus>,
+    pendingQuestions: Map<String, List<SseEvent.QuestionAsked>>,
+    pendingPermissions: Map<String, List<SseEvent.PermissionAsked>>,
+): List<ActiveConversationItem> {
+    fun normalizeDir(directory: String): String = directory.trimEnd('/').ifEmpty { "/" }
+    fun displayName(directory: String): String = if (directory == "/") "/" else directory.substringAfterLast('/').ifEmpty { directory }
+
+    return rootSessions
+        .asSequence()
+        .filter { !it.isArchived }
+        .mapNotNull { session ->
+            val questionCount = pendingQuestions[session.id]?.size ?: 0
+            val permissionCount = pendingPermissions[session.id]?.size ?: 0
+            val status = statuses[session.id] ?: SessionStatus.Idle
+
+            val (conversationStatus, pendingCount) = when {
+                questionCount > 0 -> ConversationStatus.AWAITING_QUESTION to questionCount
+                permissionCount > 0 -> ConversationStatus.AWAITING_PERMISSION to permissionCount
+                status is SessionStatus.Busy -> ConversationStatus.BUSY to 0
+                status is SessionStatus.Retry -> ConversationStatus.RETRY to 0
+                else -> return@mapNotNull null
+            }
+
+            ActiveConversationItem(
+                sessionId = session.id,
+                title = session.title,
+                projectName = displayName(normalizeDir(session.directory)),
+                status = conversationStatus,
+                pendingCount = pendingCount,
+                updatedAt = session.time.updated,
+            )
+        }
+        .sortedWith(
+            compareBy<ActiveConversationItem> { it.status.ordinal }
+                .thenByDescending { it.updatedAt }
+        )
+        .toList()
 }
