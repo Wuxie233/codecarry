@@ -838,6 +838,199 @@ Add `readMcpConfig` and `writeMcpConfig` that use `McpConfigParser` and the API.
 
 ---
 
+---
+
+## Wave 2, Task K: FAB → Add Project to Workspace (Pinned Directories)
+
+**Spec:** Task 5 in design doc. No server API needed — uses client-side DataStore.
+
+### K.1 — Extend SessionListPreferences
+
+**File:** `data/preferences/SessionListPreferences.kt`
+
+- [ ] **Step 1: Add `pinnedDirectories` field**
+
+  Open `SessionListPreferences.kt`. Find the existing preferences data class / Proto schema. Add:
+
+  If using `DataStore<Preferences>` (key-value style):
+  ```kotlin
+  val PINNED_DIRECTORIES_KEY = stringSetPreferencesKey("pinned_directories")
+  ```
+
+  If using Proto DataStore, add the field to the `.proto` schema file and regenerate.
+
+  Check the existing pattern in `SessionListPreferences.kt` to match exactly — the project uses one of these two styles.
+
+- [ ] **Step 2: Add read/write helpers in `SessionListPreferencesRepository`**
+
+  In `SessionListPreferencesRepository.kt`, add:
+  ```kotlin
+  val pinnedDirectories: Flow<Set<String>> = dataStore.data
+      .map { prefs -> prefs[PINNED_DIRECTORIES_KEY] ?: emptySet() }
+
+  suspend fun addPinnedDirectory(directory: String) {
+      dataStore.edit { prefs ->
+          val current = prefs[PINNED_DIRECTORIES_KEY] ?: emptySet()
+          prefs[PINNED_DIRECTORIES_KEY] = current + directory.trimEnd('/')
+      }
+  }
+
+  suspend fun removePinnedDirectory(directory: String) {
+      dataStore.edit { prefs ->
+          val current = prefs[PINNED_DIRECTORIES_KEY] ?: emptySet()
+          prefs[PINNED_DIRECTORIES_KEY] = current - directory.trimEnd('/')
+      }
+  }
+  ```
+
+  Normalize paths by trimming trailing slashes to avoid duplicates.
+
+- [ ] **Step 3: Verify compilation**
+
+  Run: `./gradlew :app:compileDebugKotlin`
+
+### K.2 — Extend SessionListViewModel
+
+**File:** `ui/screens/sessions/SessionListViewModel.kt`
+
+- [ ] **Step 1: Collect pinnedDirectories in ViewModel**
+
+  In `SessionListViewModel`, inject `SessionListPreferencesRepository` (it's already injected for other preferences). Add:
+  ```kotlin
+  private val _pinnedDirectories = MutableStateFlow<Set<String>>(emptySet())
+  ```
+
+  In `init` block (or where other flows are collected), collect:
+  ```kotlin
+  viewModelScope.launch {
+      preferencesRepository.pinnedDirectories.collect { pinned ->
+          _pinnedDirectories.value = pinned
+      }
+  }
+  ```
+
+- [ ] **Step 2: Merge pinned dirs into session groups**
+
+  Find the existing function that builds `ProjectGroup` list from sessions (search for `ProjectGroup` construction in the ViewModel). After building the session-based groups, add empty groups for pinned directories that have no sessions:
+
+  ```kotlin
+  val sessionDirs = groups.map { it.directory.trimEnd('/') }.toSet()
+  val pinnedEmpty = _pinnedDirectories.value
+      .map { it.trimEnd('/') }
+      .filter { it !in sessionDirs }
+      .map { dir ->
+          ProjectGroup(
+              directory = dir,
+              name = dir.substringAfterLast('/').ifEmpty { dir },
+              sessions = emptyList(),
+              isPinned = true   // or whatever field marks it as pinned
+          )
+      }
+  val allGroups = groups + pinnedEmpty
+  ```
+
+  Check the `ProjectGroup` data class fields and match them exactly. The `isPinned` logic may already exist.
+
+- [ ] **Step 3: Add `pinDirectory` and `unpinDirectory` functions**
+
+  ```kotlin
+  fun pinDirectory(directory: String) {
+      viewModelScope.launch {
+          preferencesRepository.addPinnedDirectory(directory)
+      }
+  }
+
+  fun unpinDirectory(directory: String) {
+      viewModelScope.launch {
+          preferencesRepository.removePinnedDirectory(directory)
+      }
+  }
+  ```
+
+- [ ] **Step 4: Verify compilation**
+
+  Run: `./gradlew :app:compileDebugKotlin`
+
+### K.3 — Update FAB + Empty Group UI in SessionListScreen
+
+**File:** `ui/screens/sessions/SessionListScreen.kt`
+
+- [ ] **Step 1: Change FAB to always open directory browser**
+
+  Find the FAB click handler (around line 215-224). Currently it conditionally opens either `NewSessionQuickDialog` or `OpenProjectDialog`. Change it to always open `OpenProjectDialog`:
+
+  ```kotlin
+  // Before
+  onClick = {
+      if (uiState.groups.isNotEmpty()) showQuickNewSession = true
+      else showOpenProject = true
+  }
+
+  // After
+  onClick = { showOpenProject = true }
+  ```
+
+  The `showQuickNewSession` state variable can remain (still used by the project three-dot menu "New Session Here"), but the FAB no longer sets it.
+
+- [ ] **Step 2: Change `OpenProjectDialog` onSelect to pin instead of create session**
+
+  Find the `OpenProjectDialog` call (around line 466-475). Change its `onSelect` callback:
+
+  ```kotlin
+  // Before
+  onSelect = { dir -> viewModel.createNewSession(directory = dir) }
+
+  // After
+  onSelect = { dir -> viewModel.pinDirectory(dir) }
+  ```
+
+- [ ] **Step 3: Render empty-group row for pinned-but-empty projects**
+
+  In the `LazyColumn` where session items are rendered (find where `SessionRowWithSubagents` is called inside each group), add a condition: if the group has zero sessions, show an empty state row instead:
+
+  ```kotlin
+  if (group.sessions.isEmpty()) {
+      // Empty pinned project — show "New Session" prompt
+      Row(
+          modifier = Modifier
+              .fillMaxWidth()
+              .clickable { viewModel.createNewSession(directory = group.directory) }
+              .padding(horizontal = 32.dp, vertical = 12.dp),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(8.dp)
+      ) {
+          Icon(
+              imageVector = Icons.Default.Add,
+              contentDescription = null,
+              modifier = Modifier.size(16.dp),
+              tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+          )
+          Text(
+              text = "新建对话",
+              style = MaterialTheme.typography.labelMedium,
+              color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+          )
+      }
+  } else {
+      // existing session rows
+  }
+  ```
+
+- [ ] **Step 4: Full build**
+
+  Run: `./gradlew :app:assembleDebug`  
+  Expected: builds cleanly.
+
+- [ ] **Step 5: Manual verification**
+
+  - Tap ➕ → directory browser opens (no intermediate quick-dialog)
+  - Select a directory with no existing sessions → project group appears in list with "新建对话" row
+  - Select a directory that already has sessions → project group appears, sessions shown
+  - Tap "新建对话" in an empty group → creates session and navigates to chat
+  - Re-open app → pinned directories persist
+
+---
+
 ## Final Verification Checklist
 
 - [ ] Run unit tests: `./gradlew :app:testDebugUnitTest` → all pass
@@ -847,4 +1040,5 @@ Add `readMcpConfig` and `writeMcpConfig` that use `McpConfigParser` and the API.
 - [ ] Manual smoke test — abort fix: send message, while generating long-press → Edit, confirm generation stops
 - [ ] Manual smoke test — metadata: send message, confirm faint `HH:mm · modelId` appears bottom-right
 - [ ] Manual smoke test — MCP: open project three-dot menu, tap "管理 MCP", verify bottom sheet opens (empty state or list)
-- [ ] Commit with message: `feat: banner fix, MCP management, message metadata, edit abort fix (closes #<N>)`
+- [ ] Manual smoke test — FAB: tap ➕ → directory browser, select folder → project in list, no navigation
+- [ ] Commit with message: `feat: banner fix, MCP management, message metadata, edit abort fix, FAB workspace (closes #<N>)`

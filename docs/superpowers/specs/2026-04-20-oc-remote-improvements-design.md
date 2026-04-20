@@ -248,14 +248,86 @@ viewModel.revertMessage(messageId)
 
 ---
 
+---
+
+## Task 5: FAB → Add Project to Workspace
+
+### Background
+
+The ➕ FAB currently opens `NewSessionQuickDialog` (recent project shortcuts → create session → navigate to chat). For multi-project development, users want to add a project directory to the workspace list without automatically starting a new conversation.
+
+**Constraint**: The OpenCode server has no independent "register project" API (`GET /project` is read-only, `POST /project` does not exist). Projects on the server are a side effect of creating sessions. Therefore, "add to workspace" must be implemented as **client-side local storage**.
+
+### Behavior Change
+
+| Current | New |
+|---------|-----|
+| ➕ → `NewSessionQuickDialog` (recent shortcuts) → `createNewSession()` → navigate to chat | ➕ → `OpenProjectDialog` (directory browser) → `pinDirectory(dir)` → stays on session list |
+
+`NewSessionQuickDialog` is no longer used as the FAB entry point. It can be kept for future use or removed — it is not wired to the FAB.
+
+### Data Layer
+
+**`SessionListPreferences`** (existing DataStore preferences class) gains one new field:
+```kotlin
+val pinnedDirectories: Set<String>  // default: emptySet()
+```
+
+**`SessionListPreferencesRepository`** gains:
+```kotlin
+suspend fun addPinnedDirectory(directory: String)
+suspend fun removePinnedDirectory(directory: String)
+fun pinnedDirectoriesFlow(): Flow<Set<String>>
+```
+
+### ViewModel
+
+`SessionListViewModel` already loads sessions and groups them by directory. Extend the group-building logic to also include pinned directories that have no sessions:
+
+```kotlin
+// Pseudo-code for merged groups
+val sessionGroups: Map<String, List<Session>>  // existing
+val pinned: Set<String>                         // from DataStore
+val allDirs = (sessionGroups.keys + pinned).distinct()
+// Build ProjectGroup for each dir; pinnedEmpty = true if no sessions
+```
+
+New ViewModel function:
+```kotlin
+fun pinDirectory(directory: String)   // writes to DataStore, updates state
+fun unpinDirectory(directory: String) // used by future "remove project" action
+```
+
+### UI
+
+**FAB click**: always open `OpenProjectDialog` (skip `NewSessionQuickDialog`).
+
+**After directory selected** in `OpenProjectDialog`: call `viewModel.pinDirectory(dir)` instead of `viewModel.createNewSession(dir)`. No navigation.
+
+**Empty pinned project group** (pinned but zero sessions): render the project group header normally, but instead of a session list, show a single subtle row:
+```
+  + 新建对话          (labelMedium, primary color, clickable → createNewSession(dir))
+```
+
+### Files
+
+| File | Change |
+|------|--------|
+| `data/preferences/SessionListPreferences.kt` | Add `pinnedDirectories: Set<String>` field |
+| `data/preferences/SessionListPreferencesRepository.kt` | Add `addPinnedDirectory`, `removePinnedDirectory`, `pinnedDirectoriesFlow` |
+| `ui/screens/sessions/SessionListViewModel.kt` | Merge pinned dirs into groups, add `pinDirectory` / `unpinDirectory` |
+| `ui/screens/sessions/SessionListScreen.kt` | FAB → `OpenProjectDialog` always; on select → `pinDirectory`; empty group row |
+
+---
+
 ## Implementation Order
 
-All four tasks are independent. Suggested parallel wave:
+All five tasks are independent. Suggested parallel wave:
 
 | Wave | Tasks | Notes |
 |------|-------|-------|
 | 1 (parallel) | Task 1 (Banner) + Task 4 (abort fix) + Task 3 (metadata display) | Small, isolated changes |
-| 2 | Task 2 (MCP management) | Larger, new files, depends on nothing from wave 1 but logically more complex |
+| 2 (parallel) | Task 2 (MCP management) + Task 5 (FAB / pinned projects) | Both add new data layer + UI |
 
 ## Out of Scope
 
@@ -263,3 +335,4 @@ All four tasks are independent. Suggested parallel wave:
 - MCP server status/health indicators (no API support)
 - In-app OpenCode restart (user restarts manually after save)
 - Global (non-project) MCP management
+- Persisting pinned directories across server switches (pinned list is per-server-connection)
