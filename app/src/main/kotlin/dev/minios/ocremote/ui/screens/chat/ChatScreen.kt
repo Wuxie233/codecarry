@@ -114,8 +114,9 @@ import com.mikepenz.markdown.m3.Markdown
 import com.mikepenz.markdown.m3.markdownColor
 import com.mikepenz.markdown.m3.markdownTypography
 import com.mikepenz.markdown.compose.components.markdownComponents
-import com.mikepenz.markdown.compose.elements.MarkdownTable
 import com.mikepenz.markdown.coil2.Coil2ImageTransformerImpl
+import com.mikepenz.markdown.compose.elements.highlightedCodeBlock
+import com.mikepenz.markdown.compose.elements.highlightedCodeFence
 import dev.minios.ocremote.domain.model.*
 import dev.minios.ocremote.data.api.AgentInfo
 import dev.minios.ocremote.data.api.CommandInfo
@@ -2533,10 +2534,20 @@ fun ChatScreen(
     if (showVariantPicker) {
         val defaultKey = "__default__"
         val options = buildList {
-            add(ChoicePickerOption(key = defaultKey, title = stringResource(R.string.chat_default_variant)))
-            uiState.variantNames.forEach { variant ->
-                add(ChoicePickerOption(key = variant, title = variant.replaceFirstChar { it.uppercase() }))
-            }
+            add(
+                ChoicePickerOption(
+                    key = defaultKey,
+                    title = stringResource(R.string.chat_default_variant),
+                )
+            )
+            addAll(
+                uiState.variantNames.map { variant ->
+                    ChoicePickerOption(
+                        key = variant,
+                        title = variant.replaceFirstChar { it.uppercase() },
+                    )
+                }
+            )
         }
         ChoicePickerDialog(
             title = stringResource(R.string.chat_variant_picker_title),
@@ -2754,6 +2765,7 @@ private fun ChoicePickerDialog(
     onDismiss: () -> Unit,
 ) {
     val isAmoled = isAmoledTheme()
+
     BasicAlertDialog(onDismissRequest = onDismiss) {
         Surface(
             shape = RoundedCornerShape(20.dp),
@@ -2776,6 +2788,7 @@ private fun ChoicePickerDialog(
                     color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp)
                 )
+
                 LazyColumn(
                     modifier = Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(2.dp)
@@ -2799,9 +2812,7 @@ private fun ChoicePickerDialog(
                                 Text(
                                     text = option.title,
                                     style = MaterialTheme.typography.bodyMedium,
-                                    color = option.accentColor
-                                        ?: if (isSelected) MaterialTheme.colorScheme.primary
-                                        else MaterialTheme.colorScheme.onSurface,
+                                    color = option.accentColor ?: if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
@@ -3601,7 +3612,7 @@ private fun resolveStepsStatus(stepParts: List<Part>): String {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ChatMessageBubble(
     chatMessage: ChatMessage,
@@ -3639,7 +3650,6 @@ private fun ChatMessageBubble(
     }
     val hapticView = LocalView.current
     val hapticOn = LocalHapticFeedbackEnabled.current
-    var showLongPressMenu by remember { mutableStateOf(false) }
 
     // Separate parts into text/reasoning (shown directly) and step parts (behind toggle)
     val visibleParts = if (isUser) {
@@ -3709,19 +3719,7 @@ private fun ChatMessageBubble(
             color = backgroundColor,
             border = bubbleBorder,
             tonalElevation = if (isAmoled || isUser) 0.dp else 1.dp,
-            modifier = Modifier
-                .fillMaxWidth()
-                .then(
-                    if (isUser) {
-                        Modifier.combinedClickable(
-                            onClick = {},
-                            onLongClick = {
-                                performHaptic(hapticView, hapticOn)
-                                showLongPressMenu = true
-                            }
-                        )
-                    } else Modifier
-                )
+            modifier = Modifier.fillMaxWidth()
         ) {
             val compact = LocalCompactMessages.current
             Column(
@@ -3891,128 +3889,103 @@ private fun ChatMessageBubble(
         }
     }
 
-    Box {
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalAlignment = alignment
-        ) {
-            if (isUser && onRevert != null) {
-                // Swipe-to-revert for user messages with confirmation dialog
-                var showRevertConfirmation by remember { mutableStateOf(false) }
-                val hapticEnabled = LocalHapticFeedbackEnabled.current
-                val bubbleView = LocalView.current
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = alignment
+    ) {
+        if (isUser && onRevert != null) {
+            // Swipe-to-revert for user messages with confirmation dialog
+            var showRevertConfirmation by remember { mutableStateOf(false) }
+            val hapticEnabled = LocalHapticFeedbackEnabled.current
+            val bubbleView = LocalView.current
 
-                val dismissState = rememberSwipeToDismissBoxState(
-                    confirmValueChange = { value ->
-                        if (value != SwipeToDismissBoxValue.Settled) {
-                            if (hapticEnabled) {
-                                @Suppress("DEPRECATION")
-                                bubbleView.performHapticFeedback(
-                                    android.view.HapticFeedbackConstants.LONG_PRESS,
-                                    android.view.HapticFeedbackConstants.FLAG_IGNORE_VIEW_SETTING or
-                                            android.view.HapticFeedbackConstants.FLAG_IGNORE_GLOBAL_SETTING
-                                )
-                            }
-                            showRevertConfirmation = true
+            val dismissState = rememberSwipeToDismissBoxState(
+                confirmValueChange = { value ->
+                    if (value != SwipeToDismissBoxValue.Settled) {
+                        if (hapticEnabled) {
+                            @Suppress("DEPRECATION")
+                            bubbleView.performHapticFeedback(
+                                android.view.HapticFeedbackConstants.LONG_PRESS,
+                                android.view.HapticFeedbackConstants.FLAG_IGNORE_VIEW_SETTING or
+                                        android.view.HapticFeedbackConstants.FLAG_IGNORE_GLOBAL_SETTING
+                            )
                         }
-                        false // don't actually dismiss; wait for dialog confirmation
+                        showRevertConfirmation = true
+                    }
+                    false // don't actually dismiss; wait for dialog confirmation
+                }
+            )
+
+            if (showRevertConfirmation) {
+                AlertDialog(
+                    onDismissRequest = { showRevertConfirmation = false },
+                    title = { Text(stringResource(R.string.chat_revert_title)) },
+                    text = { Text(stringResource(R.string.chat_revert_message)) },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                showRevertConfirmation = false
+                                onRevert()
+                            }
+                        ) {
+                            Text(stringResource(R.string.chat_revert), color = MaterialTheme.colorScheme.error)
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showRevertConfirmation = false }) {
+                            Text(stringResource(R.string.cancel))
+                        }
                     }
                 )
+            }
 
-                if (showRevertConfirmation) {
-                    AlertDialog(
-                        onDismissRequest = { showRevertConfirmation = false },
-                        title = { Text(stringResource(R.string.chat_revert_title)) },
-                        text = { Text(stringResource(R.string.chat_revert_message)) },
-                        confirmButton = {
-                            TextButton(
-                                onClick = {
-                                    showRevertConfirmation = false
-                                    onRevert()
-                                }
-                            ) {
-                                Text(stringResource(R.string.chat_revert), color = MaterialTheme.colorScheme.error)
-                            }
-                        },
-                        dismissButton = {
-                            TextButton(onClick = { showRevertConfirmation = false }) {
-                                Text(stringResource(R.string.cancel))
-                            }
-                        }
-                    )
-                }
-
-                SwipeToDismissBox(
-                    state = dismissState,
-                    backgroundContent = {
-                        val direction = dismissState.dismissDirection
-                        val bgColor = MaterialTheme.colorScheme.errorContainer
-                        val iconAlignment = if (direction == SwipeToDismissBoxValue.StartToEnd) {
-                            Alignment.CenterStart
-                        } else {
-                            Alignment.CenterEnd
-                        }
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .clip(RoundedCornerShape(
-                                    topStart = 18.dp,
-                                    topEnd = 4.dp,
-                                    bottomStart = 18.dp,
-                                    bottomEnd = 18.dp
-                                ))
-                                .background(bgColor)
-                                .padding(horizontal = 20.dp),
-                            contentAlignment = iconAlignment
+            SwipeToDismissBox(
+                state = dismissState,
+                backgroundContent = {
+                    val direction = dismissState.dismissDirection
+                    val bgColor = MaterialTheme.colorScheme.errorContainer
+                    val iconAlignment = if (direction == SwipeToDismissBoxValue.StartToEnd) {
+                        Alignment.CenterStart
+                    } else {
+                        Alignment.CenterEnd
+                    }
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .clip(RoundedCornerShape(
+                                topStart = 18.dp,
+                                topEnd = 4.dp,
+                                bottomStart = 18.dp,
+                                bottomEnd = 18.dp
+                            ))
+                            .background(bgColor)
+                            .padding(horizontal = 20.dp),
+                        contentAlignment = iconAlignment
+                    ) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    Icons.AutoMirrored.Filled.Undo,
-                                    contentDescription = stringResource(R.string.chat_revert),
-                                    tint = MaterialTheme.colorScheme.onErrorContainer
-                                )
-                                Text(
-                                    text = stringResource(R.string.chat_revert),
-                                    style = MaterialTheme.typography.labelLarge,
-                                    color = MaterialTheme.colorScheme.onErrorContainer
-                                )
-                            }
+                            Icon(
+                                Icons.AutoMirrored.Filled.Undo,
+                                contentDescription = stringResource(R.string.chat_revert),
+                                tint = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                            Text(
+                                text = stringResource(R.string.chat_revert),
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.onErrorContainer
+                            )
                         }
-                    },
-                    enableDismissFromStartToEnd = true,
-                    enableDismissFromEndToStart = true
-                ) {
-                    bubbleContent()
-                }
-            } else {
+                    }
+                },
+                enableDismissFromStartToEnd = true,
+                enableDismissFromEndToStart = true
+            ) {
                 bubbleContent()
             }
-        }
-        if (isUser) {
-            DropdownMenu(
-                expanded = showLongPressMenu,
-                onDismissRequest = { showLongPressMenu = false }
-            ) {
-                DropdownMenuItem(
-                    text = { Text(stringResource(R.string.chat_bubble_menu_copy)) },
-                    onClick = {
-                        showLongPressMenu = false
-                        onCopyText?.invoke()
-                    },
-                    leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) }
-                )
-                DropdownMenuItem(
-                    text = { Text(stringResource(R.string.chat_bubble_menu_edit)) },
-                    onClick = {
-                        showLongPressMenu = false
-                        onRevert?.invoke()
-                    },
-                    leadingIcon = { Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = null) }
-                )
-            }
+        } else {
+            bubbleContent()
         }
     }
 }
@@ -4327,13 +4300,8 @@ private fun MarkdownContent(
     )
 
     val components = markdownComponents(
-        codeBlock = safeHighlightedCodeBlock,
-        codeFence = safeHighlightedCodeFence,
-        table = { model ->
-            Box(modifier = Modifier.horizontalScroll(rememberScrollState())) {
-                MarkdownTable(model.content, model.node, bodyStyle)
-            }
-        },
+        codeBlock = highlightedCodeBlock,
+        codeFence = highlightedCodeFence
     )
 
     SelectionContainer {
@@ -6439,6 +6407,7 @@ private fun ChatInputBar(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
+                        // Agent selector — tap to open list picker
                         if (agents.size > 1) {
                             val agentColor = agentColor(selectedAgent, agents)
                             Row(
@@ -6495,6 +6464,7 @@ private fun ChatInputBar(
                             }
                         }
 
+                        // Variant selector (thinking effort) — THIRD
                         if (variantNames.isNotEmpty()) {
                             Row(
                                 modifier = Modifier
@@ -6511,7 +6481,7 @@ private fun ChatInputBar(
                                         MaterialTheme.colorScheme.tertiary
                                     } else {
                                         MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                                    }
+                                    },
                                 )
                                 Icon(
                                     Icons.Default.UnfoldMore,
