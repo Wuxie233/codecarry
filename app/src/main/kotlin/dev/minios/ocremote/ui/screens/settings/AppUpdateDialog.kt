@@ -11,6 +11,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -19,10 +20,30 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.minios.ocremote.R
 import dev.minios.ocremote.util.ApkInstaller
+
+private fun formatBytes(bytes: Long): String {
+    return when {
+        bytes >= 1024 * 1024 -> String.format("%.1f MB", bytes / (1024.0 * 1024.0))
+        bytes >= 1024 -> String.format("%d KB", bytes / 1024)
+        else -> "$bytes B"
+    }
+}
+
+private fun formatDownloadStatus(state: AppUpdateUiState.Downloading): String {
+    val downloaded = formatBytes(state.downloadedBytes)
+    val speed = if (state.speedBytesPerSec > 0) formatBytes(state.speedBytesPerSec) + "/s" else ""
+    return if (state.totalBytes != null && state.totalBytes > 0) {
+        val total = formatBytes(state.totalBytes)
+        if (speed.isNotEmpty()) "$downloaded / $total  $speed" else "$downloaded / $total"
+    } else {
+        if (speed.isNotEmpty()) "$downloaded  $speed" else downloaded
+    }
+}
 
 @Composable
 fun AppUpdateDialog(
@@ -74,8 +95,20 @@ fun AppUpdateDialog(
                         }
                     }
                     is AppUpdateUiState.Downloading -> {
-                        CircularProgressIndicator()
-                        Text(stringResource(R.string.settings_update_downloading))
+                        if (state.totalBytes != null && state.totalBytes > 0) {
+                            LinearProgressIndicator(
+                                progress = { state.progressPercent / 100f },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        } else {
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        }
+                        Text(
+                            text = formatDownloadStatus(state),
+                            style = MaterialTheme.typography.bodySmall,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
                     }
                     is AppUpdateUiState.ReadyToInstall -> {
                         Icon(

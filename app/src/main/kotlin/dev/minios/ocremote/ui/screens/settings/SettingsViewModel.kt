@@ -424,8 +424,19 @@ class SettingsViewModel @Inject constructor(
         val cur = _appUpdateUiState.value as? AppUpdateUiState.UpdateAvailable ?: return
         viewModelScope.launch {
             _appUpdateUiState.value = AppUpdateUiState.Downloading()
+            val startMs = System.currentTimeMillis()
             try {
-                val apkFile = appUpdateRepository.downloadApkAsset(cur.selectedAsset)
+                val apkFile = appUpdateRepository.downloadApkAsset(cur.selectedAsset) { downloadedBytes, totalBytes ->
+                    val elapsedMs = System.currentTimeMillis() - startMs
+                    val speedBytesPerSec = if (elapsedMs > 0) downloadedBytes * 1000L / elapsedMs else 0L
+                    val progressPercent = totalBytes?.let { ((downloadedBytes * 100) / it).toInt() } ?: 0
+                    _appUpdateUiState.value = AppUpdateUiState.Downloading(
+                        progressPercent = progressPercent,
+                        downloadedBytes = downloadedBytes,
+                        totalBytes = totalBytes,
+                        speedBytesPerSec = speedBytesPerSec,
+                    )
+                }
                 _appUpdateUiState.value = AppUpdateUiState.ReadyToInstall(apkFile, cur.release)
             } catch (e: Exception) {
                 _appUpdateUiState.value = AppUpdateUiState.Error(e.message ?: "Download failed", e)
