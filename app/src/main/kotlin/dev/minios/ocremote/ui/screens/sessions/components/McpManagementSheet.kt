@@ -124,7 +124,7 @@ fun McpManagementSheet(
 
                     LazyColumn(
                         modifier = Modifier
-                            .weight(1f, fill = false)
+                            .fillMaxWidth()
                             .heightIn(max = 320.dp),
                     ) {
                         items(servers.entries.toList(), key = { it.key }) { (name, server) ->
