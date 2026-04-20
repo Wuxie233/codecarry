@@ -287,6 +287,35 @@ fun SessionListScreen(
                         }
                     }
                 }
+                uiState.isFilteredEmpty && allSessions.isEmpty() -> {
+                    Column(
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .padding(32.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.FilterList,
+                            contentDescription = null,
+                            modifier = Modifier.size(64.dp),
+                            tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
+                        )
+                        Text(
+                            text = stringResource(R.string.sessions_filtered_empty),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                        )
+                        Text(
+                            text = stringResource(R.string.sessions_filtered_empty_hint),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                        )
+                        Button(onClick = { viewModel.clearFilter() }) {
+                            Text(stringResource(R.string.sessions_clear_filter))
+                        }
+                    }
+                }
                 allSessions.isEmpty() -> {
                     Column(
                         modifier = Modifier
@@ -364,12 +393,10 @@ fun SessionListScreen(
                                 if (!group.isCollapsed) {
                                     items(group.sessions, key = { it.session.id }) { item ->
                                         val untitledLabel = stringResource(R.string.session_untitled)
-                                        val dirLabel = group.sessionDirLabels[item.session.id]
-                                            ?: group.tildeDirectory.ifEmpty { group.projectName }
                                         SessionRowWithSubagents(
                                             item = item,
                                             subagents = group.subagentsByParent[item.session.id].orEmpty(),
-                                            projectName = dirLabel,
+                                            projectName = null,
                                             isSelectionMode = uiState.isSelectionMode,
                                             isSelected = item.session.id in uiState.selectedIds,
                                             onClick = {
