@@ -24,7 +24,7 @@ class SessionListPreferencesRepositoryTest {
 
     private fun createRepo(): SessionListPreferencesRepository {
         val dataStore = PreferenceDataStoreFactory.create(
-            scope = testScope,
+            scope = testScope.backgroundScope,
             produceFile = { tmpFolder.newFile("test_session_list_prefs.preferences_pb") },
         )
         return SessionListPreferencesRepository(dataStore = dataStore)
