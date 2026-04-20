@@ -3,16 +3,23 @@ package dev.minios.ocremote.ui.screens.settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dev.minios.ocremote.BuildConfig
+import dev.minios.ocremote.data.repository.AppUpdateLogic
+import dev.minios.ocremote.data.repository.AppUpdateRepository
 import dev.minios.ocremote.data.repository.LocalServerManager
 import dev.minios.ocremote.data.repository.SettingsRepository
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
-    private val settingsRepository: SettingsRepository
+    private val settingsRepository: SettingsRepository,
+    private val appUpdateRepository: AppUpdateRepository,
 ) : ViewModel() {
     
     val appLanguage = settingsRepository.appLanguage.stateIn(
@@ -376,5 +383,57 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             settingsRepository.setLocalServerStartupTimeoutSec(value)
         }
+    }
+
+    private val _appUpdateUiState = MutableStateFlow<AppUpdateUiState>(AppUpdateUiState.Idle)
+    val appUpdateUiState: StateFlow<AppUpdateUiState> = _appUpdateUiState.asStateFlow()
+
+    val debugUpdateApiUrl = settingsRepository.debugUpdateApiUrl.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = "",
+    )
+
+    fun setDebugUpdateApiUrl(url: String) {
+        if (!BuildConfig.DEBUG) return
+        viewModelScope.launch { settingsRepository.setDebugUpdateApiUrl(url) }
+    }
+
+    fun checkForAppUpdates() {
+        val cur = _appUpdateUiState.value
+        if (cur is AppUpdateUiState.Checking || cur is AppUpdateUiState.Downloading) return
+        viewModelScope.launch {
+            _appUpdateUiState.value = AppUpdateUiState.Checking
+            try {
+                val override = if (BuildConfig.DEBUG) debugUpdateApiUrl.value else ""
+                val url = AppUpdateLogic.resolveLatestReleaseApiUrl(override, BuildConfig.DEBUG)
+                val release = appUpdateRepository.fetchLatestRelease(url)
+                val asset = AppUpdateLogic.selectApkAsset(release.assets, preferDebug = BuildConfig.DEBUG)
+                if (asset != null && AppUpdateLogic.isRemoteVersionNewer(BuildConfig.VERSION_NAME, release.tagName)) {
+                    _appUpdateUiState.value = AppUpdateUiState.UpdateAvailable(release, asset)
+                } else {
+                    _appUpdateUiState.value = AppUpdateUiState.UpToDate
+                }
+            } catch (e: Exception) {
+                _appUpdateUiState.value = AppUpdateUiState.Error(e.message ?: "Unknown error", e)
+            }
+        }
+    }
+
+    fun downloadAvailableUpdate() {
+        val cur = _appUpdateUiState.value as? AppUpdateUiState.UpdateAvailable ?: return
+        viewModelScope.launch {
+            _appUpdateUiState.value = AppUpdateUiState.Downloading()
+            try {
+                val apkFile = appUpdateRepository.downloadApkAsset(cur.selectedAsset)
+                _appUpdateUiState.value = AppUpdateUiState.ReadyToInstall(apkFile, cur.release)
+            } catch (e: Exception) {
+                _appUpdateUiState.value = AppUpdateUiState.Error(e.message ?: "Download failed", e)
+            }
+        }
+    }
+
+    fun dismissAppUpdateDialog() {
+        _appUpdateUiState.value = AppUpdateUiState.Idle
     }
 }

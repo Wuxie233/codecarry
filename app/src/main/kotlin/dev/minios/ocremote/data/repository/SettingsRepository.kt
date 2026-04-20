@@ -60,6 +60,8 @@ class SettingsRepository @Inject constructor(
         private const val LOCALE_PREFS = "locale_prefs"
         private const val LOCALE_PREFS_KEY = "app_language"
 
+        private val DEBUG_UPDATE_API_URL_KEY = stringPreferencesKey("debug_update_api_url")
+
         private const val SERVER_MODEL_HIDDEN_PREFIX = "server_model_hidden_"
 
         /** Read stored language synchronously — safe to call before Hilt init. */
@@ -499,6 +501,16 @@ class SettingsRepository @Inject constructor(
     suspend fun setLocalServerStartupTimeoutSec(value: Int) {
         dataStore.edit { preferences ->
             preferences[LOCAL_SERVER_STARTUP_TIMEOUT_SEC_KEY] = value.coerceIn(10, 120)
+        }
+    }
+
+    val debugUpdateApiUrl: Flow<String> = dataStore.data.map { preferences ->
+        preferences[DEBUG_UPDATE_API_URL_KEY] ?: ""
+    }
+
+    suspend fun setDebugUpdateApiUrl(url: String) {
+        dataStore.edit { preferences ->
+            preferences[DEBUG_UPDATE_API_URL_KEY] = url.trim()
         }
     }
 
