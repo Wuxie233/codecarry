@@ -132,6 +132,7 @@ class SessionListViewModel @Inject constructor(
     )
 
     private val conn = ServerConnection.from(serverUrl, username, password.ifEmpty { null })
+    val currentConnection: ServerConnection = conn
 
     private val _error = MutableStateFlow<String?>(null)
     private val _isLoading = MutableStateFlow(true)

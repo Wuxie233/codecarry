@@ -64,6 +64,7 @@ fun ProjectGroupHeader(
     onNewSession: () -> Unit,
     onCopyPath: () -> Unit,
     onArchiveAll: () -> Unit,
+    onManageMcp: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
@@ -257,6 +258,15 @@ fun ProjectGroupHeader(
                             onToggleHidden()
                         },
                     )
+                    onManageMcp?.let { action ->
+                        DropdownMenuItem(
+                            text = { Text("管理 MCP") },
+                            onClick = {
+                                menuExpanded = false
+                                action()
+                            },
+                        )
+                    }
                     HorizontalDivider()
                     DropdownMenuItem(
                         text = {

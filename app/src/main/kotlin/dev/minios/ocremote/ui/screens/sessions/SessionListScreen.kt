@@ -61,6 +61,7 @@ import java.util.*
 import androidx.compose.animation.core.*
 import androidx.compose.ui.graphics.graphicsLayer
 import dev.minios.ocremote.ui.screens.sessions.components.ActiveConversationsBanner
+import dev.minios.ocremote.ui.screens.sessions.components.McpManagementSheet
 import dev.minios.ocremote.ui.screens.sessions.components.ProjectGroupHeader
 import dev.minios.ocremote.ui.screens.sessions.components.SessionListTopControls
 
@@ -126,9 +127,10 @@ private fun PulsingDotsIndicator(
 fun SessionListScreen(
     onNavigateToChat: (sessionId: String, openTerminal: Boolean) -> Unit,
     onNavigateBack: () -> Unit,
-    viewModel: SessionListViewModel = hiltViewModel()
+    viewModel: SessionListViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val mcpViewModel: McpViewModel = hiltViewModel()
     val isAmoled = isAmoledTheme()
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
@@ -155,6 +157,8 @@ fun SessionListScreen(
     // Project picker dialog state
     var showOpenProject by remember { mutableStateOf(false) }
     var showQuickNewSession by remember { mutableStateOf(false) }
+    var mcpSheetProjectName by remember { mutableStateOf<String?>(null) }
+    var mcpSheetProjectDir by remember { mutableStateOf<String?>(null) }
 
     BackHandler(enabled = uiState.isSelectionMode) {
         viewModel.clearSelection()
@@ -388,6 +392,14 @@ fun SessionListScreen(
                                         Toast.makeText(context, context.getString(R.string.sessions_project_path_copied), Toast.LENGTH_SHORT).show()
                                     },
                                     onArchiveAll = { viewModel.archiveProjectSessions(group.directory) },
+                                    onManageMcp = {
+                                        mcpSheetProjectName = group.projectName
+                                        mcpSheetProjectDir = group.directory
+                                        mcpViewModel.load(
+                                            conn = viewModel.currentConnection,
+                                            projectDir = group.directory,
+                                        )
+                                    },
                                 )
                             }
 
@@ -490,6 +502,22 @@ fun SessionListScreen(
                 viewModel.pinDirectory(directory)
             },
             onDismiss = { showOpenProject = false }
+        )
+    }
+
+    if (mcpSheetProjectName != null && mcpSheetProjectDir != null) {
+        McpManagementSheet(
+            projectName = mcpSheetProjectName.orEmpty(),
+            viewModel = mcpViewModel,
+            onDismiss = {
+                mcpSheetProjectName = null
+                mcpSheetProjectDir = null
+            },
+            onSaveSuccess = {
+                Toast.makeText(context, "MCP 配置已保存", Toast.LENGTH_SHORT).show()
+                mcpSheetProjectName = null
+                mcpSheetProjectDir = null
+            },
         )
     }
 
