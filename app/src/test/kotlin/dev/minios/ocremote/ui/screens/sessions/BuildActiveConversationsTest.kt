@@ -19,6 +19,7 @@ class BuildActiveConversationsTest {
             statuses = mapOf(root.id to SessionStatus.Idle),
             pendingQuestions = emptyMap(),
             pendingPermissions = emptyMap(),
+            unreadSessionIds = emptySet(),
         )
 
         assertTrue(items.isEmpty())
@@ -33,6 +34,7 @@ class BuildActiveConversationsTest {
             statuses = mapOf(root.id to SessionStatus.Busy),
             pendingQuestions = emptyMap(),
             pendingPermissions = emptyMap(),
+            unreadSessionIds = emptySet(),
         )
 
         assertEquals(1, items.size)
@@ -50,6 +52,7 @@ class BuildActiveConversationsTest {
             statuses = mapOf(root.id to retry),
             pendingQuestions = emptyMap(),
             pendingPermissions = emptyMap(),
+            unreadSessionIds = emptySet(),
         )
 
         assertEquals(1, items.size)
@@ -65,6 +68,7 @@ class BuildActiveConversationsTest {
             statuses = mapOf(root.id to SessionStatus.Busy),
             pendingQuestions = mapOf(root.id to listOf(questionAsked("q1"), questionAsked("q2"))),
             pendingPermissions = emptyMap(),
+            unreadSessionIds = emptySet(),
         )
 
         assertEquals(1, items.size)
@@ -90,6 +94,7 @@ class BuildActiveConversationsTest {
                 permissionOnly.id to listOf(permissionAsked("p1")),
                 bothPending.id to listOf(permissionAsked("p2")),
             ),
+            unreadSessionIds = emptySet(),
         )
 
         assertEquals(listOf("root2", "root1"), items.map { it.sessionId })
@@ -115,9 +120,10 @@ class BuildActiveConversationsTest {
                 question2.id to listOf(questionAsked("qa2")),
             ),
             pendingPermissions = emptyMap(),
+            unreadSessionIds = emptySet(),
         )
 
-        assertEquals(listOf("q2", "q1", "b1", "r1"), items.map { it.sessionId })
+        assertEquals(listOf("b1", "r1", "q2", "q1"), items.map { it.sessionId })
     }
 
     @Test
@@ -129,9 +135,47 @@ class BuildActiveConversationsTest {
             statuses = mapOf(archived.id to SessionStatus.Busy),
             pendingQuestions = mapOf(archived.id to listOf(questionAsked("q1"))),
             pendingPermissions = emptyMap(),
+            unreadSessionIds = emptySet(),
         )
 
         assertTrue(items.isEmpty())
+    }
+
+    @Test
+    fun `unread root is included with UNREAD status`() {
+        val root = rootSession("root1", updated = 100)
+
+        val items = buildActiveConversations(
+            rootSessions = listOf(root),
+            statuses = mapOf(root.id to SessionStatus.Idle),
+            pendingQuestions = emptyMap(),
+            pendingPermissions = emptyMap(),
+            unreadSessionIds = setOf(root.id),
+        )
+
+        assertEquals(1, items.size)
+        assertEquals(ConversationStatus.UNREAD, items[0].status)
+    }
+
+    @Test
+    fun `unread sorts before pending decision items`() {
+        val unread = rootSession("unread", updated = 100)
+        val question = rootSession("question", updated = 200)
+
+        val items = buildActiveConversations(
+            rootSessions = listOf(unread, question),
+            statuses = mapOf(
+                unread.id to SessionStatus.Idle,
+                question.id to SessionStatus.Idle,
+            ),
+            pendingQuestions = mapOf(question.id to listOf(questionAsked("qa"))),
+            pendingPermissions = emptyMap(),
+            unreadSessionIds = setOf(unread.id),
+        )
+
+        assertEquals(listOf("unread", "question"), items.map { it.sessionId })
+        assertEquals(ConversationStatus.UNREAD, items[0].status)
+        assertEquals(ConversationStatus.AWAITING_QUESTION, items[1].status)
     }
 
     private fun rootSession(id: String, updated: Long, archivedAt: Long? = null) = Session(

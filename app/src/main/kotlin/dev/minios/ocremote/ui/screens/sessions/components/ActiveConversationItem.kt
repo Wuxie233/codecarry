@@ -10,6 +10,7 @@ data class ActiveConversationItem(
 )
 
 enum class ConversationStatus {
+    UNREAD,
     AWAITING_QUESTION,
     AWAITING_PERMISSION,
     BUSY,

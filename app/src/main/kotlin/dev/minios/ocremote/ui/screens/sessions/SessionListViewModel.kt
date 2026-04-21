@@ -88,6 +88,7 @@ data class ProjectGroup(
     val sessions: List<SessionItem>,
     val subagentRowsByParent: Map<String, SubagentRow>,
     val sessionDirLabels: Map<String, String> = emptyMap(),
+    val unreadCount: Int = 0,
 )
 
 data class SubagentRow(
@@ -103,7 +104,8 @@ data class SubagentRow(
 
 data class SessionItem(
     val session: Session,
-    val status: SessionStatus = SessionStatus.Idle
+    val status: SessionStatus = SessionStatus.Idle,
+    val isUnread: Boolean = false,
 )
 
 @HiltViewModel
@@ -183,6 +185,7 @@ class SessionListViewModel @Inject constructor(
         val pendingQuestions = values[11] as Map<String, List<SseEvent.QuestionAsked>>
         val pendingPermissions = values[12] as Map<String, List<SseEvent.PermissionAsked>>
         val showHiddenProjects = values[13] as Boolean
+        val unreadMainSessionIds = prefs.unreadMainSessionIds
 
         val serverSessionIds = serverSessions[serverId] ?: emptySet()
         val serverScopedSessions = allSessions.filter { it.id in serverSessionIds }
@@ -191,6 +194,7 @@ class SessionListViewModel @Inject constructor(
             session.id to SessionItem(
                 session = session,
                 status = statuses[session.id] ?: SessionStatus.Idle,
+                isUnread = session.parentId == null && session.id in unreadMainSessionIds,
             )
         }
 
@@ -200,6 +204,7 @@ class SessionListViewModel @Inject constructor(
             statuses = statuses,
             pendingQuestions = pendingQuestions,
             pendingPermissions = pendingPermissions,
+            unreadSessionIds = unreadMainSessionIds,
         )
         val childBuckets = childSessions.groupBy { it.parentId!! }
         val projectByDirectory = projects.associateBy { normalizeDirectory(it.worktree) }
@@ -244,6 +249,7 @@ class SessionListViewModel @Inject constructor(
                 isHidden = directory in prefs.hiddenDirs,
                 sessionCount = filteredRootItems.size,
                 activeCount = filteredRootItems.count { it.status is SessionStatus.Busy },
+                unreadCount = filteredRootItems.count { it.isUnread },
                 additionsSum = filteredRootItems.sumOf { it.session.summary?.additions ?: 0 },
                 deletionsSum = filteredRootItems.sumOf { it.session.summary?.deletions ?: 0 },
                 sessions = filteredRootItems,
@@ -733,6 +739,7 @@ internal fun buildActiveConversations(
     statuses: Map<String, SessionStatus>,
     pendingQuestions: Map<String, List<SseEvent.QuestionAsked>>,
     pendingPermissions: Map<String, List<SseEvent.PermissionAsked>>,
+    unreadSessionIds: Set<String>,
 ): List<ActiveConversationItem> {
     fun normalizeDir(directory: String): String = directory.trimEnd('/').ifEmpty { "/" }
     fun displayName(directory: String): String = if (directory == "/") "/" else directory.substringAfterLast('/').ifEmpty { directory }
@@ -746,6 +753,7 @@ internal fun buildActiveConversations(
             val status = statuses[session.id] ?: SessionStatus.Idle
 
             val (conversationStatus, pendingCount) = when {
+                session.id in unreadSessionIds -> ConversationStatus.UNREAD to 0
                 questionCount > 0 -> ConversationStatus.AWAITING_QUESTION to questionCount
                 permissionCount > 0 -> ConversationStatus.AWAITING_PERMISSION to permissionCount
                 status is SessionStatus.Busy -> ConversationStatus.BUSY to 0
@@ -763,7 +771,15 @@ internal fun buildActiveConversations(
             )
         }
         .sortedWith(
-            compareBy<ActiveConversationItem> { it.status.ordinal }
+            compareBy<ActiveConversationItem> {
+                when (it.status) {
+                    ConversationStatus.BUSY -> 0
+                    ConversationStatus.RETRY -> 1
+                    ConversationStatus.UNREAD -> 2
+                    ConversationStatus.AWAITING_QUESTION -> 3
+                    ConversationStatus.AWAITING_PERMISSION -> 4
+                }
+            }
                 .thenByDescending { it.updatedAt }
         )
         .toList()

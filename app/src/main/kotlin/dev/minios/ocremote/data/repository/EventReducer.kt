@@ -38,6 +38,9 @@ class EventReducer @Inject constructor() {
     
     private val _sessionStatuses = MutableStateFlow<Map<String, SessionStatus>>(emptyMap())
     val sessionStatuses: StateFlow<Map<String, SessionStatus>> = _sessionStatuses.asStateFlow()
+
+    private val _activeSessionId = MutableStateFlow<String?>(null)
+    val activeSessionId: StateFlow<String?> = _activeSessionId.asStateFlow()
     
     private val _messages = MutableStateFlow<Map<String, List<Message>>>(emptyMap()) // sessionId -> messages
     val messages: StateFlow<Map<String, List<Message>>> = _messages.asStateFlow()
@@ -373,6 +376,16 @@ class EventReducer @Inject constructor() {
         _sessionStatuses.update { it + (sessionId to status) }
         if (BuildConfig.DEBUG) Log.d(TAG, "Manually updated session $sessionId status to $status")
     }
+
+    fun setActiveSessionId(sessionId: String?) {
+        _activeSessionId.value = sessionId
+    }
+
+    fun clearActiveSessionId(sessionId: String) {
+        if (_activeSessionId.value == sessionId) {
+            _activeSessionId.value = null
+        }
+    }
     
     /**
      * Load messages for a session
@@ -393,6 +406,7 @@ class EventReducer @Inject constructor() {
         _serverSessions.value = emptyMap()
         _sessions.value = emptyList()
         _sessionStatuses.value = emptyMap()
+        _activeSessionId.value = null
         _messages.value = emptyMap()
         _parts.value = emptyMap()
         _sessionDiffs.value = emptyMap()
@@ -434,6 +448,10 @@ class EventReducer @Inject constructor() {
             .toSet()
         _messages.update { it - sessionIds }
         _parts.update { it - messageIds }
+
+        if (_activeSessionId.value in sessionIds) {
+            _activeSessionId.value = null
+        }
 
         if (BuildConfig.DEBUG) Log.d(TAG, "Clearing state for server $serverId (${sessionIds.size} sessions)")
     }

@@ -25,6 +25,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.HelpOutline
+import androidx.compose.material.icons.filled.MarkChatUnread
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Card
@@ -104,7 +105,9 @@ private fun ActiveConversationCard(
     onClick: (sessionId: String) -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
+    val unreadColor = Color(0xFF2196F3)
     val (statusColor, statusLabelRes) = when (item.status) {
+        ConversationStatus.UNREAD -> unreadColor to R.string.sessions_conversation_status_unread
         ConversationStatus.AWAITING_QUESTION -> colors.tertiary to R.string.sessions_conversation_status_question
         ConversationStatus.AWAITING_PERMISSION -> colors.secondary to R.string.sessions_conversation_status_permission
         ConversationStatus.BUSY -> colors.primary to R.string.sessions_conversation_status_busy
@@ -203,6 +206,12 @@ private fun ConversationStatusIcon(
     modifier: Modifier = Modifier,
 ) {
     when (status) {
+        ConversationStatus.UNREAD -> Icon(
+            imageVector = Icons.Default.MarkChatUnread,
+            contentDescription = stringResource(R.string.sessions_conversation_status_unread),
+            tint = color,
+            modifier = modifier,
+        )
         ConversationStatus.AWAITING_QUESTION -> Icon(
             imageVector = Icons.AutoMirrored.Filled.HelpOutline,
             contentDescription = stringResource(R.string.sessions_conversation_status_question),

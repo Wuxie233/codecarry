@@ -70,4 +70,40 @@ class SessionListPreferencesRepositoryTest {
         assertEquals(SessionSort.TITLE_ALPHA, prefs.sort)
         assertEquals(SessionFilter.HAS_ERRORS, prefs.filter)
     }
+
+    @Test
+    fun `markMainSessionUnread adds session to unread set`() = testScope.runTest {
+        val repo = createRepo()
+
+        repo.markMainSessionUnread("session-1")
+
+        val prefs = repo.preferences.first()
+        assertTrue(prefs.unreadMainSessionIds.contains("session-1"))
+    }
+
+    @Test
+    fun `markMainSessionRead removes session from unread set`() = testScope.runTest {
+        val repo = createRepo()
+        repo.markMainSessionUnread("session-1")
+
+        repo.markMainSessionRead("session-1")
+
+        val prefs = repo.preferences.first()
+        assertFalse(prefs.unreadMainSessionIds.contains("session-1"))
+    }
+
+    @Test
+    fun `markMainSessionsRead removes only requested sessions`() = testScope.runTest {
+        val repo = createRepo()
+        repo.markMainSessionUnread("session-1")
+        repo.markMainSessionUnread("session-2")
+        repo.markMainSessionUnread("session-3")
+
+        repo.markMainSessionsRead(listOf("session-1", "session-3"))
+
+        val prefs = repo.preferences.first()
+        assertFalse(prefs.unreadMainSessionIds.contains("session-1"))
+        assertTrue(prefs.unreadMainSessionIds.contains("session-2"))
+        assertFalse(prefs.unreadMainSessionIds.contains("session-3"))
+    }
 }

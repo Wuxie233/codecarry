@@ -53,6 +53,7 @@ fun ProjectGroupHeader(
     tildeDirectory: String,
     sessionCount: Int,
     activeCount: Int,
+    unreadCount: Int,
     additions: Int,
     deletions: Int,
     isPinned: Boolean,
@@ -69,6 +70,7 @@ fun ProjectGroupHeader(
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
     val colors = MaterialTheme.colorScheme
+    val unreadColor = Color(0xFF2196F3)
     val isAmoled = rememberIsAmoledTheme()
     val arrowRotation by animateFloatAsState(
         targetValue = if (isCollapsed) -90f else 0f,
@@ -164,6 +166,24 @@ fun ProjectGroupHeader(
                         text = activeCount.toString(),
                         style = MaterialTheme.typography.labelSmall,
                         color = colors.tertiary,
+                    )
+                }
+            }
+
+            if (unreadCount > 0) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(3.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(6.dp)
+                            .background(unreadColor, CircleShape),
+                    )
+                    Text(
+                        text = unreadCount.toString(),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = unreadColor,
                     )
                 }
             }

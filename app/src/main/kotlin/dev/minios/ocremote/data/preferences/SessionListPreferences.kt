@@ -20,6 +20,7 @@ data class SessionListPreferences(
     val hiddenDirs: Set<String>,
     val sort: SessionSort,
     val filter: SessionFilter,
+    val unreadMainSessionIds: Set<String>,
 ) {
     companion object {
         val DEFAULT = SessionListPreferences(
@@ -28,6 +29,7 @@ data class SessionListPreferences(
             hiddenDirs = emptySet(),
             sort = SessionSort.RECENT_UPDATED,
             filter = SessionFilter.ALL,
+            unreadMainSessionIds = emptySet(),
         )
     }
 }
