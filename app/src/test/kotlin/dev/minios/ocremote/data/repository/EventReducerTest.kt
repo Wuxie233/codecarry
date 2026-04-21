@@ -1,8 +1,10 @@
 package dev.minios.ocremote.data.repository
 
 import dev.minios.ocremote.domain.model.Session
+import dev.minios.ocremote.domain.model.Part
 import dev.minios.ocremote.domain.model.SessionStatus
 import dev.minios.ocremote.domain.model.SseEvent
+import dev.minios.ocremote.domain.model.ToolState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -65,6 +67,47 @@ class EventReducerTest {
         clearForServer(reducer, "server-1")
 
         assertNull(reducer.sessionStatuses.value[session.id])
+    }
+
+    @Test
+    fun messagePartUpdatedRetainsLatestRunningToolOutput() {
+        val reducer = EventReducer()
+        val messageId = "msg-1"
+        val toolId = "tool-1"
+        val sessionId = "ses-1"
+
+        reducer.processEvent(
+            SseEvent.MessagePartUpdated(
+                Part.Tool(
+                    id = toolId,
+                    sessionId = sessionId,
+                    messageId = messageId,
+                    callId = "call-1",
+                    tool = "bash",
+                    state = ToolState.Running(output = "line 1", title = "Shell")
+                )
+            ),
+            serverId = "server-1"
+        )
+        reducer.processEvent(
+            SseEvent.MessagePartUpdated(
+                Part.Tool(
+                    id = toolId,
+                    sessionId = sessionId,
+                    messageId = messageId,
+                    callId = "call-1",
+                    tool = "bash",
+                    state = ToolState.Running(output = "line 1\nline 2", title = "Shell")
+                )
+            ),
+            serverId = "server-1"
+        )
+
+        val runningTool = reducer.parts.value[messageId]?.single() as? Part.Tool
+        val runningState = runningTool?.state as? ToolState.Running
+
+        assertEquals("line 1\nline 2", runningState?.output)
+        assertEquals("Shell", runningState?.title)
     }
 
     private fun testSession(id: String) = Session(

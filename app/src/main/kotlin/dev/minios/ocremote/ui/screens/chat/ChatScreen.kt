@@ -2282,8 +2282,8 @@ fun ChatScreen(
                         verticalArrangement = Arrangement.spacedBy(messageSpacing)
                     ) {
                         // "Load earlier messages" button at the top
-                        if (uiState.hasOlderMessages) {
-                            item(key = "load_older") {
+                    if (uiState.hasOlderMessages) {
+                        item(key = "load_older") {
                                 Box(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -2312,6 +2312,12 @@ fun ChatScreen(
                                         }
                                     }
                                 }
+                            }
+                        }
+
+                        if (uiState.sessionStatus is SessionStatus.Retry) {
+                            item(key = "retry_status") {
+                                RetryStatusBanner(retry = uiState.sessionStatus as SessionStatus.Retry)
                             }
                         }
 
@@ -4475,7 +4481,7 @@ private fun ToolCallCard(tool: Part.Tool) {
                 modifier = Modifier
                     .fillMaxWidth()
                     .let { mod ->
-                        if (tool.state is ToolState.Completed || tool.state is ToolState.Error) {
+                        if (tool.state is ToolState.Completed || tool.state is ToolState.Error || extractToolOutput(tool).isNotBlank()) {
                             mod.clickable { performHaptic(hapticView, hapticOn); expanded = !expanded }
                         } else mod
                     },
@@ -4517,19 +4523,32 @@ private fun ToolCallCard(tool: Part.Tool) {
                     }
                 }
                 // Expand indicator for completed/errored tools
-                if (tool.state is ToolState.Completed || tool.state is ToolState.Error) {
-                    Icon(
-                        imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                        contentDescription = if (expanded) stringResource(R.string.chat_collapse) else stringResource(R.string.chat_expand),
-                        modifier = Modifier.size(16.dp),
-                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
-                    )
-                } else if (tool.state is ToolState.Running) {
+                val hasRunningOutput = extractToolOutput(tool).isNotBlank()
+                if (tool.state is ToolState.Running && !hasRunningOutput) {
                     PulsingDotsIndicator(
                         dotSize = 5.dp,
                         dotSpacing = 3.dp,
                         color = stateColor
                     )
+                } else if (tool.state is ToolState.Running || tool.state is ToolState.Completed || tool.state is ToolState.Error) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        if (tool.state is ToolState.Running) {
+                            PulsingDotsIndicator(
+                                dotSize = 5.dp,
+                                dotSpacing = 3.dp,
+                                color = stateColor
+                            )
+                        }
+                        Icon(
+                            imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                            contentDescription = if (expanded) stringResource(R.string.chat_collapse) else stringResource(R.string.chat_expand),
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
+                        )
+                    }
                 }
             }
 
@@ -4539,11 +4558,7 @@ private fun ToolCallCard(tool: Part.Tool) {
                     modifier = Modifier.padding(top = 4.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    val output = when (val s = tool.state) {
-                        is ToolState.Completed -> s.output
-                        is ToolState.Error -> s.error
-                        else -> ""
-                    }
+                    val output = extractToolOutput(tool)
                     if (output.isNotBlank()) {
                         Surface(
                             shape = RoundedCornerShape(4.dp),
@@ -4711,9 +4726,52 @@ private fun extractToolInput(tool: Part.Tool): Map<String, kotlinx.serialization
 
 private fun extractToolOutput(tool: Part.Tool): String {
     return when (val s = tool.state) {
+        is ToolState.Running -> s.output.ifBlank {
+            s.metadata?.get("output")?.jsonPrimitive?.contentOrNull.orEmpty()
+        }
         is ToolState.Completed -> s.output
-        is ToolState.Error -> s.error
+        is ToolState.Error -> {
+            val rawOutput = s.metadata?.get("output")?.jsonPrimitive?.contentOrNull.orEmpty()
+            when {
+                rawOutput.isBlank() -> s.error
+                s.error.isBlank() -> rawOutput
+                else -> "$rawOutput\n\n${s.error}"
+            }
+        }
         else -> ""
+    }
+}
+
+@Composable
+private fun RetryStatusBanner(retry: SessionStatus.Retry) {
+    val isAmoled = isAmoledTheme()
+    val retryText = stringResource(R.string.chat_retry, retry.attempt, retry.message)
+
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = if (isAmoled) Color.Black else MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.45f),
+        border = if (isAmoled) BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.65f)) else null,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = Icons.Default.Refresh,
+                contentDescription = stringResource(R.string.sessions_retrying),
+                tint = MaterialTheme.colorScheme.error,
+                modifier = Modifier.size(16.dp)
+            )
+            Text(
+                text = retryText,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        }
     }
 }
 

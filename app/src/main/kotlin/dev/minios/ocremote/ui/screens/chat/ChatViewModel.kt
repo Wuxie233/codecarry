@@ -14,6 +14,7 @@ import dev.minios.ocremote.data.api.OpenCodeApi
 import dev.minios.ocremote.data.api.PromptPart
 import dev.minios.ocremote.data.api.ProviderInfo
 import dev.minios.ocremote.data.api.ServerConnection
+import dev.minios.ocremote.data.preferences.SessionListPreferencesRepository
 import dev.minios.ocremote.data.repository.DraftRepository
 import dev.minios.ocremote.data.repository.EventReducer
 import dev.minios.ocremote.data.repository.SettingsRepository
@@ -94,6 +95,7 @@ class ChatViewModel @Inject constructor(
     private val eventReducer: EventReducer,
     private val api: OpenCodeApi,
     private val draftRepository: DraftRepository,
+    private val sessionListPreferencesRepository: SessionListPreferencesRepository,
     private val settingsRepository: SettingsRepository
 ) : ViewModel() {
 
@@ -394,6 +396,11 @@ class ChatViewModel @Inject constructor(
     )
 
     init {
+        eventReducer.setActiveSessionId(sessionId)
+        viewModelScope.launch {
+            sessionListPreferencesRepository.markMainSessionRead(sessionId)
+        }
+
         // Restore draft from disk
         val draft = draftRepository.getDraft(sessionId)
         if (draft != null) {
@@ -752,6 +759,7 @@ class ChatViewModel @Inject constructor(
     }
 
     override fun onCleared() {
+        eventReducer.clearActiveSessionId(sessionId)
         closeTerminalSession()
         super.onCleared()
         saveDraft()

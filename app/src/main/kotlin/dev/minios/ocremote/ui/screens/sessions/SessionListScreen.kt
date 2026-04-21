@@ -378,6 +378,7 @@ fun SessionListScreen(
                                     tildeDirectory = group.tildeDirectory,
                                     sessionCount = group.sessionCount,
                                     activeCount = group.activeCount,
+                                    unreadCount = group.unreadCount,
                                     additions = group.additionsSum,
                                     deletions = group.deletionsSum,
                                     isPinned = group.isPinned,
@@ -1504,6 +1505,7 @@ private fun SessionRow(
 ) {
     val isAmoled = isAmoledTheme()
     val dateFormat = remember { SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()) }
+    val unreadColor = Color(0xFF2196F3)
 
     val addColor = Color(0xFF4CAF50)
     val delColor = Color(0xFFE53935)
@@ -1678,6 +1680,16 @@ private fun SessionRow(
                             }
                         }
                     }
+                }
+
+                if (item.isUnread) {
+                    Box(
+                        modifier = Modifier
+                            .padding(start = 8.dp)
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(unreadColor)
+                    )
                 }
             }
         }

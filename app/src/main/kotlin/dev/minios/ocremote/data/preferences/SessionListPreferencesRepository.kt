@@ -21,6 +21,7 @@ class SessionListPreferencesRepository @Inject constructor(
         private val HIDDEN_DIRS_KEY = stringSetPreferencesKey("hidden_dirs")
         private val SORT_KEY = stringPreferencesKey("sort")
         private val FILTER_KEY = stringPreferencesKey("filter")
+        private val UNREAD_MAIN_SESSION_IDS_KEY = stringSetPreferencesKey("unread_main_session_ids")
     }
 
     val preferences: Flow<SessionListPreferences> = dataStore.data.map { prefs ->
@@ -40,12 +41,14 @@ class SessionListPreferencesRepository @Inject constructor(
             runCatching { SessionFilter.valueOf(it) }.getOrNull()
         } ?: SessionFilter.ALL
         val hiddenDirs = prefs[HIDDEN_DIRS_KEY] ?: emptySet()
+        val unreadMainSessionIds = prefs[UNREAD_MAIN_SESSION_IDS_KEY] ?: emptySet()
         SessionListPreferences(
             collapsedDirs = collapsedDirs,
             pinnedDirs = pinnedDirs,
             hiddenDirs = hiddenDirs,
             sort = sort,
             filter = filter,
+            unreadMainSessionIds = unreadMainSessionIds,
         )
     }
 
@@ -100,6 +103,28 @@ class SessionListPreferencesRepository @Inject constructor(
     suspend fun setFilter(filter: SessionFilter) {
         dataStore.edit { prefs ->
             prefs[FILTER_KEY] = filter.name
+        }
+    }
+
+    suspend fun markMainSessionUnread(sessionId: String) {
+        dataStore.edit { prefs ->
+            val current = prefs[UNREAD_MAIN_SESSION_IDS_KEY] ?: emptySet()
+            prefs[UNREAD_MAIN_SESSION_IDS_KEY] = current + sessionId
+        }
+    }
+
+    suspend fun markMainSessionRead(sessionId: String) {
+        dataStore.edit { prefs ->
+            val current = prefs[UNREAD_MAIN_SESSION_IDS_KEY] ?: emptySet()
+            prefs[UNREAD_MAIN_SESSION_IDS_KEY] = current - sessionId
+        }
+    }
+
+    suspend fun markMainSessionsRead(sessionIds: Collection<String>) {
+        if (sessionIds.isEmpty()) return
+        dataStore.edit { prefs ->
+            val current = prefs[UNREAD_MAIN_SESSION_IDS_KEY] ?: emptySet()
+            prefs[UNREAD_MAIN_SESSION_IDS_KEY] = current - sessionIds.toSet()
         }
     }
 

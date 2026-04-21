@@ -15,6 +15,7 @@ import dev.minios.ocremote.R
 import dev.minios.ocremote.data.api.OpenCodeApi
 import dev.minios.ocremote.data.api.ServerConnection
 import dev.minios.ocremote.data.api.SseClient
+import dev.minios.ocremote.data.preferences.SessionListPreferencesRepository
 import dev.minios.ocremote.data.repository.EventReducer
 import dev.minios.ocremote.data.repository.LocalServerManager
 import dev.minios.ocremote.data.repository.ServerRepository
@@ -100,6 +101,9 @@ class OpenCodeConnectionService : Service() {
 
     @Inject
     lateinit var settingsRepository: SettingsRepository
+
+    @Inject
+    lateinit var sessionListPreferencesRepository: SessionListPreferencesRepository
 
     @Inject
     lateinit var serverRepository: ServerRepository
@@ -487,10 +491,22 @@ class OpenCodeConnectionService : Service() {
     private fun processEvent(server: ServerConfig, event: SseEvent) {
         if (BuildConfig.DEBUG) Log.d(TAG, "[${server.displayName}] SSE event: ${event.javaClass.simpleName}")
 
+        val previousStatus = when (event) {
+            is SseEvent.SessionStatus -> eventReducer.sessionStatuses.value[event.sessionId]
+            is SseEvent.SessionIdle -> eventReducer.sessionStatuses.value[event.sessionId]
+            else -> null
+        }
+
         eventReducer.processEvent(event, server.id)
 
         when (event) {
+            is SseEvent.SessionStatus -> {
+                if (event.status is dev.minios.ocremote.domain.model.SessionStatus.Idle) {
+                    maybeMarkSessionUnread(event.sessionId, previousStatus)
+                }
+            }
             is SseEvent.SessionIdle -> {
+                maybeMarkSessionUnread(event.sessionId, previousStatus)
                 if (isChildSession(event.sessionId)) return
                 serviceScope.launch {
                     if (!settingsRepository.notificationsEnabled.first()) return@launch
@@ -536,6 +552,18 @@ class OpenCodeConnectionService : Service() {
                 showErrorNotification(server, event.sessionId, event.error)
             }
             else -> { }
+        }
+    }
+
+    private fun maybeMarkSessionUnread(sessionId: String, previousStatus: dev.minios.ocremote.domain.model.SessionStatus?) {
+        if (isChildSession(sessionId)) return
+        if (previousStatus !is dev.minios.ocremote.domain.model.SessionStatus.Busy && previousStatus !is dev.minios.ocremote.domain.model.SessionStatus.Retry) {
+            return
+        }
+        if (eventReducer.activeSessionId.value == sessionId) return
+
+        serviceScope.launch {
+            sessionListPreferencesRepository.markMainSessionUnread(sessionId)
         }
     }
 
