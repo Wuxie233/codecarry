@@ -166,6 +166,22 @@ class OpenCodeApi @Inject constructor(
         }.body()
     }
 
+    suspend fun archiveSession(conn: ServerConnection, sessionId: String): Session {
+        return httpClient.patch("${conn.baseUrl}/session/$sessionId") {
+            conn.authHeader?.let { header("Authorization", it) }
+            contentType(ContentType.Application.Json)
+            setBody(mapOf("archived" to true))
+        }.body()
+    }
+
+    suspend fun restoreSession(conn: ServerConnection, sessionId: String): Session {
+        return httpClient.patch("${conn.baseUrl}/session/$sessionId") {
+            conn.authHeader?.let { header("Authorization", it) }
+            contentType(ContentType.Application.Json)
+            setBody(mapOf("archived" to false))
+        }.body()
+    }
+
     suspend fun abortSession(conn: ServerConnection, sessionId: String, directory: String? = null): Boolean {
         val response = httpClient.post("${conn.baseUrl}/session/$sessionId/abort") {
             conn.authHeader?.let { header("Authorization", it) }
