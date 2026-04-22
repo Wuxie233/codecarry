@@ -6,8 +6,10 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import dev.minios.ocremote.data.api.OpenCodeApi
+import dev.minios.ocremote.data.api.OpenCodeFileNotFoundException
 import dev.minios.ocremote.data.api.ServerConnection
 import dev.minios.ocremote.domain.model.McpConfig
+import dev.minios.ocremote.domain.model.McpConfigLoadState
 import dev.minios.ocremote.domain.model.ServerConfig
 import dev.minios.ocremote.domain.model.ServerHealth
 import kotlinx.coroutines.flow.Flow
@@ -24,18 +26,18 @@ private const val SERVERS_KEY = "servers"
 
 /**
  * Server Repository - manages saved OpenCode servers
- * 
+ *
  * Uses DataStore to persist server configurations
  */
 @Singleton
 class ServerRepository @Inject constructor(
     private val dataStore: DataStore<Preferences>,
     private val api: OpenCodeApi,
-    private val json: Json
+    private val json: Json,
 ) {
-    
+
     private val serversKey = stringPreferencesKey(SERVERS_KEY)
-    
+
     /**
      * Get all saved servers as Flow
      */
@@ -48,12 +50,12 @@ class ServerRepository @Inject constructor(
             emptyList()
         }
     }
-    
+
     /**
      * Get all servers (alias for servers Flow)
      */
     fun getAllServers(): Flow<List<ServerConfig>> = servers
-    
+
     /**
      * Add a new server
      */
@@ -62,7 +64,7 @@ class ServerRepository @Inject constructor(
         username: String = "opencode",
         password: String? = null,
         name: String? = null,
-        autoConnect: Boolean = false
+        autoConnect: Boolean = false,
     ): ServerConfig {
         val server = ServerConfig(
             id = UUID.randomUUID().toString(),
@@ -72,26 +74,26 @@ class ServerRepository @Inject constructor(
             name = name,
             autoConnect = autoConnect,
             lastConnected = null,
-            isHealthy = false
+            isHealthy = false,
         )
-        
+
         val currentServers = servers.firstOrNull() ?: emptyList()
         val updatedServers = currentServers + server
-        
+
         saveServers(updatedServers)
-        
+
         return server
     }
-    
+
     /**
      * Update a server
      */
     suspend fun updateServer(server: ServerConfig) {
         val currentServers = servers.firstOrNull() ?: emptyList()
-        val updatedServers = currentServers.map { 
-            if (it.id == server.id) server else it 
+        val updatedServers = currentServers.map {
+            if (it.id == server.id) server else it
         }
-        
+
         saveServers(updatedServers)
     }
 
@@ -99,17 +101,17 @@ class ServerRepository @Inject constructor(
         val server = getServer(serverId) ?: return
         updateServer(server.copy(autoConnect = autoConnect))
     }
-    
+
     /**
      * Delete a server
      */
     suspend fun deleteServer(serverId: String) {
         val currentServers = servers.firstOrNull() ?: emptyList()
         val updatedServers = currentServers.filter { it.id != serverId }
-        
+
         saveServers(updatedServers)
     }
-    
+
     /**
      * Check server health
      */
@@ -117,33 +119,33 @@ class ServerRepository @Inject constructor(
         return try {
             val conn = ServerConnection.from(server.url, server.username, server.password)
             val health = api.getHealth(conn)
-            
+
             // Update server health status
             val updatedServer = server.copy(
                 isHealthy = health.healthy,
-                lastConnected = System.currentTimeMillis()
+                lastConnected = System.currentTimeMillis(),
             )
             updateServer(updatedServer)
-            
+
             Result.success(health)
         } catch (e: Exception) {
             Log.e(TAG, "Health check failed for ${server.url}", e)
-            
+
             // Mark as unhealthy
             val updatedServer = server.copy(isHealthy = false)
             updateServer(updatedServer)
-            
+
             Result.failure(e)
         }
     }
-    
+
     /**
      * Check server health (alias returning boolean)
      */
     suspend fun checkServerHealth(server: ServerConfig): Boolean {
         return checkHealth(server).isSuccess
     }
-    
+
     /**
      * Get server by ID
      */
@@ -153,11 +155,28 @@ class ServerRepository @Inject constructor(
 
     suspend fun readMcpConfig(
         conn: ServerConnection,
-        projectDir: String
-    ): Result<McpConfig?> = runCatching {
+        projectDir: String,
+    ): Result<McpConfig?> {
+        return when (val state = readMcpConfigState(conn, projectDir)) {
+            is McpConfigLoadState.Loaded -> Result.success(state.config)
+            is McpConfigLoadState.Empty -> Result.success(state.config)
+            is McpConfigLoadState.NotFound -> Result.success(null)
+            is McpConfigLoadState.Error -> Result.failure(state.cause ?: IllegalStateException(state.message))
+        }
+    }
+
+    suspend fun readMcpConfigState(
+        conn: ServerConnection,
+        projectDir: String,
+    ): McpConfigLoadState {
         val homeDir = runCatching { api.getServerPaths(conn).home }
-            .getOrNull()
-            .orEmpty()
+            .getOrElse { error ->
+                return McpConfigLoadState.Error(
+                    filePath = null,
+                    message = error.message ?: "Failed to resolve server paths",
+                    cause = error,
+                )
+            }
 
         val candidates = buildList {
             val normalizedProjectDir = projectDir.trimEnd('/')
@@ -172,32 +191,63 @@ class ServerRepository @Inject constructor(
             }
         }
 
-        for (path in candidates) {
-            val raw = runCatching { api.readFile(conn, path).content }
-                .getOrNull()
-                ?.takeIf { it.isNotBlank() }
-                ?: continue
-
-            return@runCatching McpConfigParser.parse(filePath = path, rawJson = raw)
+        val reads = candidates.map { path ->
+            McpConfigCandidateRead(path, runCatching { api.readFileText(conn, path) })
         }
-
-        null
+        return resolveMcpConfigLoadState(reads)
     }
 
     suspend fun writeMcpConfig(
         conn: ServerConnection,
-        config: McpConfig
+        config: McpConfig,
     ): Result<Unit> = runCatching {
         val updatedJson = McpConfigParser.serialize(config)
         api.writeFile(conn, path = config.filePath, content = updatedJson)
     }
 
     // ============ Private ============
-    
+
     private suspend fun saveServers(servers: List<ServerConfig>) {
         dataStore.edit { preferences ->
             val serversJson = json.encodeToString(servers)
             preferences[serversKey] = serversJson
         }
+    }
+
+    internal data class McpConfigCandidateRead(
+        val path: String,
+        val readResult: Result<String>,
+    )
+
+    internal fun resolveMcpConfigLoadState(
+        candidateReads: List<McpConfigCandidateRead>,
+    ): McpConfigLoadState {
+        for ((path, readResult) in candidateReads) {
+            if (readResult.isFailure) {
+                val error = readResult.exceptionOrNull()!!
+                if (error is OpenCodeFileNotFoundException) {
+                    continue
+                }
+                return McpConfigLoadState.Error(
+                    filePath = path,
+                    message = error.message ?: "Failed to read MCP config",
+                    cause = error,
+                )
+            }
+
+            val raw = readResult.getOrThrow()
+
+            val content = raw.takeIf { it.isNotBlank() }
+                ?: return McpConfigLoadState.Empty(
+                    config = McpConfig(
+                        filePath = path,
+                        rawJson = raw,
+                        servers = emptyMap(),
+                    )
+                )
+            return McpConfigParser.parseState(path, content)
+        }
+
+        return McpConfigLoadState.NotFound(candidateReads.map { it.path })
     }
 }

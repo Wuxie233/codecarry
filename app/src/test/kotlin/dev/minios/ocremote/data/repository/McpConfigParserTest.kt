@@ -1,9 +1,9 @@
 package dev.minios.ocremote.data.repository
 
+import dev.minios.ocremote.domain.model.McpConfigLoadState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -43,10 +43,12 @@ class McpConfigParserTest {
     }
 
     @Test
-    fun parseReturnsNullWhenNoMcpServersKey() {
+    fun parseStateReturnsExplicitEmptyWhenNoMcpServersKey() {
         val json = """{"providers": {}}"""
 
-        assertNull(McpConfigParser.parse("/tmp/config.json", json))
+        val result = McpConfigParser.parseState("/tmp/config.json", json)
+
+        assertTrue(result is McpConfigLoadState.Empty)
     }
 
     @Test
@@ -72,5 +74,25 @@ class McpConfigParserTest {
         val config = McpConfigParser.parse("/tmp/config.json", json)!!
 
         assertTrue(config.servers["s"]!!.enabled)
+    }
+
+    @Test
+    fun parseStateReturnsExplicitEmptyWhenMcpServersIsEmpty() {
+        val json = """{"mcpServers": {}, "providers": {}}"""
+
+        val result = McpConfigParser.parseState("/tmp/config.json", json)
+
+        assertTrue(result is McpConfigLoadState.Empty)
+        assertEquals(0, (result as McpConfigLoadState.Empty).config.servers.size)
+    }
+
+    @Test
+    fun parseStateReturnsErrorWhenServerEntryIsNull() {
+        val json = """{"mcpServers": {"broken": null}}"""
+
+        val result = McpConfigParser.parseState("/tmp/config.json", json)
+
+        assertTrue(result is McpConfigLoadState.Error)
+        assertEquals("/tmp/config.json", (result as McpConfigLoadState.Error).filePath)
     }
 }
