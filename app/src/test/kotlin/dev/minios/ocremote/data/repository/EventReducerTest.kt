@@ -110,12 +110,47 @@ class EventReducerTest {
         assertEquals("Shell", runningState?.title)
     }
 
-    private fun testSession(id: String) = Session(
+    @Test
+    fun sessionUpdatedWithArchivedTimeMarksSessionArchivedAndReordersByUpdatedTime() {
+        val reducer = EventReducer()
+        val firstSession = testSession(id = "ses-1", updated = 1L)
+        val secondSession = testSession(id = "ses-2", updated = 2L)
+
+        reducer.processEvent(SseEvent.SessionCreated(firstSession), serverId = "server-1")
+        reducer.processEvent(SseEvent.SessionCreated(secondSession), serverId = "server-1")
+        reducer.processEvent(
+            SseEvent.SessionUpdated(firstSession.copy(time = firstSession.time.copy(updated = 3L, archived = 1_000L))),
+            serverId = "server-1",
+        )
+
+        assertEquals(listOf("ses-1", "ses-2"), reducer.sessions.value.map { it.id })
+        assertEquals(true, reducer.sessions.value.first().isArchived)
+    }
+
+    @Test
+    fun sessionUpdatedWithoutArchivedTimeRestoresSessionAndReordersByUpdatedTime() {
+        val reducer = EventReducer()
+        val archived = testSession(id = "ses-restored", updated = 1L, archived = 1_000L)
+        val secondSession = testSession(id = "ses-2", updated = 2L)
+
+        reducer.processEvent(SseEvent.SessionCreated(archived), serverId = "server-1")
+        reducer.processEvent(SseEvent.SessionCreated(secondSession), serverId = "server-1")
+        reducer.processEvent(
+            SseEvent.SessionUpdated(archived.copy(time = archived.time.copy(updated = 3L, archived = null))),
+            serverId = "server-1",
+        )
+
+        assertEquals(listOf("ses-restored", "ses-2"), reducer.sessions.value.map { it.id })
+        assertEquals(false, reducer.sessions.value.first().isArchived)
+    }
+
+    private fun testSession(id: String, updated: Long = 1L, archived: Long? = null) = Session(
         id = id,
         directory = "/tmp/project",
         time = Session.Time(
             created = 1L,
-            updated = 1L,
+            updated = updated,
+            archived = archived,
         ),
     )
 

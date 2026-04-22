@@ -40,6 +40,16 @@ import javax.inject.Inject
 
 private const val TAG = "SessionListViewModel"
 
+private fun logErrorCompat(tag: String, message: String, throwable: Throwable) {
+    try {
+        Log.e(tag, message, throwable)
+    } catch (error: RuntimeException) {
+        if (!error.message.orEmpty().contains("android.util.Log not mocked")) {
+            throw error
+        }
+    }
+}
+
 data class SessionListUiState(
     val serverName: String = "",
     val isLoading: Boolean = true,
@@ -107,6 +117,30 @@ data class SessionItem(
     val status: SessionStatus = SessionStatus.Idle,
     val isUnread: Boolean = false,
 )
+
+internal fun matchesSessionFilter(item: SessionItem, filter: SessionFilter): Boolean {
+    val session = item.session
+    return when (filter) {
+        SessionFilter.ALL -> !session.isArchived
+        SessionFilter.WORKING -> !session.isArchived && item.status is SessionStatus.Busy
+        SessionFilter.HAS_CHANGES -> !session.isArchived && ((session.summary?.additions ?: 0) + (session.summary?.deletions ?: 0) > 0)
+        SessionFilter.HAS_ERRORS -> !session.isArchived && item.status is SessionStatus.Retry
+        SessionFilter.ARCHIVED -> session.isArchived
+    }
+}
+
+internal fun archiveableRootSessionIds(
+    sessions: List<Session>,
+    directory: String,
+    normalizeDirectory: (String) -> String,
+): List<String> {
+    val normalizedDirectory = normalizeDirectory(directory)
+    return sessions
+        .filter { it.parentId == null }
+        .filter { normalizeDirectory(it.directory) == normalizedDirectory }
+        .filter { !it.isArchived }
+        .map { it.id }
+}
 
 @HiltViewModel
 class SessionListViewModel @Inject constructor(
@@ -362,7 +396,7 @@ class SessionListViewModel @Inject constructor(
                     if (BuildConfig.DEBUG) Log.d(TAG, "Loaded ${all.size} project-scoped sessions (${all.count { it.parentId != null }} children, ${all.count { it.parentId == null }} roots)")
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to load sessions", e)
+                logErrorCompat(TAG, "Failed to load sessions", e)
                 _error.value = e.message ?: "Failed to load sessions"
             } finally {
                 _isLoading.value = false
@@ -488,8 +522,43 @@ class SessionListViewModel @Inject constructor(
     }
 
     fun archiveProjectSessions(dir: String) {
-        Log.w(TAG, "Archive not supported yet for directory=${normalizeDirectory(dir)}")
-        _error.value = "Archive not supported yet"
+        viewModelScope.launch {
+            val targetIds = archiveableRootSessionIds(
+                sessions = serverScopedSessions(),
+                directory = dir,
+                normalizeDirectory = ::normalizeDirectory,
+            )
+            if (targetIds.isEmpty()) return@launch
+
+            try {
+                coroutineScope {
+                    targetIds.map { sessionId ->
+                        async { api.archiveSession(conn, sessionId) }
+                    }.awaitAll()
+                }
+                loadSessions()
+            } catch (e: Exception) {
+                logErrorCompat(TAG, "Failed to archive sessions for directory $dir", e)
+                _error.value = e.message ?: "Failed to archive sessions"
+            }
+        }
+    }
+
+    fun restoreSession(sessionId: String) {
+        viewModelScope.launch {
+            try {
+                api.restoreSession(conn, sessionId)
+                loadSessions()
+            } catch (e: Exception) {
+                logErrorCompat(TAG, "Failed to restore session $sessionId", e)
+                _error.value = e.message ?: "Failed to restore session"
+            }
+        }
+    }
+
+    private fun serverScopedSessions(): List<Session> {
+        val sessionIds = eventReducer.serverSessions.value[serverId] ?: emptySet()
+        return eventReducer.sessions.value.filter { it.id in sessionIds }
     }
 
     fun deleteSelected() {
@@ -542,7 +611,7 @@ class SessionListViewModel @Inject constructor(
             if (BuildConfig.DEBUG) Log.d(TAG, "Server home directory: $home")
             home
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to get server paths", e)
+            logErrorCompat(TAG, "Failed to get server paths", e)
             "/"
         }
     }
@@ -639,14 +708,7 @@ class SessionListViewModel @Inject constructor(
     }
 
     private fun matchesFilter(item: SessionItem, filter: SessionFilter): Boolean {
-        val session = item.session
-        return when (filter) {
-            SessionFilter.ALL -> !session.isArchived
-            SessionFilter.WORKING -> !session.isArchived && item.status is SessionStatus.Busy
-            SessionFilter.HAS_CHANGES -> !session.isArchived && ((session.summary?.additions ?: 0) + (session.summary?.deletions ?: 0) > 0)
-            SessionFilter.HAS_ERRORS -> !session.isArchived && item.status is SessionStatus.Retry
-            SessionFilter.ARCHIVED -> session.isArchived
-        }
+        return matchesSessionFilter(item, filter)
     }
 
     private fun matchesChildArchiveMode(session: Session, filter: SessionFilter): Boolean {

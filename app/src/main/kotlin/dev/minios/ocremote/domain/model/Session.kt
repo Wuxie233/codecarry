@@ -60,7 +60,7 @@ data class Session(
         get() = time.created
 
     val isArchived: Boolean
-        get() = time.archived != null
+        get() = (time.archived ?: 0L) > 0L
 }
 
 /**
