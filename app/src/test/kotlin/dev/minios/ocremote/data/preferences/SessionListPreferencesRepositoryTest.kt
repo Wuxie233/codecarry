@@ -65,9 +65,12 @@ class SessionListPreferencesRepositoryTest {
     fun `addPinned emits pinned directory for ViewModel refresh`() = testScope.runTest {
         val repo = createRepo()
 
-        repo.addPinned("/home/user/empty-project")
+        val firstAddChanged = repo.addPinned("/home/user/empty-project")
+        val duplicateAddChanged = repo.addPinned("/home/user/empty-project")
 
         val prefs = repo.preferences.first()
+        assertTrue(firstAddChanged)
+        assertFalse(duplicateAddChanged)
         assertEquals(listOf("/home/user/empty-project"), prefs.pinnedDirs)
     }
 

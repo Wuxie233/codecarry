@@ -78,7 +78,8 @@ class SessionListPreferencesRepository @Inject constructor(
         }
     }
 
-    suspend fun addPinned(dir: String) {
+    suspend fun addPinned(dir: String): Boolean {
+        var changed = false
         dataStore.edit { prefs ->
             val key = PINNED_DIRS_KEY
             val orderKey = PINNED_DIRS_ORDER_KEY
@@ -90,8 +91,10 @@ class SessionListPreferencesRepository @Inject constructor(
                     .distinct()
                 prefs[key] = newList.toSet()
                 prefs[orderKey] = newList.joinToString(",")
+                changed = true
             }
         }
+        return changed
     }
 
     suspend fun setSort(sort: SessionSort) {
