@@ -167,11 +167,15 @@ class OpenCodeApi @Inject constructor(
         }.body()
     }
 
-    suspend fun archiveSession(conn: ServerConnection, sessionId: String): Session {
+    suspend fun archiveSession(
+        conn: ServerConnection,
+        sessionId: String,
+        archivedAt: Long = System.currentTimeMillis(),
+    ): Session {
         return httpClient.patch("${conn.baseUrl}/session/$sessionId") {
             conn.authHeader?.let { header("Authorization", it) }
             contentType(ContentType.Application.Json)
-            setBody(mapOf("archived" to true))
+            setBody(mapOf("time" to mapOf("archived" to archivedAt)))
         }.body()
     }
 
@@ -179,7 +183,7 @@ class OpenCodeApi @Inject constructor(
         return httpClient.patch("${conn.baseUrl}/session/$sessionId") {
             conn.authHeader?.let { header("Authorization", it) }
             contentType(ContentType.Application.Json)
-            setBody(mapOf("archived" to false))
+            setBody(mapOf("time" to mapOf("archived" to 0L)))
         }.body()
     }
 

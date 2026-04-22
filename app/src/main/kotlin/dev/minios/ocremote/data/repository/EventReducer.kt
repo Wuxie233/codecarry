@@ -134,15 +134,15 @@ class EventReducer @Inject constructor() {
     private fun handleSessionUpdated(event: SseEvent.SessionUpdated, serverId: String) {
         trackSession(serverId, event.info.id)
         _sessions.update { current ->
-            val updated = current.toMutableList()
-            val existingIndex = updated.indexOfFirst { it.id == event.info.id }
+            val existingIndex = current.indexOfFirst { it.id == event.info.id }
             if (existingIndex >= 0) {
-                updated[existingIndex] = event.info
+                // Update existing
+                current.toMutableList().apply { set(existingIndex, event.info) }
             } else {
+                // Upsert: session wasn't in list (no session.created received), add it
                 if (BuildConfig.DEBUG) Log.d(TAG, "Session ${event.info.id} not found, upserting (title=${event.info.title})")
-                updated.add(event.info)
+                (current + event.info).sortedByDescending { it.time.updated }
             }
-            updated.sortedByDescending { it.time.updated }
         }
     }
     
