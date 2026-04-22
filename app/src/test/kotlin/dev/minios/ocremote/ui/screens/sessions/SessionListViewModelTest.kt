@@ -89,6 +89,18 @@ class SessionListViewModelTest {
         assertFalse(isProjectGroupVisible(unpinnedEmptyGroup, showHiddenProjects = false))
     }
 
+    @Test
+    fun `pinDirectoryRefreshTargets keeps session refresh explicit after duplicate pin attempts`() {
+        assertEquals(
+            setOf(PinDirectoryRefreshTarget.PROJECTS, PinDirectoryRefreshTarget.SESSIONS),
+            pinDirectoryRefreshTargets(changed = true),
+        )
+        assertEquals(
+            setOf(PinDirectoryRefreshTarget.SESSIONS),
+            pinDirectoryRefreshTargets(changed = false),
+        )
+    }
+
     private fun testSession(
         id: String,
         directory: String = "/workspace/project",

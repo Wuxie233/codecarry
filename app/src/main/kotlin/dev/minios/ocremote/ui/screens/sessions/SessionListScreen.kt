@@ -441,30 +441,36 @@ fun SessionListScreen(
                                             subagents = group.subagentRowsByParent[item.session.id]
                                                 ?: SubagentRow.EMPTY,
                                             projectName = dirLabel,
-                                                isSelectionMode = uiState.isSelectionMode,
-                                                isSelected = item.session.id in uiState.selectedIds,
-                                                onClick = {
-                                                    if (uiState.isSelectionMode) {
-                                                        viewModel.toggleSelection(item.session.id)
-                                                    } else {
-                                                        onNavigateToChat(item.session.id, false)
-                                                    }
-                                                },
-                                                onLongClick = { viewModel.toggleSelection(item.session.id) },
-                                                onRename = {
-                                                    renameSessionId = item.session.id
-                                                    renameText = item.session.title ?: ""
-                                                    showRenameDialog = true
-                                                },
-                                                onDelete = {
-                                                    deleteSessionId = item.session.id
-                                                    deleteSessionTitle = item.session.title ?: untitledLabel
-                                                    showDeleteDialog = true
-                                                },
-                                                onSubagentClick = { sessionId ->
-                                                    onNavigateToChat(sessionId, false)
-                                                },
-                                            )
+                                            isSelectionMode = uiState.isSelectionMode,
+                                            isSelected = item.session.id in uiState.selectedIds,
+                                            onClick = {
+                                                if (uiState.isSelectionMode) {
+                                                    viewModel.toggleSelection(item.session.id)
+                                                } else {
+                                                    onNavigateToChat(item.session.id, false)
+                                                }
+                                            },
+                                            onLongClick = { viewModel.toggleSelection(item.session.id) },
+                                            onRename = {
+                                                renameSessionId = item.session.id
+                                                renameText = item.session.title ?: ""
+                                                showRenameDialog = true
+                                            },
+                                            onArchive = {
+                                                viewModel.archiveSession(item.session.id)
+                                            },
+                                            onRestore = {
+                                                viewModel.restoreSession(item.session.id)
+                                            },
+                                            onDelete = {
+                                                deleteSessionId = item.session.id
+                                                deleteSessionTitle = item.session.title ?: untitledLabel
+                                                showDeleteDialog = true
+                                            },
+                                            onSubagentClick = { sessionId ->
+                                                onNavigateToChat(sessionId, false)
+                                            },
+                                        )
                                         }
                                     }
                                 }
@@ -662,6 +668,8 @@ private fun SessionRowWithSubagents(
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     onRename: () -> Unit,
+    onArchive: () -> Unit,
+    onRestore: () -> Unit,
     onDelete: () -> Unit,
     onSubagentClick: (sessionId: String) -> Unit,
 ) {
@@ -682,6 +690,8 @@ private fun SessionRowWithSubagents(
             onClick = onClick,
             onLongClick = onLongClick,
             onRename = onRename,
+            onArchive = onArchive,
+            onRestore = onRestore,
             onDelete = onDelete,
         )
 
@@ -1491,7 +1501,22 @@ private fun NewSessionQuickDialog(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+internal enum class SessionRowMenuAction {
+    RENAME,
+    ARCHIVE,
+    RESTORE,
+    DELETE,
+}
+
+internal fun sessionRowMenuActions(isArchived: Boolean): List<SessionRowMenuAction> {
+    return buildList {
+        add(SessionRowMenuAction.RENAME)
+        add(if (isArchived) SessionRowMenuAction.RESTORE else SessionRowMenuAction.ARCHIVE)
+        add(SessionRowMenuAction.DELETE)
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun SessionRow(
     item: SessionItem,
@@ -1501,7 +1526,9 @@ private fun SessionRow(
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     onRename: () -> Unit,
-    onDelete: () -> Unit
+    onArchive: () -> Unit,
+    onRestore: () -> Unit,
+    onDelete: () -> Unit,
 ) {
     val isAmoled = isAmoledTheme()
     val dateFormat = remember { SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()) }
@@ -1509,6 +1536,8 @@ private fun SessionRow(
 
     val addColor = Color(0xFF4CAF50)
     val delColor = Color(0xFFE53935)
+
+    var menuExpanded by remember { mutableStateOf(false) }
 
     val dismissState = rememberSwipeToDismissBoxState(
         confirmValueChange = { dismissValue ->
@@ -1690,6 +1719,55 @@ private fun SessionRow(
                             .clip(CircleShape)
                             .background(unreadColor)
                     )
+                }
+
+                if (!isSelectionMode) {
+                    Box {
+                        IconButton(onClick = { menuExpanded = true }) {
+                            Icon(
+                                imageVector = Icons.Default.MoreVert,
+                                contentDescription = stringResource(R.string.sessions_project_actions),
+                            )
+                        }
+
+                        DropdownMenu(
+                            expanded = menuExpanded,
+                            onDismissRequest = { menuExpanded = false },
+                        ) {
+                            sessionRowMenuActions(isArchived = item.session.isArchived).forEach { action ->
+                                when (action) {
+                                    SessionRowMenuAction.RENAME -> DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.session_rename)) },
+                                        onClick = {
+                                            menuExpanded = false
+                                            onRename()
+                                        },
+                                    )
+                                    SessionRowMenuAction.ARCHIVE -> DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.sessions_project_archive_all)) },
+                                        onClick = {
+                                            menuExpanded = false
+                                            onArchive()
+                                        },
+                                    )
+                                    SessionRowMenuAction.RESTORE -> DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.chat_restore)) },
+                                        onClick = {
+                                            menuExpanded = false
+                                            onRestore()
+                                        },
+                                    )
+                                    SessionRowMenuAction.DELETE -> DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.delete)) },
+                                        onClick = {
+                                            menuExpanded = false
+                                            onDelete()
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

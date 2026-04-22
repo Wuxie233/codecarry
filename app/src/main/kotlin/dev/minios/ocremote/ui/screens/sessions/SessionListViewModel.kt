@@ -157,6 +157,19 @@ internal fun archiveableRootSessionIds(
         .map { it.id }
 }
 
+internal enum class PinDirectoryRefreshTarget {
+    PROJECTS,
+    SESSIONS,
+}
+
+internal fun pinDirectoryRefreshTargets(changed: Boolean): Set<PinDirectoryRefreshTarget> {
+    return if (changed) {
+        setOf(PinDirectoryRefreshTarget.PROJECTS, PinDirectoryRefreshTarget.SESSIONS)
+    } else {
+        setOf(PinDirectoryRefreshTarget.SESSIONS)
+    }
+}
+
 @HiltViewModel
 class SessionListViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
@@ -511,7 +524,16 @@ class SessionListViewModel @Inject constructor(
 
     fun pinDirectory(dir: String) {
         viewModelScope.launch {
-            preferencesRepo.addPinned(normalizeDirectory(dir))
+            val normalizedDirectory = normalizeDirectory(dir)
+            val refreshTargets = pinDirectoryRefreshTargets(
+                changed = preferencesRepo.addPinned(normalizedDirectory),
+            )
+            if (PinDirectoryRefreshTarget.PROJECTS in refreshTargets) {
+                loadProjects()
+            }
+            if (PinDirectoryRefreshTarget.SESSIONS in refreshTargets) {
+                loadSessions()
+            }
         }
     }
 
@@ -554,6 +576,18 @@ class SessionListViewModel @Inject constructor(
             } catch (e: Exception) {
                 logErrorCompat(TAG, "Failed to archive sessions for directory $dir", e)
                 _error.value = e.message ?: "Failed to archive sessions"
+            }
+        }
+    }
+
+    fun archiveSession(sessionId: String) {
+        viewModelScope.launch {
+            try {
+                api.archiveSession(conn, sessionId)
+                loadSessions()
+            } catch (e: Exception) {
+                logErrorCompat(TAG, "Failed to archive session $sessionId", e)
+                _error.value = e.message ?: "Failed to archive session"
             }
         }
     }
