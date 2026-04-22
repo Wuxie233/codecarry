@@ -88,18 +88,32 @@ fun McpManagementSheet(
                     }
                 }
 
-                McpUiState.NoConfig -> {
+                is McpUiState.Empty -> {
                     Text(
-                        text = "此项目无 MCP 配置",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                        modifier = Modifier.padding(vertical = 24.dp),
+                        text = current.title,
+                        style = MaterialTheme.typography.titleSmall,
                     )
-                    TextButton(
-                        onClick = onDismiss,
-                        modifier = Modifier.align(Alignment.End),
+                    Text(
+                        text = current.message,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+                        modifier = Modifier.padding(top = 8.dp, bottom = 24.dp),
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text("关闭")
+                        TextButton(onClick = onDismiss) {
+                            Text("关闭")
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(
+                            onClick = viewModel::refresh,
+                            enabled = viewModel.canReload(),
+                        ) {
+                            Text("刷新")
+                        }
                     }
                 }
 
@@ -108,10 +122,23 @@ fun McpManagementSheet(
                         text = current.message,
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(bottom = 12.dp),
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    TextButton(onClick = onDismiss) {
-                        Text("取消")
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        TextButton(onClick = onDismiss) {
+                            Text("取消")
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(
+                            onClick = viewModel::retry,
+                            enabled = viewModel.canReload(),
+                        ) {
+                            Text("重试")
+                        }
                     }
                 }
 
@@ -121,6 +148,7 @@ fun McpManagementSheet(
                     val isSaving = current is McpUiState.Saving
                     val isDirty = loaded?.dirty == true
                     val saveError = loaded?.saveError ?: lastSaveError
+                    val canRefresh = viewModel.canReload() && !isDirty
 
                     LazyColumn(
                         modifier = Modifier
@@ -155,6 +183,10 @@ fun McpManagementSheet(
                         horizontalArrangement = Arrangement.End,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
+                        TextButton(onClick = viewModel::refresh, enabled = canRefresh) {
+                            Text("刷新")
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
                         TextButton(onClick = onDismiss, enabled = !isSaving) {
                             Text("取消")
                         }
