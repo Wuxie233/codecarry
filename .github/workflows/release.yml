@@ -2,26 +2,55 @@ name: Build Release APK
 
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - 'v*'
+    inputs:
+      tag:
+        description: 'Release tag to build (e.g. v1.6.18)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
 
 jobs:
   build-release:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
+      - name: Checkout code at release tag
         uses: actions/checkout@v4.1.0
+        with:
+          ref: ${{ inputs.tag }}
 
-      - name: Extract version from build.gradle.kts
+      - name: Validate tag format
+        run: |
+          TAG="${{ inputs.tag }}"
+          if ! echo "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Invalid tag format: $TAG (expected v<major>.<minor>.<patch>)"
+            exit 1
+          fi
+
+      - name: Extract and validate version from build.gradle.kts
         id: version
         run: |
           VERSION=$(grep 'versionName = ' app/build.gradle.kts | head -1 | sed 's/.*versionName = "\(.*\)"/\1/')
           VERSION_CODE=$(grep 'versionCode = ' app/build.gradle.kts | head -1 | sed 's/.*versionCode = \([0-9]*\)/\1/')
-          echo "name=$VERSION" >> $GITHUB_OUTPUT
-          echo "code=$VERSION_CODE" >> $GITHUB_OUTPUT
-          echo "Building version: $VERSION (code: $VERSION_CODE)"
+          TAG="${{ inputs.tag }}"
+          EXPECTED_VERSION="${TAG#v}"
+
+          if [ -z "$VERSION" ] || [ -z "$VERSION_CODE" ]; then
+            echo "::error::Failed to parse versionName/versionCode from app/build.gradle.kts"
+            exit 1
+          fi
+
+          if [ "$VERSION" != "$EXPECTED_VERSION" ]; then
+            echo "::error::Tag version ($EXPECTED_VERSION) does not match build.gradle.kts versionName ($VERSION)"
+            exit 1
+          fi
+
+          echo "name=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Building version: $VERSION (code: $VERSION_CODE) from tag $TAG"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v3.13.0
@@ -44,26 +73,54 @@ jobs:
           echo "keystore.password=${{ secrets.KEYSTORE_PASSWORD }}" >> app/keystore/signing.properties
 
       - name: Build Release APK
-        run: ./gradlew :app:assembleRelease
+        run: ./gradlew clean :app:assembleRelease
 
-      - name: Rename APK
+      - name: Collect release APK from current run
+        id: package_apk
         run: |
           VERSION="${{ steps.version.outputs.name }}"
-          mkdir -p release-apks
-          # Find the built APK (signed or unsigned)
-          APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
-          if [ -n "$APK" ]; then
-            cp "$APK" release-apks/oc-remote-${VERSION}.apk
-          else
-            echo "::error::No APK found in app/build/outputs/apk/release/"
+          OUTPUT_DIR="$RUNNER_TEMP/release-apk"
+          APK_SOURCE="app/build/outputs/apk/release/app-release.apk"
+          TARGET_APK="$OUTPUT_DIR/oc-remote-${VERSION}.apk"
+
+          rm -rf "$OUTPUT_DIR"
+          mkdir -p "$OUTPUT_DIR"
+
+          if [ ! -f "$APK_SOURCE" ]; then
+            echo "::error::Expected APK not found: $APK_SOURCE"
+            ls -R app/build/outputs/apk/release || true
             exit 1
           fi
+
+          cp "$APK_SOURCE" "$TARGET_APK"
+          echo "apk=$TARGET_APK" >> "$GITHUB_OUTPUT"
+
+      - name: Verify built APK metadata matches expected version
+        run: |
+          EXPECTED_VERSION="${{ steps.version.outputs.name }}"
+          EXPECTED_CODE="${{ steps.version.outputs.code }}"
+          METADATA_FILE="app/build/outputs/apk/release/output-metadata.json"
+
+          if [ ! -f "$METADATA_FILE" ]; then
+            echo "::error::Missing metadata file: $METADATA_FILE"
+            exit 1
+          fi
+
+          ACTUAL_VERSION=$(python3 -c "import json; d=json.load(open('app/build/outputs/apk/release/output-metadata.json', encoding='utf-8')); e=(d.get('elements') or [{}])[0]; print(str(e.get('versionName','')))")
+          ACTUAL_CODE=$(python3 -c "import json; d=json.load(open('app/build/outputs/apk/release/output-metadata.json', encoding='utf-8')); e=(d.get('elements') or [{}])[0]; print(str(e.get('versionCode','')))")
+
+          if [ "$ACTUAL_VERSION" != "$EXPECTED_VERSION" ] || [ "$ACTUAL_CODE" != "$EXPECTED_CODE" ]; then
+            echo "::error::Built APK metadata mismatch: got versionName=$ACTUAL_VERSION versionCode=$ACTUAL_CODE, expected versionName=$EXPECTED_VERSION versionCode=$EXPECTED_CODE"
+            exit 1
+          fi
+
+          echo "Verified output-metadata.json versionName=$ACTUAL_VERSION versionCode=$ACTUAL_CODE"
 
       - name: Upload Release APK
         uses: actions/upload-artifact@v4
         with:
           name: ocremote-release-${{ steps.version.outputs.name }}
-          path: release-apks/*.apk
+          path: ${{ steps.package_apk.outputs.apk }}
           retention-days: 90
 
       - name: Create or update GitHub Release
@@ -71,27 +128,29 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           VERSION="${{ steps.version.outputs.name }}"
-          TAG="v${VERSION}"
-
-          # Create tag if it doesn't exist
-          git tag $TAG || true
-          git push origin $TAG || true
+          TAG="${{ steps.version.outputs.tag }}"
+          APK_PATH="${{ steps.package_apk.outputs.apk }}"
 
           # Check if release already exists
-          if gh release view $TAG > /dev/null 2>&1; then
-            echo "Release $TAG already exists, uploading APK..."
-            gh release upload $TAG release-apks/*.apk --clobber
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "Release $TAG already exists, cleaning previous APK assets..."
+            for ASSET_ID in $(gh release view "$TAG" --json assets --jq '.assets[] | select(.name | endswith(".apk")) | .id'); do
+              gh api "repos/${{ github.repository }}/releases/assets/${ASSET_ID}" -X DELETE
+            done
+
+            echo "Uploading current APK..."
+            gh release upload "$TAG" "$APK_PATH" --clobber
           else
             echo "Creating new release $TAG..."
             if [ -f "RELEASE_NOTES_${VERSION}.md" ]; then
-              gh release create $TAG \
+              gh release create "$TAG" \
                 --title "${VERSION}" \
                 --notes-file "RELEASE_NOTES_${VERSION}.md" \
-                release-apks/*.apk
+                "$APK_PATH"
             else
-              gh release create $TAG \
+              gh release create "$TAG" \
                 --title "${VERSION}" \
                 --generate-notes \
-                release-apks/*.apk
+                "$APK_PATH"
             fi
           fi
