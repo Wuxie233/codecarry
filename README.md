@@ -128,6 +128,25 @@ opencode serve --port 4096 --hostname 0.0.0.0
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
+## Release
+
+Releases are **manual-only**.
+
+1. Update `versionName`, `versionCode`, and `RELEASE_NOTES_<version>.md`
+2. Verify:
+
+```bash
+./gradlew :app:testDebugUnitTest
+./gradlew :app:assembleDebug
+```
+
+3. Push `master`
+4. Create and push the release tag
+5. Manually trigger `.github/workflows/release.yml` and provide `tag` (e.g. `v1.6.18`)
+6. Confirm the GitHub Release has exactly one uploaded APK `oc-remote-<version>.apk` and that install metadata matches the tag version
+
+Tag pushes must **not** be relied on to auto-publish releases.
+
 ## License
 
 MIT
