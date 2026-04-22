@@ -91,6 +91,21 @@ data class ProjectGroup(
     val unreadCount: Int = 0,
 )
 
+internal fun deriveAllDirectories(
+    projectDirectories: List<String>,
+    rootSessionDirectories: List<String>,
+    pinnedDirectories: List<String>,
+): List<String> = (projectDirectories + rootSessionDirectories + pinnedDirectories).distinct()
+
+internal fun isProjectGroupVisible(
+    group: ProjectGroup,
+    showHiddenProjects: Boolean,
+): Boolean {
+    val visibleByDefault = group.sessionCount > 0 || group.isPinned
+    val hiddenFilter = if (group.isHidden) showHiddenProjects else true
+    return visibleByDefault && hiddenFilter
+}
+
 data class SubagentRow(
     val running: List<SessionItem>,
     val historical: List<SessionItem>,
@@ -208,8 +223,11 @@ class SessionListViewModel @Inject constructor(
         )
         val childBuckets = childSessions.groupBy { it.parentId!! }
         val projectByDirectory = projects.associateBy { normalizeDirectory(it.worktree) }
-        val allDirectories = (projects.map { normalizeDirectory(it.worktree) } + rootSessions.map { normalizeDirectory(it.directory) })
-            .distinct()
+        val allDirectories = deriveAllDirectories(
+            projectDirectories = projects.map { normalizeDirectory(it.worktree) },
+            rootSessionDirectories = rootSessions.map { normalizeDirectory(it.directory) },
+            pinnedDirectories = prefs.pinnedDirs.map(::normalizeDirectory),
+        )
 
         val rawGroups = allDirectories.map { directory ->
             val project = projectByDirectory[directory]
@@ -260,11 +278,7 @@ class SessionListViewModel @Inject constructor(
 
         val hiddenProjectCount = rawGroups.count { it.isHidden }
         val groups = rawGroups
-            .filter { group ->
-                val visibleByDefault = group.sessionCount > 0 || group.isPinned
-                val hiddenFilter = if (group.isHidden) showHiddenProjects else true
-                visibleByDefault && hiddenFilter
-            }
+            .filter { group -> isProjectGroupVisible(group, showHiddenProjects) }
             .sortedWith(
                 compareBy<ProjectGroup> { group ->
                     val pinnedIndex = prefs.pinnedDirs.indexOf(group.directory)
