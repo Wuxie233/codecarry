@@ -6,7 +6,9 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.minios.ocremote.data.api.ServerConnection
 import dev.minios.ocremote.data.repository.ServerRepository
 import dev.minios.ocremote.domain.model.McpConfig
+import dev.minios.ocremote.domain.model.McpConfigLoadState
 import dev.minios.ocremote.domain.model.McpServer
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -23,7 +25,10 @@ sealed class McpUiState {
         val saveError: String? = null,
     ) : McpUiState()
 
-    data object NoConfig : McpUiState()
+    data class Empty(
+        val title: String,
+        val message: String,
+    ) : McpUiState()
 
     data class Error(val message: String) : McpUiState()
 
@@ -32,38 +37,79 @@ sealed class McpUiState {
     data object SaveSuccess : McpUiState()
 }
 
-@HiltViewModel
-class McpViewModel @Inject constructor(
-    private val repository: ServerRepository,
-) : ViewModel() {
+internal class McpStateController(
+    private val scope: CoroutineScope,
+    private val readMcpConfigState: suspend (ServerConnection, String) -> McpConfigLoadState,
+    private val writeMcpConfig: suspend (ServerConnection, McpConfig) -> Result<Unit>,
+) {
 
     private val _state = MutableStateFlow<McpUiState>(McpUiState.Loading)
     val state: StateFlow<McpUiState> = _state.asStateFlow()
 
     private var currentConn: ServerConnection? = null
+    private var currentProjectDir: String? = null
     private var lastLoaded: McpUiState.Loaded? = null
 
     fun load(conn: ServerConnection, projectDir: String) {
         currentConn = conn
+        currentProjectDir = projectDir
+        loadCurrentConfig()
+    }
+
+    fun refresh() {
+        loadCurrentConfig()
+    }
+
+    fun retry() {
+        loadCurrentConfig()
+    }
+
+    private fun loadCurrentConfig() {
+        val conn = currentConn ?: return
+        val projectDir = currentProjectDir ?: return
         _state.value = McpUiState.Loading
 
-        viewModelScope.launch {
-            repository.readMcpConfig(conn, projectDir)
-                .onSuccess { config ->
-                    if (config == null) {
-                        lastLoaded = null
-                        _state.value = McpUiState.NoConfig
-                    } else {
-                        val loaded = McpUiState.Loaded(config = config)
-                        lastLoaded = loaded
-                        _state.value = loaded
-                    }
+        scope.launch {
+            when (val loadState = readMcpConfigState(conn, projectDir)) {
+                is McpConfigLoadState.Loaded -> {
+                    val loaded = McpUiState.Loaded(config = loadState.config)
+                    lastLoaded = loaded
+                    _state.value = loaded
                 }
-                .onFailure { error ->
+
+                is McpConfigLoadState.Empty -> {
                     lastLoaded = null
-                    _state.value = McpUiState.Error(error.message ?: "Unknown error")
+                    _state.value = McpUiState.Empty(
+                        title = "暂无 MCP 服务器",
+                        message = "已找到 MCP 配置，但当前没有配置任何 MCP 服务器。",
+                    )
                 }
+
+                is McpConfigLoadState.NotFound -> {
+                    lastLoaded = null
+                    _state.value = McpUiState.Empty(
+                        title = "未找到 MCP 配置",
+                        message = "此项目当前没有可读取的 MCP 配置文件。",
+                    )
+                }
+
+                is McpConfigLoadState.Error -> {
+                    lastLoaded = null
+                    _state.value = McpUiState.Error(loadState.message)
+                }
+            }
         }
+    }
+
+    fun canReload(): Boolean {
+        return currentConn != null &&
+            currentProjectDir != null &&
+            _state.value !is McpUiState.Loading &&
+            _state.value !is McpUiState.Saving
+    }
+
+    fun hasReloadContext(): Boolean {
+        return currentConn != null && currentProjectDir != null
     }
 
     fun toggleServer(name: String) {
@@ -88,8 +134,8 @@ class McpViewModel @Inject constructor(
 
         _state.value = McpUiState.Saving
 
-        viewModelScope.launch {
-            repository.writeMcpConfig(conn, updatedConfig)
+        scope.launch {
+            writeMcpConfig(conn, updatedConfig)
                 .onSuccess {
                     _state.value = McpUiState.SaveSuccess
                 }
@@ -99,5 +145,46 @@ class McpViewModel @Inject constructor(
                     _state.value = restored
                 }
         }
+    }
+}
+
+@HiltViewModel
+class McpViewModel @Inject constructor(
+    repository: ServerRepository,
+) : ViewModel() {
+    private val controller = McpStateController(
+        scope = viewModelScope,
+        readMcpConfigState = repository::readMcpConfigState,
+        writeMcpConfig = repository::writeMcpConfig,
+    )
+
+    val state: StateFlow<McpUiState> = controller.state
+
+    fun load(conn: ServerConnection, projectDir: String) {
+        controller.load(conn, projectDir)
+    }
+
+    fun refresh() {
+        controller.refresh()
+    }
+
+    fun retry() {
+        controller.retry()
+    }
+
+    fun canReload(): Boolean {
+        return controller.canReload()
+    }
+
+    fun hasReloadContext(): Boolean {
+        return controller.hasReloadContext()
+    }
+
+    fun toggleServer(name: String) {
+        controller.toggleServer(name)
+    }
+
+    fun save() {
+        controller.save()
     }
 }

@@ -40,6 +40,16 @@ import javax.inject.Inject
 
 private const val TAG = "SessionListViewModel"
 
+private fun logErrorCompat(tag: String, message: String, throwable: Throwable) {
+    try {
+        Log.e(tag, message, throwable)
+    } catch (error: RuntimeException) {
+        if (!error.message.orEmpty().contains("android.util.Log not mocked")) {
+            throw error
+        }
+    }
+}
+
 data class SessionListUiState(
     val serverName: String = "",
     val isLoading: Boolean = true,
@@ -91,6 +101,21 @@ data class ProjectGroup(
     val unreadCount: Int = 0,
 )
 
+internal fun deriveAllDirectories(
+    projectDirectories: List<String>,
+    rootSessionDirectories: List<String>,
+    pinnedDirectories: List<String>,
+): List<String> = (projectDirectories + rootSessionDirectories + pinnedDirectories).distinct()
+
+internal fun isProjectGroupVisible(
+    group: ProjectGroup,
+    showHiddenProjects: Boolean,
+): Boolean {
+    val visibleByDefault = group.sessionCount > 0 || group.isPinned
+    val hiddenFilter = if (group.isHidden) showHiddenProjects else true
+    return visibleByDefault && hiddenFilter
+}
+
 data class SubagentRow(
     val running: List<SessionItem>,
     val historical: List<SessionItem>,
@@ -107,6 +132,43 @@ data class SessionItem(
     val status: SessionStatus = SessionStatus.Idle,
     val isUnread: Boolean = false,
 )
+
+internal fun matchesSessionFilter(item: SessionItem, filter: SessionFilter): Boolean {
+    val session = item.session
+    return when (filter) {
+        SessionFilter.ALL -> !session.isArchived
+        SessionFilter.WORKING -> !session.isArchived && item.status is SessionStatus.Busy
+        SessionFilter.HAS_CHANGES -> !session.isArchived && ((session.summary?.additions ?: 0) + (session.summary?.deletions ?: 0) > 0)
+        SessionFilter.HAS_ERRORS -> !session.isArchived && item.status is SessionStatus.Retry
+        SessionFilter.ARCHIVED -> session.isArchived
+    }
+}
+
+internal fun archiveableRootSessionIds(
+    sessions: List<Session>,
+    directory: String,
+    normalizeDirectory: (String) -> String,
+): List<String> {
+    val normalizedDirectory = normalizeDirectory(directory)
+    return sessions
+        .filter { it.parentId == null }
+        .filter { normalizeDirectory(it.directory) == normalizedDirectory }
+        .filter { !it.isArchived }
+        .map { it.id }
+}
+
+internal enum class PinDirectoryRefreshTarget {
+    PROJECTS,
+    SESSIONS,
+}
+
+internal fun pinDirectoryRefreshTargets(changed: Boolean): Set<PinDirectoryRefreshTarget> {
+    return if (changed) {
+        setOf(PinDirectoryRefreshTarget.PROJECTS, PinDirectoryRefreshTarget.SESSIONS)
+    } else {
+        setOf(PinDirectoryRefreshTarget.SESSIONS)
+    }
+}
 
 @HiltViewModel
 class SessionListViewModel @Inject constructor(
@@ -208,8 +270,11 @@ class SessionListViewModel @Inject constructor(
         )
         val childBuckets = childSessions.groupBy { it.parentId!! }
         val projectByDirectory = projects.associateBy { normalizeDirectory(it.worktree) }
-        val allDirectories = (projects.map { normalizeDirectory(it.worktree) } + rootSessions.map { normalizeDirectory(it.directory) })
-            .distinct()
+        val allDirectories = deriveAllDirectories(
+            projectDirectories = projects.map { normalizeDirectory(it.worktree) },
+            rootSessionDirectories = rootSessions.map { normalizeDirectory(it.directory) },
+            pinnedDirectories = prefs.pinnedDirs.map(::normalizeDirectory),
+        )
 
         val rawGroups = allDirectories.map { directory ->
             val project = projectByDirectory[directory]
@@ -260,11 +325,7 @@ class SessionListViewModel @Inject constructor(
 
         val hiddenProjectCount = rawGroups.count { it.isHidden }
         val groups = rawGroups
-            .filter { group ->
-                val visibleByDefault = group.sessionCount > 0 || group.isPinned
-                val hiddenFilter = if (group.isHidden) showHiddenProjects else true
-                visibleByDefault && hiddenFilter
-            }
+            .filter { group -> isProjectGroupVisible(group, showHiddenProjects) }
             .sortedWith(
                 compareBy<ProjectGroup> { group ->
                     val pinnedIndex = prefs.pinnedDirs.indexOf(group.directory)
@@ -362,7 +423,7 @@ class SessionListViewModel @Inject constructor(
                     if (BuildConfig.DEBUG) Log.d(TAG, "Loaded ${all.size} project-scoped sessions (${all.count { it.parentId != null }} children, ${all.count { it.parentId == null }} roots)")
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to load sessions", e)
+                logErrorCompat(TAG, "Failed to load sessions", e)
                 _error.value = e.message ?: "Failed to load sessions"
             } finally {
                 _isLoading.value = false
@@ -463,7 +524,16 @@ class SessionListViewModel @Inject constructor(
 
     fun pinDirectory(dir: String) {
         viewModelScope.launch {
-            preferencesRepo.addPinned(normalizeDirectory(dir))
+            val normalizedDirectory = normalizeDirectory(dir)
+            val refreshTargets = pinDirectoryRefreshTargets(
+                changed = preferencesRepo.addPinned(normalizedDirectory),
+            )
+            if (PinDirectoryRefreshTarget.PROJECTS in refreshTargets) {
+                loadProjects()
+            }
+            if (PinDirectoryRefreshTarget.SESSIONS in refreshTargets) {
+                loadSessions()
+            }
         }
     }
 
@@ -488,8 +558,55 @@ class SessionListViewModel @Inject constructor(
     }
 
     fun archiveProjectSessions(dir: String) {
-        Log.w(TAG, "Archive not supported yet for directory=${normalizeDirectory(dir)}")
-        _error.value = "Archive not supported yet"
+        viewModelScope.launch {
+            val targetIds = archiveableRootSessionIds(
+                sessions = serverScopedSessions(),
+                directory = dir,
+                normalizeDirectory = ::normalizeDirectory,
+            )
+            if (targetIds.isEmpty()) return@launch
+
+            try {
+                coroutineScope {
+                    targetIds.map { sessionId ->
+                        async { api.archiveSession(conn, sessionId) }
+                    }.awaitAll()
+                }
+                loadSessions()
+            } catch (e: Exception) {
+                logErrorCompat(TAG, "Failed to archive sessions for directory $dir", e)
+                _error.value = e.message ?: "Failed to archive sessions"
+            }
+        }
+    }
+
+    fun archiveSession(sessionId: String) {
+        viewModelScope.launch {
+            try {
+                api.archiveSession(conn, sessionId)
+                loadSessions()
+            } catch (e: Exception) {
+                logErrorCompat(TAG, "Failed to archive session $sessionId", e)
+                _error.value = e.message ?: "Failed to archive session"
+            }
+        }
+    }
+
+    fun restoreSession(sessionId: String) {
+        viewModelScope.launch {
+            try {
+                api.restoreSession(conn, sessionId)
+                loadSessions()
+            } catch (e: Exception) {
+                logErrorCompat(TAG, "Failed to restore session $sessionId", e)
+                _error.value = e.message ?: "Failed to restore session"
+            }
+        }
+    }
+
+    private fun serverScopedSessions(): List<Session> {
+        val sessionIds = eventReducer.serverSessions.value[serverId] ?: emptySet()
+        return eventReducer.sessions.value.filter { it.id in sessionIds }
     }
 
     fun deleteSelected() {
@@ -542,7 +659,7 @@ class SessionListViewModel @Inject constructor(
             if (BuildConfig.DEBUG) Log.d(TAG, "Server home directory: $home")
             home
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to get server paths", e)
+            logErrorCompat(TAG, "Failed to get server paths", e)
             "/"
         }
     }
@@ -639,14 +756,7 @@ class SessionListViewModel @Inject constructor(
     }
 
     private fun matchesFilter(item: SessionItem, filter: SessionFilter): Boolean {
-        val session = item.session
-        return when (filter) {
-            SessionFilter.ALL -> !session.isArchived
-            SessionFilter.WORKING -> !session.isArchived && item.status is SessionStatus.Busy
-            SessionFilter.HAS_CHANGES -> !session.isArchived && ((session.summary?.additions ?: 0) + (session.summary?.deletions ?: 0) > 0)
-            SessionFilter.HAS_ERRORS -> !session.isArchived && item.status is SessionStatus.Retry
-            SessionFilter.ARCHIVED -> session.isArchived
-        }
+        return matchesSessionFilter(item, filter)
     }
 
     private fun matchesChildArchiveMode(session: Session, filter: SessionFilter): Boolean {

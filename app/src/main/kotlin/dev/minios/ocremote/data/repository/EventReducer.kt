@@ -137,7 +137,9 @@ class EventReducer @Inject constructor() {
             val existingIndex = current.indexOfFirst { it.id == event.info.id }
             if (existingIndex >= 0) {
                 // Update existing
-                current.toMutableList().apply { set(existingIndex, event.info) }
+                current.toMutableList()
+                    .apply { set(existingIndex, event.info) }
+                    .sortedByDescending { it.time.updated }
             } else {
                 // Upsert: session wasn't in list (no session.created received), add it
                 if (BuildConfig.DEBUG) Log.d(TAG, "Session ${event.info.id} not found, upserting (title=${event.info.title})")

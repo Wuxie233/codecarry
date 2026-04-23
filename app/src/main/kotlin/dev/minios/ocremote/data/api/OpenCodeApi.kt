@@ -25,6 +25,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import java.io.IOException
 import java.util.Base64
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -163,6 +164,26 @@ class OpenCodeApi @Inject constructor(
             conn.authHeader?.let { header("Authorization", it) }
             contentType(ContentType.Application.Json)
             setBody(mapOf("title" to title))
+        }.body()
+    }
+
+    suspend fun archiveSession(
+        conn: ServerConnection,
+        sessionId: String,
+        archivedAt: Long = System.currentTimeMillis(),
+    ): Session {
+        return httpClient.patch("${conn.baseUrl}/session/$sessionId") {
+            conn.authHeader?.let { header("Authorization", it) }
+            contentType(ContentType.Application.Json)
+            setBody(mapOf("time" to mapOf("archived" to archivedAt)))
+        }.body()
+    }
+
+    suspend fun restoreSession(conn: ServerConnection, sessionId: String): Session {
+        return httpClient.patch("${conn.baseUrl}/session/$sessionId") {
+            conn.authHeader?.let { header("Authorization", it) }
+            contentType(ContentType.Application.Json)
+            setBody(mapOf("time" to mapOf("archived" to 0L)))
         }.body()
     }
 
@@ -843,11 +864,22 @@ class OpenCodeApi @Inject constructor(
     }
 
     suspend fun readFile(conn: ServerConnection, path: String): FileContent {
-        return httpClient.get("${conn.baseUrl}/file/content") {
+        val response = httpClient.get("${conn.baseUrl}/file/content") {
             conn.authHeader?.let { header("Authorization", it) }
             parameter("path", path)
-        }.body()
+        }
+        if (response.status == HttpStatusCode.NotFound) {
+            throw OpenCodeFileNotFoundException(path = path)
+        }
+        if (!response.status.isSuccess()) {
+            val body = runCatching { response.bodyAsText() }.getOrDefault("")
+            throw OpenCodeFileReadException(path = path, status = response.status, responseBody = body)
+        }
+        return response.body()
     }
+
+    suspend fun readFileText(conn: ServerConnection, path: String): String =
+        readFile(conn, path).content
 
     suspend fun writeFile(conn: ServerConnection, path: String, content: String) {
         httpClient.put("${conn.baseUrl}/file/content") {
@@ -865,6 +897,16 @@ class OpenCodeApi @Inject constructor(
         }.body()
     }
 }
+
+class OpenCodeFileNotFoundException(
+    val path: String,
+) : IOException("OpenCode file not found: $path")
+
+class OpenCodeFileReadException(
+    val path: String,
+    val status: HttpStatusCode,
+    val responseBody: String,
+) : IOException("Failed to read OpenCode file $path: $status")
 
 class PtySocket(
     private val session: ClientWebSocketSession
