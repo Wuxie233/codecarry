@@ -384,8 +384,8 @@ class EventReducer @Inject constructor() {
     }
 
     fun clearActiveSessionId(sessionId: String) {
-        if (_activeSessionId.value == sessionId) {
-            _activeSessionId.value = null
+        _activeSessionId.update { activeSessionId ->
+            if (activeSessionId == sessionId) null else activeSessionId
         }
     }
     

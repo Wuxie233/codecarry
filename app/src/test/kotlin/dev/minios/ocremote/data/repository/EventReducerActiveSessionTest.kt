@@ -16,11 +16,12 @@ class EventReducerActiveSessionTest {
     }
 
     @Test
-    fun clearActiveSessionIdOnlyClearsMatchingSession() {
+    fun clearActiveSessionIdDoesNotClearNewerActiveSession() {
         val reducer = EventReducer()
+        reducer.setActiveSessionId("ses_stale")
         reducer.setActiveSessionId("ses_visible")
 
-        reducer.clearActiveSessionId("other")
+        reducer.clearActiveSessionId("ses_stale")
         assertEquals("ses_visible", reducer.activeSessionId.value)
 
         reducer.clearActiveSessionId("ses_visible")
