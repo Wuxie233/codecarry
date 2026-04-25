@@ -61,16 +61,28 @@ jobs:
       - name: Grant execute permissions for gradlew
         run: chmod +x ./gradlew
 
+      - name: Validate signing secrets
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_ALIAS: ${{ secrets.KEYSTORE_ALIAS }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$KEYSTORE_ALIAS" ] || [ -z "$KEYSTORE_PASSWORD" ]; then
+            echo "::error::Release signing secrets are required: KEYSTORE_BASE64, KEYSTORE_ALIAS, KEYSTORE_PASSWORD"
+            exit 1
+          fi
+
       - name: Decode Keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-        if: ${{ env.KEYSTORE_BASE64 != '' }}
+          KEYSTORE_ALIAS: ${{ secrets.KEYSTORE_ALIAS }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
         run: |
           mkdir -p app/keystore
-          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > app/keystore/release.keystore
+          echo "$KEYSTORE_BASE64" | base64 -d > app/keystore/release.keystore
           echo "keystore=keystore/release.keystore" > app/keystore/signing.properties
-          echo "keystore.alias=${{ secrets.KEYSTORE_ALIAS }}" >> app/keystore/signing.properties
-          echo "keystore.password=${{ secrets.KEYSTORE_PASSWORD }}" >> app/keystore/signing.properties
+          echo "keystore.alias=$KEYSTORE_ALIAS" >> app/keystore/signing.properties
+          echo "keystore.password=$KEYSTORE_PASSWORD" >> app/keystore/signing.properties
 
       - name: Build Release APK
         run: ./gradlew clean :app:assembleRelease
@@ -128,6 +140,16 @@ jobs:
 
           echo "Verified output-metadata.json versionName=$ACTUAL_VERSION versionCode=$ACTUAL_CODE"
 
+      - name: Verify release APK signature
+        run: |
+          APK_PATH="${{ steps.package_apk.outputs.apk }}"
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -1)
+          if [ -z "$APKSIGNER" ]; then
+            echo "::error::apksigner not found in Android SDK build-tools"
+            exit 1
+          fi
+          "$APKSIGNER" verify --verbose "$APK_PATH"
+
       - name: Upload Release APK
         uses: actions/upload-artifact@v4
         with:
@@ -145,12 +167,7 @@ jobs:
 
           # Check if release already exists
           if gh release view "$TAG" > /dev/null 2>&1; then
-            echo "Release $TAG already exists, cleaning previous APK assets..."
-            for ASSET_ID in $(gh release view "$TAG" --json assets --jq '.assets[] | select(.name | endswith(".apk")) | .id'); do
-              gh api "repos/${{ github.repository }}/releases/assets/${ASSET_ID}" -X DELETE
-            done
-
-            echo "Uploading current APK..."
+            echo "Release $TAG already exists, uploading current APK with --clobber..."
             gh release upload "$TAG" "$APK_PATH" --clobber
           else
             echo "Creating new release $TAG..."
