@@ -1,5 +1,6 @@
 package dev.minios.ocremote
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -91,6 +92,10 @@ class MainActivity : ComponentActivity() {
         terminalKeyInterceptor = interceptor
     }
 
+    // Lint flags ComponentActivity.dispatchKeyEvent as RestrictedApi, but overriding
+    // dispatchKeyEvent is the supported way to intercept hardware keys at the Activity
+    // level — required by terminal mode (volume keys as virtual Ctrl/Fn).
+    @SuppressLint("RestrictedApi")
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (terminalKeyInterceptor?.invoke(event) == true) {
             return true

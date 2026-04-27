@@ -532,4 +532,9 @@
     <string name="home_local_run_background_label">在后台运行服务器</string>
     <string name="home_local_run_background_desc">使用 Termux 后台任务模式启动本地运行环境</string>
     <string name="home_local_auto_start_requires_background">自动启动需要后台模式</string>
+    <string name="session_agent_none">代理</string>
+    <string name="session_time_now">现在</string>
+    <string name="session_time_minutes">%1$d分钟</string>
+    <string name="session_time_hours">%1$d小时</string>
+    <string name="session_time_days">%1$d天</string>
 </resources>
