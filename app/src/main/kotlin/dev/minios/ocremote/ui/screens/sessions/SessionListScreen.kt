@@ -51,8 +51,10 @@ import androidx.activity.compose.BackHandler
 import androidx.hilt.navigation.compose.hiltViewModel
 import dev.minios.ocremote.R
 import dev.minios.ocremote.data.api.FileNode
+import dev.minios.ocremote.data.preferences.SessionScope
 import dev.minios.ocremote.domain.model.Project
 import dev.minios.ocremote.domain.model.SessionStatus
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
@@ -64,6 +66,7 @@ import dev.minios.ocremote.ui.screens.sessions.components.ActiveConversationsBan
 import dev.minios.ocremote.ui.screens.sessions.components.McpManagementSheet
 import dev.minios.ocremote.ui.screens.sessions.components.ProjectGroupHeader
 import dev.minios.ocremote.ui.screens.sessions.components.SessionListTopControls
+import dev.minios.ocremote.ui.screens.sessions.components.SessionScopeSegmentedControl
 
 @Composable
 private fun isAmoledTheme(): Boolean {
@@ -134,6 +137,15 @@ fun SessionListScreen(
     val isAmoled = isAmoledTheme()
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    val archiveSuccessFmt = stringResource(R.string.sessions_archive_success)
+    val restoreSuccessFmt = stringResource(R.string.sessions_restore_success)
+    val undoLabel = stringResource(R.string.sessions_undo_action)
+    val archiveFailedMsg = stringResource(R.string.sessions_archive_failed)
+    val restoreFailedMsg = stringResource(R.string.sessions_restore_failed)
+    val untitledLabel = stringResource(R.string.session_untitled)
+
     // Navigate to newly created session
     LaunchedEffect(viewModel) {
         viewModel.navigateToSession
@@ -141,6 +153,56 @@ fun SessionListScreen(
                 onNavigateToChat(sessionId, false)
             }
             .launchIn(this)
+    }
+
+    LaunchedEffect(viewModel) {
+        viewModel.undoState.collect { event ->
+            // Dismiss any in-flight snackbar so the new event always wins.
+            snackbarHostState.currentSnackbarData?.dismiss()
+
+            // Use Material Short (~4s) instead of exact 5s per design decision.
+            val duration = SnackbarDuration.Short
+
+            when (event) {
+                is UndoAction.Archive -> {
+                    val displayTitle = event.title.ifBlank { untitledLabel }
+                    val result = snackbarHostState.showSnackbar(
+                        message = String.format(archiveSuccessFmt, displayTitle),
+                        actionLabel = undoLabel,
+                        withDismissAction = false,
+                        duration = duration,
+                    )
+                    if (result == SnackbarResult.ActionPerformed) {
+                        viewModel.restoreSession(event.sessionId)
+                    }
+                }
+                is UndoAction.Restore -> {
+                    val displayTitle = event.title.ifBlank { untitledLabel }
+                    val result = snackbarHostState.showSnackbar(
+                        message = String.format(restoreSuccessFmt, displayTitle),
+                        actionLabel = undoLabel,
+                        withDismissAction = false,
+                        duration = duration,
+                    )
+                    if (result == SnackbarResult.ActionPerformed) {
+                        viewModel.archiveSession(event.sessionId)
+                    }
+                }
+                is UndoAction.Failure -> {
+                    val msg = when (event.messageResId) {
+                        R.string.sessions_archive_failed -> archiveFailedMsg
+                        R.string.sessions_restore_failed -> restoreFailedMsg
+                        else -> archiveFailedMsg
+                    }
+                    snackbarHostState.showSnackbar(
+                        message = msg,
+                        actionLabel = null,
+                        withDismissAction = true,
+                        duration = duration,
+                    )
+                }
+            }
+        }
     }
 
     // Rename dialog state
@@ -165,6 +227,7 @@ fun SessionListScreen(
     }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
         topBar = {
             if (uiState.isSelectionMode) {
                 TopAppBar(
@@ -319,6 +382,13 @@ fun SessionListScreen(
                         )
 
                         if (!uiState.isSelectionMode) {
+                            SessionScopeSegmentedControl(
+                                currentScope = uiState.scope,
+                                archivedCount = uiState.archivedCount,
+                                onScopeChange = viewModel::setScope,
+                                modifier = Modifier.padding(top = 4.dp),
+                            )
+
                             SessionListTopControls(
                                 searchQuery = uiState.searchQuery,
                                 onSearchQueryChange = viewModel::setSearchQuery,
@@ -326,6 +396,7 @@ fun SessionListScreen(
                                 onSortChange = viewModel::setSort,
                                 filter = uiState.filter,
                                 onFilterChange = viewModel::setFilter,
+                                scope = uiState.scope,
                             )
                         }
 
@@ -345,24 +416,35 @@ fun SessionListScreen(
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically)
                             ) {
+                                val isArchivedEmpty = uiState.scope == SessionScope.ARCHIVED && uiState.archivedCount == 0
                                 Icon(
-                                    imageVector = Icons.Default.FilterList,
+                                    imageVector = if (isArchivedEmpty) Icons.Default.Archive else Icons.Default.FilterList,
                                     contentDescription = null,
                                     modifier = Modifier.size(64.dp),
                                     tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
                                 )
                                 Text(
-                                    text = stringResource(R.string.sessions_filtered_empty),
+                                    text = if (isArchivedEmpty) {
+                                        stringResource(R.string.sessions_archived_empty)
+                                    } else {
+                                        stringResource(R.string.sessions_filtered_empty)
+                                    },
                                     style = MaterialTheme.typography.bodyLarge,
                                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                                 )
                                 Text(
-                                    text = stringResource(R.string.sessions_filtered_empty_hint),
+                                    text = if (isArchivedEmpty) {
+                                        stringResource(R.string.sessions_archived_empty_hint)
+                                    } else {
+                                        stringResource(R.string.sessions_filtered_empty_hint)
+                                    },
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
                                 )
-                                Button(onClick = { viewModel.clearFilter() }) {
-                                    Text(stringResource(R.string.sessions_clear_filter))
+                                if (!isArchivedEmpty) {
+                                    Button(onClick = { viewModel.clearFilter() }) {
+                                        Text(stringResource(R.string.sessions_clear_filter))
+                                    }
                                 }
                             }
                         } else {
@@ -443,6 +525,7 @@ fun SessionListScreen(
                                             projectName = dirLabel,
                                             isSelectionMode = uiState.isSelectionMode,
                                             isSelected = item.session.id in uiState.selectedIds,
+                                            currentScope = uiState.scope,
                                             onClick = {
                                                 if (uiState.isSelectionMode) {
                                                     viewModel.toggleSelection(item.session.id)
@@ -665,6 +748,7 @@ private fun SessionRowWithSubagents(
     projectName: String?,
     isSelectionMode: Boolean,
     isSelected: Boolean,
+    currentScope: SessionScope,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     onRename: () -> Unit,
@@ -687,6 +771,7 @@ private fun SessionRowWithSubagents(
             projectName = projectName,
             isSelectionMode = isSelectionMode,
             isSelected = isSelected,
+            currentScope = currentScope,
             onClick = onClick,
             onLongClick = onLongClick,
             onRename = onRename,
@@ -1516,6 +1601,15 @@ internal fun sessionRowMenuActions(isArchived: Boolean): List<SessionRowMenuActi
     }
 }
 
+internal fun resolveSwipeLeftAction(
+    scope: SessionScope,
+    onArchive: () -> Unit,
+    onRestore: () -> Unit,
+): () -> Unit = when (scope) {
+    SessionScope.INBOX -> onArchive
+    SessionScope.ARCHIVED -> onRestore
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun SessionRow(
@@ -1523,6 +1617,7 @@ private fun SessionRow(
     projectName: String? = null,
     isSelectionMode: Boolean,
     isSelected: Boolean,
+    currentScope: SessionScope,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     onRename: () -> Unit,
@@ -1547,7 +1642,7 @@ private fun SessionRow(
                     false // don't settle — snap back
                 }
                 SwipeToDismissBoxValue.EndToStart -> {
-                    onDelete()
+                    resolveSwipeLeftAction(currentScope, onArchive, onRestore).invoke()
                     false
                 }
                 SwipeToDismissBoxValue.Settled -> false
@@ -1780,17 +1875,32 @@ private fun SessionRow(
 
             // Rename background (swipe right)
             val renameColor = MaterialTheme.colorScheme.primaryContainer
-            // Delete background (swipe left)
-            val deleteColor = MaterialTheme.colorScheme.errorContainer
+            // Scope-dependent archive/restore background (swipe left)
+            val swipeLeftColor = when (currentScope) {
+                SessionScope.INBOX -> MaterialTheme.colorScheme.tertiaryContainer
+                SessionScope.ARCHIVED -> MaterialTheme.colorScheme.secondaryContainer
+            }
+            val swipeLeftIcon = when (currentScope) {
+                SessionScope.INBOX -> Icons.Default.Archive
+                SessionScope.ARCHIVED -> Icons.Default.Unarchive
+            }
+            val swipeLeftLabel = when (currentScope) {
+                SessionScope.INBOX -> stringResource(R.string.sessions_archive_action)
+                SessionScope.ARCHIVED -> stringResource(R.string.sessions_restore_action)
+            }
+            val swipeLeftTint = when (currentScope) {
+                SessionScope.INBOX -> MaterialTheme.colorScheme.onTertiaryContainer
+                SessionScope.ARCHIVED -> MaterialTheme.colorScheme.onSecondaryContainer
+            }
 
             val bgColor = when (direction) {
                 SwipeToDismissBoxValue.StartToEnd -> renameColor
-                SwipeToDismissBoxValue.EndToStart -> deleteColor
+                SwipeToDismissBoxValue.EndToStart -> swipeLeftColor
                 else -> Color.Transparent
             }
             val iconTint = when (direction) {
                 SwipeToDismissBoxValue.StartToEnd -> MaterialTheme.colorScheme.onPrimaryContainer
-                SwipeToDismissBoxValue.EndToStart -> MaterialTheme.colorScheme.onErrorContainer
+                SwipeToDismissBoxValue.EndToStart -> swipeLeftTint
                 else -> Color.Transparent
             }
 
@@ -1830,13 +1940,13 @@ private fun SessionRow(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                stringResource(R.string.delete),
+                                swipeLeftLabel,
                                 style = MaterialTheme.typography.labelMedium,
                                 color = iconTint
                             )
                             Icon(
-                                Icons.Default.Delete,
-                                contentDescription = stringResource(R.string.delete),
+                                swipeLeftIcon,
+                                contentDescription = swipeLeftLabel,
                                 tint = iconTint,
                                 modifier = Modifier.size(20.dp)
                             )

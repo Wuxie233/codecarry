@@ -53,6 +53,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import dev.minios.ocremote.R
 import dev.minios.ocremote.data.preferences.SessionFilter
+import dev.minios.ocremote.data.preferences.SessionScope
 import dev.minios.ocremote.data.preferences.SessionSort
 
 @Composable
@@ -63,6 +64,7 @@ fun SessionListTopControls(
     onSortChange: (SessionSort) -> Unit,
     filter: SessionFilter,
     onFilterChange: (SessionFilter) -> Unit,
+    scope: SessionScope,
     modifier: Modifier = Modifier,
 ) {
     val colors = MaterialTheme.colorScheme
@@ -176,33 +178,35 @@ fun SessionListTopControls(
             }
         }
 
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(filterScrollState)
-                .padding(horizontal = 16.dp)
-                .heightIn(min = 48.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            SessionFilter.entries.forEach { option ->
-                FilterChip(
-                    selected = filter == option,
-                    onClick = { onFilterChange(option) },
-                    label = { Text(text = filterLabel(option)) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        containerColor = if (isAmoled) Color.Black else colors.surface,
-                        selectedContainerColor = colors.primaryContainer,
-                    ),
-                    border = FilterChipDefaults.filterChipBorder(
-                        enabled = true,
+        if (scope == SessionScope.INBOX) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(filterScrollState)
+                    .padding(horizontal = 16.dp)
+                    .heightIn(min = 48.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                SessionFilter.entries.forEach { option ->
+                    FilterChip(
                         selected = filter == option,
-                        borderColor = if (isAmoled) colors.outlineVariant else colors.outlineVariant.copy(alpha = 0.6f),
-                        selectedBorderColor = if (isAmoled) colors.primaryContainer else colors.outlineVariant.copy(alpha = 0.3f),
-                        borderWidth = 1.dp,
-                        selectedBorderWidth = 1.dp,
-                    ),
-                )
+                        onClick = { onFilterChange(option) },
+                        label = { Text(text = filterLabel(option)) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            containerColor = if (isAmoled) Color.Black else colors.surface,
+                            selectedContainerColor = colors.primaryContainer,
+                        ),
+                        border = FilterChipDefaults.filterChipBorder(
+                            enabled = true,
+                            selected = filter == option,
+                            borderColor = if (isAmoled) colors.outlineVariant else colors.outlineVariant.copy(alpha = 0.6f),
+                            selectedBorderColor = if (isAmoled) colors.primaryContainer else colors.outlineVariant.copy(alpha = 0.3f),
+                            borderWidth = 1.dp,
+                            selectedBorderWidth = 1.dp,
+                        ),
+                    )
+                }
             }
         }
     }
@@ -262,5 +266,4 @@ private fun filterLabel(filter: SessionFilter): String = when (filter) {
     SessionFilter.WORKING -> stringResource(R.string.sessions_filter_working)
     SessionFilter.HAS_CHANGES -> stringResource(R.string.sessions_filter_has_changes)
     SessionFilter.HAS_ERRORS -> stringResource(R.string.sessions_filter_has_errors)
-    SessionFilter.ARCHIVED -> stringResource(R.string.sessions_filter_archived)
 }

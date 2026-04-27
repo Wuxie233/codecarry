@@ -1,6 +1,7 @@
 package dev.minios.ocremote.data.preferences
 
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import androidx.datastore.preferences.core.edit
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.TestScope
@@ -82,6 +83,47 @@ class SessionListPreferencesRepositoryTest {
         val prefs = repo.preferences.first()
         assertEquals(SessionSort.TITLE_ALPHA, prefs.sort)
         assertEquals(SessionFilter.HAS_ERRORS, prefs.filter)
+    }
+
+    @Test
+    fun `setScope persists value to ARCHIVED then INBOX`() = testScope.runTest {
+        val repo = createRepo()
+
+        repo.setScope(SessionScope.ARCHIVED)
+        assertEquals(SessionScope.ARCHIVED, repo.preferences.first().scope)
+
+        repo.setScope(SessionScope.INBOX)
+        assertEquals(SessionScope.INBOX, repo.preferences.first().scope)
+    }
+
+    @Test
+    fun `default scope is INBOX`() = testScope.runTest {
+        val repo = createRepo()
+        assertEquals(SessionScope.INBOX, repo.preferences.first().scope)
+    }
+
+    @Test
+    fun `legacy filter ARCHIVED migrates to scope ARCHIVED and filter ALL`() = testScope.runTest {
+        // Seed the underlying DataStore directly with the legacy persisted string
+        // before constructing the repository instance under test.
+        val file = tmpFolder.newFile("legacy_session_list_prefs.preferences_pb")
+        val seedDataStore = androidx.datastore.preferences.core.PreferenceDataStoreFactory.create(
+            scope = testScope.backgroundScope,
+            produceFile = { file },
+        )
+        seedDataStore.edit { mutable ->
+            mutable[androidx.datastore.preferences.core.stringPreferencesKey("filter")] = "ARCHIVED"
+        }
+        // Build a repository against the seeded DataStore. Reusing the instance
+        // avoids DataStore's single-active-instance-per-file guard in tests.
+        val repo = SessionListPreferencesRepository(
+            dataStore = seedDataStore,
+        )
+
+        val migrated = repo.preferences.first()
+
+        assertEquals(SessionScope.ARCHIVED, migrated.scope)
+        assertEquals(SessionFilter.ALL, migrated.filter)
     }
 
     @Test
