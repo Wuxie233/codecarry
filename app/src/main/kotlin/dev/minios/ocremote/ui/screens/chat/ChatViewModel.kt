@@ -838,14 +838,23 @@ class ChatViewModel @Inject constructor(
 
     fun abortSession() {
         viewModelScope.launch {
-            try {
-                api.abortSession(conn, sessionId, directory = sessionDirectory)
-                if (BuildConfig.DEBUG) Log.d(TAG, "Aborted session $sessionId")
-                // Optimistically update session status to Idle so UI reflects change immediately
-                eventReducer.updateSessionStatus(sessionId, SessionStatus.Idle)
+            val outcome: AbortOutcome = try {
+                val ok = api.abortSession(conn, sessionId, directory = sessionDirectory)
+                if (ok) AbortOutcome.Success else AbortOutcome.Unsuccessful
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to abort session", e)
+                AbortOutcome.Failed(e)
             }
+            handleAbortResult(
+                outcome = outcome,
+                onIdle = {
+                    if (BuildConfig.DEBUG) Log.d(TAG, "Aborted session $sessionId")
+                    eventReducer.updateSessionStatus(sessionId, SessionStatus.Idle)
+                },
+                onError = { message ->
+                    _error.value = message
+                },
+            )
         }
     }
 
@@ -1086,12 +1095,46 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    /** Fork the current session. Returns the new session or null. */
+    /**
+     * Fork the current session.
+     *
+     * Inherits the source session's project directory via the existing
+     * `x-opencode-directory` header so the forked session lands in the same
+     * project rather than the server's root context. The returned session is
+     * merged into [eventReducer] so the session list updates immediately,
+     * mirroring [createNewSession].
+     *
+     * Returns the new session or `null` on failure.
+     */
     fun forkSession(onResult: (Session?) -> Unit) {
         viewModelScope.launch {
             try {
-                val session = api.forkSession(conn, sessionId)
-                if (BuildConfig.DEBUG) Log.d(TAG, "Forked session $sessionId -> ${session.id}")
+                if (!sessionLoaded.isCompleted) {
+                    sessionLoaded.await()
+                }
+                val effectiveDirectory = ForkDirectoryResolver.resolve(
+                    sessionDirectory = sessionDirectory,
+                    sessionId = sessionId,
+                    reducerSessions = eventReducer.sessions.value,
+                )
+                if (effectiveDirectory == null) {
+                    Log.w(
+                        TAG,
+                        "Forking session $sessionId without directory context — server will use its default project"
+                    )
+                }
+                val session = api.forkSession(
+                    conn = conn,
+                    sessionId = sessionId,
+                    directory = effectiveDirectory,
+                )
+                eventReducer.setSessions(serverId, listOf(session))
+                if (BuildConfig.DEBUG) {
+                    Log.d(
+                        TAG,
+                        "Forked session $sessionId -> ${session.id} (directory=$effectiveDirectory)"
+                    )
+                }
                 onResult(session)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to fork session", e)

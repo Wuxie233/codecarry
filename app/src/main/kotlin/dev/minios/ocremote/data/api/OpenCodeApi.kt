@@ -264,13 +264,24 @@ class OpenCodeApi @Inject constructor(
     /**
      * Fork a session (create a new session from a message point).
      * POST /session/{sessionId}/fork
+     *
+     * @param directory The source session's project directory, sent as
+     *   `x-opencode-directory` so the server creates the forked session in
+     *   the correct project context. When `null`, the server falls back to
+     *   its default/root context (legacy behaviour).
      */
-    suspend fun forkSession(conn: ServerConnection, sessionId: String, messageId: String? = null): Session {
+    suspend fun forkSession(
+        conn: ServerConnection,
+        sessionId: String,
+        messageId: String? = null,
+        directory: String? = null,
+    ): Session {
         val body = buildMap<String, String> {
             messageId?.let { put("messageID", it) }
         }
         return httpClient.post("${conn.baseUrl}/session/$sessionId/fork") {
             conn.authHeader?.let { header("Authorization", it) }
+            directory?.let { header("x-opencode-directory", android.net.Uri.encode(it)) }
             contentType(ContentType.Application.Json)
             setBody(body)
         }.body()
