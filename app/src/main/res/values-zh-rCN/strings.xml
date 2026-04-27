@@ -196,6 +196,19 @@
     <string name="sessions_filter_has_changes">有改动</string>
     <string name="sessions_filter_has_errors">有错误</string>
     <string name="sessions_filter_archived">已归档</string>
+    <!-- Swipe-to-archive: 顶部 scope 切换 + 撤销 snackbar -->
+    <string name="sessions_scope_inbox">收件箱</string>
+    <string name="sessions_scope_archived">归档</string>
+    <string name="sessions_scope_archived_with_count">归档 (%1$d)</string>
+    <string name="sessions_archive_action">归档</string>
+    <string name="sessions_restore_action">还原</string>
+    <string name="sessions_undo_action">撤销</string>
+    <string name="sessions_archive_success">已归档 "%1$s"</string>
+    <string name="sessions_restore_success">已还原 "%1$s"</string>
+    <string name="sessions_archive_failed">归档失败,请重试</string>
+    <string name="sessions_restore_failed">还原失败,请重试</string>
+    <string name="sessions_archived_empty">暂无归档会话</string>
+    <string name="sessions_archived_empty_hint">归档后的会话会出现在这里</string>
     <string name="sessions_project_actions">项目操作</string>
     <string name="sessions_project_new_here">在此项目中新建会话</string>
     <string name="sessions_project_pin">置顶项目</string>

@@ -3,6 +3,7 @@ package dev.minios.ocremote.ui.screens.sessions
 import android.util.Log
 import androidx.lifecycle.SavedStateHandle
 import dev.minios.ocremote.BuildConfig
+import dev.minios.ocremote.R
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -13,6 +14,7 @@ import dev.minios.ocremote.data.preferences.SessionFilter
 import dev.minios.ocremote.data.preferences.SessionListPreferences
 import dev.minios.ocremote.data.preferences.SessionListPreferencesRepository
 import dev.minios.ocremote.data.preferences.SessionSort
+import dev.minios.ocremote.data.preferences.SessionScope
 import dev.minios.ocremote.data.repository.EventReducer
 import dev.minios.ocremote.data.repository.SettingsRepository
 import dev.minios.ocremote.domain.model.Project
@@ -21,6 +23,7 @@ import dev.minios.ocremote.domain.model.SessionStatus
 import dev.minios.ocremote.domain.model.SseEvent
 import dev.minios.ocremote.ui.screens.sessions.components.ActiveConversationItem
 import dev.minios.ocremote.ui.screens.sessions.components.ConversationStatus
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -28,6 +31,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.async
@@ -61,6 +65,8 @@ data class SessionListUiState(
 
     val sort: SessionSort = SessionSort.RECENT_UPDATED,
     val filter: SessionFilter = SessionFilter.ALL,
+    val scope: SessionScope = SessionScope.INBOX,
+    val archivedCount: Int = 0,
     val searchQuery: String = "",
     val hasAnySessions: Boolean = false,
     val isFilteredEmpty: Boolean = false,
@@ -140,7 +146,26 @@ internal fun matchesSessionFilter(item: SessionItem, filter: SessionFilter): Boo
         SessionFilter.WORKING -> !session.isArchived && item.status is SessionStatus.Busy
         SessionFilter.HAS_CHANGES -> !session.isArchived && ((session.summary?.additions ?: 0) + (session.summary?.deletions ?: 0) > 0)
         SessionFilter.HAS_ERRORS -> !session.isArchived && item.status is SessionStatus.Retry
-        SessionFilter.ARCHIVED -> session.isArchived
+    }
+}
+
+internal fun matchesScope(item: SessionItem, scope: SessionScope): Boolean {
+    return when (scope) {
+        SessionScope.INBOX -> !item.session.isArchived
+        SessionScope.ARCHIVED -> item.session.isArchived
+    }
+}
+
+internal fun matchesScopeAndFilter(
+    item: SessionItem,
+    scope: SessionScope,
+    filter: SessionFilter,
+): Boolean {
+    if (!matchesScope(item, scope)) return false
+    // In Archived scope, status filters are meaningless (the design forces filter=ALL).
+    return when (scope) {
+        SessionScope.ARCHIVED -> true
+        SessionScope.INBOX -> matchesSessionFilter(item, filter)
     }
 }
 
@@ -208,6 +233,8 @@ class SessionListViewModel @Inject constructor(
     private val _showHiddenProjects = MutableStateFlow(false)
     private val _navigateToSession = MutableSharedFlow<String>(extraBufferCapacity = 1)
     val navigateToSession: SharedFlow<String> = _navigateToSession.asSharedFlow()
+    private val _undoState = Channel<UndoAction>(Channel.BUFFERED)
+    internal val undoState: kotlinx.coroutines.flow.Flow<UndoAction> = _undoState.receiveAsFlow()
     private val prefsFlow = preferencesRepo.preferences.stateIn(
         viewModelScope,
         SharingStarted.Eagerly,
@@ -251,6 +278,7 @@ class SessionListViewModel @Inject constructor(
 
         val serverSessionIds = serverSessions[serverId] ?: emptySet()
         val serverScopedSessions = allSessions.filter { it.id in serverSessionIds }
+        val archivedCount = serverScopedSessions.count { it.parentId == null && it.isArchived }
         val sessionsById = serverScopedSessions.associateBy { it.id }
         val itemsById = serverScopedSessions.associate { session ->
             session.id to SessionItem(
@@ -285,7 +313,9 @@ class SessionListViewModel @Inject constructor(
             val groupedRoots = rootSessions.filter { normalizeDirectory(it.directory) == directory }
 
             val filteredRoots = groupedRoots
-                .filter { session -> matchesFilter(itemsById.getValue(session.id), filter) }
+                .filter { session ->
+                    matchesScopeAndFilter(itemsById.getValue(session.id), prefs.scope, filter)
+                }
                 .filter { session ->
                     matchesSearch(
                         session = session,
@@ -299,7 +329,7 @@ class SessionListViewModel @Inject constructor(
             val filteredRootItems = filteredRoots.map { itemsById.getValue(it.id) }
             val subagentRowsByParent = filteredRoots.associate { root ->
                 val childItems = (childBuckets[root.id] ?: emptyList())
-                    .filter { child -> matchesChildArchiveMode(child, filter) }
+                    .filter { child -> matchesChildScope(child, prefs.scope) }
                     .map { itemsById.getValue(it.id) }
                     .sortedWith(sessionItemComparator(prefs.sort))
                 root.id to partitionSubagentsByActivity(childItems)
@@ -368,6 +398,8 @@ class SessionListViewModel @Inject constructor(
             sessionGroups = legacySessionGroups,
             sort = prefs.sort,
             filter = filter,
+            scope = prefs.scope,
+            archivedCount = archivedCount,
             searchQuery = searchQuery,
             hasAnySessions = emptyState.hasAnySessions,
             isFilteredEmpty = emptyState.isFilteredEmpty,
@@ -453,6 +485,7 @@ class SessionListViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 _filter.value = SessionFilter.ALL
+                preferencesRepo.setScope(SessionScope.INBOX)
                 val session = api.createSession(conn, directory = directory)
                 eventReducer.setSessions(serverId, listOf(session))
                 if (BuildConfig.DEBUG) Log.d(TAG, "Created new session: ${session.id}")
@@ -510,6 +543,12 @@ class SessionListViewModel @Inject constructor(
 
     fun setFilter(f: SessionFilter) {
         _filter.value = if (_filter.value == f && f != SessionFilter.ALL) SessionFilter.ALL else f
+    }
+
+    fun setScope(scope: SessionScope) {
+        viewModelScope.launch {
+            preferencesRepo.setScope(scope)
+        }
     }
 
     fun clearFilter() {
@@ -582,24 +621,30 @@ class SessionListViewModel @Inject constructor(
 
     fun archiveSession(sessionId: String) {
         viewModelScope.launch {
+            val title = serverScopedSessions().firstOrNull { it.id == sessionId }?.title.orEmpty()
             try {
                 api.archiveSession(conn, sessionId)
                 loadSessions()
+                _undoState.send(UndoAction.Archive(sessionId = sessionId, title = title))
             } catch (e: Exception) {
                 logErrorCompat(TAG, "Failed to archive session $sessionId", e)
                 _error.value = e.message ?: "Failed to archive session"
+                _undoState.send(UndoAction.Failure(messageResId = R.string.sessions_archive_failed))
             }
         }
     }
 
     fun restoreSession(sessionId: String) {
         viewModelScope.launch {
+            val title = serverScopedSessions().firstOrNull { it.id == sessionId }?.title.orEmpty()
             try {
                 api.restoreSession(conn, sessionId)
                 loadSessions()
+                _undoState.send(UndoAction.Restore(sessionId = sessionId, title = title))
             } catch (e: Exception) {
                 logErrorCompat(TAG, "Failed to restore session $sessionId", e)
                 _error.value = e.message ?: "Failed to restore session"
+                _undoState.send(UndoAction.Failure(messageResId = R.string.sessions_restore_failed))
             }
         }
     }
@@ -755,14 +800,10 @@ class SessionListViewModel @Inject constructor(
         }
     }
 
-    private fun matchesFilter(item: SessionItem, filter: SessionFilter): Boolean {
-        return matchesSessionFilter(item, filter)
-    }
-
-    private fun matchesChildArchiveMode(session: Session, filter: SessionFilter): Boolean {
-        return when (filter) {
-            SessionFilter.ARCHIVED -> session.isArchived
-            else -> !session.isArchived
+    private fun matchesChildScope(session: Session, scope: SessionScope): Boolean {
+        return when (scope) {
+            SessionScope.ARCHIVED -> session.isArchived
+            SessionScope.INBOX -> !session.isArchived
         }
     }
 
@@ -812,6 +853,11 @@ class SessionListViewModel @Inject constructor(
 
     private fun displayNameFromDirectory(directory: String): String {
         return if (directory == "/") "/" else directory.substringAfterLast('/').ifEmpty { directory }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        _undoState.close()
     }
 }
 

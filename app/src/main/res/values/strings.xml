@@ -121,6 +121,19 @@
     <string name="sessions_filter_has_changes">Has changes</string>
     <string name="sessions_filter_has_errors">Has errors</string>
     <string name="sessions_filter_archived">Archived</string>
+    <!-- Swipe-to-archive: scope segmented control + undo snackbar -->
+    <string name="sessions_scope_inbox">Inbox</string>
+    <string name="sessions_scope_archived">Archived</string>
+    <string name="sessions_scope_archived_with_count">Archived (%1$d)</string>
+    <string name="sessions_archive_action">Archive</string>
+    <string name="sessions_restore_action">Restore</string>
+    <string name="sessions_undo_action">Undo</string>
+    <string name="sessions_archive_success">Archived "%1$s"</string>
+    <string name="sessions_restore_success">Restored "%1$s"</string>
+    <string name="sessions_archive_failed">Failed to archive, please retry</string>
+    <string name="sessions_restore_failed">Failed to restore, please retry</string>
+    <string name="sessions_archived_empty">No archived sessions</string>
+    <string name="sessions_archived_empty_hint">Sessions you archive will appear here</string>
     <string name="sessions_no_folders">No folders found</string>
     <string name="sessions_empty_directory">Empty directory</string>
     <string name="sessions_working">Working</string>

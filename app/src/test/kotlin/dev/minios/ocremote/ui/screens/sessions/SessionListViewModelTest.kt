@@ -1,6 +1,7 @@
 package dev.minios.ocremote.ui.screens.sessions
 
 import dev.minios.ocremote.data.preferences.SessionFilter
+import dev.minios.ocremote.data.preferences.SessionScope
 import dev.minios.ocremote.domain.model.Session
 import dev.minios.ocremote.domain.model.SessionStatus
 import org.junit.Assert.assertEquals
@@ -11,19 +12,48 @@ import org.junit.Test
 class SessionListViewModelTest {
 
     @Test
-    fun archivedSessionsOnlyMatchArchivedFilter() {
+    fun archivedSessionsAreHiddenInInboxScope() {
         val item = SessionItem(session = testSession(id = "archived", archived = 1_000L), status = SessionStatus.Idle)
 
-        assertFalse(matchesSessionFilter(item, SessionFilter.ALL))
-        assertTrue(matchesSessionFilter(item, SessionFilter.ARCHIVED))
+        assertFalse(matchesScopeAndFilter(item, SessionScope.INBOX, SessionFilter.ALL))
+        assertTrue(matchesScopeAndFilter(item, SessionScope.ARCHIVED, SessionFilter.ALL))
     }
 
     @Test
-    fun restoredSessionsReturnToActiveFiltersWhenArchivedTimeClears() {
-        val item = SessionItem(session = testSession(id = "restored", archived = 0L), status = SessionStatus.Idle)
+    fun activeSessionsAreHiddenInArchivedScope() {
+        val item = SessionItem(session = testSession(id = "active", archived = null), status = SessionStatus.Idle)
 
-        assertTrue(matchesSessionFilter(item, SessionFilter.ALL))
-        assertFalse(matchesSessionFilter(item, SessionFilter.ARCHIVED))
+        assertTrue(matchesScopeAndFilter(item, SessionScope.INBOX, SessionFilter.ALL))
+        assertFalse(matchesScopeAndFilter(item, SessionScope.ARCHIVED, SessionFilter.ALL))
+    }
+
+    @Test
+    fun statusFilterIsIgnoredInArchivedScope() {
+        // An archived idle session would not match WORKING in inbox,
+        // but in Archived scope status filters are forced to ALL.
+        val item = SessionItem(session = testSession(id = "a", archived = 1_000L), status = SessionStatus.Idle)
+
+        assertTrue(matchesScopeAndFilter(item, SessionScope.ARCHIVED, SessionFilter.WORKING))
+        assertTrue(matchesScopeAndFilter(item, SessionScope.ARCHIVED, SessionFilter.HAS_ERRORS))
+    }
+
+    @Test
+    fun inboxScopeStillRespectsStatusFilter() {
+        val idleActive = SessionItem(session = testSession(id = "idle", archived = null), status = SessionStatus.Idle)
+
+        assertTrue(matchesScopeAndFilter(idleActive, SessionScope.INBOX, SessionFilter.ALL))
+        assertFalse(matchesScopeAndFilter(idleActive, SessionScope.INBOX, SessionFilter.WORKING))
+    }
+
+    @Test
+    fun matchesScopeReportsArchivedFlagDirectly() {
+        val active = SessionItem(session = testSession(id = "a", archived = null), status = SessionStatus.Idle)
+        val archived = SessionItem(session = testSession(id = "b", archived = 1L), status = SessionStatus.Idle)
+
+        assertTrue(matchesScope(active, SessionScope.INBOX))
+        assertFalse(matchesScope(active, SessionScope.ARCHIVED))
+        assertFalse(matchesScope(archived, SessionScope.INBOX))
+        assertTrue(matchesScope(archived, SessionScope.ARCHIVED))
     }
 
     @Test
