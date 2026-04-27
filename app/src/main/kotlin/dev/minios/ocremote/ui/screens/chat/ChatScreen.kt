@@ -1474,7 +1474,7 @@ fun ChatScreen(
                     }
                 },
                 actions = {
-                    if (uiState.sessionStatus is SessionStatus.Busy) {
+                    if (uiState.sessionStatus.isInterruptible) {
                         IconButton(onClick = { viewModel.abortSession() }) {
                             Icon(
                                 Icons.Default.Stop,
@@ -2317,7 +2317,10 @@ fun ChatScreen(
 
                         if (uiState.sessionStatus is SessionStatus.Retry) {
                             item(key = "retry_status") {
-                                RetryStatusBanner(retry = uiState.sessionStatus as SessionStatus.Retry)
+                                RetryStatusBanner(
+                                    retry = uiState.sessionStatus as SessionStatus.Retry,
+                                    onStop = { viewModel.abortSession() },
+                                )
                             }
                         }
 
@@ -4743,7 +4746,10 @@ private fun extractToolOutput(tool: Part.Tool): String {
 }
 
 @Composable
-private fun RetryStatusBanner(retry: SessionStatus.Retry) {
+private fun RetryStatusBanner(
+    retry: SessionStatus.Retry,
+    onStop: () -> Unit,
+) {
     val isAmoled = isAmoledTheme()
     val retryText = stringResource(R.string.chat_retry, retry.attempt, retry.message)
 
@@ -4770,7 +4776,19 @@ private fun RetryStatusBanner(retry: SessionStatus.Retry) {
                 text = retryText,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f),
             )
+            IconButton(
+                onClick = onStop,
+                modifier = Modifier.size(28.dp)
+            ) {
+                Icon(
+                    Icons.Default.Stop,
+                    contentDescription = stringResource(R.string.chat_stop),
+                    tint = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
         }
     }
 }
