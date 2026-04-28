@@ -29,24 +29,32 @@ object McpConfigParser {
     fun parseState(filePath: String, rawJson: String): McpConfigLoadState {
         return try {
             val root = Json.parseToJsonElement(rawJson).jsonObject
-            val mcpServersElement = root["mcpServers"]
+            val mcpServersKey = when {
+                root.containsKey("mcpServers") -> "mcpServers"
+                root.containsKey("mcp") -> "mcp"
+                else -> null
+            }
+            val mcpServersElement = mcpServersKey?.let { root[it] }
                 ?: return McpConfigLoadState.Empty(
                     McpConfig(filePath = filePath, rawJson = rawJson, servers = emptyMap())
                 )
             val mcpServers = mcpServersElement as? JsonObject
-                ?: return McpConfigLoadState.Error(filePath, "Invalid mcpServers section")
+                ?: return McpConfigLoadState.Error(filePath, "Invalid $mcpServersKey section")
 
             val servers = buildMap {
                 for ((name, element) in mcpServers.entries) {
                     val obj = element as? JsonObject
                         ?: return McpConfigLoadState.Error(filePath, "Invalid MCP server entry: $name")
+                    val type = obj["type"]?.jsonPrimitive?.contentOrNull
                     val command = obj["command"]?.jsonPrimitive?.contentOrNull
-                        ?: return McpConfigLoadState.Error(filePath, "MCP server '$name' is missing required command")
+                    if (command == null && type != "remote") {
+                        return McpConfigLoadState.Error(filePath, "MCP server '$name' is missing required command")
+                    }
                     put(
                         name,
                         McpServer(
                             name = name,
-                            type = obj["type"]?.jsonPrimitive?.contentOrNull,
+                            type = type,
                             command = command,
                             args = obj["args"]?.jsonArray?.map { it.jsonPrimitive.contentOrNull.orEmpty() } ?: emptyList(),
                             enabled = obj["enabled"]?.jsonPrimitive?.booleanOrNull ?: true,
@@ -68,7 +76,12 @@ object McpConfigParser {
 
     fun serialize(config: McpConfig): String {
         val root = Json.parseToJsonElement(config.rawJson).jsonObject.toMutableMap()
-        val mcpServers = root["mcpServers"]?.jsonObject?.toMutableMap() ?: mutableMapOf()
+        val mcpServersKey = when {
+            root.containsKey("mcpServers") -> "mcpServers"
+            root.containsKey("mcp") -> "mcp"
+            else -> "mcpServers"
+        }
+        val mcpServers = (root[mcpServersKey] as? JsonObject)?.toMutableMap() ?: mutableMapOf()
 
         config.servers.forEach { (name, server) ->
             val existing = mcpServers[name]?.jsonObject?.toMutableMap() ?: mutableMapOf()
@@ -76,7 +89,7 @@ object McpConfigParser {
             mcpServers[name] = JsonObject(existing)
         }
 
-        root["mcpServers"] = JsonObject(mcpServers)
+        root[mcpServersKey] = JsonObject(mcpServers)
         return prettyJson.encodeToString(JsonObject(root))
     }
 }

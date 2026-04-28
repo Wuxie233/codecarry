@@ -10,6 +10,8 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import kotlinx.serialization.SerializationException
+import java.io.IOException
 import org.junit.Test
 import java.util.ArrayDeque
 
@@ -17,13 +19,14 @@ import java.util.ArrayDeque
 class McpViewModelTest {
 
     @Test
-    fun `load maps empty MCP config to explicit empty state`() = runTest {
+    fun loadMapsEmptyConfigToEmptyConfigStateNotEmptyGeneric() = runTest {
+        val filePath = "/workspace/project/.opencode/config.json"
         val controller = newController(
             scope = this,
             readState = { _, _ ->
                 McpConfigLoadState.Empty(
                     config = McpConfig(
-                        filePath = "/workspace/project/.opencode/config.json",
+                        filePath = filePath,
                         rawJson = "{}",
                         servers = emptyMap(),
                     )
@@ -35,18 +38,39 @@ class McpViewModelTest {
         advanceUntilIdle()
 
         val state = controller.state.value
-        assertTrue(state is McpUiState.Empty)
-        assertEquals("暂无 MCP 服务器", (state as McpUiState.Empty).title)
+        assertTrue(state is McpUiState.EmptyConfig)
+        assertEquals(filePath, (state as McpUiState.EmptyConfig).filePath)
     }
 
     @Test
-    fun `load maps fetch failure to explicit error state`() = runTest {
+    fun loadMapsNotFoundToMissingConfigState() = runTest {
+        val checkedPaths = listOf(
+            "/workspace/project/.opencode/opencode.json",
+            "/workspace/project/.opencode/config.json",
+        )
+        val controller = newController(
+            scope = this,
+            readState = { _, _ -> McpConfigLoadState.NotFound(checkedPaths) },
+        )
+
+        controller.load(testConn, "/workspace/project")
+        advanceUntilIdle()
+
+        val state = controller.state.value
+        assertTrue(state is McpUiState.MissingConfig)
+        assertEquals(checkedPaths, (state as McpUiState.MissingConfig).checkedPaths)
+    }
+
+    @Test
+    fun loadMapsParseFailureToParseErrorState() = runTest {
+        val filePath = "/workspace/project/.opencode/config.json"
         val controller = newController(
             scope = this,
             readState = { _, _ ->
                 McpConfigLoadState.Error(
-                    filePath = "/workspace/project/.opencode/config.json",
-                    message = "boom",
+                    filePath = filePath,
+                    message = "Failed to parse MCP config",
+                    cause = SerializationException("Unexpected JSON token"),
                 )
             },
         )
@@ -55,8 +79,64 @@ class McpViewModelTest {
         advanceUntilIdle()
 
         val state = controller.state.value
-        assertTrue(state is McpUiState.Error)
-        assertEquals("boom", (state as McpUiState.Error).message)
+        assertTrue(state is McpUiState.ParseError)
+        assertEquals(filePath, (state as McpUiState.ParseError).filePath)
+        assertEquals("Failed to parse MCP config", state.message)
+    }
+
+    @Test
+    fun loadMapsReadFailurePreservesLastLoaded() = runTest {
+        val errorMessage = "Failed to read OpenCode file /workspace/project/.opencode/config.json: 500"
+        val states = ArrayDeque<McpConfigLoadState>().apply {
+            add(McpConfigLoadState.Loaded(sampleConfig(command = "npx")))
+            add(
+                McpConfigLoadState.Error(
+                    filePath = "/workspace/project/.opencode/config.json",
+                    message = errorMessage,
+                    cause = IOException(errorMessage),
+                )
+            )
+        }
+        val controller = newController(
+            scope = this,
+            readState = { _, _ -> states.removeFirst() },
+        )
+
+        controller.load(testConn, "/workspace/project")
+        advanceUntilIdle()
+        controller.refresh()
+        advanceUntilIdle()
+
+        val errorState = controller.state.value
+        assertTrue(errorState is McpUiState.ReadError)
+        assertEquals(errorMessage, (errorState as McpUiState.ReadError).message)
+
+        controller.toggleServer("filesystem")
+
+        val loadedState = controller.state.value as McpUiState.Loaded
+        assertTrue(loadedState.dirty)
+        assertEquals(false, loadedState.editedServers.getValue("filesystem").enabled)
+    }
+
+    @Test
+    fun `load maps fetch failure to explicit read error state`() = runTest {
+        val controller = newController(
+            scope = this,
+            readState = { _, _ ->
+                McpConfigLoadState.Error(
+                    filePath = "/workspace/project/.opencode/config.json",
+                    message = "boom",
+                    cause = IOException("boom"),
+                )
+            },
+        )
+
+        controller.load(testConn, "/workspace/project")
+        advanceUntilIdle()
+
+        val state = controller.state.value
+        assertTrue(state is McpUiState.ReadError)
+        assertEquals("boom", (state as McpUiState.ReadError).message)
     }
 
     @Test
@@ -113,14 +193,112 @@ class McpViewModelTest {
         assertEquals("node", state.config.servers.getValue("filesystem").command)
     }
 
+    @Test
+    fun refreshAfterSaveFailurePreservesUnsavedEdits() = runTest {
+        val states = ArrayDeque<McpConfigLoadState>().apply {
+            add(McpConfigLoadState.Loaded(configWithServers("alpha" to true, "beta" to true)))
+            add(McpConfigLoadState.Loaded(configWithServers("alpha" to true, "beta" to true)))
+        }
+        val controller = newController(
+            scope = this,
+            readState = { _, _ -> states.removeFirst() },
+            writeMcpConfig = { _, _ -> Result.failure(IllegalStateException("network blip")) },
+        )
+
+        controller.load(testConn, "/workspace/project")
+        advanceUntilIdle()
+        controller.toggleServer("beta")
+        controller.save()
+        advanceUntilIdle()
+        controller.refresh()
+        advanceUntilIdle()
+
+        val state = controller.state.value as McpUiState.Loaded
+        assertTrue(state.dirty)
+        assertEquals(false, state.editedServers.getValue("beta").enabled)
+        assertEquals(true, state.editedServers.getValue("alpha").enabled)
+    }
+
+    @Test
+    fun refreshAfterServerKeysChangeDropsStaleEdits() = runTest {
+        val refreshedConfig = configWithServers("alpha" to true, "charlie" to false)
+        val states = ArrayDeque<McpConfigLoadState>().apply {
+            add(McpConfigLoadState.Loaded(configWithServers("alpha" to true, "beta" to true)))
+            add(McpConfigLoadState.Loaded(refreshedConfig))
+        }
+        val controller = newController(
+            scope = this,
+            readState = { _, _ -> states.removeFirst() },
+        )
+
+        controller.load(testConn, "/workspace/project")
+        advanceUntilIdle()
+        controller.toggleServer("beta")
+        controller.refresh()
+        advanceUntilIdle()
+
+        val state = controller.state.value as McpUiState.Loaded
+        assertEquals(false, state.dirty)
+        assertEquals(refreshedConfig.servers, state.editedServers)
+    }
+
+    @Test
+    fun refreshAfterUnchangedServerDisappearsPreservesDirtyEdit() = runTest {
+        val refreshedConfig = configWithServers("beta" to true, "gamma" to true)
+        val states = ArrayDeque<McpConfigLoadState>().apply {
+            add(McpConfigLoadState.Loaded(configWithServers("alpha" to true, "beta" to true, "gamma" to true)))
+            add(McpConfigLoadState.Loaded(refreshedConfig))
+        }
+        val controller = newController(
+            scope = this,
+            readState = { _, _ -> states.removeFirst() },
+        )
+
+        controller.load(testConn, "/workspace/project")
+        advanceUntilIdle()
+        controller.toggleServer("beta")
+        controller.refresh()
+        advanceUntilIdle()
+
+        val state = controller.state.value as McpUiState.Loaded
+        assertTrue(state.dirty)
+        assertEquals(false, state.editedServers.getValue("beta").enabled)
+        assertEquals(true, state.editedServers.getValue("gamma").enabled)
+    }
+
+    @Test
+    fun refreshAfterToggleBackToOriginalRemainsClean() = runTest {
+        val config = configWithServers("alpha" to true, "beta" to true)
+        val states = ArrayDeque<McpConfigLoadState>().apply {
+            add(McpConfigLoadState.Loaded(config))
+            add(McpConfigLoadState.Loaded(config))
+        }
+        val controller = newController(
+            scope = this,
+            readState = { _, _ -> states.removeFirst() },
+        )
+
+        controller.load(testConn, "/workspace/project")
+        advanceUntilIdle()
+        controller.toggleServer("beta")
+        controller.toggleServer("beta")
+        controller.refresh()
+        advanceUntilIdle()
+
+        val state = controller.state.value as McpUiState.Loaded
+        assertEquals(false, state.dirty)
+        assertEquals(config.servers, state.editedServers)
+    }
+
     private fun newController(
         scope: CoroutineScope,
         readState: suspend (ServerConnection, String) -> McpConfigLoadState,
+        writeMcpConfig: suspend (ServerConnection, McpConfig) -> Result<Unit> = { _, _ -> Result.success(Unit) },
     ): McpStateController {
         return McpStateController(
             scope = scope,
             readMcpConfigState = readState,
-            writeMcpConfig = { _, _ -> Result.success(Unit) },
+            writeMcpConfig = writeMcpConfig,
         )
     }
 
@@ -135,6 +313,20 @@ class McpViewModelTest {
                 args = listOf("server.js"),
             )
         ),
+    )
+
+    private fun configWithServers(vararg servers: Pair<String, Boolean>) = McpConfig(
+        filePath = "/workspace/project/.opencode/config.json",
+        rawJson = "{}",
+        servers = servers.associate { (name, enabled) ->
+            name to McpServer(
+                name = name,
+                type = "stdio",
+                command = "node",
+                args = listOf("$name.js"),
+                enabled = enabled,
+            )
+        },
     )
 
     private val testConn = ServerConnection.from("http://127.0.0.1:4096")
