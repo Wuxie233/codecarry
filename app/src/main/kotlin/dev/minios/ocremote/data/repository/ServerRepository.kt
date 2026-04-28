@@ -169,7 +169,8 @@ class ServerRepository @Inject constructor(
         conn: ServerConnection,
         projectDir: String,
     ): McpConfigLoadState {
-        val homeDir = runCatching { api.getServerPaths(conn).home }
+        val projectDirectory = projectDir.takeIf { it.isNotBlank() }
+        val homeDir = runCatching { api.getServerPaths(conn, directory = projectDirectory).home }
             .getOrElse { error ->
                 return McpConfigLoadState.Error(
                     filePath = null,
@@ -181,18 +182,20 @@ class ServerRepository @Inject constructor(
         val candidates = buildList {
             val normalizedProjectDir = projectDir.trimEnd('/')
             if (normalizedProjectDir.isNotEmpty()) {
+                add("$normalizedProjectDir/.opencode/opencode.json")
                 add("$normalizedProjectDir/.opencode/config.json")
                 add("$normalizedProjectDir/opencode.json")
             }
 
             val normalizedHomeDir = homeDir.trimEnd('/')
             if (normalizedHomeDir.isNotEmpty()) {
+                add("$normalizedHomeDir/.config/opencode/opencode.json")
                 add("$normalizedHomeDir/.config/opencode/config.json")
             }
         }
 
         val reads = candidates.map { path ->
-            McpConfigCandidateRead(path, runCatching { api.readFileText(conn, path) })
+            McpConfigCandidateRead(path, runCatching { api.readFileText(conn, path, directory = projectDirectory) })
         }
         return resolveMcpConfigLoadState(reads)
     }
@@ -202,7 +205,8 @@ class ServerRepository @Inject constructor(
         config: McpConfig,
     ): Result<Unit> = runCatching {
         val updatedJson = McpConfigParser.serialize(config)
-        api.writeFile(conn, path = config.filePath, content = updatedJson)
+        val configDirectory = config.filePath.substringBeforeLast('/').takeIf { it.isNotBlank() }
+        api.writeFile(conn, path = config.filePath, content = updatedJson, directory = configDirectory)
     }
 
     // ============ Private ============

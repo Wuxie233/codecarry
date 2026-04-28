@@ -66,6 +66,7 @@ fun ProjectGroupHeader(
     onCopyPath: () -> Unit,
     onArchiveAll: () -> Unit,
     onManageMcp: (() -> Unit)? = null,
+    mcpServerCount: Int? = null,
     modifier: Modifier = Modifier,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
@@ -279,11 +280,41 @@ fun ProjectGroupHeader(
                         },
                     )
                     onManageMcp?.let { action ->
+                        val mcpHint = mcpHintLabel(mcpServerCount)
                         DropdownMenuItem(
-                            text = { Text("管理 MCP") },
+                            text = {
+                                Column {
+                                    Text("管理 MCP")
+                                    if (mcpServerCount == 0 && mcpHint != null) {
+                                        Text(
+                                            text = mcpHint,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = colors.onSurfaceVariant.copy(alpha = 0.65f),
+                                        )
+                                    }
+                                }
+                            },
                             onClick = {
                                 menuExpanded = false
                                 action()
+                            },
+                            trailingIcon = if (mcpServerCount != null && mcpServerCount > 0 && mcpHint != null) {
+                                {
+                                    Box(
+                                        modifier = Modifier
+                                            .background(colors.primary, CircleShape)
+                                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        Text(
+                                            text = mcpHint,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = colors.onPrimary,
+                                        )
+                                    }
+                                }
+                            } else {
+                                null
                             },
                         )
                     }
@@ -312,4 +343,10 @@ fun ProjectGroupHeader(
 private fun rememberIsAmoledTheme(): Boolean {
     val colors = MaterialTheme.colorScheme
     return colors.background == Color.Black && colors.surface == Color.Black
+}
+
+internal fun mcpHintLabel(count: Int?): String? = when (count) {
+    null -> null
+    0 -> "未启用"
+    else -> count.toString()
 }

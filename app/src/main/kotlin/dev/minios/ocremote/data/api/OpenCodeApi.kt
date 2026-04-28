@@ -79,9 +79,10 @@ class OpenCodeApi @Inject constructor(
      * Get server paths (home directory, worktree, etc.).
      * GET /path
      */
-    suspend fun getServerPaths(conn: ServerConnection): ServerPaths {
+    suspend fun getServerPaths(conn: ServerConnection, directory: String? = null): ServerPaths {
         return httpClient.get("${conn.baseUrl}/path") {
             conn.authHeader?.let { header("Authorization", it) }
+            directory?.let { header("x-opencode-directory", android.net.Uri.encode(it)) }
         }.body()
     }
 
@@ -874,9 +875,10 @@ class OpenCodeApi @Inject constructor(
         }.body()
     }
 
-    suspend fun readFile(conn: ServerConnection, path: String): FileContent {
+    suspend fun readFile(conn: ServerConnection, path: String, directory: String? = null): FileContent {
         val response = httpClient.get("${conn.baseUrl}/file/content") {
             conn.authHeader?.let { header("Authorization", it) }
+            directory?.let { header("x-opencode-directory", android.net.Uri.encode(it)) }
             parameter("path", path)
         }
         if (response.status == HttpStatusCode.NotFound) {
@@ -889,12 +891,13 @@ class OpenCodeApi @Inject constructor(
         return response.body()
     }
 
-    suspend fun readFileText(conn: ServerConnection, path: String): String =
-        readFile(conn, path).content
+    suspend fun readFileText(conn: ServerConnection, path: String, directory: String? = null): String =
+        readFile(conn, path, directory).content
 
-    suspend fun writeFile(conn: ServerConnection, path: String, content: String) {
+    suspend fun writeFile(conn: ServerConnection, path: String, content: String, directory: String? = null) {
         httpClient.put("${conn.baseUrl}/file/content") {
             conn.authHeader?.let { header("Authorization", it) }
+            directory?.let { header("x-opencode-directory", android.net.Uri.encode(it)) }
             contentType(ContentType.Application.Json)
             setBody(WriteFileRequest(path = path, content = content))
         }
