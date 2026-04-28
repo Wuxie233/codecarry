@@ -77,6 +77,7 @@
     <string name="session_delete">Usuń sesję</string>
     <string name="session_delete_confirm">Usunąć "%1$s"? Tego nie można cofnąć.</string>
     <string name="chat_stop">Zatrzymaj</string>
+    <string name="chat_stop_failed">Nie udało się zatrzymać sesji</string>
     <string name="chat_copy">Kopiuj</string>
     <string name="chat_revert">Cofnij</string>
     <string name="chat_revert_title">Cofnąć wiadomość?</string>

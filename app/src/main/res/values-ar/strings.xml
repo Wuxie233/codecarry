@@ -77,6 +77,7 @@
     <string name="session_delete">حذف الجلسة</string>
     <string name="session_delete_confirm">حذف "%1$s"؟ لا يمكن التراجع عن ذلك.</string>
     <string name="chat_stop">إيقاف</string>
+    <string name="chat_stop_failed">فشل إيقاف الجلسة</string>
     <string name="chat_copy">نسخ</string>
     <string name="chat_revert">استرجاع</string>
     <string name="chat_revert_title">استرجاع الرسالة؟</string>

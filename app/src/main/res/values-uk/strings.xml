@@ -77,6 +77,7 @@
     <string name="session_delete">Видалити сесію</string>
     <string name="session_delete_confirm">Видалити "%1$s"? Це неможливо скасувати.</string>
     <string name="chat_stop">Зупинити</string>
+    <string name="chat_stop_failed">Не вдалося зупинити сеанс</string>
     <string name="chat_copy">Копіювати</string>
     <string name="chat_revert">Відмінити зміни</string>
     <string name="chat_revert_title">Відмінити повідомлення?</string>
