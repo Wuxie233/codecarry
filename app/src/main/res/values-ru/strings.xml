@@ -43,6 +43,7 @@
     <string name="chat_input_hint">Написать OpenCode…</string>
     <string name="chat_send">Отправить</string>
     <string name="chat_stop">Остановить</string>
+    <string name="chat_stop_failed">Не удалось остановить сеанс</string>
     <string name="chat_abort">Прервать</string>
     <string name="chat_empty">Начать разговор с OpenCode</string>
     <string name="chat_copy">Копировать</string>

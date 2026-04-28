@@ -189,6 +189,7 @@
     <string name="chat_send_shell">Envoyer une commande shell</string>
     <string name="chat_shell_mode_hold_send_hint">Mode shell actif. Maintenez Envoyer pour revenir en arrière.</string>
     <string name="chat_stop">Arrêter</string>
+    <string name="chat_stop_failed">Impossible d’arrêter la session</string>
     <string name="chat_abort">Abandonner</string>
     <string name="chat_empty">Démarrer une conversation avec OpenCode</string>
     <string name="chat_copy">Copier</string>

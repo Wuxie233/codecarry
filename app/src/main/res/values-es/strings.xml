@@ -77,6 +77,7 @@
     <string name="session_delete">Eliminar sesión</string>
     <string name="session_delete_confirm">¿Eliminar "%1$s"? Esto no se puede deshacer.</string>
     <string name="chat_stop">Detener</string>
+    <string name="chat_stop_failed">No se pudo detener la sesión</string>
     <string name="chat_copy">Copiar</string>
     <string name="chat_revert">Revertir</string>
     <string name="chat_revert_title">¿Revertir mensaje?</string>
