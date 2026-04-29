@@ -255,12 +255,25 @@ private fun Modifier.codeHorizontalScroll(): Modifier {
  * @param name Command name without the "/" prefix
  * @param description Human-readable description
  * @param type "server" commands are sent via API, "client" commands trigger local actions
+ * @param source Server command source, e.g. "command", "mcp", or "skill"; null for client commands
  */
-private data class SlashCommand(
+internal data class SlashCommand(
     val name: String,
     val description: String?,
-    val type: String // "server" or "client"
+    val type: String, // "server" or "client"
+    val source: String? = null
 )
+
+internal fun mergeSlashCommands(
+    client: List<SlashCommand>,
+    server: List<CommandInfo>
+): List<SlashCommand> {
+    val clientNames = client.map { it.name }.toSet()
+    val serverSlash = server
+        .filter { it.source != "skill" && it.name !in clientNames }
+        .map { SlashCommand(it.name, it.description, "server", it.source) }
+    return client + serverSlash
+}
 
 private enum class ChatInputMode {
     NORMAL,
@@ -6259,11 +6272,7 @@ private fun ChatInputBar(
     // Build merged slash commands: client commands + server commands (deduplicated)
     val clientCmds = clientCommands()
     val allCommands = remember(commands, clientCmds) {
-        val clientNames = clientCmds.map { it.name }.toSet()
-        val serverSlash = commands
-            .filter { it.source != "skill" && it.name !in clientNames }
-            .map { SlashCommand(it.name, it.description, "server") }
-        clientCmds + serverSlash
+        mergeSlashCommands(clientCmds, commands)
     }
 
     // Slash command suggestions
@@ -6301,9 +6310,21 @@ private fun ChatInputBar(
                     .fillMaxWidth()
                     .heightIn(max = maxHeight)
                     .background(if (isAmoled) Color.Black else MaterialTheme.colorScheme.surfaceContainerHigh)
+                    .then(
+                        if (isAmoled) {
+                            Modifier.border(
+                                width = 1.dp,
+                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f),
+                                shape = RoundedCornerShape(12.dp),
+                            )
+                        } else {
+                            Modifier
+                        }
+                    )
                     .padding(vertical = 4.dp)
             ) {
                 items(filteredCommands, key = { it.name }) { cmd ->
+                    val showMcpChip = cmd.source == "mcp"
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -6330,6 +6351,29 @@ private fun ChatInputBar(
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f)
                             )
+                        } else if (showMcpChip) {
+                            Spacer(modifier = Modifier.weight(1f))
+                        }
+                        if (showMcpChip) {
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = if (isAmoled) {
+                                    MaterialTheme.colorScheme.surfaceVariant
+                                } else {
+                                    MaterialTheme.colorScheme.tertiary.copy(alpha = 0.12f)
+                                },
+                                border = BorderStroke(
+                                    1.dp,
+                                    MaterialTheme.colorScheme.tertiary.copy(alpha = 0.25f)
+                                ),
+                            ) {
+                                Text(
+                                    text = "MCP",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.85f),
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
                         }
                     }
                 }

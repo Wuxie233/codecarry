@@ -134,6 +134,7 @@ fun SessionListScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val mcpViewModel: McpViewModel = hiltViewModel()
+    val mcpState by mcpViewModel.state.collectAsState()
     val isAmoled = isAmoledTheme()
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
@@ -455,6 +456,11 @@ fun SessionListScreen(
                             ) {
                                 for (group in uiState.groups) {
                         stickyHeader(key = "header_${group.directory}") {
+                                val activeProjectMcpServerCount = (mcpState as? McpUiState.Loaded)
+                                    ?.takeIf { mcpSheetProjectDir == group.directory }
+                                    ?.config
+                                    ?.servers
+                                    ?.size
                                 ProjectGroupHeader(
                                     projectName = group.projectName,
                                     tildeDirectory = group.tildeDirectory,
@@ -475,6 +481,7 @@ fun SessionListScreen(
                                         Toast.makeText(context, context.getString(R.string.sessions_project_path_copied), Toast.LENGTH_SHORT).show()
                                     },
                                     onArchiveAll = { viewModel.archiveProjectSessions(group.directory) },
+                                    mcpServerCount = activeProjectMcpServerCount,
                                     onManageMcp = {
                                         mcpSheetProjectName = group.projectName
                                         mcpSheetProjectDir = group.directory

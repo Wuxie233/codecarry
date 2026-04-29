@@ -52,6 +52,30 @@ class McpConfigParserTest {
     }
 
     @Test
+    fun parseStateAcceptsTopLevelMcpKey() {
+        val json = """{"mcp": {"x": {"command": "node"}}}"""
+
+        val result = McpConfigParser.parseState("/tmp/config.json", json)
+
+        assertTrue(result is McpConfigLoadState.Loaded)
+        val config = (result as McpConfigLoadState.Loaded).config
+        assertEquals(1, config.servers.size)
+        assertEquals("node", config.servers["x"]!!.command)
+    }
+
+    @Test
+    fun parseStateAcceptsRemoteServerWithoutCommand() {
+        val json = """{"mcpServers": {"r": {"type": "remote", "url": "https://example"}}}"""
+
+        val result = McpConfigParser.parseState("/tmp/config.json", json)
+
+        assertTrue(result is McpConfigLoadState.Loaded)
+        val config = (result as McpConfigLoadState.Loaded).config
+        assertEquals("remote", config.servers["r"]!!.type)
+        assertEquals(null, config.servers["r"]!!.command)
+    }
+
+    @Test
     fun serializePreservesUnknownFieldsAndUpdatesEnabled() {
         val config = McpConfigParser.parse("/tmp/config.json", validJson)!!
         val toggled = config.copy(
@@ -65,6 +89,19 @@ class McpConfigParserTest {
 
         assertFalse(reparsed.servers["filesystem"]!!.enabled)
         assertTrue(output.contains("\"providers\""))
+    }
+
+    @Test
+    fun serializePreservesMcpAliasKey() {
+        val json = """{"mcp": {"x": {"command": "node"}}}"""
+        val config = McpConfigParser.parse("/tmp/config.json", json)!!
+
+        val output = McpConfigParser.serialize(config)
+
+        assertTrue(output.contains("\"mcp\""))
+        assertFalse(output.contains("\"mcpServers\""))
+        val reparsed = McpConfigParser.parse("/tmp/config.json", output)!!
+        assertEquals("node", reparsed.servers["x"]!!.command)
     }
 
     @Test
@@ -89,6 +126,16 @@ class McpConfigParserTest {
     @Test
     fun parseStateReturnsErrorWhenServerEntryIsNull() {
         val json = """{"mcpServers": {"broken": null}}"""
+
+        val result = McpConfigParser.parseState("/tmp/config.json", json)
+
+        assertTrue(result is McpConfigLoadState.Error)
+        assertEquals("/tmp/config.json", (result as McpConfigLoadState.Error).filePath)
+    }
+
+    @Test
+    fun parseStateStillRejectsServerEntryThatIsNotJsonObject() {
+        val json = """{"mcpServers": {"broken": true}}"""
 
         val result = McpConfigParser.parseState("/tmp/config.json", json)
 
