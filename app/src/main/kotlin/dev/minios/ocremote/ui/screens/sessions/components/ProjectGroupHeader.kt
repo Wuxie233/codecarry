@@ -28,6 +28,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -281,7 +282,9 @@ fun ProjectGroupHeader(
                     )
                     onManageMcp?.let { action ->
                         val mcpHint = mcpHintLabel(mcpServerCount)
+                        val mcpHintDescription = mcpHintContentDescription(mcpServerCount)
                         DropdownMenuItem(
+                            modifier = Modifier.minimumInteractiveComponentSize(),
                             text = {
                                 Column {
                                     Text("管理 MCP")
@@ -302,6 +305,9 @@ fun ProjectGroupHeader(
                                 {
                                     Box(
                                         modifier = Modifier
+                                            .semantics {
+                                                contentDescription = mcpHintDescription.orEmpty()
+                                            }
                                             .background(colors.primary, CircleShape)
                                             .padding(horizontal = 6.dp, vertical = 2.dp),
                                         contentAlignment = Alignment.Center,
@@ -350,3 +356,7 @@ internal fun mcpHintLabel(count: Int?): String? = when (count) {
     0 -> "未启用"
     else -> count.toString()
 }
+
+internal fun mcpHintContentDescription(count: Int?): String? = count
+    ?.takeIf { it > 0 }
+    ?.let { "该项目已配置 $it 个 MCP 服务器" }

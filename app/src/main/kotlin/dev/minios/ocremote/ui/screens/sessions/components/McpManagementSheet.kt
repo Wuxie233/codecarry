@@ -26,6 +26,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -35,6 +36,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -115,9 +118,14 @@ fun McpManagementSheet(
                 }
 
                 is McpUiState.EmptyConfig -> {
+                    val message = if (current.fallbackExhausted) {
+                        "已检查项目与全局 OpenCode 配置，但都未声明任何 MCP 服务器。最近一次检查的配置位于 ${current.filePath}。在该文件中加入 mcpServers 后下拉刷新即可生效。"
+                    } else {
+                        "已找到配置 ${current.filePath}，但其中未声明任何 MCP 服务器。"
+                    }
                     EmptyStateCard(
                         title = "暂无 MCP 服务器",
-                        message = "已找到配置 ${current.filePath}，但其中未声明任何 MCP 服务器。",
+                        message = message,
                         action = {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 TextButton(onClick = onDismiss) {
@@ -136,20 +144,37 @@ fun McpManagementSheet(
                 }
 
                 is McpUiState.MissingConfig -> {
+                    val firstPath = current.checkedPaths.firstOrNull() ?: "未知路径"
+                    var pathsExpanded by remember(current.checkedPaths) { mutableStateOf(false) }
+                    val allCheckedPaths = current.checkedPaths.joinToString("\n") { "• $it" }
                     EmptyStateCard(
                         title = "未找到 MCP 配置",
-                        message = "已检查以下路径：${current.checkedPaths.joinToString("\n• ", prefix = "• ")}",
+                        message = "优先检查路径：\n• $firstPath",
                         action = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                TextButton(onClick = onDismiss) {
-                                    Text("关闭")
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                if (current.checkedPaths.size > 1) {
+                                    TextButton(onClick = { pathsExpanded = !pathsExpanded }) {
+                                        Text(if (pathsExpanded) "收起检查路径" else "查看全部检查路径")
+                                    }
+                                    if (pathsExpanded) {
+                                        Text(
+                                            text = allCheckedPaths,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
                                 }
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Button(
-                                    onClick = requestRefresh,
-                                    enabled = viewModel.canReload(),
-                                ) {
-                                    Text("刷新")
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    TextButton(onClick = onDismiss) {
+                                        Text("关闭")
+                                    }
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Button(
+                                        onClick = requestRefresh,
+                                        enabled = viewModel.canReload(),
+                                    ) {
+                                        Text("刷新")
+                                    }
                                 }
                             }
                         },
@@ -340,7 +365,10 @@ private fun McpServerRow(
             checked = server.enabled,
             onCheckedChange = { onToggle() },
             enabled = enabled,
-            modifier = Modifier.padding(start = 16.dp),
+            modifier = Modifier
+                .padding(start = 16.dp)
+                .minimumInteractiveComponentSize()
+                .semantics { contentDescription = "${server.name} 启用状态" },
         )
     }
 }
