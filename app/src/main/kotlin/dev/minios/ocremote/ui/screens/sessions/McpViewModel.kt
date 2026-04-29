@@ -3,6 +3,7 @@ package dev.minios.ocremote.ui.screens.sessions
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dev.minios.ocremote.data.api.OpenCodeFileReadException
 import dev.minios.ocremote.data.api.ServerConnection
 import dev.minios.ocremote.data.repository.ServerRepository
 import dev.minios.ocremote.domain.model.McpConfig
@@ -13,6 +14,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.serialization.SerializationException
+import java.io.IOException
 import javax.inject.Inject
 
 sealed class McpUiState {
@@ -25,12 +28,13 @@ sealed class McpUiState {
         val saveError: String? = null,
     ) : McpUiState()
 
-    data class Empty(
-        val title: String,
-        val message: String,
-    ) : McpUiState()
+    data class EmptyConfig(val filePath: String) : McpUiState()
 
-    data class Error(val message: String) : McpUiState()
+    data class MissingConfig(val checkedPaths: List<String>) : McpUiState()
+
+    data class ReadError(val filePath: String?, val message: String) : McpUiState()
+
+    data class ParseError(val filePath: String, val message: String) : McpUiState()
 
     data object Saving : McpUiState()
 
@@ -49,6 +53,7 @@ internal class McpStateController(
     private var currentConn: ServerConnection? = null
     private var currentProjectDir: String? = null
     private var lastLoaded: McpUiState.Loaded? = null
+    private var pendingEdits: Map<String, McpServer>? = null
 
     fun load(conn: ServerConnection, projectDir: String) {
         currentConn = conn
@@ -72,30 +77,47 @@ internal class McpStateController(
         scope.launch {
             when (val loadState = readMcpConfigState(conn, projectDir)) {
                 is McpConfigLoadState.Loaded -> {
+                    val pending = pendingEdits
                     val loaded = McpUiState.Loaded(config = loadState.config)
-                    lastLoaded = loaded
-                    _state.value = loaded
+                    val resolvedLoaded = if (pending != null) {
+                        if (pending.keys.all { it in loadState.config.servers.keys }) {
+                            val mergedServers = loadState.config.servers.mapValues { (name, server) ->
+                                pending[name]?.let { pendingServer ->
+                                    server.copy(enabled = pendingServer.enabled)
+                                } ?: server
+                            }
+                            val dirtyEntries = dirtyEdits(mergedServers, loadState.config.servers)
+                            pendingEdits = dirtyEntries
+                            loaded.copy(
+                                editedServers = mergedServers,
+                                dirty = dirtyEntries != null,
+                            )
+                        } else {
+                            pendingEdits = null
+                            loaded
+                        }
+                    } else {
+                        loaded
+                    }
+                    lastLoaded = resolvedLoaded
+                    _state.value = resolvedLoaded
                 }
 
                 is McpConfigLoadState.Empty -> {
                     lastLoaded = null
-                    _state.value = McpUiState.Empty(
-                        title = "暂无 MCP 服务器",
-                        message = "已找到 MCP 配置，但当前没有配置任何 MCP 服务器。",
-                    )
+                    _state.value = McpUiState.EmptyConfig(filePath = loadState.config.filePath)
                 }
 
                 is McpConfigLoadState.NotFound -> {
                     lastLoaded = null
-                    _state.value = McpUiState.Empty(
-                        title = "未找到 MCP 配置",
-                        message = "此项目当前没有可读取的 MCP 配置文件。",
-                    )
+                    _state.value = McpUiState.MissingConfig(checkedPaths = loadState.checkedPaths)
                 }
 
                 is McpConfigLoadState.Error -> {
-                    lastLoaded = null
-                    _state.value = McpUiState.Error(loadState.message)
+                    _state.value = loadState.toUiState()
+                    if (_state.value !is McpUiState.ReadError) {
+                        lastLoaded = null
+                    }
                 }
             }
         }
@@ -117,12 +139,14 @@ internal class McpStateController(
         val updatedServers = current.editedServers.toMutableMap()
         val server = updatedServers[name] ?: return
         updatedServers[name] = server.copy(enabled = !server.enabled)
+        val dirtyEntries = dirtyEdits(updatedServers, current.config.servers)
 
         val newState = current.copy(
             editedServers = updatedServers,
-            dirty = updatedServers != current.config.servers,
+            dirty = dirtyEntries != null,
             saveError = null,
         )
+        pendingEdits = dirtyEntries
         lastLoaded = newState
         _state.value = newState
     }
@@ -137,6 +161,7 @@ internal class McpStateController(
         scope.launch {
             writeMcpConfig(conn, updatedConfig)
                 .onSuccess {
+                    pendingEdits = null
                     _state.value = McpUiState.SaveSuccess
                 }
                 .onFailure { error ->
@@ -145,6 +170,27 @@ internal class McpStateController(
                     _state.value = restored
                 }
         }
+    }
+
+    private fun dirtyEdits(
+        editedServers: Map<String, McpServer>,
+        baseServers: Map<String, McpServer>,
+    ): Map<String, McpServer>? = editedServers
+        .filter { (name, server) -> baseServers[name] != server }
+        .takeIf { it.isNotEmpty() }
+
+    private fun McpConfigLoadState.Error.toUiState(): McpUiState = when {
+        cause is OpenCodeFileReadException || cause is IOException -> McpUiState.ReadError(filePath, message)
+        isParseError() -> McpUiState.ParseError(filePath.orEmpty(), message)
+        else -> McpUiState.ReadError(filePath, message)
+    }
+
+    private fun McpConfigLoadState.Error.isParseError(): Boolean {
+        val lowerMessage = message.lowercase()
+        return cause is SerializationException ||
+            lowerMessage.contains("parse") ||
+            lowerMessage.contains("invalid") ||
+            lowerMessage.contains("missing required command")
     }
 }
 

@@ -1,12 +1,10 @@
 package dev.minios.ocremote.ui.screens.sessions.components
 
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -14,10 +12,15 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Switch
@@ -36,6 +39,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.minios.ocremote.domain.model.McpServer
+import dev.minios.ocremote.ui.components.EmptyStateCard
+import dev.minios.ocremote.ui.components.ErrorStateCard
+import dev.minios.ocremote.ui.components.LoadingStateCard
 import dev.minios.ocremote.ui.screens.sessions.McpUiState
 import dev.minios.ocremote.ui.screens.sessions.McpViewModel
 
@@ -50,6 +56,16 @@ fun McpManagementSheet(
     val state by viewModel.state.collectAsState()
     var lastServers by remember { mutableStateOf<Map<String, McpServer>>(emptyMap()) }
     var lastSaveError by remember { mutableStateOf<String?>(null) }
+    var pendingRefreshConfirm by remember { mutableStateOf(false) }
+
+    val requestRefresh = {
+        val loaded = state as? McpUiState.Loaded
+        if (loaded?.dirty == true) {
+            pendingRefreshConfirm = true
+        } else if (viewModel.canReload()) {
+            viewModel.refresh()
+        }
+    }
 
     LaunchedEffect(state) {
         when (val current = state) {
@@ -70,85 +86,135 @@ fun McpManagementSheet(
                 .padding(horizontal = 24.dp)
                 .navigationBarsPadding(),
         ) {
-            Text(
-                text = "MCP 服务器 · $projectName",
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.padding(bottom = 16.dp),
-            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "MCP 服务器 · $projectName",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                IconButton(
+                    onClick = requestRefresh,
+                    enabled = viewModel.canReload(),
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = "刷新 MCP 配置",
+                    )
+                }
+            }
 
             when (val current = state) {
                 McpUiState.Loading -> {
-                    Box(
+                    LoadingStateCard(label = "正在加载 MCP 配置")
+                }
+
+                is McpUiState.EmptyConfig -> {
+                    EmptyStateCard(
+                        title = "暂无 MCP 服务器",
+                        message = "已找到配置 ${current.filePath}，但其中未声明任何 MCP 服务器。",
+                        action = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                TextButton(onClick = onDismiss) {
+                                    Text("关闭")
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Button(
+                                    onClick = requestRefresh,
+                                    enabled = viewModel.canReload(),
+                                ) {
+                                    Text("刷新")
+                                }
+                            }
+                        },
+                    )
+                }
+
+                is McpUiState.MissingConfig -> {
+                    EmptyStateCard(
+                        title = "未找到 MCP 配置",
+                        message = "已检查以下路径：${current.checkedPaths.joinToString("\n• ", prefix = "• ")}",
+                        action = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                TextButton(onClick = onDismiss) {
+                                    Text("关闭")
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Button(
+                                    onClick = requestRefresh,
+                                    enabled = viewModel.canReload(),
+                                ) {
+                                    Text("刷新")
+                                }
+                            }
+                        },
+                    )
+                }
+
+                is McpUiState.ReadError -> {
+                    ErrorStateCard(
+                        title = "无法读取 MCP 配置",
+                        message = current.message,
+                    )
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(80.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        CircularProgressIndicator()
-                    }
-                }
-
-                is McpUiState.Empty -> {
-                    Text(
-                        text = current.title,
-                        style = MaterialTheme.typography.titleSmall,
-                    )
-                    Text(
-                        text = current.message,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
-                        modifier = Modifier.padding(top = 8.dp, bottom = 24.dp),
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
+                            .padding(top = 12.dp),
                         horizontalArrangement = Arrangement.End,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        TextButton(onClick = onDismiss) {
-                            Text("关闭")
-                        }
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Button(
-                            onClick = viewModel::refresh,
-                            enabled = viewModel.canReload(),
-                        ) {
-                            Text("刷新")
-                        }
-                    }
-                }
-
-                is McpUiState.Error -> {
-                    Text(
-                        text = current.message,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.padding(bottom = 12.dp),
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        TextButton(onClick = onDismiss) {
-                            Text("取消")
-                        }
-                        Spacer(modifier = Modifier.width(8.dp))
                         Button(
                             onClick = viewModel::retry,
                             enabled = viewModel.canReload(),
                         ) {
                             Text("重试")
                         }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        TextButton(onClick = onDismiss) {
+                            Text("关闭")
+                        }
                     }
                 }
 
-                else -> {
+                is McpUiState.ParseError -> {
+                    ErrorStateCard(
+                        title = "MCP 配置解析失败",
+                        message = "${current.filePath}\n${current.message}",
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 12.dp),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Button(
+                            onClick = viewModel::retry,
+                            enabled = viewModel.canReload(),
+                        ) {
+                            Text("重试")
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        TextButton(onClick = onDismiss) {
+                            Text("关闭")
+                        }
+                    }
+                }
+
+                is McpUiState.Loaded,
+                McpUiState.Saving,
+                McpUiState.SaveSuccess,
+                -> {
                     val loaded = current as? McpUiState.Loaded
                     val servers = loaded?.editedServers ?: lastServers
                     val isSaving = current is McpUiState.Saving
                     val isDirty = loaded?.dirty == true
                     val saveError = loaded?.saveError ?: lastSaveError
-                    val canRefresh = viewModel.canReload() && !isDirty
 
                     LazyColumn(
                         modifier = Modifier
@@ -183,10 +249,6 @@ fun McpManagementSheet(
                         horizontalArrangement = Arrangement.End,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        TextButton(onClick = viewModel::refresh, enabled = canRefresh) {
-                            Text("刷新")
-                        }
-                        Spacer(modifier = Modifier.width(8.dp))
                         TextButton(onClick = onDismiss, enabled = !isSaving) {
                             Text("取消")
                         }
@@ -209,6 +271,30 @@ fun McpManagementSheet(
                 }
             }
         }
+    }
+
+    if (pendingRefreshConfirm) {
+        AlertDialog(
+            onDismissRequest = { pendingRefreshConfirm = false },
+            title = { Text("将丢失未保存的修改") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        pendingRefreshConfirm = false
+                        if (viewModel.canReload()) {
+                            viewModel.refresh()
+                        }
+                    },
+                ) {
+                    Text("继续刷新")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingRefreshConfirm = false }) {
+                    Text("取消")
+                }
+            },
+        )
     }
 }
 
