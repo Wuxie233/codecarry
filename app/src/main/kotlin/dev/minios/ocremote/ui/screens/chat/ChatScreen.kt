@@ -1345,13 +1345,13 @@ fun ChatScreen(
         onSharedImagesConsumed()
     }
 
-    // Show errors as snackbar when messages are already loaded
+    // Show errors as persistent snackbar when messages are already loaded
     LaunchedEffect(uiState.error) {
         val error = uiState.error
         if (error != null && uiState.messages.isNotEmpty()) {
             snackbarHostState.showSnackbar(
                 message = error,
-                duration = SnackbarDuration.Short
+                duration = SnackbarDuration.Indefinite
             )
         }
     }
@@ -1488,10 +1488,13 @@ fun ChatScreen(
                 },
                 actions = {
                     if (uiState.sessionStatus.isInterruptible) {
-                        IconButton(onClick = { viewModel.abortSession() }) {
+                        IconButton(
+                            onClick = { viewModel.abortSession() },
+                            modifier = Modifier.size(48.dp),
+                        ) {
                             Icon(
                                 Icons.Default.Stop,
-                                contentDescription = stringResource(R.string.chat_stop),
+                                contentDescription = if (uiState.sessionStatus is SessionStatus.Retry) "停止重试" else stringResource(R.string.chat_stop),
                                 tint = MaterialTheme.colorScheme.error
                             )
                         }
@@ -4793,11 +4796,11 @@ private fun RetryStatusBanner(
             )
             IconButton(
                 onClick = onStop,
-                modifier = Modifier.size(28.dp)
+                modifier = Modifier.size(48.dp)
             ) {
                 Icon(
                     Icons.Default.Stop,
-                    contentDescription = stringResource(R.string.chat_stop),
+                    contentDescription = "停止重试",
                     tint = MaterialTheme.colorScheme.error,
                     modifier = Modifier.size(18.dp)
                 )
