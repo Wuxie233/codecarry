@@ -14,6 +14,7 @@
 - `:app:testDebugUnitTest` ✅
 - `:app:lintDebug` ✅
 - `:app:assembleDebug` ✅
+- `:app:assembleRelease` ✅ signed release build
 
 ## Version
 
@@ -22,13 +23,12 @@
 
 ## Known limitations
 
-- Release-signed APK requires `app/keystore/signing.properties`; builds are debug-signed or unsigned unless that file is present at build time.
 - Screenshots were not captured in this environment because no connected device or AVD was available. See `screenshots/2026-04-29-mcp-states/NOTES.md` for the screenshot blocker and manual capture steps.
 
 ## Artifact
 
-- Artifact: `release-apks/oc-remote-1.6.24-unsigned.apk`
-- SHA-256: `3cb55b05b08a1b7bb4a0d3f5362b6eff2e486907029399029e6c563d5f077304`
-- Signing credentials: absent (`app/keystore/signing.properties` was not present), so this is an unsigned release build and must not be published as the final release APK.
-
-**Manual publish step required.** Drop a valid `app/keystore/signing.properties` (matching the existing repo convention) into the worktree, then re-run `./gradlew :app:assembleRelease` and rename the output to `release-apks/oc-remote-1.6.24.apk`.
+- Artifact: `release-apks/oc-remote-1.6.24.apk`
+- SHA-256: `74496c9223a5d3339a9b989db2b070b53b9f2201c6c9b34191068a902179ca52`
+- Signature verification: `apksigner verify --verbose --print-certs` ✅ (`v2` scheme verified, 1 signer)
+- Signer certificate SHA-256 digest: `98de61e5749b2eaeaaa8912b94c8ac33e817a6403c1673cf4fc9cc89a22984b7`
+- Previous unsigned build retained for traceability: `release-apks/oc-remote-1.6.24-unsigned.apk`
