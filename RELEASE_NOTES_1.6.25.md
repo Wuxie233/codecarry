@@ -21,6 +21,13 @@
 - `:app:lintDebug` ✅
 - Signer cert SHA-256 matches v1.6.23 reference ✅
 
+## Release artifact verification
+
+- APK: `oc-remote-1.6.25.apk`
+- APK SHA-256: `8d2b1a558a9d91b9c51ce66f0e46e81a84534b7797e5a8d700e192ccf1624c38`
+- Signer certificate SHA-256: `fac3107e3e646a1ea9a5022d1da48480e5988c715bf4400f90a236f9f219a4dc`
+- Built by GitHub Actions release workflow using repository signing secrets.
+
 ## Version
 
 - `versionName`: `1.6.25`
