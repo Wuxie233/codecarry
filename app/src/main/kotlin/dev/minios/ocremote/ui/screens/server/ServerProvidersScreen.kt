@@ -49,6 +49,8 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -179,10 +181,9 @@ fun ServerProvidersScreen(
                     }
 
                     if (!uiState.error.isNullOrBlank()) {
-                        Text(
-                            text = uiState.error!!,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error,
+                        ServerSettingsErrorRegion(
+                            message = uiState.error!!,
+                            onRetry = viewModel::loadProviders,
                         )
                     }
 
@@ -195,6 +196,7 @@ fun ServerProvidersScreen(
     }
 
     apiKeyProvider?.let { provider ->
+        val apiKeyLabel = stringResource(R.string.server_settings_api_key_placeholder)
         BasicAlertDialog(onDismissRequest = {
             apiKeyProvider = null
             apiKey = ""
@@ -214,8 +216,11 @@ fun ServerProvidersScreen(
                     OutlinedTextField(
                         value = apiKey,
                         onValueChange = { apiKey = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        placeholder = { Text(stringResource(R.string.server_settings_api_key_placeholder)) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .semantics { contentDescription = apiKeyLabel },
+                        label = { Text(apiKeyLabel) },
+                        placeholder = { Text(apiKeyLabel) },
                         singleLine = true,
                         colors = if (isAmoled) {
                             androidx.compose.material3.OutlinedTextFieldDefaults.colors(
@@ -248,6 +253,7 @@ fun ServerProvidersScreen(
         val deviceCode = remember(pending.authorization.instructions) {
             extractOAuthDeviceCode(pending.authorization.instructions)
         }
+        val oauthCodeLabel = stringResource(R.string.server_settings_oauth_code_placeholder)
         BasicAlertDialog(onDismissRequest = {
             oauthCode = ""
             viewModel.cancelProviderOauth()
@@ -357,8 +363,11 @@ fun ServerProvidersScreen(
                         OutlinedTextField(
                             value = oauthCode,
                             onValueChange = { oauthCode = it },
-                            modifier = Modifier.fillMaxWidth(),
-                            placeholder = { Text(stringResource(R.string.server_settings_oauth_code_placeholder)) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .semantics { contentDescription = oauthCodeLabel },
+                            label = { Text(oauthCodeLabel) },
+                            placeholder = { Text(oauthCodeLabel) },
                             singleLine = true,
                             colors = if (isAmoled) {
                                 androidx.compose.material3.OutlinedTextFieldDefaults.colors(
@@ -410,10 +419,9 @@ fun ServerProvidersScreen(
         ) {
             if (!uiState.error.isNullOrBlank()) {
                 item {
-                    Text(
-                        text = uiState.error!!,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
+                    ServerSettingsErrorRegion(
+                        message = uiState.error!!,
+                        onRetry = viewModel::loadProviders,
                     )
                 }
             }
@@ -469,6 +477,33 @@ fun ServerProvidersScreen(
 private fun extractOAuthDeviceCode(instructions: String): String? {
     val codePattern = Regex("\\b[A-Z0-9]{3,}(?:-[A-Z0-9]{3,})+\\b")
     return codePattern.find(instructions)?.value
+}
+
+@Composable
+private fun ServerSettingsErrorRegion(
+    message: String,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val retryLabel = stringResource(R.string.retry)
+    val retryDescription = "$retryLabel ${stringResource(R.string.server_settings_title)}"
+
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(
+            text = message,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+        )
+        TextButton(
+            onClick = onRetry,
+            modifier = Modifier.semantics { contentDescription = retryDescription },
+        ) {
+            Text(retryLabel)
+        }
+    }
 }
 
 @Composable

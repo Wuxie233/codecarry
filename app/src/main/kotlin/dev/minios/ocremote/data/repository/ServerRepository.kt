@@ -194,8 +194,18 @@ class ServerRepository @Inject constructor(
             }
         }
 
-        val reads = candidates.map { path ->
-            McpConfigCandidateRead(path, runCatching { api.readFileText(conn, path, directory = projectDirectory) })
+        val reads = mutableListOf<McpConfigCandidateRead>()
+        for (path in candidates) {
+            reads += McpConfigCandidateRead(
+                path = path,
+                readResult = runCatching { api.readFileText(conn, path, directory = projectDirectory) },
+            )
+            when (val state = resolveMcpConfigLoadState(reads)) {
+                is McpConfigLoadState.Loaded -> return state
+                is McpConfigLoadState.Error -> return state
+                is McpConfigLoadState.Empty,
+                is McpConfigLoadState.NotFound -> Unit
+            }
         }
         return resolveMcpConfigLoadState(reads)
     }
@@ -226,6 +236,8 @@ class ServerRepository @Inject constructor(
     internal fun resolveMcpConfigLoadState(
         candidateReads: List<McpConfigCandidateRead>,
     ): McpConfigLoadState {
+        var rememberedEmpty: McpConfigLoadState.Empty? = null
+
         for ((path, readResult) in candidateReads) {
             if (readResult.isFailure) {
                 val error = readResult.exceptionOrNull()!!
@@ -242,16 +254,32 @@ class ServerRepository @Inject constructor(
             val raw = readResult.getOrThrow()
 
             val content = raw.takeIf { it.isNotBlank() }
-                ?: return McpConfigLoadState.Empty(
-                    config = McpConfig(
-                        filePath = path,
-                        rawJson = raw,
-                        servers = emptyMap(),
+            if (content == null) {
+                if (rememberedEmpty == null) {
+                    rememberedEmpty = McpConfigLoadState.Empty(
+                        config = McpConfig(
+                            filePath = path,
+                            rawJson = raw,
+                            servers = emptyMap(),
+                        )
                     )
-                )
-            return McpConfigParser.parseState(path, content)
+                }
+                continue
+            }
+
+            when (val parsed = McpConfigParser.parseState(path, content)) {
+                is McpConfigLoadState.Loaded -> return parsed
+                is McpConfigLoadState.Empty -> {
+                    if (rememberedEmpty == null) {
+                        rememberedEmpty = parsed
+                    }
+                }
+
+                is McpConfigLoadState.Error -> return parsed
+                is McpConfigLoadState.NotFound -> Unit
+            }
         }
 
-        return McpConfigLoadState.NotFound(candidateReads.map { it.path })
+        return rememberedEmpty ?: McpConfigLoadState.NotFound(candidateReads.map { it.path })
     }
 }

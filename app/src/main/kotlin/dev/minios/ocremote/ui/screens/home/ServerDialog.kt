@@ -13,6 +13,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -88,7 +90,15 @@ fun ServerDialog(
 
     var urlError by remember { mutableStateOf<String?>(null) }
 
-    val urlRequiredText = stringResource(R.string.server_url)
+    val nameLabel = stringResource(R.string.server_name)
+    val urlLabel = stringResource(R.string.server_url)
+    val usernameLabel = stringResource(R.string.server_username)
+    val passwordLabel = stringResource(R.string.server_password)
+    val saveLabel = stringResource(R.string.server_save)
+    val addServerLabel = stringResource(R.string.server_add)
+    val editServerLabel = stringResource(R.string.home_edit)
+    val saveServerDescription = "$saveLabel ${if (server != null) editServerLabel else addServerLabel}"
+    val urlRequiredText = urlLabel
     val urlInvalidText = stringResource(R.string.server_invalid_url)
     val dialogMaxHeight = LocalConfiguration.current.screenHeightDp.dp * 0.9f
     val scrollState = rememberScrollState()
@@ -130,17 +140,19 @@ fun ServerDialog(
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Text(
-                        text = if (server != null) stringResource(R.string.home_edit) else stringResource(R.string.server_add),
+                        text = if (server != null) editServerLabel else addServerLabel,
                         style = MaterialTheme.typography.headlineSmall
                     )
 
                     OutlinedTextField(
                         value = name,
                         onValueChange = { name = it },
-                        label = { Text(stringResource(R.string.server_name)) },
+                        label = { Text(nameLabel) },
                         placeholder = { Text(stringResource(R.string.server_name_hint)) },
                         singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .semantics { contentDescription = nameLabel }
                     )
 
                     OutlinedTextField(
@@ -149,7 +161,7 @@ fun ServerDialog(
                             url = it
                             urlError = null
                         },
-                        label = { Text(stringResource(R.string.server_url)) },
+                        label = { Text(urlLabel) },
                         placeholder = { Text(stringResource(R.string.server_url_hint)) },
                         isError = urlError != null,
                         supportingText = if (urlError != null) {
@@ -159,26 +171,32 @@ fun ServerDialog(
                         },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                         singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .semantics { contentDescription = urlLabel }
                     )
 
                     OutlinedTextField(
                         value = username,
                         onValueChange = { username = it },
-                        label = { Text(stringResource(R.string.server_username)) },
+                        label = { Text(usernameLabel) },
                         placeholder = { Text(stringResource(R.string.server_username_hint)) },
                         singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .semantics { contentDescription = usernameLabel }
                     )
 
                     OutlinedTextField(
                         value = password,
                         onValueChange = { password = it },
-                        label = { Text(stringResource(R.string.server_password)) },
+                        label = { Text(passwordLabel) },
                         visualTransformation = PasswordVisualTransformation(),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                         singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .semantics { contentDescription = passwordLabel }
                     )
 
                     Surface(
@@ -224,6 +242,7 @@ fun ServerDialog(
                         Text(stringResource(R.string.server_cancel))
                     }
                     TextButton(
+                        modifier = Modifier.semantics { contentDescription = saveServerDescription },
                         onClick = {
                             val normalizedUrl = validateAndNormalizeUrl(url)
                             urlError = when {
@@ -246,7 +265,7 @@ fun ServerDialog(
                             }
                         }
                     ) {
-                        Text(stringResource(R.string.server_save))
+                        Text(saveLabel)
                     }
                 }
             }

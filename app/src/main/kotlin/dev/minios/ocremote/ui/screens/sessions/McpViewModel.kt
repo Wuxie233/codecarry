@@ -28,7 +28,7 @@ sealed class McpUiState {
         val saveError: String? = null,
     ) : McpUiState()
 
-    data class EmptyConfig(val filePath: String) : McpUiState()
+    data class EmptyConfig(val filePath: String, val fallbackExhausted: Boolean = true) : McpUiState()
 
     data class MissingConfig(val checkedPaths: List<String>) : McpUiState()
 
@@ -105,7 +105,10 @@ internal class McpStateController(
 
                 is McpConfigLoadState.Empty -> {
                     lastLoaded = null
-                    _state.value = McpUiState.EmptyConfig(filePath = loadState.config.filePath)
+                    _state.value = McpUiState.EmptyConfig(
+                        filePath = loadState.config.filePath,
+                        fallbackExhausted = true
+                    )
                 }
 
                 is McpConfigLoadState.NotFound -> {

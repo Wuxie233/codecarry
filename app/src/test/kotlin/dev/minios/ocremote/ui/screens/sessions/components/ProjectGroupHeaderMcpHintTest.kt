@@ -2,6 +2,7 @@ package dev.minios.ocremote.ui.screens.sessions.components
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ProjectGroupHeaderMcpHintTest {
@@ -24,5 +25,13 @@ class ProjectGroupHeaderMcpHintTest {
     @Test
     fun mcpHintLabelMapsLargerCountToNumericLabel() {
         assertEquals("42", mcpHintLabel(42))
+    }
+
+    @Test
+    fun mcpHintContentDescriptionMapsCountToNonEmptyDescription() {
+        val description = mcpHintContentDescription(2)
+
+        assertTrue(description.orEmpty().isNotBlank())
+        assertEquals("该项目已配置 2 个 MCP 服务器", description)
     }
 }

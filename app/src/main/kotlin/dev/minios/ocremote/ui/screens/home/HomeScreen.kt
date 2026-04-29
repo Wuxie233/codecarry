@@ -28,6 +28,8 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.OffsetMapping
 import androidx.compose.ui.text.input.TransformedText
@@ -838,6 +840,11 @@ private fun LocalLaunchOptionsDialog(
     } else {
         OutlinedTextFieldDefaults.colors()
     }
+    val localServerUsernameLabel = stringResource(R.string.home_local_server_username_label)
+    val localServerPasswordLabel = stringResource(R.string.home_local_server_password_label)
+    val proxyUrlLabel = stringResource(R.string.home_local_proxy_url_label)
+    val noProxyLabel = stringResource(R.string.home_local_proxy_no_proxy_label)
+    val startupTimeoutLabel = stringResource(R.string.home_local_startup_timeout_label)
 
     val switchColors = if (isAmoled) {
         SwitchDefaults.colors(
@@ -913,9 +920,10 @@ private fun LocalLaunchOptionsDialog(
                         },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 16.dp),
+                            .padding(horizontal = 16.dp)
+                            .semantics { contentDescription = localServerUsernameLabel },
                         singleLine = true,
-                        label = { Text(stringResource(R.string.home_local_server_username_label)) },
+                        label = { Text(localServerUsernameLabel) },
                         placeholder = { Text(stringResource(R.string.home_local_server_username_placeholder)) },
                         keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.Text),
                         colors = fieldColors,
@@ -928,9 +936,10 @@ private fun LocalLaunchOptionsDialog(
                         },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 16.dp),
+                            .padding(horizontal = 16.dp)
+                            .semantics { contentDescription = localServerPasswordLabel },
                         singleLine = true,
-                        label = { Text(stringResource(R.string.home_local_server_password_label)) },
+                        label = { Text(localServerPasswordLabel) },
                         placeholder = { Text(stringResource(R.string.home_local_server_password_placeholder)) },
                         visualTransformation = if (maskPassword) FullStringMaskTransformation else VisualTransformation.None,
                         keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.Password),
@@ -978,9 +987,10 @@ private fun LocalLaunchOptionsDialog(
                             },
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 16.dp),
+                                .padding(horizontal = 16.dp)
+                                .semantics { contentDescription = proxyUrlLabel },
                             singleLine = true,
-                            label = { Text(stringResource(R.string.home_local_proxy_url_label)) },
+                            label = { Text(proxyUrlLabel) },
                             placeholder = { Text("http://127.0.0.1:8080") },
                             visualTransformation = if (maskProxy) FullStringMaskTransformation else VisualTransformation.None,
                             keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.Uri),
@@ -1002,10 +1012,11 @@ private fun LocalLaunchOptionsDialog(
                             },
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 16.dp),
+                                .padding(horizontal = 16.dp)
+                                .semantics { contentDescription = noProxyLabel },
                             minLines = 2,
                             maxLines = 4,
-                            label = { Text(stringResource(R.string.home_local_proxy_no_proxy_label)) },
+                            label = { Text(noProxyLabel) },
                             placeholder = { Text(LocalServerManager.DEFAULT_NO_PROXY_LIST) },
                             keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.Text),
                             colors = fieldColors,
@@ -1060,10 +1071,12 @@ private fun LocalLaunchOptionsDialog(
                         },
                     )
                     ListItem(
-                        headlineContent = { Text(stringResource(R.string.home_local_startup_timeout_label)) },
+                        headlineContent = { Text(startupTimeoutLabel) },
                         supportingContent = { Text(stringResource(R.string.home_local_startup_timeout_value, startupTimeoutSec)) },
                         trailingContent = { Icon(Icons.Default.ChevronRight, contentDescription = null) },
-                        modifier = Modifier.clickable { showTimeoutDialog = true },
+                        modifier = Modifier
+                            .semantics { contentDescription = startupTimeoutLabel }
+                            .clickable { showTimeoutDialog = true },
                     )
                 }
             }
@@ -1225,6 +1238,14 @@ private fun ServerCard(
     } else {
         MaterialTheme.colorScheme.onSurface
     }
+    val connectLabel = stringResource(R.string.home_connect)
+    val retryLabel = stringResource(R.string.retry)
+    val retryConnectDescription = "$retryLabel ${server.displayName}"
+    val connectButtonDescription = if (connectionError != null) {
+        retryConnectDescription
+    } else {
+        "$connectLabel ${server.displayName}"
+    }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -1316,11 +1337,20 @@ private fun ServerCard(
 
             // Connection error
             if (connectionError != null) {
-                Text(
-                    text = connectionError,
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodySmall
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = connectionError,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    TextButton(
+                        onClick = onConnect,
+                        modifier = Modifier.semantics { contentDescription = retryConnectDescription },
+                        enabled = !isConnecting,
+                    ) {
+                        Text(retryLabel)
+                    }
+                }
             }
 
             // Action buttons row
@@ -1383,7 +1413,9 @@ private fun ServerCard(
             if (!isConnected) {
                 Button(
                     onClick = onConnect,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .semantics { contentDescription = connectButtonDescription },
                     enabled = !isConnecting,
                     colors = if (isAmoled) {
                         ButtonDefaults.buttonColors(
@@ -1412,7 +1444,7 @@ private fun ServerCard(
                     } else {
                         Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text(stringResource(R.string.home_connect))
+                        Text(connectLabel)
                     }
                 }
             }
