@@ -28,7 +28,7 @@
 ## Artifact
 
 - Artifact: `release-apks/oc-remote-1.6.24.apk`
-- SHA-256: `74496c9223a5d3339a9b989db2b070b53b9f2201c6c9b34191068a902179ca52`
+- SHA-256: `7e6b3e9368526904cf98bb3bdeea2d9672c0d114226ada056713b712aac6f843`
 - Signature verification: `apksigner verify --verbose --print-certs` ✅ (`v2` scheme verified, 1 signer)
-- Signer certificate SHA-256 digest: `98de61e5749b2eaeaaa8912b94c8ac33e817a6403c1673cf4fc9cc89a22984b7`
+- Signer certificate SHA-256 digest: `fac3107e3e646a1ea9a5022d1da48480e5988c715bf4400f90a236f9f219a4dc`
 - Previous unsigned build retained for traceability: `release-apks/oc-remote-1.6.24-unsigned.apk`
