@@ -1,0 +1,5 @@
+# v1.6.23 signer certificate SHA-256 (canonical reference for OC Remote releases).
+# Captured from /tmp/oc-remote-signfix.12Nyf5/oc-remote-1.6.23.apk via:
+#   apksigner verify --print-certs <apk> | grep 'SHA-256'
+# Future releases MUST be signed with a key whose cert hashes to this value.
+fac3107e3e646a1ea9a5022d1da48480e5988c715bf4400f90a236f9f219a4dc

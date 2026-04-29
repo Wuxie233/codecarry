@@ -42,6 +42,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -686,6 +688,13 @@ private fun LocalServerLaunchOptionsDialog(
     val trimmedNoProxy = localNoProxyList.trim()
     val trimmedServerPassword = localServerPassword.trim()
     val canSave = !localEnabled || trimmedProxyUrl.isNotBlank()
+    val localServerUsernameLabel = stringResource(R.string.home_local_server_username_label)
+    val localServerPasswordLabel = stringResource(R.string.home_local_server_password_label)
+    val proxyUrlLabel = stringResource(R.string.home_local_proxy_url_label)
+    val noProxyLabel = stringResource(R.string.home_local_proxy_no_proxy_label)
+    val startupTimeoutLabel = stringResource(R.string.home_local_startup_timeout_label)
+    val saveLabel = stringResource(R.string.server_save)
+    val localLaunchSaveDescription = "$saveLabel ${stringResource(R.string.home_local_launch_options)}"
 
     val switchColors = if (isAmoled) {
         SwitchDefaults.colors(
@@ -731,9 +740,11 @@ private fun LocalServerLaunchOptionsDialog(
                 OutlinedTextField(
                     value = localServerUsername,
                     onValueChange = { localServerUsername = it },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .semantics { contentDescription = localServerUsernameLabel },
                     singleLine = true,
-                    label = { Text(stringResource(R.string.home_local_server_username_label)) },
+                    label = { Text(localServerUsernameLabel) },
                     placeholder = { Text(stringResource(R.string.home_local_server_username_placeholder)) },
                     keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.Text),
                 )
@@ -741,9 +752,11 @@ private fun LocalServerLaunchOptionsDialog(
                 OutlinedTextField(
                     value = localServerPassword,
                     onValueChange = { localServerPassword = it },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .semantics { contentDescription = localServerPasswordLabel },
                     singleLine = true,
-                    label = { Text(stringResource(R.string.home_local_server_password_label)) },
+                    label = { Text(localServerPasswordLabel) },
                     placeholder = { Text(stringResource(R.string.home_local_server_password_placeholder)) },
                     trailingIcon = {
                         IconButton(onClick = { maskServerPassword = !maskServerPassword }) {
@@ -783,9 +796,11 @@ private fun LocalServerLaunchOptionsDialog(
                     OutlinedTextField(
                         value = localProxyUrl,
                         onValueChange = { localProxyUrl = it },
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .semantics { contentDescription = proxyUrlLabel },
                         singleLine = true,
-                        label = { Text(stringResource(R.string.home_local_proxy_url_label)) },
+                        label = { Text(proxyUrlLabel) },
                         placeholder = { Text("http://127.0.0.1:8080") },
                         trailingIcon = {
                             IconButton(onClick = { maskProxyUrl = !maskProxyUrl }) {
@@ -803,10 +818,12 @@ private fun LocalServerLaunchOptionsDialog(
                     OutlinedTextField(
                         value = localNoProxyList,
                         onValueChange = { localNoProxyList = it },
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .semantics { contentDescription = noProxyLabel },
                         minLines = 2,
                         maxLines = 4,
-                        label = { Text(stringResource(R.string.home_local_proxy_no_proxy_label)) },
+                        label = { Text(noProxyLabel) },
                         placeholder = { Text(LocalServerManager.DEFAULT_NO_PROXY_LIST) },
                         keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.Text),
                     )
@@ -866,8 +883,11 @@ private fun LocalServerLaunchOptionsDialog(
                         value = stringResource(R.string.home_local_startup_timeout_value, localStartupTimeoutSec),
                         onValueChange = {},
                         readOnly = true,
-                        modifier = Modifier.menuAnchor().fillMaxWidth(),
-                        label = { Text(stringResource(R.string.home_local_startup_timeout_label)) },
+                        modifier = Modifier
+                            .menuAnchor()
+                            .fillMaxWidth()
+                            .semantics { contentDescription = startupTimeoutLabel },
+                        label = { Text(startupTimeoutLabel) },
                         trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = timeoutExpanded) },
                     )
                     ExposedDropdownMenu(expanded = timeoutExpanded, onDismissRequest = { timeoutExpanded = false }) {
@@ -886,6 +906,7 @@ private fun LocalServerLaunchOptionsDialog(
         },
         confirmButton = {
             Button(
+                modifier = Modifier.semantics { contentDescription = localLaunchSaveDescription },
                 onClick = {
                     onSave(
                         localEnabled,
@@ -901,7 +922,7 @@ private fun LocalServerLaunchOptionsDialog(
                 },
                 enabled = canSave,
             ) {
-                Text(stringResource(R.string.server_save))
+                Text(saveLabel)
             }
         },
         dismissButton = {

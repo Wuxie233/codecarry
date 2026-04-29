@@ -40,6 +40,7 @@ class McpViewModelTest {
         val state = controller.state.value
         assertTrue(state is McpUiState.EmptyConfig)
         assertEquals(filePath, (state as McpUiState.EmptyConfig).filePath)
+        assertTrue(state.fallbackExhausted)
     }
 
     @Test

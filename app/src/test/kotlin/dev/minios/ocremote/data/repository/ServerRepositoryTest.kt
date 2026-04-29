@@ -2,6 +2,7 @@ package dev.minios.ocremote.data.repository
 
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import dev.minios.ocremote.data.api.OpenCodeApi
+import dev.minios.ocremote.data.api.OpenCodeFileNotFoundException
 import dev.minios.ocremote.data.api.ServerConnection
 import dev.minios.ocremote.domain.model.McpConfigLoadState
 import io.ktor.client.HttpClient
@@ -21,12 +22,14 @@ import io.ktor.utils.io.ByteReadChannel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import java.io.IOException
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ServerRepositoryTest {
@@ -45,7 +48,7 @@ class ServerRepositoryTest {
     )
 
     @Test
-    fun resolveMcpConfigLoadStateProbesAllFiveCandidatesInPriorityOrder() = runTest {
+    fun resolveMcpConfigLoadStateStopsAfterLoadedCandidateInPriorityOrder() = runTest {
         val captured = mutableListOf<HttpRequestData>()
         val repository = newRepository(
             api = newApi(captured) { path ->
@@ -62,7 +65,7 @@ class ServerRepositoryTest {
             projectDir = "/workspace/project",
         )
 
-        assertEquals(candidatePaths, captured.fileContentPaths())
+        assertEquals(candidatePaths.take(4), captured.fileContentPaths())
         assertTrue(result is McpConfigLoadState.Loaded)
         assertEquals(
             candidatePaths[3],
@@ -110,7 +113,7 @@ class ServerRepositoryTest {
             projectDir = "/workspace/project",
         )
 
-        assertEquals(candidatePaths, captured.fileContentPaths())
+        assertEquals(candidatePaths.take(2), captured.fileContentPaths())
         assertTrue(result is McpConfigLoadState.Error)
         assertEquals(
             candidatePaths[1],
@@ -147,6 +150,154 @@ class ServerRepositoryTest {
         )
     }
 
+    @Test
+    fun resolveMcpConfigLoadStateProjectEmptyFallsThroughToGlobalLoaded() = runTest {
+        val captured = mutableListOf<HttpRequestData>()
+        val repository = newRepository(
+            api = newApi(captured) { path ->
+                when (path) {
+                    candidatePaths[0] -> FileReply(HttpStatusCode.OK, configFileContent("{}"))
+                    candidatePaths[3] -> FileReply(HttpStatusCode.OK, configFileContent(globalMcpConfigJson))
+                    else -> FileReply(HttpStatusCode.NotFound)
+                }
+            },
+            scope = backgroundScope,
+        )
+
+        val result = repository.readMcpConfigState(
+            conn = ServerConnection.from("http://example.test:4096"),
+            projectDir = "/workspace/project",
+        )
+
+        assertEquals(candidatePaths.take(4), captured.fileContentPaths())
+        assertTrue(result is McpConfigLoadState.Loaded)
+        val config = (result as McpConfigLoadState.Loaded).config
+        assertEquals(candidatePaths[3], config.filePath)
+        assertEquals(setOf("filesystem"), config.servers.keys)
+    }
+
+    @Test
+    fun resolveMcpConfigLoadStateBlankProjectFallsThroughToGlobalLoaded() = runTest {
+        val repository = resolverRepository(backgroundScope)
+        val projectPath = "/proj/.opencode/opencode.json"
+        val globalPath = "/home/u/.config/opencode/opencode.json"
+
+        val result = repository.resolveMcpConfigLoadState(
+            listOf(
+                ServerRepository.McpConfigCandidateRead(projectPath, Result.success("")),
+                ServerRepository.McpConfigCandidateRead(globalPath, Result.success(globalMcpConfigJson)),
+            )
+        )
+
+        assertTrue(result is McpConfigLoadState.Loaded)
+        assertEquals(globalPath, (result as McpConfigLoadState.Loaded).config.filePath)
+    }
+
+    @Test
+    fun resolveMcpConfigLoadStateLoadedProjectIsTerminal() = runTest {
+        val repository = resolverRepository(backgroundScope)
+        val projectPath = "/proj/.opencode/opencode.json"
+        val globalPath = "/home/u/.config/opencode/opencode.json"
+
+        val result = repository.resolveMcpConfigLoadState(
+            listOf(
+                ServerRepository.McpConfigCandidateRead(
+                    projectPath,
+                    Result.success("""{"mcpServers":{"project":{"command":"project-cmd"}}}"""),
+                ),
+                ServerRepository.McpConfigCandidateRead(
+                    globalPath,
+                    Result.success("""{"mcpServers":{"global":{"command":"global-cmd"}}}"""),
+                ),
+            )
+        )
+
+        assertTrue(result is McpConfigLoadState.Loaded)
+        val config = (result as McpConfigLoadState.Loaded).config
+        assertEquals(projectPath, config.filePath)
+        assertEquals(setOf("project"), config.servers.keys)
+    }
+
+    @Test
+    fun resolveMcpConfigLoadStateAllEmptyReturnsFirstRememberedEmpty() = runTest {
+        val repository = resolverRepository(backgroundScope)
+        val projectPath = "/proj/.opencode/opencode.json"
+        val globalPath = "/home/u/.config/opencode/opencode.json"
+
+        val result = repository.resolveMcpConfigLoadState(
+            listOf(
+                ServerRepository.McpConfigCandidateRead(projectPath, Result.success("{}")),
+                ServerRepository.McpConfigCandidateRead(globalPath, Result.success("""{"mcpServers":{}}""")),
+            )
+        )
+
+        assertTrue(result is McpConfigLoadState.Empty)
+        assertEquals(projectPath, (result as McpConfigLoadState.Empty).config.filePath)
+    }
+
+    @Test
+    fun resolveMcpConfigLoadStateAllMissingReturnsNotFoundCheckedPaths() = runTest {
+        val repository = resolverRepository(backgroundScope)
+        val projectPath = "/proj/.opencode/opencode.json"
+        val globalPath = "/home/u/.config/opencode/opencode.json"
+
+        val result = repository.resolveMcpConfigLoadState(
+            listOf(
+                ServerRepository.McpConfigCandidateRead(
+                    projectPath,
+                    Result.failure(OpenCodeFileNotFoundException(projectPath)),
+                ),
+                ServerRepository.McpConfigCandidateRead(
+                    globalPath,
+                    Result.failure(OpenCodeFileNotFoundException(globalPath)),
+                ),
+            )
+        )
+
+        assertTrue(result is McpConfigLoadState.NotFound)
+        assertEquals(
+            listOf(projectPath, globalPath),
+            (result as McpConfigLoadState.NotFound).checkedPaths,
+        )
+    }
+
+    @Test
+    fun resolveMcpConfigLoadStateHardReadErrorIsTerminal() = runTest {
+        val repository = resolverRepository(backgroundScope)
+        val projectPath = "/proj/.opencode/opencode.json"
+        val globalPath = "/home/u/.config/opencode/opencode.json"
+
+        val result = repository.resolveMcpConfigLoadState(
+            listOf(
+                ServerRepository.McpConfigCandidateRead(
+                    projectPath,
+                    Result.failure(IOException("permission denied")),
+                ),
+                ServerRepository.McpConfigCandidateRead(globalPath, Result.success(globalMcpConfigJson)),
+            )
+        )
+
+        assertTrue(result is McpConfigLoadState.Error)
+        assertEquals(projectPath, (result as McpConfigLoadState.Error).filePath)
+    }
+
+    @Test
+    fun resolveMcpConfigLoadStateParseErrorIsTerminal() = runTest {
+        val repository = resolverRepository(backgroundScope)
+        val projectPath = "/proj/.opencode/opencode.json"
+        val globalPath = "/home/u/.config/opencode/opencode.json"
+
+        val result = repository.resolveMcpConfigLoadState(
+            listOf(
+                ServerRepository.McpConfigCandidateRead(projectPath, Result.success("{ this is not json ")),
+                ServerRepository.McpConfigCandidateRead(globalPath, Result.success(globalMcpConfigJson)),
+            )
+        )
+
+        assertTrue(result is McpConfigLoadState.Error)
+        assertEquals(projectPath, (result as McpConfigLoadState.Error).filePath)
+    }
+
     private fun newRepository(api: OpenCodeApi, scope: CoroutineScope): ServerRepository {
         val dataStore = PreferenceDataStoreFactory.create(
             scope = scope,
@@ -159,6 +310,15 @@ class ServerRepositoryTest {
             json = json,
         )
     }
+
+    private fun resolverRepository(scope: CoroutineScope): ServerRepository = ServerRepository(
+        dataStore = PreferenceDataStoreFactory.create(
+            scope = scope,
+            produceFile = { tmpFolder.newFile("server_repo_prefs_${System.nanoTime()}.preferences_pb") },
+        ),
+        api = OpenCodeApi(HttpClient(OkHttp), json),
+        json = json,
+    )
 
     private fun newApi(
         captured: MutableList<HttpRequestData>,
@@ -216,6 +376,10 @@ class ServerRepositoryTest {
     )
 
     private companion object {
+        private const val globalMcpConfigJson = """{"mcpServers":{"filesystem":{"command":"npx"}}}"""
+
+        private fun configFileContent(content: String): String = """{"type":"file","content":${Json.encodeToString(content)}}"""
+
         private val validMcpFileContent =
             """{"type":"file","content":"{\"mcpServers\":{\"filesystem\":{\"command\":\"npx\"}}}"}"""
     }
