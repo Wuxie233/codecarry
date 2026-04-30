@@ -809,6 +809,41 @@ class OpenCodeApi @Inject constructor(
     }
 
     /**
+     * Get runtime MCP server status from the OpenCode server.
+     * GET /mcp
+     *
+     * This mirrors the OpenCode web UI runtime source and reflects the merged
+     * global + project MCP configuration the server actually loaded.
+     */
+    suspend fun getMcpStatus(
+        conn: ServerConnection,
+        directory: String? = null,
+    ): McpRuntimeStatusResult {
+        return try {
+            val response = httpClient.get("${conn.baseUrl}/mcp") {
+                conn.authHeader?.let { header("Authorization", it) }
+                directory?.let { header("x-opencode-directory", android.net.Uri.encode(it)) }
+            }
+            when (val status = response.status) {
+                HttpStatusCode.NotFound,
+                HttpStatusCode.MethodNotAllowed,
+                HttpStatusCode.NotImplemented -> McpRuntimeStatusResult.Unsupported
+
+                else -> if (status.isSuccess()) {
+                    val statuses: Map<String, McpRuntimeStatus> = response.body()
+                    if (BuildConfig.DEBUG) runCatching { Log.d(TAG, "getMcpStatus: ${statuses.size} servers") }
+                    McpRuntimeStatusResult.Success(statuses)
+                } else {
+                    McpRuntimeStatusResult.Failed(IOException("GET /mcp failed: HTTP ${status.value}"))
+                }
+            }
+        } catch (error: Exception) {
+            if (BuildConfig.DEBUG) runCatching { Log.d(TAG, "getMcpStatus: error class=${error.javaClass.simpleName}") }
+            McpRuntimeStatusResult.Failed(error)
+        }
+    }
+
+    /**
      * Patch server config.
      * PATCH /config
      */
@@ -1024,6 +1059,19 @@ data class OutputFormat(
 data class QuestionReplyBody(
     val answers: List<List<String>>
 )
+
+@Serializable
+data class McpRuntimeStatus(
+    val status: String,
+    val error: String? = null,
+    val version: String? = null,
+)
+
+sealed interface McpRuntimeStatusResult {
+    data class Success(val statuses: Map<String, McpRuntimeStatus>) : McpRuntimeStatusResult
+    data object Unsupported : McpRuntimeStatusResult
+    data class Failed(val cause: Throwable) : McpRuntimeStatusResult
+}
 
 @Serializable
 data class SearchMatch(

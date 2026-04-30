@@ -9,6 +9,7 @@ import dev.minios.ocremote.data.repository.ServerRepository
 import dev.minios.ocremote.domain.model.McpConfig
 import dev.minios.ocremote.domain.model.McpConfigLoadState
 import dev.minios.ocremote.domain.model.McpServer
+import dev.minios.ocremote.domain.model.McpSource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -26,15 +27,23 @@ sealed class McpUiState {
         val editedServers: Map<String, McpServer> = config.servers,
         val dirty: Boolean = false,
         val saveError: String? = null,
+        val source: McpSource = McpSource.File,
     ) : McpUiState()
 
-    data class EmptyConfig(val filePath: String, val fallbackExhausted: Boolean = true) : McpUiState()
+    data class EmptyConfig(
+        val filePath: String,
+        val fallbackExhausted: Boolean = true,
+        val source: McpSource = McpSource.File,
+    ) : McpUiState()
 
     data class MissingConfig(val checkedPaths: List<String>) : McpUiState()
 
     data class ReadError(val filePath: String?, val message: String) : McpUiState()
 
     data class ParseError(val filePath: String, val message: String) : McpUiState()
+
+    /** Runtime /mcp call failed with a non-Unsupported error AND file fallback was Empty/NotFound. */
+    data class RuntimeUnavailable(val fallback: McpUiState) : McpUiState()
 
     data object Saving : McpUiState()
 
@@ -75,53 +84,65 @@ internal class McpStateController(
         _state.value = McpUiState.Loading
 
         scope.launch {
-            when (val loadState = readMcpConfigState(conn, projectDir)) {
-                is McpConfigLoadState.Loaded -> {
-                    val pending = pendingEdits
-                    val loaded = McpUiState.Loaded(config = loadState.config)
-                    val resolvedLoaded = if (pending != null) {
-                        if (pending.keys.all { it in loadState.config.servers.keys }) {
-                            val mergedServers = loadState.config.servers.mapValues { (name, server) ->
-                                pending[name]?.let { pendingServer ->
-                                    server.copy(enabled = pendingServer.enabled)
-                                } ?: server
-                            }
-                            val dirtyEntries = dirtyEdits(mergedServers, loadState.config.servers)
-                            pendingEdits = dirtyEntries
-                            loaded.copy(
-                                editedServers = mergedServers,
-                                dirty = dirtyEntries != null,
-                            )
-                        } else {
-                            pendingEdits = null
-                            loaded
+            _state.value = mapLoadStateToUi(readMcpConfigState(conn, projectDir))
+        }
+    }
+
+    private fun mapLoadStateToUi(loadState: McpConfigLoadState): McpUiState {
+        return when (loadState) {
+            is McpConfigLoadState.Loaded -> {
+                val pending = pendingEdits
+                val loaded = McpUiState.Loaded(config = loadState.config, source = loadState.source)
+                val resolvedLoaded = if (pending != null && loadState.source == McpSource.File) {
+                    if (pending.keys.all { it in loadState.config.servers.keys }) {
+                        val mergedServers = loadState.config.servers.mapValues { (name, server) ->
+                            pending[name]?.let { pendingServer ->
+                                server.copy(enabled = pendingServer.enabled)
+                            } ?: server
                         }
+                        val dirtyEntries = dirtyEdits(mergedServers, loadState.config.servers)
+                        pendingEdits = dirtyEntries
+                        loaded.copy(
+                            editedServers = mergedServers,
+                            dirty = dirtyEntries != null,
+                        )
                     } else {
+                        pendingEdits = null
                         loaded
                     }
-                    lastLoaded = resolvedLoaded
-                    _state.value = resolvedLoaded
+                } else {
+                    // Runtime source is read-only and cannot carry config-file pending edits.
+                    if (loadState.source == McpSource.Runtime) pendingEdits = null
+                    loaded
                 }
+                lastLoaded = resolvedLoaded
+                resolvedLoaded
+            }
 
-                is McpConfigLoadState.Empty -> {
+            is McpConfigLoadState.Empty -> {
+                lastLoaded = null
+                McpUiState.EmptyConfig(
+                    filePath = loadState.config.filePath,
+                    fallbackExhausted = true,
+                    source = loadState.source,
+                )
+            }
+
+            is McpConfigLoadState.NotFound -> {
+                lastLoaded = null
+                McpUiState.MissingConfig(checkedPaths = loadState.checkedPaths)
+            }
+
+            is McpConfigLoadState.Error -> {
+                val uiState = loadState.toUiState()
+                if (uiState !is McpUiState.ReadError) {
                     lastLoaded = null
-                    _state.value = McpUiState.EmptyConfig(
-                        filePath = loadState.config.filePath,
-                        fallbackExhausted = true
-                    )
                 }
+                uiState
+            }
 
-                is McpConfigLoadState.NotFound -> {
-                    lastLoaded = null
-                    _state.value = McpUiState.MissingConfig(checkedPaths = loadState.checkedPaths)
-                }
-
-                is McpConfigLoadState.Error -> {
-                    _state.value = loadState.toUiState()
-                    if (_state.value !is McpUiState.ReadError) {
-                        lastLoaded = null
-                    }
-                }
+            is McpConfigLoadState.RuntimeUnavailable -> {
+                McpUiState.RuntimeUnavailable(fallback = mapLoadStateToUi(loadState.fallback))
             }
         }
     }
@@ -139,6 +160,7 @@ internal class McpStateController(
 
     fun toggleServer(name: String) {
         val current = (_state.value as? McpUiState.Loaded) ?: lastLoaded ?: return
+        if (current.source == McpSource.Runtime) return
         val updatedServers = current.editedServers.toMutableMap()
         val server = updatedServers[name] ?: return
         updatedServers[name] = server.copy(enabled = !server.enabled)
@@ -156,6 +178,7 @@ internal class McpStateController(
 
     fun save() {
         val current = (_state.value as? McpUiState.Loaded) ?: lastLoaded ?: return
+        if (current.source == McpSource.Runtime) return
         val conn = currentConn ?: return
         val updatedConfig = current.config.copy(servers = current.editedServers)
 
