@@ -18,6 +18,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class OpenCodeApiMcpHeaderTest {
@@ -66,6 +67,21 @@ class OpenCodeApiMcpHeaderTest {
         return OpenCodeApi(client, json)
     }
 
+    private fun newApiForMcpRuntime(captured: MutableList<HttpRequestData>, body: String): OpenCodeApi {
+        val engine = MockEngine { request ->
+            captured += request
+            when {
+                request.url.encodedPath.startsWith("/mcp") -> respondJson(body)
+
+                else -> error("Unexpected request: ${'$'}{request.method.value} ${'$'}{request.url}")
+            }
+        }
+        val client = HttpClient(engine) {
+            install(ContentNegotiation) { json(json) }
+        }
+        return OpenCodeApi(client, json)
+    }
+
     @Test
     fun `MCP file and path APIs attach encoded directory header when supplied`() = runBlocking {
         val captured = mutableListOf<HttpRequestData>()
@@ -101,6 +117,54 @@ class OpenCodeApiMcpHeaderTest {
         captured.forEach { request ->
             assertNull(request.headers[DIRECTORY_HEADER])
         }
+    }
+
+    @Test
+    fun `getMcpRuntime forwards directory header`() = runBlocking {
+        val captured = mutableListOf<HttpRequestData>()
+        val api = newApiForMcpRuntime(captured, body = """{"servers":[]}""")
+        val conn = ServerConnection.from("http://example.test:4096")
+        val directory = "/workspace/proj"
+
+        api.getMcpRuntime(conn = conn, directory = directory)
+
+        val req = captured.single()
+        assertEquals(HttpMethod.Get, req.method)
+        assertEquals("/mcp", req.url.encodedPath)
+        assertEquals(Uri.encode(directory), req.headers[DIRECTORY_HEADER])
+    }
+
+    @Test
+    fun `connectMcp forwards directory header and url-encodes name`() = runBlocking {
+        val captured = mutableListOf<HttpRequestData>()
+        val api = newApiForMcpRuntime(captured, body = "")
+        val conn = ServerConnection.from("http://example.test:4096")
+        val directory = "/workspace/proj"
+
+        api.connectMcp(conn = conn, name = "a/b name", directory = directory)
+
+        val req = captured.single()
+        assertEquals(HttpMethod.Post, req.method)
+        assertTrue(
+            "Expected encoded MCP name in path, got ${'$'}{req.url.encodedPath}",
+            req.url.encodedPath == "/mcp/a%2Fb%20name/connect" ||
+                req.url.encodedPath == "/mcp/a%2Fb+name/connect",
+        )
+        assertEquals(Uri.encode(directory), req.headers[DIRECTORY_HEADER])
+    }
+
+    @Test
+    fun `disconnectMcp omits directory header when null`() = runBlocking {
+        val captured = mutableListOf<HttpRequestData>()
+        val api = newApiForMcpRuntime(captured, body = "")
+        val conn = ServerConnection.from("http://example.test:4096")
+
+        api.disconnectMcp(conn = conn, name = "fs", directory = null)
+
+        val req = captured.single()
+        assertEquals(HttpMethod.Post, req.method)
+        assertEquals("/mcp/fs/disconnect", req.url.encodedPath)
+        assertNull(req.headers[DIRECTORY_HEADER])
     }
 
     private fun MockRequestHandleScope.respondJson(content: String) = respond(
