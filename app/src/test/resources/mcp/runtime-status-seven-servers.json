@@ -1,0 +1,9 @@
+{
+  "aceTool": { "status": "connected" },
+  "autoinfo": { "status": "connected" },
+  "exa": { "status": "connected" },
+  "fetch": { "status": "connected" },
+  "github": { "status": "connected" },
+  "playwright": { "status": "connected" },
+  "stitch": { "status": "needs_auth" }
+}
