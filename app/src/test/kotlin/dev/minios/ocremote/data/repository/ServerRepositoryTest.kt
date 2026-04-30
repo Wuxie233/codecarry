@@ -339,6 +339,11 @@ class ServerRepositoryTest {
                     """.trimIndent(),
                 )
 
+                request.method == HttpMethod.Get && request.url.encodedPath == "/mcp" -> respond(
+                    status = HttpStatusCode.NotFound,
+                    content = ByteReadChannel(""),
+                )
+
                 request.method == HttpMethod.Get && request.url.encodedPath == "/file/content" -> {
                     val path = request.url.parameters["path"].orEmpty()
                     val reply = fileContentResponse(path)
