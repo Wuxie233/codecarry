@@ -52,6 +52,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import dev.minios.ocremote.R
 import dev.minios.ocremote.data.api.FileNode
 import dev.minios.ocremote.data.preferences.SessionScope
+import dev.minios.ocremote.domain.model.McpRuntimeState
 import dev.minios.ocremote.domain.model.Project
 import dev.minios.ocremote.domain.model.SessionStatus
 import kotlinx.coroutines.flow.collect
@@ -222,6 +223,7 @@ fun SessionListScreen(
     var showQuickNewSession by remember { mutableStateOf(false) }
     var mcpSheetProjectName by remember { mutableStateOf<String?>(null) }
     var mcpSheetProjectDir by remember { mutableStateOf<String?>(null) }
+    val fallbackMcpHintCounts = remember { mutableStateMapOf<String, Int>() }
 
     BackHandler(enabled = uiState.isSelectionMode) {
         viewModel.clearSelection()
@@ -456,11 +458,27 @@ fun SessionListScreen(
                             ) {
                                 for (group in uiState.groups) {
                         stickyHeader(key = "header_${group.directory}") {
-                                val activeProjectMcpServerCount = (mcpState as? McpUiState.Loaded)
-                                    ?.takeIf { mcpSheetProjectDir == group.directory }
-                                    ?.config
-                                    ?.servers
-                                    ?.size
+                                val activeProjectMcpServerCount = if (mcpSheetProjectDir == group.directory) {
+                                    when (val currentMcpState = mcpState) {
+                                        is McpUiState.Runtime -> currentMcpState.snapshot.servers.count { it.state == McpRuntimeState.CONNECTED }
+                                        is McpUiState.FallbackReadOnly -> currentMcpState.snapshot.servers.size.also { count ->
+                                            fallbackMcpHintCounts[group.directory] = count
+                                        }
+                                        is McpUiState.LoadError -> fallbackMcpHintCounts[group.directory] ?: 0
+                                        else -> null
+                                    }
+                                } else {
+                                    null
+                                }
+                                val activeProjectMcpSupportsRuntimeControl = if (mcpSheetProjectDir == group.directory) {
+                                    when (val currentMcpState = mcpState) {
+                                        is McpUiState.Runtime -> currentMcpState.snapshot.supportsRuntimeControl
+                                        is McpUiState.FallbackReadOnly -> currentMcpState.snapshot.supportsRuntimeControl
+                                        else -> false
+                                    }
+                                } else {
+                                    false
+                                }
                                 ProjectGroupHeader(
                                     projectName = group.projectName,
                                     tildeDirectory = group.tildeDirectory,
@@ -482,6 +500,7 @@ fun SessionListScreen(
                                     },
                                     onArchiveAll = { viewModel.archiveProjectSessions(group.directory) },
                                     mcpServerCount = activeProjectMcpServerCount,
+                                    mcpSupportsRuntimeControl = activeProjectMcpSupportsRuntimeControl,
                                     onManageMcp = {
                                         mcpSheetProjectName = group.projectName
                                         mcpSheetProjectDir = group.directory

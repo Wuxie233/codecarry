@@ -18,14 +18,18 @@ import io.ktor.websocket.readText
 import io.ktor.websocket.send
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.io.IOException
+import java.net.URLEncoder
 import java.util.Base64
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -672,6 +676,119 @@ class OpenCodeApi @Inject constructor(
         }.body()
     }
 
+    // ============ MCP Runtime ============
+
+    /**
+     * GET /mcp — list MCP servers and their runtime state for the active project.
+     *
+     * Returns null when the server does not expose runtime MCP endpoints
+     * (404 / 405). Callers should fall back to file-based config parsing in that case.
+     */
+    suspend fun getMcpRuntime(
+        conn: ServerConnection,
+        directory: String? = null,
+    ): List<McpRuntimeStatus>? {
+        val response = httpClient.get("${conn.baseUrl}/mcp") {
+            conn.authHeader?.let { header("Authorization", it) }
+            directory?.let { header("x-opencode-directory", android.net.Uri.encode(it)) }
+        }
+        if (response.status == HttpStatusCode.NotFound || response.status == HttpStatusCode.MethodNotAllowed) {
+            return null
+        }
+        if (!response.status.isSuccess()) {
+            throw mcpRuntimeIOException("getMcpRuntime", response)
+        }
+
+        val parsed = parseMcpRuntimeServers(response.bodyAsText())
+        return parsed.map { dto ->
+            McpRuntimeStatus(
+                name = dto.name.orEmpty(),
+                state = parseMcpRuntimeState(dto.state?.takeIf { it.isNotBlank() } ?: dto.statusFallback),
+                errorMessage = sanitizeMcpError(dto.error) ?: sanitizeMcpError(dto.message),
+            )
+        }.filter { it.name.isNotBlank() }
+    }
+
+    /**
+     * POST /mcp/{name}/connect — request runtime connect for one MCP server.
+     *
+     * Returns true on 2xx. Returns false on 404 / 405 (server lacks endpoint).
+     */
+    suspend fun connectMcp(
+        conn: ServerConnection,
+        name: String,
+        directory: String? = null,
+    ): Boolean {
+        val encoded = URLEncoder.encode(name, Charsets.UTF_8.name())
+        val response = httpClient.post("${conn.baseUrl}/mcp/$encoded/connect") {
+            conn.authHeader?.let { header("Authorization", it) }
+            directory?.let { header("x-opencode-directory", android.net.Uri.encode(it)) }
+        }
+        if (response.status == HttpStatusCode.NotFound || response.status == HttpStatusCode.MethodNotAllowed) {
+            return false
+        }
+        if (!response.status.isSuccess()) {
+            throw mcpRuntimeIOException("connectMcp", response)
+        }
+        return true
+    }
+
+    /**
+     * POST /mcp/{name}/disconnect — same shape as [connectMcp] but disconnects.
+     */
+    suspend fun disconnectMcp(
+        conn: ServerConnection,
+        name: String,
+        directory: String? = null,
+    ): Boolean {
+        val encoded = URLEncoder.encode(name, Charsets.UTF_8.name())
+        val response = httpClient.post("${conn.baseUrl}/mcp/$encoded/disconnect") {
+            conn.authHeader?.let { header("Authorization", it) }
+            directory?.let { header("x-opencode-directory", android.net.Uri.encode(it)) }
+        }
+        if (response.status == HttpStatusCode.NotFound || response.status == HttpStatusCode.MethodNotAllowed) {
+            return false
+        }
+        if (!response.status.isSuccess()) {
+            throw mcpRuntimeIOException("disconnectMcp", response)
+        }
+        return true
+    }
+
+    private fun parseMcpRuntimeServers(body: String): List<McpRuntimeServerDto> {
+        val root = runCatching { json.parseToJsonElement(body) }.getOrElse { return emptyList() }
+        val serializer = ListSerializer(McpRuntimeServerDto.serializer())
+        return when (root) {
+            is JsonArray -> runCatching { json.decodeFromJsonElement(serializer, root) }.getOrElse { emptyList() }
+            is JsonObject -> {
+                root["servers"]?.let { servers ->
+                    return runCatching { json.decodeFromJsonElement(serializer, servers) }.getOrElse { emptyList() }
+                }
+                root.entries.map { (name, value) ->
+                    val nested = value as? JsonObject ?: JsonObject(emptyMap())
+                    McpRuntimeServerDto(
+                        name = name,
+                        state = nested.stringField("state"),
+                        statusFallback = nested.stringField("status"),
+                        error = nested.stringField("error"),
+                        message = nested.stringField("message"),
+                    )
+                }
+            }
+            else -> emptyList()
+        }
+    }
+
+    private fun JsonObject.stringField(name: String): String? =
+        runCatching { this[name]?.jsonPrimitive?.contentOrNull }.getOrNull()
+
+    private suspend fun mcpRuntimeIOException(operation: String, response: HttpResponse): IOException {
+        val body = runCatching { response.bodyAsText() }.getOrNull()
+        val sanitized = sanitizeMcpError(body)
+        val suffix = sanitized?.let { ": $it" }.orEmpty()
+        return IOException("$operation failed: ${response.status}$suffix")
+    }
+
     // ============ Config / Providers ============
 
     /**
@@ -1091,6 +1208,46 @@ data class QuestionOption(
     val label: String,
     val description: String
 )
+
+// ============ MCP Runtime DTOs ============
+
+@Serializable
+data class McpRuntimeServerDto(
+    val name: String? = null,
+    val state: String? = null,
+    @SerialName("status") val statusFallback: String? = null,
+    val error: String? = null,
+    val message: String? = null,
+)
+
+@Serializable
+data class McpRuntimeListDto(
+    val servers: List<McpRuntimeServerDto> = emptyList(),
+)
+
+internal fun sanitizeMcpError(raw: String?): String? {
+    val oneLine = raw?.trim()
+        ?.takeIf { it.isNotBlank() }
+        ?.lineSequence()
+        ?.firstOrNull()
+        .orEmpty()
+    if (oneLine.isBlank()) return null
+
+    val headerLikeRegex = Regex("(?i)([\"']?(?:authorization|headers?)[\"']?\\s*[:=]\\s*).*")
+    val configLikeRegex = Regex("(?i)([\"']?(?:command|cmd|args|arguments|env)[\"']?\\s*[:=]\\s*).*")
+    val secretRegex = Regex("(?i)([\"']?(?:token|api[_-]?key|key|secret|password)[\"']?\\s*[:=]\\s*)(\"[^\"]*\"|'[^']*'|\\S+)")
+
+    val redactedHeader = headerLikeRegex.replace(oneLine) { match ->
+        "${match.groupValues[1]}<redacted>"
+    }
+    val redactedConfig = configLikeRegex.replace(redactedHeader) { match ->
+        "${match.groupValues[1]}<redacted>"
+    }
+    val redactedSecrets = secretRegex.replace(redactedConfig) { match ->
+        "${match.groupValues[1]}<redacted>"
+    }
+    return redactedSecrets.take(200)
+}
 
 // ============ Provider DTOs ============
 
