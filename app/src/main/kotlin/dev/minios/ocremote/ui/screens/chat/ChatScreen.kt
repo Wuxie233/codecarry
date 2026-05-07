@@ -1668,6 +1668,19 @@ fun ChatScreen(
             } else ""
 
             if (!isTerminalMode) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    // Issue #22: live session retry status renders directly above the
+                    // composer so users do not need to scroll to the top of the message
+                    // list to see it. Historical Part.Retry parts continue to render
+                    // inline in the message timeline (see ChatMessageBubble).
+                    if (uiState.sessionStatus is SessionStatus.Retry) {
+                        RetryStatusBanner(
+                            retry = uiState.sessionStatus as SessionStatus.Retry,
+                            onStop = { viewModel.abortSession() },
+                            modifier = Modifier.padding(horizontal = 12.dp),
+                        )
+                    }
+
             ChatInputBar(
                 textFieldValue = inputText,
                 onTextFieldValueChange = { newValue ->
@@ -1931,6 +1944,7 @@ fun ChatScreen(
                 contextWindow = uiState.contextWindow,
                 lastContextTokens = uiState.lastContextTokens
             )
+                }
             }
         }
     ) { padding ->
@@ -2325,15 +2339,6 @@ fun ChatScreen(
                                         }
                                     }
                                 }
-                            }
-                        }
-
-                        if (uiState.sessionStatus is SessionStatus.Retry) {
-                            item(key = "retry_status") {
-                                RetryStatusBanner(
-                                    retry = uiState.sessionStatus as SessionStatus.Retry,
-                                    onStop = { viewModel.abortSession() },
-                                )
                             }
                         }
 
@@ -4762,6 +4767,7 @@ private fun extractToolOutput(tool: Part.Tool): String {
 private fun RetryStatusBanner(
     retry: SessionStatus.Retry,
     onStop: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val isAmoled = isAmoledTheme()
     val retryText = stringResource(R.string.chat_retry, retry.attempt, retry.message)
@@ -4770,7 +4776,7 @@ private fun RetryStatusBanner(
         shape = RoundedCornerShape(10.dp),
         color = if (isAmoled) Color.Black else MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.45f),
         border = if (isAmoled) BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.65f)) else null,
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp)
     ) {
