@@ -123,7 +123,9 @@ class BuildActiveConversationsTest {
             unreadSessionIds = emptySet(),
         )
 
-        assertEquals(listOf("b1", "r1", "q2", "q1"), items.map { it.sessionId })
+        // AWAITING_QUESTION demands user attention and outranks background BUSY/RETRY work.
+        // Within the same priority, updated desc wins, so q2 precedes q1.
+        assertEquals(listOf("q2", "q1", "b1", "r1"), items.map { it.sessionId })
     }
 
     @Test
@@ -176,6 +178,30 @@ class BuildActiveConversationsTest {
         assertEquals(listOf("unread", "question"), items.map { it.sessionId })
         assertEquals(ConversationStatus.UNREAD, items[0].status)
         assertEquals(ConversationStatus.AWAITING_QUESTION, items[1].status)
+    }
+
+    @Test
+    fun `unread sorts before busy and retry sessions`() {
+        val unread = rootSession("unread", updated = 100)
+        val busy = rootSession("busy", updated = 300)
+        val retry = rootSession("retry", updated = 200)
+
+        val items = buildActiveConversations(
+            rootSessions = listOf(unread, busy, retry),
+            statuses = mapOf(
+                unread.id to SessionStatus.Idle,
+                busy.id to SessionStatus.Busy,
+                retry.id to SessionStatus.Retry(1, "x", 0L),
+            ),
+            pendingQuestions = emptyMap(),
+            pendingPermissions = emptyMap(),
+            unreadSessionIds = setOf(unread.id),
+        )
+
+        assertEquals(listOf("unread", "busy", "retry"), items.map { it.sessionId })
+        assertEquals(ConversationStatus.UNREAD, items[0].status)
+        assertEquals(ConversationStatus.BUSY, items[1].status)
+        assertEquals(ConversationStatus.RETRY, items[2].status)
     }
 
     private fun rootSession(id: String, updated: Long, archivedAt: Long? = null) = Session(
