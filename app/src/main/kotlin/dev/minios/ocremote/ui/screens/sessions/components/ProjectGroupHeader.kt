@@ -46,6 +46,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.minios.ocremote.R
+import dev.minios.ocremote.domain.model.McpRuntimeState
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -68,6 +69,7 @@ fun ProjectGroupHeader(
     onArchiveAll: () -> Unit,
     onManageMcp: (() -> Unit)? = null,
     mcpServerCount: Int? = null,
+    mcpSupportsRuntimeControl: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
@@ -281,7 +283,7 @@ fun ProjectGroupHeader(
                         },
                     )
                     onManageMcp?.let { action ->
-                        val mcpHint = mcpHintLabel(mcpServerCount)
+                        val mcpHint = mcpHintLabel(mcpServerCount, mcpSupportsRuntimeControl)
                         val mcpHintDescription = mcpHintContentDescription(mcpServerCount)
                         DropdownMenuItem(
                             modifier = Modifier.minimumInteractiveComponentSize(),
@@ -351,10 +353,28 @@ private fun rememberIsAmoledTheme(): Boolean {
     return colors.background == Color.Black && colors.surface == Color.Black
 }
 
-internal fun mcpHintLabel(count: Int?): String? = when (count) {
-    null -> null
-    0 -> "未启用"
-    else -> count.toString()
+internal fun mcpHintLabel(count: Int?, supportsRuntimeControl: Boolean): String? {
+    if (supportsRuntimeControl) {
+        return if (count != null && count > 0) "MCP: $count" else null
+    }
+    return when (count) {
+        null -> null
+        0 -> "未启用"
+        else -> count.toString()
+    }
+}
+
+internal fun runtimeMcpHintLabel(
+    states: List<McpRuntimeState>,
+    supportsRuntimeControl: Boolean,
+    fallbackCount: Int?,
+): String? {
+    val count = if (supportsRuntimeControl) {
+        states.count { it == McpRuntimeState.CONNECTED }
+    } else {
+        fallbackCount
+    }
+    return mcpHintLabel(count, supportsRuntimeControl)
 }
 
 internal fun mcpHintContentDescription(count: Int?): String? = count

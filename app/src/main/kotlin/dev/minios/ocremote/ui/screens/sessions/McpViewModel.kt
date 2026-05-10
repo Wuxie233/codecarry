@@ -3,260 +3,180 @@ package dev.minios.ocremote.ui.screens.sessions
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
-import dev.minios.ocremote.data.api.OpenCodeFileReadException
 import dev.minios.ocremote.data.api.ServerConnection
+import dev.minios.ocremote.data.repository.McpToggleException
 import dev.minios.ocremote.data.repository.ServerRepository
-import dev.minios.ocremote.domain.model.McpConfig
-import dev.minios.ocremote.domain.model.McpConfigLoadState
-import dev.minios.ocremote.domain.model.McpServer
-import dev.minios.ocremote.domain.model.McpSource
+import dev.minios.ocremote.domain.model.McpRuntimeSnapshot
+import dev.minios.ocremote.domain.model.McpRuntimeState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.serialization.SerializationException
-import java.io.IOException
 import javax.inject.Inject
 
 sealed class McpUiState {
     data object Loading : McpUiState()
 
-    data class Loaded(
-        val config: McpConfig,
-        val editedServers: Map<String, McpServer> = config.servers,
-        val dirty: Boolean = false,
-        val saveError: String? = null,
-        val source: McpSource = McpSource.File,
+    /** Successful runtime load. Per-server pending names tracks in-flight toggles. */
+    data class Runtime(
+        val snapshot: McpRuntimeSnapshot,
+        val pendingNames: Set<String> = emptySet(),
+        val rowErrors: Map<String, String> = emptyMap(),
+        val sheetError: String? = null,
     ) : McpUiState()
 
-    data class EmptyConfig(
-        val filePath: String,
-        val fallbackExhausted: Boolean = true,
-        val source: McpSource = McpSource.File,
+    /** Server lacks runtime control endpoints; fallback to read-only file config rows/diagnostics. */
+    data class FallbackReadOnly(
+        val snapshot: McpRuntimeSnapshot,
     ) : McpUiState()
 
-    data class MissingConfig(val checkedPaths: List<String>) : McpUiState()
+    data class LoadError(val message: String) : McpUiState()
 
-    data class ReadError(val filePath: String?, val message: String) : McpUiState()
-
-    data class ParseError(val filePath: String, val message: String) : McpUiState()
-
-    /** Runtime /mcp call failed with a non-Unsupported error AND file fallback was Empty/NotFound. */
-    data class RuntimeUnavailable(val fallback: McpUiState) : McpUiState()
-
-    data object Saving : McpUiState()
-
-    data object SaveSuccess : McpUiState()
+    data object Empty : McpUiState()
 }
 
-internal class McpStateController(
+internal class McpRuntimeController(
     private val scope: CoroutineScope,
-    private val readMcpConfigState: suspend (ServerConnection, String) -> McpConfigLoadState,
-    private val writeMcpConfig: suspend (ServerConnection, McpConfig) -> Result<Unit>,
+    private val loadRuntime: suspend (ServerConnection, String) -> Result<McpRuntimeSnapshot>,
+    private val toggleRuntime: suspend (ServerConnection, String, String, McpRuntimeSnapshot) -> Result<McpRuntimeSnapshot>,
 ) {
-
     private val _state = MutableStateFlow<McpUiState>(McpUiState.Loading)
     val state: StateFlow<McpUiState> = _state.asStateFlow()
 
-    private var currentConn: ServerConnection? = null
-    private var currentProjectDir: String? = null
-    private var lastLoaded: McpUiState.Loaded? = null
-    private var pendingEdits: Map<String, McpServer>? = null
+    private var conn: ServerConnection? = null
+    private var projectDir: String? = null
 
     fun load(conn: ServerConnection, projectDir: String) {
-        currentConn = conn
-        currentProjectDir = projectDir
-        loadCurrentConfig()
+        this.conn = conn
+        this.projectDir = projectDir
+        loadInternal()
     }
 
-    fun refresh() {
-        loadCurrentConfig()
-    }
+    fun refresh() = loadInternal()
 
-    fun retry() {
-        loadCurrentConfig()
-    }
-
-    private fun loadCurrentConfig() {
-        val conn = currentConn ?: return
-        val projectDir = currentProjectDir ?: return
+    private fun loadInternal() {
+        val c = conn ?: return
+        val p = projectDir ?: return
         _state.value = McpUiState.Loading
 
         scope.launch {
-            _state.value = mapLoadStateToUi(readMcpConfigState(conn, projectDir))
-        }
-    }
-
-    private fun mapLoadStateToUi(loadState: McpConfigLoadState): McpUiState {
-        return when (loadState) {
-            is McpConfigLoadState.Loaded -> {
-                val pending = pendingEdits
-                val loaded = McpUiState.Loaded(config = loadState.config, source = loadState.source)
-                val resolvedLoaded = if (pending != null && loadState.source == McpSource.File) {
-                    if (pending.keys.all { it in loadState.config.servers.keys }) {
-                        val mergedServers = loadState.config.servers.mapValues { (name, server) ->
-                            pending[name]?.let { pendingServer ->
-                                server.copy(enabled = pendingServer.enabled)
-                            } ?: server
-                        }
-                        val dirtyEntries = dirtyEdits(mergedServers, loadState.config.servers)
-                        pendingEdits = dirtyEntries
-                        loaded.copy(
-                            editedServers = mergedServers,
-                            dirty = dirtyEntries != null,
-                        )
-                    } else {
-                        pendingEdits = null
-                        loaded
+            loadRuntime(c, p)
+                .onSuccess { snapshot ->
+                    _state.value = when {
+                        !snapshot.supportsRuntimeControl -> McpUiState.FallbackReadOnly(snapshot)
+                        snapshot.servers.isEmpty() -> McpUiState.Empty
+                        else -> McpUiState.Runtime(snapshot = snapshot)
                     }
-                } else {
-                    // Runtime source is read-only and cannot carry config-file pending edits.
-                    if (loadState.source == McpSource.Runtime) pendingEdits = null
-                    loaded
-                }
-                lastLoaded = resolvedLoaded
-                resolvedLoaded
-            }
-
-            is McpConfigLoadState.Empty -> {
-                lastLoaded = null
-                McpUiState.EmptyConfig(
-                    filePath = loadState.config.filePath,
-                    fallbackExhausted = true,
-                    source = loadState.source,
-                )
-            }
-
-            is McpConfigLoadState.NotFound -> {
-                lastLoaded = null
-                McpUiState.MissingConfig(checkedPaths = loadState.checkedPaths)
-            }
-
-            is McpConfigLoadState.Error -> {
-                val uiState = loadState.toUiState()
-                if (uiState !is McpUiState.ReadError) {
-                    lastLoaded = null
-                }
-                uiState
-            }
-
-            is McpConfigLoadState.RuntimeUnavailable -> {
-                McpUiState.RuntimeUnavailable(fallback = mapLoadStateToUi(loadState.fallback))
-            }
-        }
-    }
-
-    fun canReload(): Boolean {
-        return currentConn != null &&
-            currentProjectDir != null &&
-            _state.value !is McpUiState.Loading &&
-            _state.value !is McpUiState.Saving
-    }
-
-    fun hasReloadContext(): Boolean {
-        return currentConn != null && currentProjectDir != null
-    }
-
-    fun toggleServer(name: String) {
-        val current = (_state.value as? McpUiState.Loaded) ?: lastLoaded ?: return
-        if (current.source == McpSource.Runtime) return
-        val updatedServers = current.editedServers.toMutableMap()
-        val server = updatedServers[name] ?: return
-        updatedServers[name] = server.copy(enabled = !server.enabled)
-        val dirtyEntries = dirtyEdits(updatedServers, current.config.servers)
-
-        val newState = current.copy(
-            editedServers = updatedServers,
-            dirty = dirtyEntries != null,
-            saveError = null,
-        )
-        pendingEdits = dirtyEntries
-        lastLoaded = newState
-        _state.value = newState
-    }
-
-    fun save() {
-        val current = (_state.value as? McpUiState.Loaded) ?: lastLoaded ?: return
-        if (current.source == McpSource.Runtime) return
-        val conn = currentConn ?: return
-        val updatedConfig = current.config.copy(servers = current.editedServers)
-
-        _state.value = McpUiState.Saving
-
-        scope.launch {
-            writeMcpConfig(conn, updatedConfig)
-                .onSuccess {
-                    pendingEdits = null
-                    _state.value = McpUiState.SaveSuccess
                 }
                 .onFailure { error ->
-                    val restored = current.copy(saveError = error.message ?: "Save failed")
-                    lastLoaded = restored
-                    _state.value = restored
+                    _state.value = McpUiState.LoadError(
+                        sanitizeForUi(error.message ?: "Failed to load MCP runtime")
+                    )
                 }
         }
     }
 
-    private fun dirtyEdits(
-        editedServers: Map<String, McpServer>,
-        baseServers: Map<String, McpServer>,
-    ): Map<String, McpServer>? = editedServers
-        .filter { (name, server) -> baseServers[name] != server }
-        .takeIf { it.isNotEmpty() }
+    /**
+     * Web-parity toggle:
+     * - CONNECTED → disconnect
+     * - DISABLED / FAILED / UNKNOWN → connect
+     * - NEEDS_AUTH / NEEDS_CLIENT_REGISTRATION → set row error, do NOT call API
+     */
+    fun toggle(name: String) {
+        val c = conn ?: return
+        val p = projectDir ?: return
+        val current = (_state.value as? McpUiState.Runtime) ?: return
+        val target = current.snapshot.servers.firstOrNull { it.name == name } ?: return
 
-    private fun McpConfigLoadState.Error.toUiState(): McpUiState = when {
-        cause is OpenCodeFileReadException || cause is IOException -> McpUiState.ReadError(filePath, message)
-        isParseError() -> McpUiState.ParseError(filePath.orEmpty(), message)
-        else -> McpUiState.ReadError(filePath, message)
+        if (target.state == McpRuntimeState.NEEDS_AUTH ||
+            target.state == McpRuntimeState.NEEDS_CLIENT_REGISTRATION
+        ) {
+            _state.value = current.copy(
+                rowErrors = current.rowErrors + (name to authRequiredHint(target.state)),
+            )
+            return
+        }
+        if (name in current.pendingNames) return
+
+        _state.value = current.copy(
+            pendingNames = current.pendingNames + name,
+            rowErrors = current.rowErrors - name,
+            sheetError = null,
+        )
+
+        scope.launch {
+            toggleRuntime(c, p, name, current.snapshot)
+                .onSuccess { refreshed ->
+                    val nextState = (state.value as? McpUiState.Runtime) ?: McpUiState.Runtime(refreshed)
+                    _state.value = McpUiState.Runtime(
+                        snapshot = refreshed,
+                        pendingNames = nextState.pendingNames - name,
+                        rowErrors = nextState.rowErrors - name,
+                        sheetError = null,
+                    )
+                }
+                .onFailure { error ->
+                    val previous = (error as? McpToggleException)?.previous ?: current.snapshot
+                    val message = (error as? McpToggleException)?.cause?.message
+                        ?: error.message
+                        ?: "Toggle failed"
+                    val safeMessage = sanitizeForUi(message)
+                    val baseline = (state.value as? McpUiState.Runtime) ?: McpUiState.Runtime(previous)
+                    _state.value = baseline.copy(
+                        snapshot = previous,
+                        pendingNames = baseline.pendingNames - name,
+                        rowErrors = baseline.rowErrors + (name to safeMessage),
+                    )
+                }
+        }
     }
 
-    private fun McpConfigLoadState.Error.isParseError(): Boolean {
-        val lowerMessage = message.lowercase()
-        return cause is SerializationException ||
-            lowerMessage.contains("parse") ||
-            lowerMessage.contains("invalid") ||
-            lowerMessage.contains("missing required command")
+    fun dismissRowError(name: String) {
+        val current = (_state.value as? McpUiState.Runtime) ?: return
+        _state.value = current.copy(rowErrors = current.rowErrors - name)
     }
+
+    fun canReload(): Boolean =
+        conn != null && projectDir != null && _state.value !is McpUiState.Loading
+
+    fun hasReloadContext(): Boolean = conn != null && projectDir != null
+
+    private fun authRequiredHint(state: McpRuntimeState): String = when (state) {
+        McpRuntimeState.NEEDS_AUTH ->
+            "需要 OAuth 授权，目前移动端暂不支持，请在 Web 端完成授权后刷新。"
+        McpRuntimeState.NEEDS_CLIENT_REGISTRATION ->
+            "需要客户端注册，目前移动端暂不支持，请在 Web 端完成后刷新。"
+        else -> ""
+    }
+
+    private fun sanitizeForUi(raw: String): String =
+        raw.lineSequence().firstOrNull().orEmpty().take(160)
 }
 
 @HiltViewModel
 class McpViewModel @Inject constructor(
     repository: ServerRepository,
 ) : ViewModel() {
-    private val controller = McpStateController(
+    private val controller = McpRuntimeController(
         scope = viewModelScope,
-        readMcpConfigState = repository::readMcpConfigState,
-        writeMcpConfig = repository::writeMcpConfig,
+        loadRuntime = repository::loadMcpRuntime,
+        toggleRuntime = repository::toggleMcpRuntime,
     )
 
     val state: StateFlow<McpUiState> = controller.state
 
-    fun load(conn: ServerConnection, projectDir: String) {
-        controller.load(conn, projectDir)
-    }
+    fun load(conn: ServerConnection, projectDir: String) = controller.load(conn, projectDir)
 
-    fun refresh() {
-        controller.refresh()
-    }
+    fun refresh() = controller.refresh()
 
-    fun retry() {
-        controller.retry()
-    }
+    fun retry() = controller.refresh()
 
-    fun canReload(): Boolean {
-        return controller.canReload()
-    }
+    fun toggleServer(name: String) = controller.toggle(name)
 
-    fun hasReloadContext(): Boolean {
-        return controller.hasReloadContext()
-    }
+    fun dismissRowError(name: String) = controller.dismissRowError(name)
 
-    fun toggleServer(name: String) {
-        controller.toggleServer(name)
-    }
+    fun canReload(): Boolean = controller.canReload()
 
-    fun save() {
-        controller.save()
-    }
+    fun hasReloadContext(): Boolean = controller.hasReloadContext()
 }

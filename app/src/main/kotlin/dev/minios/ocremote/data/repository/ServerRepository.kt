@@ -11,6 +11,9 @@ import dev.minios.ocremote.data.api.McpRuntimeStatusResult
 import dev.minios.ocremote.data.api.ServerConnection
 import dev.minios.ocremote.domain.model.McpConfig
 import dev.minios.ocremote.domain.model.McpConfigLoadState
+import dev.minios.ocremote.domain.model.McpRuntimeSnapshot
+import dev.minios.ocremote.domain.model.McpRuntimeState
+import dev.minios.ocremote.domain.model.McpRuntimeStatus
 import dev.minios.ocremote.domain.model.McpServer
 import dev.minios.ocremote.domain.model.McpSource
 import dev.minios.ocremote.domain.model.ServerConfig
@@ -167,10 +170,20 @@ class ServerRepository @Inject constructor(
     suspend fun readMcpConfigState(
         conn: ServerConnection,
         projectDir: String,
+    ): McpConfigLoadState = readMcpConfigState(conn, projectDir, preferRuntimeStatus = true)
+
+    private suspend fun readMcpConfigState(
+        conn: ServerConnection,
+        projectDir: String,
+        preferRuntimeStatus: Boolean,
     ): McpConfigLoadState {
         val projectDirectory = projectDir.takeIf { it.isNotBlank() }
 
-        val runtimeResult = api.getMcpStatus(conn, directory = projectDirectory)
+        val runtimeResult = if (preferRuntimeStatus) {
+            api.getMcpStatus(conn, directory = projectDirectory)
+        } else {
+            McpRuntimeStatusResult.Unsupported
+        }
         when (runtimeResult) {
             is McpRuntimeStatusResult.Success -> {
                 if (runtimeResult.statuses.isNotEmpty()) {
@@ -266,6 +279,111 @@ class ServerRepository @Inject constructor(
         api.writeFile(conn, path = config.filePath, content = updatedJson, directory = configDirectory)
     }
 
+    // ============ MCP Runtime ============
+
+    /**
+     * Load runtime MCP status for the current project, with file-config fallback
+     * for older OpenCode servers that do not expose /mcp.
+     *
+     * Returns a snapshot whose [McpRuntimeSnapshot.supportsRuntimeControl] tells
+     * the UI whether to render interactive switches or read-only file rows.
+     */
+    suspend fun loadMcpRuntime(
+        conn: ServerConnection,
+        projectDir: String,
+    ): Result<McpRuntimeSnapshot> = runCatching {
+        val directory = projectDir.takeIf { it.isNotBlank() }
+        val runtime = try {
+            api.getMcpRuntime(conn, directory = directory)
+        } catch (error: Exception) {
+            val fallbackState = readMcpConfigState(conn, projectDir, preferRuntimeStatus = false)
+            return@runCatching fallbackState.toRuntimeSnapshot(runtimeUnavailable = true)
+        }
+        if (runtime != null) {
+            return@runCatching McpRuntimeSnapshot(servers = runtime, supportsRuntimeControl = true)
+        }
+
+        readMcpConfigState(conn, projectDir, preferRuntimeStatus = false).toRuntimeSnapshot(
+            runtimeUnavailable = false,
+        )
+    }
+
+    private fun McpConfigLoadState.toRuntimeSnapshot(runtimeUnavailable: Boolean): McpRuntimeSnapshot = when (this) {
+        is McpConfigLoadState.Loaded -> McpRuntimeSnapshot(
+            servers = config.servers.values.map {
+                McpRuntimeStatus(name = it.name, state = McpRuntimeState.UNKNOWN, errorMessage = null)
+            },
+            supportsRuntimeControl = false,
+            runtimeUnavailable = runtimeUnavailable,
+            fallbackExhausted = false,
+        )
+        is McpConfigLoadState.Empty -> McpRuntimeSnapshot(
+            servers = emptyList(),
+            supportsRuntimeControl = false,
+            runtimeUnavailable = runtimeUnavailable,
+            fallbackExhausted = true,
+        )
+        is McpConfigLoadState.NotFound -> McpRuntimeSnapshot(
+            servers = emptyList(),
+            supportsRuntimeControl = false,
+            runtimeUnavailable = runtimeUnavailable,
+            fallbackExhausted = true,
+        )
+        is McpConfigLoadState.RuntimeUnavailable -> fallback.toRuntimeSnapshot(runtimeUnavailable = true)
+        is McpConfigLoadState.Error -> throw cause ?: IllegalStateException(message)
+    }
+
+    /**
+     * Runtime toggle transaction:
+     *   1. Inspect current [previous] for [name].
+     *   2. CONNECTED → call disconnect; DISABLED, FAILED, UNKNOWN → call connect.
+     *   3. After the API succeeds, refetch the full runtime list.
+     *   4. On any toggle/refetch failure, return the original snapshot unchanged.
+     */
+    suspend fun toggleMcpRuntime(
+        conn: ServerConnection,
+        projectDir: String,
+        name: String,
+        previous: McpRuntimeSnapshot,
+    ): Result<McpRuntimeSnapshot> {
+        val directory = projectDir.takeIf { it.isNotBlank() }
+        val target = previous.servers.firstOrNull { it.name == name }
+            ?: return Result.failure(IllegalStateException("Unknown MCP server: $name"))
+
+        return when (target.state) {
+            McpRuntimeState.CONNECTED -> performToggle(conn, directory, name, previous) {
+                api.disconnectMcp(conn, name, directory = directory)
+            }
+            McpRuntimeState.DISABLED,
+            McpRuntimeState.FAILED,
+            McpRuntimeState.UNKNOWN -> performToggle(conn, directory, name, previous) {
+                api.connectMcp(conn, name, directory = directory)
+            }
+            McpRuntimeState.NEEDS_AUTH,
+            McpRuntimeState.NEEDS_CLIENT_REGISTRATION -> Result.failure(
+                McpAuthRequiredException(state = target.state, name = name)
+            )
+        }
+    }
+
+    private suspend fun performToggle(
+        conn: ServerConnection,
+        directory: String?,
+        name: String,
+        previous: McpRuntimeSnapshot,
+        action: suspend () -> Boolean,
+    ): Result<McpRuntimeSnapshot> = runCatching {
+        val supported = action()
+        if (!supported) {
+            throw McpRuntimeUnsupportedException()
+        }
+        val refreshed = api.getMcpRuntime(conn, directory = directory)
+            ?: throw McpRuntimeUnsupportedException()
+        McpRuntimeSnapshot(servers = refreshed, supportsRuntimeControl = true)
+    }.recoverCatching { error ->
+        throw McpToggleException(name = name, previous = previous, cause = error)
+    }
+
     // ============ Private ============
 
     private suspend fun saveServers(servers: List<ServerConfig>) {
@@ -339,3 +457,17 @@ class ServerRepository @Inject constructor(
         return rememberedEmpty ?: McpConfigLoadState.NotFound(candidateReads.map { it.path })
     }
 }
+
+class McpAuthRequiredException(
+    val state: McpRuntimeState,
+    val name: String,
+) : RuntimeException("MCP server '$name' requires ${state.name.lowercase()}")
+
+class McpRuntimeUnsupportedException :
+    RuntimeException("OpenCode server does not support runtime MCP control")
+
+class McpToggleException(
+    val name: String,
+    val previous: McpRuntimeSnapshot,
+    cause: Throwable,
+) : RuntimeException("Failed to toggle MCP server '$name': ${cause.message}", cause)
