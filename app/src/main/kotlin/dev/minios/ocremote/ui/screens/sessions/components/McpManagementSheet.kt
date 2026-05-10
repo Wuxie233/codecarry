@@ -25,11 +25,14 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -126,42 +129,37 @@ internal fun McpManagementSheetContent(
                     title = "无法加载 MCP 运行时状态",
                     message = current.message,
                 )
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 12.dp),
-                    horizontalArrangement = Arrangement.End,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Button(
-                        onClick = onRetry,
-                        enabled = canReload,
-                    ) {
-                        Text("重试")
-                    }
-                    Spacer(modifier = Modifier.width(8.dp))
-                    TextButton(onClick = onDismiss) {
-                        Text("关闭")
-                    }
-                }
+                RetryCloseRow(canReload = canReload, onRetry = onRetry, onDismiss = onDismiss)
             }
 
             is McpUiState.FallbackReadOnly -> {
                 Text(
-                    text = "运行时控制需要更新的 OpenCode 服务器；当前仅显示配置文件中声明的 MCP 服务器。",
+                    text = fallbackMessage(current.snapshot),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(bottom = 8.dp),
                 )
-                McpRuntimeList(
-                    snapshot = current.snapshot,
-                    pendingNames = emptySet(),
-                    rowErrors = emptyMap(),
-                    readOnly = true,
-                    onToggle = {},
-                    onDismissRowError = {},
-                )
-                CloseButton(onDismiss)
+                if (current.snapshot.servers.isEmpty()) {
+                    EmptyStateCard(
+                        title = "暂无 MCP 服务器",
+                        message = if (current.snapshot.fallbackExhausted) {
+                            "已检查项目与全局 OpenCode 配置，但都未声明任何 MCP 服务器。在配置中加入 mcp 后下拉刷新即可生效。"
+                        } else {
+                            "已找到配置，但其中未声明任何 MCP 服务器。"
+                        },
+                        action = { CloseButton(onDismiss) },
+                    )
+                } else {
+                    McpRuntimeList(
+                        snapshot = current.snapshot,
+                        pendingNames = emptySet(),
+                        rowErrors = emptyMap(),
+                        readOnly = true,
+                        onToggle = {},
+                        onDismissRowError = {},
+                    )
+                    CloseButton(onDismiss)
+                }
             }
 
             is McpUiState.Runtime -> {
@@ -291,8 +289,33 @@ private fun McpServerRow(
                 checked = server.state == McpRuntimeState.CONNECTED,
                 onCheckedChange = { onToggle() },
                 enabled = !pending,
-                modifier = Modifier.padding(start = if (pending) 8.dp else 16.dp),
+                modifier = Modifier
+                    .padding(start = if (pending) 8.dp else 16.dp)
+                    .minimumInteractiveComponentSize()
+                    .semantics { contentDescription = "${server.name} 启用状态" },
             )
+        }
+    }
+}
+
+@Composable
+private fun RetryCloseRow(canReload: Boolean, onRetry: () -> Unit, onDismiss: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 12.dp),
+        horizontalArrangement = Arrangement.End,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Button(
+            onClick = onRetry,
+            enabled = canReload,
+        ) {
+            Text("重试")
+        }
+        Spacer(modifier = Modifier.width(8.dp))
+        TextButton(onClick = onDismiss) {
+            Text("关闭")
         }
     }
 }
@@ -310,6 +333,12 @@ private fun CloseButton(onDismiss: () -> Unit) {
             Text("关闭")
         }
     }
+}
+
+private fun fallbackMessage(snapshot: McpRuntimeSnapshot): String = when {
+    snapshot.runtimeUnavailable -> "OpenCode 运行时状态不可用；正在显示本地配置文件诊断结果。"
+    snapshot.fallbackExhausted -> "运行时控制需要更新的 OpenCode 服务器；已检查项目与全局配置但未发现 MCP 服务器。"
+    else -> "运行时控制需要更新的 OpenCode 服务器；当前仅显示配置文件中声明的 MCP 服务器。"
 }
 
 private fun stateLabel(state: McpRuntimeState): String = when (state) {

@@ -26,7 +26,7 @@ sealed class McpUiState {
         val sheetError: String? = null,
     ) : McpUiState()
 
-    /** Server lacks /mcp endpoints; fallback to read-only file config rows. */
+    /** Server lacks runtime control endpoints; fallback to read-only file config rows/diagnostics. */
     data class FallbackReadOnly(
         val snapshot: McpRuntimeSnapshot,
     ) : McpUiState()
@@ -140,6 +140,8 @@ internal class McpRuntimeController(
     fun canReload(): Boolean =
         conn != null && projectDir != null && _state.value !is McpUiState.Loading
 
+    fun hasReloadContext(): Boolean = conn != null && projectDir != null
+
     private fun authRequiredHint(state: McpRuntimeState): String = when (state) {
         McpRuntimeState.NEEDS_AUTH ->
             "需要 OAuth 授权，目前移动端暂不支持，请在 Web 端完成授权后刷新。"
@@ -176,5 +178,5 @@ class McpViewModel @Inject constructor(
 
     fun canReload(): Boolean = controller.canReload()
 
-    fun hasReloadContext(): Boolean = controller.canReload()
+    fun hasReloadContext(): Boolean = controller.hasReloadContext()
 }

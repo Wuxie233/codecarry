@@ -18,6 +18,8 @@ data class McpRuntimeStatus(
 data class McpRuntimeSnapshot(
     val servers: List<McpRuntimeStatus>,
     val supportsRuntimeControl: Boolean,
+    val runtimeUnavailable: Boolean = false,
+    val fallbackExhausted: Boolean = false,
 )
 
 fun parseMcpRuntimeState(raw: String?): McpRuntimeState = when (raw) {

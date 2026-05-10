@@ -3,6 +3,7 @@ package dev.minios.ocremote.ui.screens.sessions.components
 import dev.minios.ocremote.domain.model.McpRuntimeState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ProjectGroupHeaderMcpHintTest {
@@ -69,5 +70,13 @@ class ProjectGroupHeaderMcpHintTest {
     @Test
     fun mcpHintLabelLoadErrorFallbackUsesNonRuntimeBehavior() {
         assertEquals("未启用", mcpHintLabel(0, false))
+    }
+
+    @Test
+    fun mcpHintContentDescriptionMapsCountToNonEmptyDescription() {
+        val description = mcpHintContentDescription(2)
+
+        assertTrue(description.orEmpty().isNotBlank())
+        assertEquals("该项目已配置 2 个 MCP 服务器", description)
     }
 }
