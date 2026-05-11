@@ -48,6 +48,8 @@ import dev.minios.ocremote.ui.components.LoadingStateCard
 import dev.minios.ocremote.ui.screens.sessions.McpUiState
 import dev.minios.ocremote.ui.screens.sessions.McpViewModel
 
+private const val RUNTIME_SOURCE_SENTINEL = "<runtime>"
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun McpManagementSheet(
@@ -119,9 +121,11 @@ fun McpManagementSheet(
 
                 is McpUiState.EmptyConfig -> {
                     val message = if (current.fallbackExhausted) {
-                        "已检查项目与全局 OpenCode 配置，但都未声明任何 MCP 服务器。最近一次检查的配置位于 ${current.filePath}。在该文件中加入 mcpServers 后下拉刷新即可生效。"
+                        val pathText = if (current.filePath == RUNTIME_SOURCE_SENTINEL) "" else "。最近一次检查的配置位于 ${current.filePath}"
+                        "已检查项目与全局 OpenCode 配置，但都未声明任何 MCP 服务器$pathText。在该文件中加入 mcp 后下拉刷新即可生效。"
                     } else {
-                        "已找到配置 ${current.filePath}，但其中未声明任何 MCP 服务器。"
+                        val pathText = if (current.filePath == RUNTIME_SOURCE_SENTINEL) "" else " ${current.filePath}"
+                        "已找到配置$pathText，但其中未声明任何 MCP 服务器。"
                     }
                     EmptyStateCard(
                         title = "暂无 MCP 服务器",
@@ -144,9 +148,9 @@ fun McpManagementSheet(
                 }
 
                 is McpUiState.MissingConfig -> {
-                    val firstPath = current.checkedPaths.firstOrNull() ?: "未知路径"
+                    val firstPath = current.checkedPaths.firstOrNull { it != RUNTIME_SOURCE_SENTINEL } ?: "未知路径"
                     var pathsExpanded by remember(current.checkedPaths) { mutableStateOf(false) }
-                    val allCheckedPaths = current.checkedPaths.joinToString("\n") { "• $it" }
+                    val allCheckedPaths = current.checkedPaths.filter { it != RUNTIME_SOURCE_SENTINEL }.joinToString("\n") { "• $it" }
                     EmptyStateCard(
                         title = "未找到 MCP 配置",
                         message = "优先检查路径：\n• $firstPath",
@@ -209,8 +213,151 @@ fun McpManagementSheet(
                 is McpUiState.ParseError -> {
                     ErrorStateCard(
                         title = "MCP 配置解析失败",
-                        message = "${current.filePath}\n${current.message}",
+                        message = "${current.filePath}\n${current.message} (请检查是否使用了旧版的 mcpServers 字段)",
                     )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 12.dp),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Button(
+                            onClick = viewModel::retry,
+                            enabled = viewModel.canReload(),
+                        ) {
+                            Text("重试")
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        TextButton(onClick = onDismiss) {
+                            Text("关闭")
+                        }
+                    }
+                }
+
+                is McpUiState.RuntimeUnavailable -> {
+                    ErrorStateCard(
+                        title = "OpenCode 运行时状态不可用",
+                        message = "正在显示本地配置文件诊断结果。",
+                    )
+                    // Render fallback state
+                    when (val fallback = current.fallback) {
+                        is McpUiState.EmptyConfig -> {
+                            val message = if (fallback.fallbackExhausted) {
+                                val pathText = if (fallback.filePath == RUNTIME_SOURCE_SENTINEL) "" else "。最近一次检查的配置位于 ${fallback.filePath}"
+                                "已检查项目与全局 OpenCode 配置，但都未声明任何 MCP 服务器$pathText。在该文件中加入 mcp 后下拉刷新即可生效。"
+                            } else {
+                                val pathText = if (fallback.filePath == RUNTIME_SOURCE_SENTINEL) "" else " ${fallback.filePath}"
+                                "已找到配置$pathText，但其中未声明任何 MCP 服务器。"
+                            }
+                            EmptyStateCard(
+                                title = "暂无 MCP 服务器",
+                                message = message,
+                                action = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        TextButton(onClick = onDismiss) {
+                                            Text("关闭")
+                                        }
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Button(
+                                            onClick = requestRefresh,
+                                            enabled = viewModel.canReload(),
+                                        ) {
+                                            Text("刷新")
+                                        }
+                                    }
+                                },
+                            )
+                        }
+                        is McpUiState.MissingConfig -> {
+                            val firstPath = fallback.checkedPaths.firstOrNull { it != RUNTIME_SOURCE_SENTINEL } ?: "未知路径"
+                            var pathsExpanded by remember(fallback.checkedPaths) { mutableStateOf(false) }
+                            val allCheckedPaths = fallback.checkedPaths.filter { it != RUNTIME_SOURCE_SENTINEL }.joinToString("\n") { "• $it" }
+                            EmptyStateCard(
+                                title = "未找到 MCP 配置",
+                                message = "优先检查路径：\n• $firstPath",
+                                action = {
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                        if (fallback.checkedPaths.size > 1) {
+                                            TextButton(onClick = { pathsExpanded = !pathsExpanded }) {
+                                                Text(if (pathsExpanded) "收起检查路径" else "查看全部检查路径")
+                                            }
+                                            if (pathsExpanded) {
+                                                Text(
+                                                    text = allCheckedPaths,
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                )
+                                            }
+                                        }
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            TextButton(onClick = onDismiss) {
+                                                Text("关闭")
+                                            }
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Button(
+                                                onClick = requestRefresh,
+                                                enabled = viewModel.canReload(),
+                                            ) {
+                                                Text("刷新")
+                                            }
+                                        }
+                                    }
+                                },
+                            )
+                        }
+                        is McpUiState.ReadError -> {
+                            ErrorStateCard(
+                                title = "无法读取 MCP 配置",
+                                message = fallback.message,
+                            )
+                        }
+                        is McpUiState.ParseError -> {
+                            ErrorStateCard(
+                                title = "MCP 配置解析失败",
+                                message = "${fallback.filePath}\n${fallback.message} (请检查是否使用了旧版的 mcpServers 字段)",
+                            )
+                        }
+                        is McpUiState.Loaded -> {
+                            val servers = fallback.editedServers
+                            val isReadOnly = fallback.source == dev.minios.ocremote.domain.model.McpSource.Runtime
+                            val sourceText = if (isReadOnly) {
+                                "来自 OpenCode 服务运行时状态（只读）"
+                            } else if (fallback.config.filePath == RUNTIME_SOURCE_SENTINEL) {
+                                ""
+                            } else {
+                                fallback.config.filePath
+                            }
+
+                            if (sourceText.isNotBlank()) {
+                                Text(
+                                    text = sourceText,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(bottom = 8.dp),
+                                )
+                            }
+
+                            LazyColumn(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(max = 320.dp),
+                            ) {
+                                items(servers.entries.toList(), key = { it.key }) { (name, server) ->
+                                    McpServerRow(
+                                        server = server,
+                                        enabled = !isReadOnly,
+                                        onToggle = { viewModel.toggleServer(name) },
+                                    )
+                                    HorizontalDivider(
+                                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f),
+                                    )
+                                }
+                            }
+                        }
+                        else -> {}
+                    }
+
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -240,6 +387,24 @@ fun McpManagementSheet(
                     val isSaving = current is McpUiState.Saving
                     val isDirty = loaded?.dirty == true
                     val saveError = loaded?.saveError ?: lastSaveError
+                    val isReadOnly = loaded?.source == dev.minios.ocremote.domain.model.McpSource.Runtime
+
+                    val sourceText = if (isReadOnly) {
+                        "来自 OpenCode 服务运行时状态（只读）"
+                    } else if (loaded?.config?.filePath == RUNTIME_SOURCE_SENTINEL) {
+                        ""
+                    } else {
+                        loaded?.config?.filePath ?: ""
+                    }
+
+                    if (sourceText.isNotBlank()) {
+                        Text(
+                            text = sourceText,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(bottom = 8.dp),
+                        )
+                    }
 
                     LazyColumn(
                         modifier = Modifier
@@ -249,7 +414,7 @@ fun McpManagementSheet(
                         items(servers.entries.toList(), key = { it.key }) { (name, server) ->
                             McpServerRow(
                                 server = server,
-                                enabled = !isSaving,
+                                enabled = !isSaving && !isReadOnly,
                                 onToggle = { viewModel.toggleServer(name) },
                             )
                             HorizontalDivider(
@@ -275,21 +440,23 @@ fun McpManagementSheet(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         TextButton(onClick = onDismiss, enabled = !isSaving) {
-                            Text("取消")
+                            Text("关闭")
                         }
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Button(
-                            onClick = { viewModel.save() },
-                            enabled = !isSaving && isDirty,
-                        ) {
-                            if (isSaving) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(16.dp),
-                                    strokeWidth = 2.dp,
-                                    color = MaterialTheme.colorScheme.onPrimary,
-                                )
-                            } else {
-                                Text("保存")
+                        if (!isReadOnly) {
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Button(
+                                onClick = { viewModel.save() },
+                                enabled = !isSaving && isDirty,
+                            ) {
+                                if (isSaving) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        strokeWidth = 2.dp,
+                                        color = MaterialTheme.colorScheme.onPrimary,
+                                    )
+                                } else {
+                                    Text("保存")
+                                }
                             }
                         }
                     }

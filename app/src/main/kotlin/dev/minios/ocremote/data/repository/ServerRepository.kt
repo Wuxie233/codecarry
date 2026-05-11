@@ -7,9 +7,12 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import dev.minios.ocremote.data.api.OpenCodeApi
 import dev.minios.ocremote.data.api.OpenCodeFileNotFoundException
+import dev.minios.ocremote.data.api.McpRuntimeStatusResult
 import dev.minios.ocremote.data.api.ServerConnection
 import dev.minios.ocremote.domain.model.McpConfig
 import dev.minios.ocremote.domain.model.McpConfigLoadState
+import dev.minios.ocremote.domain.model.McpServer
+import dev.minios.ocremote.domain.model.McpSource
 import dev.minios.ocremote.domain.model.ServerConfig
 import dev.minios.ocremote.domain.model.ServerHealth
 import kotlinx.coroutines.flow.Flow
@@ -23,6 +26,7 @@ import javax.inject.Singleton
 
 private const val TAG = "ServerRepository"
 private const val SERVERS_KEY = "servers"
+private const val RUNTIME_SOURCE_SENTINEL = "<runtime>"
 
 /**
  * Server Repository - manages saved OpenCode servers
@@ -157,12 +161,7 @@ class ServerRepository @Inject constructor(
         conn: ServerConnection,
         projectDir: String,
     ): Result<McpConfig?> {
-        return when (val state = readMcpConfigState(conn, projectDir)) {
-            is McpConfigLoadState.Loaded -> Result.success(state.config)
-            is McpConfigLoadState.Empty -> Result.success(state.config)
-            is McpConfigLoadState.NotFound -> Result.success(null)
-            is McpConfigLoadState.Error -> Result.failure(state.cause ?: IllegalStateException(state.message))
-        }
+        return readMcpConfigResult(readMcpConfigState(conn, projectDir))
     }
 
     suspend fun readMcpConfigState(
@@ -170,6 +169,42 @@ class ServerRepository @Inject constructor(
         projectDir: String,
     ): McpConfigLoadState {
         val projectDirectory = projectDir.takeIf { it.isNotBlank() }
+
+        val runtimeResult = api.getMcpStatus(conn, directory = projectDirectory)
+        when (runtimeResult) {
+            is McpRuntimeStatusResult.Success -> {
+                if (runtimeResult.statuses.isNotEmpty()) {
+                    return McpConfigLoadState.Loaded(
+                        config = McpConfig(
+                            filePath = RUNTIME_SOURCE_SENTINEL,
+                            rawJson = "{}",
+                            servers = runtimeResult.statuses.entries.associate { (name, status) ->
+                                name to McpServer(
+                                    name = name,
+                                    type = null,
+                                    command = null,
+                                    args = emptyList(),
+                                    url = null,
+                                    enabled = status.status != "disabled" && status.status != "disconnected",
+                                )
+                            },
+                        ),
+                        source = McpSource.Runtime,
+                    )
+                }
+            }
+
+            is McpRuntimeStatusResult.Unsupported -> Unit
+            is McpRuntimeStatusResult.Failed -> {
+                runCatching {
+                    Log.w(
+                        TAG,
+                        "getMcpStatus failed; falling back to file scan: ${runtimeResult.cause.javaClass.simpleName}",
+                    )
+                }
+            }
+        }
+
         val homeDir = runCatching { api.getServerPaths(conn, directory = projectDirectory).home }
             .getOrElse { error ->
                 return McpConfigLoadState.Error(
@@ -204,16 +239,28 @@ class ServerRepository @Inject constructor(
                 is McpConfigLoadState.Loaded -> return state
                 is McpConfigLoadState.Error -> return state
                 is McpConfigLoadState.Empty,
-                is McpConfigLoadState.NotFound -> Unit
+                is McpConfigLoadState.NotFound,
+                is McpConfigLoadState.RuntimeUnavailable -> Unit
             }
         }
-        return resolveMcpConfigLoadState(reads)
+        val fileFallback = resolveMcpConfigLoadState(reads)
+
+        return if (runtimeResult is McpRuntimeStatusResult.Failed &&
+            (fileFallback is McpConfigLoadState.Empty || fileFallback is McpConfigLoadState.NotFound)
+        ) {
+            McpConfigLoadState.RuntimeUnavailable(fallback = fileFallback)
+        } else {
+            fileFallback
+        }
     }
 
     suspend fun writeMcpConfig(
         conn: ServerConnection,
         config: McpConfig,
     ): Result<Unit> = runCatching {
+        if (config.filePath == RUNTIME_SOURCE_SENTINEL) {
+            throw IllegalStateException("Cannot persist edits when MCP source is runtime")
+        }
         val updatedJson = McpConfigParser.serialize(config)
         val configDirectory = config.filePath.substringBeforeLast('/').takeIf { it.isNotBlank() }
         api.writeFile(conn, path = config.filePath, content = updatedJson, directory = configDirectory)
@@ -232,6 +279,14 @@ class ServerRepository @Inject constructor(
         val path: String,
         val readResult: Result<String>,
     )
+
+    private fun readMcpConfigResult(state: McpConfigLoadState): Result<McpConfig?> = when (state) {
+        is McpConfigLoadState.Loaded -> Result.success(state.config)
+        is McpConfigLoadState.Empty -> Result.success(state.config)
+        is McpConfigLoadState.NotFound -> Result.success(null)
+        is McpConfigLoadState.Error -> Result.failure(state.cause ?: IllegalStateException(state.message))
+        is McpConfigLoadState.RuntimeUnavailable -> readMcpConfigResult(state.fallback)
+    }
 
     internal fun resolveMcpConfigLoadState(
         candidateReads: List<McpConfigCandidateRead>,
@@ -276,7 +331,8 @@ class ServerRepository @Inject constructor(
                 }
 
                 is McpConfigLoadState.Error -> return parsed
-                is McpConfigLoadState.NotFound -> Unit
+                is McpConfigLoadState.NotFound,
+                is McpConfigLoadState.RuntimeUnavailable -> Unit
             }
         }
 
