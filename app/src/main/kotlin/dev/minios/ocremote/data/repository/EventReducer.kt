@@ -285,6 +285,23 @@ class EventReducer @Inject constructor() {
             }
         }
     }
+
+    /**
+     * Optimistically remove a permission request from the pending list.
+     * Called after a successful service-side or chat-side reply, in case the
+     * SSE `permission.replied` event arrives late or is missed entirely
+     * (e.g. when the user replies via a notification action while the chat
+     * screen is closed).
+     *
+     * Idempotent: removing an already-removed request is a no-op.
+     */
+    fun removePermission(requestId: String) {
+        _permissions.update { current ->
+            current.mapValues { (_, permissions) ->
+                permissions.filter { it.id != requestId }
+            }
+        }
+    }
     
     // ============ Question Events ============
     

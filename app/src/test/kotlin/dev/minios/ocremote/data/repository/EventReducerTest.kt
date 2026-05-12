@@ -7,6 +7,7 @@ import dev.minios.ocremote.domain.model.SseEvent
 import dev.minios.ocremote.domain.model.ToolState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class EventReducerTest {
@@ -142,6 +143,89 @@ class EventReducerTest {
 
         assertEquals(listOf("ses-restored", "ses-2"), reducer.sessions.value.map { it.id })
         assertEquals(false, reducer.sessions.value.first().isArchived)
+    }
+
+    @Test
+    fun permissionAskedAddsPendingEntry() {
+        val reducer = EventReducer()
+        val asked = SseEvent.PermissionAsked(
+            id = "perm-1",
+            sessionId = "ses-1",
+            permission = "write file foo.txt",
+        )
+
+        reducer.processEvent(asked, serverId = "server-1")
+
+        val pending = reducer.permissions.value["ses-1"].orEmpty()
+        assertEquals(1, pending.size)
+        assertEquals("perm-1", pending.single().id)
+    }
+
+    @Test
+    fun permissionRepliedClearsPendingEntryForRequestId() {
+        val reducer = EventReducer()
+        reducer.processEvent(
+            SseEvent.PermissionAsked(id = "perm-1", sessionId = "ses-1", permission = "p1"),
+            serverId = "server-1",
+        )
+        reducer.processEvent(
+            SseEvent.PermissionAsked(id = "perm-2", sessionId = "ses-1", permission = "p2"),
+            serverId = "server-1",
+        )
+
+        reducer.processEvent(
+            SseEvent.PermissionReplied(sessionId = "ses-1", requestId = "perm-1"),
+            serverId = "server-1",
+        )
+
+        val remaining = reducer.permissions.value["ses-1"].orEmpty().map { it.id }
+        assertEquals(listOf("perm-2"), remaining)
+    }
+
+    @Test
+    fun removePermissionOptimisticallyClearsPendingEntry() {
+        val reducer = EventReducer()
+        reducer.processEvent(
+            SseEvent.PermissionAsked(id = "perm-1", sessionId = "ses-1", permission = "p1"),
+            serverId = "server-1",
+        )
+
+        reducer.removePermission("perm-1")
+
+        assertTrue(reducer.permissions.value["ses-1"].orEmpty().isEmpty())
+    }
+
+    @Test
+    fun removePermissionIsIdempotentWhenRequestIdMissing() {
+        val reducer = EventReducer()
+        reducer.processEvent(
+            SseEvent.PermissionAsked(id = "perm-1", sessionId = "ses-1", permission = "p1"),
+            serverId = "server-1",
+        )
+
+        reducer.removePermission("perm-unknown")
+        reducer.removePermission("perm-1")
+        reducer.removePermission("perm-1") // second call: no-op
+
+        assertTrue(reducer.permissions.value["ses-1"].orEmpty().isEmpty())
+    }
+
+    @Test
+    fun permissionRepliedAfterLocalRemovalIsNoOp() {
+        val reducer = EventReducer()
+        reducer.processEvent(
+            SseEvent.PermissionAsked(id = "perm-1", sessionId = "ses-1", permission = "p1"),
+            serverId = "server-1",
+        )
+        reducer.removePermission("perm-1")
+
+        // Late-arriving SSE event must not crash, duplicate, or resurrect state.
+        reducer.processEvent(
+            SseEvent.PermissionReplied(sessionId = "ses-1", requestId = "perm-1"),
+            serverId = "server-1",
+        )
+
+        assertTrue(reducer.permissions.value["ses-1"].orEmpty().isEmpty())
     }
 
     private fun testSession(id: String, updated: Long = 1L, archived: Long? = null) = Session(

@@ -51,6 +51,9 @@
     <string name="notification_connected">Połączono z %1$s</string>
     <string name="notification_task_complete">Zadanie ukończone</string>
     <string name="notification_permission_required">Wymagana zgoda</string>
+    <string name="notification_permission_action_allow_once">Zezwól raz</string>
+    <string name="notification_permission_action_allow_always">Zawsze zezwalaj</string>
+    <string name="notification_permission_action_reject">Odrzuć</string>
     <!-- Errors -->
     <string name="error_network">Błąd sieci</string>
     <string name="error_auth">Błąd uwierzytelnienia</string>

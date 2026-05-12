@@ -51,6 +51,9 @@
     <string name="notification_connected">Підключено до %1$s</string>
     <string name="notification_task_complete">Завдання виконано</string>
     <string name="notification_permission_required">Потрібен дозвіл</string>
+    <string name="notification_permission_action_allow_once">Дозволити один раз</string>
+    <string name="notification_permission_action_allow_always">Завжди дозволяти</string>
+    <string name="notification_permission_action_reject">Відхилити</string>
     <!-- Errors -->
     <string name="error_network">Помилка мережі</string>
     <string name="error_auth">Помилка автентифікації</string>

@@ -204,6 +204,72 @@ class BuildActiveConversationsTest {
         assertEquals(ConversationStatus.RETRY, items[2].status)
     }
 
+    @Test
+    fun `idle root with pending permission is included with AWAITING_PERMISSION status`() {
+        val root = rootSession("root1", updated = 100)
+
+        val items = buildActiveConversations(
+            rootSessions = listOf(root),
+            statuses = mapOf(root.id to SessionStatus.Idle),
+            pendingQuestions = emptyMap(),
+            pendingPermissions = mapOf(root.id to listOf(permissionAsked("perm-1"))),
+            unreadSessionIds = emptySet(),
+        )
+
+        assertEquals(1, items.size)
+        assertEquals(ConversationStatus.AWAITING_PERMISSION, items[0].status)
+        assertEquals(1, items[0].pendingCount)
+    }
+
+    @Test
+    fun `multiple pending permissions on idle root surface pendingCount`() {
+        val root = rootSession("root1", updated = 100)
+
+        val items = buildActiveConversations(
+            rootSessions = listOf(root),
+            statuses = mapOf(root.id to SessionStatus.Idle),
+            pendingQuestions = emptyMap(),
+            pendingPermissions = mapOf(
+                root.id to listOf(
+                    permissionAsked("perm-1"),
+                    permissionAsked("perm-2"),
+                    permissionAsked("perm-3"),
+                ),
+            ),
+            unreadSessionIds = emptySet(),
+        )
+
+        assertEquals(1, items.size)
+        assertEquals(ConversationStatus.AWAITING_PERMISSION, items[0].status)
+        assertEquals(3, items[0].pendingCount)
+    }
+
+    @Test
+    fun `awaiting permission preserves busy ordering when both states are present across sessions`() {
+        // Regression guard: surfacing awaiting-permission visibility must not
+        // perturb the existing UNREAD < AWAITING_QUESTION < AWAITING_PERMISSION
+        // < BUSY < RETRY priority on the other sessions in the same banner.
+        val permRoot = rootSession("root-perm", updated = 100)
+        val busyRoot = rootSession("root-busy", updated = 200) // newer
+
+        val items = buildActiveConversations(
+            rootSessions = listOf(permRoot, busyRoot),
+            statuses = mapOf(
+                permRoot.id to SessionStatus.Idle,
+                busyRoot.id to SessionStatus.Busy,
+            ),
+            pendingQuestions = emptyMap(),
+            pendingPermissions = mapOf(permRoot.id to listOf(permissionAsked("perm-1"))),
+            unreadSessionIds = emptySet(),
+        )
+
+        // AWAITING_PERMISSION ordinal < BUSY ordinal, so permRoot comes first
+        // even though busyRoot is newer.
+        assertEquals(listOf("root-perm", "root-busy"), items.map { it.sessionId })
+        assertEquals(ConversationStatus.AWAITING_PERMISSION, items[0].status)
+        assertEquals(ConversationStatus.BUSY, items[1].status)
+    }
+
     private fun rootSession(id: String, updated: Long, archivedAt: Long? = null) = Session(
         id = id,
         slug = id,

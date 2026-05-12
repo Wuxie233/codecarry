@@ -270,6 +270,9 @@
     <string name="notification_needs_permission_project">%1$s di %2$s membutuhkan izin</string>
     <string name="notification_needs_permission">%1$s membutuhkan izin</string>
     <string name="notification_permission_required">Izin diperlukan</string>
+    <string name="notification_permission_action_allow_once">Izinkan sekali</string>
+    <string name="notification_permission_action_allow_always">Selalu izinkan</string>
+    <string name="notification_permission_action_reject">Tolak</string>
     <string name="notification_has_question_project">%1$s di %2$s memiliki pertanyaan</string>
     <string name="notification_has_question">%1$s memiliki pertanyaan</string>
     <string name="notification_question">Pertanyaan</string>

@@ -97,6 +97,9 @@
     <string name="notification_needs_permission_project">%1$s в %2$s требует разрешения</string>
     <string name="notification_needs_permission">%1$s требует разрешения</string>
     <string name="notification_permission_required">Требуется разрешение</string>
+    <string name="notification_permission_action_allow_once">Разрешить один раз</string>
+    <string name="notification_permission_action_allow_always">Всегда разрешать</string>
+    <string name="notification_permission_action_reject">Отклонить</string>
     <string name="notification_has_question_project">%1$s в %2$s задаёт вопрос</string>
     <string name="notification_has_question">%1$s задаёт вопрос</string>
     <string name="notification_question">Вопрос</string>

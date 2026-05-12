@@ -51,6 +51,9 @@
     <string name="notification_connected">已连接到 %1$s</string>
     <string name="notification_task_complete">任务已完成</string>
     <string name="notification_permission_required">需要权限</string>
+    <string name="notification_permission_action_allow_once">允许一次</string>
+    <string name="notification_permission_action_allow_always">始终允许</string>
+    <string name="notification_permission_action_reject">拒绝</string>
     <!-- Errors -->
     <string name="error_network">网络错误</string>
     <string name="error_auth">认证失败</string>
