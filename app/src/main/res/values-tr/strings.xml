@@ -51,6 +51,9 @@
     <string name="notification_connected">%1$s\'e bağlandı</string>
     <string name="notification_task_complete">Görev tamamlandı</string>
     <string name="notification_permission_required">İzin gerekli</string>
+    <string name="notification_permission_action_allow_once">Bir kez izin ver</string>
+    <string name="notification_permission_action_allow_always">Her zaman izin ver</string>
+    <string name="notification_permission_action_reject">Reddet</string>
     <!-- Errors -->
     <string name="error_network">Ağ hatası</string>
     <string name="error_auth">Kimlik doğrulama başarısız</string>

@@ -4806,7 +4806,7 @@ private fun RetryStatusBanner(
             ) {
                 Icon(
                     Icons.Default.Stop,
-                    contentDescription = "停止重试",
+                    contentDescription = stringResource(R.string.chat_stop),
                     tint = MaterialTheme.colorScheme.error,
                     modifier = Modifier.size(18.dp)
                 )

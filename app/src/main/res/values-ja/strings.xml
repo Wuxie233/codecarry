@@ -51,6 +51,9 @@
     <string name="notification_connected">%1$sに接続しました</string>
     <string name="notification_task_complete">タスク完了</string>
     <string name="notification_permission_required">権限が必要です</string>
+    <string name="notification_permission_action_allow_once">一度だけ許可</string>
+    <string name="notification_permission_action_allow_always">常に許可</string>
+    <string name="notification_permission_action_reject">拒否</string>
     <!-- Errors -->
     <string name="error_network">ネットワークエラー</string>
     <string name="error_auth">認証に失敗しました</string>

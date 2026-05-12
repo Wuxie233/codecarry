@@ -51,6 +51,9 @@
     <string name="notification_connected">متصل بـ %1$s</string>
     <string name="notification_task_complete">تم إكمال المهمة</string>
     <string name="notification_permission_required">مطلوب إذن</string>
+    <string name="notification_permission_action_allow_once">السماح مرة واحدة</string>
+    <string name="notification_permission_action_allow_always">السماح دائمًا</string>
+    <string name="notification_permission_action_reject">رفض</string>
     <!-- Errors -->
     <string name="error_network">خطأ في الشبكة</string>
     <string name="error_auth">فشل التحقق من الهوية</string>

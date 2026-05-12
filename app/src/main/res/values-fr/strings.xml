@@ -492,6 +492,9 @@
     <string name="notification_needs_permission_project">%1$s dans %2$s a besoin d\'une autorisation</string>
     <string name="notification_needs_permission">%1$s a besoin d\'une autorisation</string>
     <string name="notification_permission_required">Autorisation requise</string>
+    <string name="notification_permission_action_allow_once">Autoriser une fois</string>
+    <string name="notification_permission_action_allow_always">Toujours autoriser</string>
+    <string name="notification_permission_action_reject">Rejeter</string>
     <string name="notification_has_question_project">%1$s dans %2$s a une question</string>
     <string name="notification_has_question">%1$s a une question</string>
     <string name="notification_question">Question</string>

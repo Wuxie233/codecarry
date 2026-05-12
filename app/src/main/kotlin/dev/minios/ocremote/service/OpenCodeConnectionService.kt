@@ -151,6 +151,21 @@ class OpenCodeConnectionService : Service() {
         if (BuildConfig.DEBUG) Log.d(TAG, "Service started, action=${intent?.action}")
 
         when (intent?.action) {
+            ACTION_PERMISSION_REPLY -> {
+                val serverId = intent.getStringExtra(EXTRA_SERVER_ID)
+                val sessionId = intent.getStringExtra(EXTRA_SESSION_ID)
+                val requestId = intent.getStringExtra(EXTRA_PERMISSION_REQUEST_ID)
+                val replyValue = intent.getStringExtra(EXTRA_PERMISSION_REPLY_VALUE)
+
+                if (serverId == null || sessionId == null || requestId == null || replyValue == null) {
+                    Log.w(TAG, "Permission reply action missing required extras")
+                    return START_NOT_STICKY
+                }
+
+                Log.i(TAG, "Permission reply requested for $requestId in session $sessionId on server $serverId: $replyValue")
+                handlePermissionAction(serverId, sessionId, requestId, replyValue)
+                return START_NOT_STICKY
+            }
             ACTION_DISCONNECT_ALL -> {
                 Log.i(TAG, "Disconnect All requested via notification")
                 disconnectAllVisibleServers()
@@ -537,8 +552,13 @@ class OpenCodeConnectionService : Service() {
             }
             is SseEvent.PermissionAsked -> {
                 if (isChildSession(event.sessionId)) return
-                Log.i(TAG, "[${server.displayName}] Permission asked: ${event.permission}")
-                showPermissionNotification(server, event.sessionId, event.permission)
+                Log.i(TAG, "[${server.displayName}] Permission asked: ${event.permission} (id=${event.id})")
+                showPermissionNotification(
+                    server = server,
+                    sessionId = event.sessionId,
+                    requestId = event.id,
+                    permission = event.permission
+                )
             }
             is SseEvent.QuestionAsked -> {
                 if (isChildSession(event.sessionId)) return
@@ -576,6 +596,43 @@ class OpenCodeConnectionService : Service() {
     private fun getSessionInfo(sessionId: String): Pair<String?, String?> {
         val session = eventReducer.sessions.value.find { it.id == sessionId }
         return Pair(session?.title, session?.directory)
+    }
+
+    private fun handlePermissionAction(serverId: String, sessionId: String, requestId: String, replyValue: String) {
+        if (replyValue !in setOf(PERMISSION_REPLY_ONCE, PERMISSION_REPLY_ALWAYS, PERMISSION_REPLY_REJECT)) {
+            Log.w(TAG, "Ignoring unknown permission reply value for $requestId: $replyValue")
+            return
+        }
+
+        val state = connections[serverId]
+        if (state == null) {
+            Log.w(TAG, "Ignoring permission reply for missing server $serverId (requestId=$requestId)")
+            notificationManager.cancel(eventNotificationId(serverId, sessionId, 1000))
+            return
+        }
+
+        val (_, directory) = getSessionInfo(sessionId)
+        serviceScope.launch {
+            val success = try {
+                api.replyToPermission(
+                    conn = state.conn,
+                    requestId = requestId,
+                    reply = replyValue,
+                    directory = directory
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to send permission reply for $requestId: ${e.message}", e)
+                false
+            }
+
+            if (success) {
+                eventReducer.removePermission(requestId)
+                notificationManager.cancel(eventNotificationId(state.config.id, sessionId, 1000))
+                Log.i(TAG, "Permission reply sent for $requestId: $replyValue")
+            } else {
+                Log.w(TAG, "Permission reply failed for $requestId; leaving chat fallback active")
+            }
+        }
     }
 
     private fun latestNotifiableAssistantMessageId(sessionId: String): String? {
@@ -645,6 +702,29 @@ class OpenCodeConnectionService : Service() {
         )
     }
 
+    private fun buildPermissionReplyPendingIntent(
+        server: ServerConfig,
+        sessionId: String,
+        requestId: String,
+        replyValue: String,
+        requestCode: Int
+    ): PendingIntent {
+        val intent = Intent(this, OpenCodeConnectionService::class.java).apply {
+            action = ACTION_PERMISSION_REPLY
+            putExtra(EXTRA_SERVER_ID, server.id)
+            putExtra(EXTRA_SESSION_ID, sessionId)
+            putExtra(EXTRA_PERMISSION_REQUEST_ID, requestId)
+            putExtra(EXTRA_PERMISSION_REPLY_VALUE, replyValue)
+        }
+
+        return PendingIntent.getService(
+            this,
+            requestCode,
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+    }
+
     /** Generate a stable notification ID for a server+session event type. */
     private fun eventNotificationId(serverId: String, sessionId: String, typeOffset: Int): Int {
         return (serverId + sessionId).hashCode() + typeOffset
@@ -652,14 +732,21 @@ class OpenCodeConnectionService : Service() {
 
     companion object {
         const val ACTION_OPEN_SESSION = "dev.minios.ocremote.OPEN_SESSION"
+        const val ACTION_PERMISSION_REPLY = "dev.minios.ocremote.PERMISSION_REPLY"
         const val ACTION_DISCONNECT = "dev.minios.ocremote.DISCONNECT"
         const val ACTION_DISCONNECT_ALL = "dev.minios.ocremote.DISCONNECT_ALL"
+        const val EXTRA_SERVER_ID = "server_id"
         const val EXTRA_SERVER_URL = "server_url"
         const val EXTRA_SERVER_USERNAME = "server_username"
         const val EXTRA_SERVER_PASSWORD = "server_password"
         const val EXTRA_SERVER_NAME = "server_name"
         const val EXTRA_SESSION_PATH = "session_path"
         const val EXTRA_SESSION_ID = "sessionId"
+        const val EXTRA_PERMISSION_REQUEST_ID = "permission_request_id"
+        const val EXTRA_PERMISSION_REPLY_VALUE = "permission_reply_value"
+        const val PERMISSION_REPLY_ONCE = "once"
+        const val PERMISSION_REPLY_ALWAYS = "always"
+        const val PERMISSION_REPLY_REJECT = "reject"
     }
 
     // ============ Notification Channels ============
@@ -826,7 +913,7 @@ class OpenCodeConnectionService : Service() {
         showServerGroupSummary(server)
     }
 
-    private fun showPermissionNotification(server: ServerConfig, sessionId: String, permission: String) {
+    private fun showPermissionNotification(server: ServerConfig, sessionId: String, requestId: String, permission: String) {
         val (sessionTitle, directory) = getSessionInfo(sessionId)
         val displayTitle = sessionTitle ?: getString(R.string.notification_new_session)
         val projectName = getProjectName(directory)
@@ -850,6 +937,21 @@ class OpenCodeConnectionService : Service() {
             .setDefaults(NotificationCompat.DEFAULT_ALL)
             .setVibrate(longArrayOf(0, 300, 100, 300))
             .setGroup("server_${server.id}")
+            .addAction(
+                R.mipmap.ic_launcher,
+                getString(R.string.notification_permission_action_allow_once),
+                buildPermissionReplyPendingIntent(server, sessionId, requestId, PERMISSION_REPLY_ONCE, notifId + 1)
+            )
+            .addAction(
+                R.mipmap.ic_launcher,
+                getString(R.string.notification_permission_action_allow_always),
+                buildPermissionReplyPendingIntent(server, sessionId, requestId, PERMISSION_REPLY_ALWAYS, notifId + 2)
+            )
+            .addAction(
+                R.mipmap.ic_launcher,
+                getString(R.string.notification_permission_action_reject),
+                buildPermissionReplyPendingIntent(server, sessionId, requestId, PERMISSION_REPLY_REJECT, notifId + 3)
+            )
             .build()
 
         notificationManager.notify(notifId, notification)

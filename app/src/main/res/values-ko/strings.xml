@@ -51,6 +51,9 @@
     <string name="notification_connected">%1$s에 연결됨</string>
     <string name="notification_task_complete">작업 완료</string>
     <string name="notification_permission_required">권한 필요</string>
+    <string name="notification_permission_action_allow_once">한 번만 허용</string>
+    <string name="notification_permission_action_allow_always">항상 허용</string>
+    <string name="notification_permission_action_reject">거부</string>
     <!-- Errors -->
     <string name="error_network">네트워크 오류</string>
     <string name="error_auth">인증 실패</string>

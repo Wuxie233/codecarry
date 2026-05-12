@@ -508,6 +508,9 @@
     <string name="notification_needs_permission_project">%1$s in %2$s needs permission</string>
     <string name="notification_needs_permission">%1$s needs permission</string>
     <string name="notification_permission_required">Permission required</string>
+    <string name="notification_permission_action_allow_once">Allow once</string>
+    <string name="notification_permission_action_allow_always">Always allow</string>
+    <string name="notification_permission_action_reject">Reject</string>
     <string name="notification_has_question_project">%1$s in %2$s has a question</string>
     <string name="notification_has_question">%1$s has a question</string>
     <string name="notification_question">Question</string>

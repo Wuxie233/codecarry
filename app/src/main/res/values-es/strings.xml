@@ -51,6 +51,9 @@
     <string name="notification_connected">Conectado a %1$s</string>
     <string name="notification_task_complete">Tarea completada</string>
     <string name="notification_permission_required">Permiso requerido</string>
+    <string name="notification_permission_action_allow_once">Permitir una vez</string>
+    <string name="notification_permission_action_allow_always">Permitir siempre</string>
+    <string name="notification_permission_action_reject">Rechazar</string>
     <!-- Errors -->
     <string name="error_network">Error de red</string>
     <string name="error_auth">Autenticación fallida</string>
