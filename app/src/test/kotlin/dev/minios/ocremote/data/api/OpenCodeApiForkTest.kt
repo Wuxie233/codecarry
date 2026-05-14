@@ -34,11 +34,14 @@ class OpenCodeApiForkTest {
         encodeDefaults = true
     }
 
-    private fun newApi(captured: MutableList<HttpRequestData>): OpenCodeApi {
+    private fun newApi(
+        captured: MutableList<HttpRequestData>,
+        responseBody: String = responseJson,
+    ): OpenCodeApi {
         val engine = MockEngine { request ->
             captured += request
             respond(
-                content = ByteReadChannel(responseJson),
+                content = ByteReadChannel(responseBody),
                 status = HttpStatusCode.OK,
                 headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
             )
@@ -116,5 +119,28 @@ class OpenCodeApiForkTest {
             .toString(Charsets.UTF_8)
         assert(body.contains("\"messageID\"")) { "messageID missing from body: $body" }
         assert(body.contains("msg_123")) { "messageID value missing from body: $body" }
+    }
+
+    @Test
+    fun `createSession accepts response without time`() = runBlocking {
+        val captured = mutableListOf<HttpRequestData>()
+        val api = newApi(
+            captured = captured,
+            responseBody = """
+                {
+                  "id": "ses_new",
+                  "directory": "/home/user/projectA"
+                }
+            """.trimIndent(),
+        )
+        val conn = ServerConnection.from("http://example.test:4096")
+
+        val result: Session = api.createSession(conn = conn, title = "New chat")
+
+        assertEquals("ses_new", result.id)
+        assertEquals("/home/user/projectA", result.directory)
+        assertEquals(0L, result.time.created)
+        assertEquals(0L, result.time.updated)
+        assertEquals("http://example.test:4096/session", captured.single().url.toString())
     }
 }

@@ -16,7 +16,7 @@ data class Session(
     @SerialName("parentID") val parentId: String? = null,
     val title: String? = null,
     val version: String = "",
-    val time: Time,
+    val time: Time = Time(),
     val summary: Summary? = null,
     val share: Share? = null,
     val permission: List<PermissionRule>? = null,
@@ -24,8 +24,8 @@ data class Session(
 ) {
     @Serializable
     data class Time(
-        val created: Long,
-        val updated: Long,
+        val created: Long = 0L,
+        val updated: Long = 0L,
         val compacting: Long? = null,
         val archived: Long? = null
     )
