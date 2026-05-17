@@ -10,7 +10,7 @@ import kotlinx.serialization.json.jsonPrimitive
 
 @Serializable
 data class TimeInfo(
-    val created: Long,
+    val created: Long = 0L,
     val completed: Long? = null
 )
 
@@ -43,7 +43,7 @@ sealed class Message {
         override val id: String,
         @SerialName("sessionID") override val sessionId: String,
         override val role: String = "user",
-        override val time: TimeInfo,
+        override val time: TimeInfo = TimeInfo(),
         val agent: String? = null,
         val model: Model? = null,
         val format: OutputFormat? = null,
@@ -78,8 +78,8 @@ sealed class Message {
         override val id: String,
         @SerialName("sessionID") override val sessionId: String,
         override val role: String = "assistant",
-        override val time: TimeInfo,
-        @SerialName("parentID") val parentId: String,
+        override val time: TimeInfo = TimeInfo(),
+        @SerialName("parentID") val parentId: String? = null,
         @SerialName("modelID") val modelId: String? = null,
         @SerialName("providerID") val providerId: String? = null,
         val agent: String? = null,

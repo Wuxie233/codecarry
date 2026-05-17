@@ -74,9 +74,9 @@ sealed class Part {
         override val id: String,
         @SerialName("sessionID") override val sessionId: String,
         @SerialName("messageID") override val messageId: String,
-        @SerialName("callID") val callId: String,
-        val tool: String,
-        val state: ToolState,
+        @SerialName("callID") val callId: String = "",
+        val tool: String = "",
+        val state: ToolState = ToolState.Pending(),
         val metadata: Map<String, JsonElement>? = null
     ) : Part()
 
@@ -119,7 +119,7 @@ sealed class Part {
         override val id: String,
         @SerialName("sessionID") override val sessionId: String,
         @SerialName("messageID") override val messageId: String,
-        val mime: String,
+        val mime: String = "application/octet-stream",
         val filename: String? = null,
         val url: String? = null,
         val source: JsonElement? = null

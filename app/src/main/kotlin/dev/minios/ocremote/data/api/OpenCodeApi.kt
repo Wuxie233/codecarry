@@ -1227,7 +1227,7 @@ data class FileNode(
 data class PermissionRequest(
     val id: String,
     @SerialName("sessionID") val sessionId: String,
-    val permission: String,
+    val permission: String = "ask",
     val patterns: List<String> = emptyList(),
     val metadata: Map<String, JsonElement>? = null,
     val always: List<String> = emptyList(),
@@ -1238,23 +1238,23 @@ data class PermissionRequest(
 data class QuestionRequest(
     val id: String,
     @SerialName("sessionID") val sessionId: String,
-    val questions: List<QuestionInfo>,
+    val questions: List<QuestionInfo> = emptyList(),
     val tool: ToolRef? = null
 )
 
 @Serializable
 data class QuestionInfo(
-    val question: String,
-    val header: String,
-    val options: List<QuestionOption>,
+    val question: String = "",
+    val header: String = "",
+    val options: List<QuestionOption> = emptyList(),
     val multiple: Boolean = false,
     val custom: Boolean = true
 )
 
 @Serializable
 data class QuestionOption(
-    val label: String,
-    val description: String
+    val label: String = "",
+    val description: String = ""
 )
 
 // ============ MCP Runtime DTOs ============
@@ -1301,7 +1301,7 @@ internal fun sanitizeMcpError(raw: String?): String? {
 
 @Serializable
 data class ProvidersResponse(
-    val providers: List<ProviderInfo>,
+    val providers: List<ProviderInfo> = emptyList(),
     val default: Map<String, String> = emptyMap()
 )
 
@@ -1345,7 +1345,7 @@ data class ServerConfigPatch(
 @Serializable
 data class ProviderInfo(
     val id: String,
-    val name: String,
+    val name: String = "",
     val source: String = "",
     val env: List<String> = emptyList(),
     val key: String? = null,
@@ -1357,7 +1357,7 @@ data class ProviderInfo(
 data class ProviderModel(
     val id: String,
     @SerialName("providerID") val providerId: String = "",
-    val name: String,
+    val name: String = "",
     val family: String? = null,
     val status: String = "active",
     val capabilities: ModelCapabilities? = null,

@@ -385,7 +385,7 @@ class ChatViewModel @Inject constructor(
             commands = commands,
             hasOlderMessages = hasOlderMessages,
             isLoadingOlder = isLoadingOlder,
-            shareUrl = session?.share?.url,
+            shareUrl = session?.share?.url?.takeIf { it.isNotBlank() },
             contextWindow = currentModel?.limit?.context ?: 0,
             lastContextTokens = lastContextTokens
         )
@@ -397,49 +397,58 @@ class ChatViewModel @Inject constructor(
 
     init {
         eventReducer.setActiveSessionId(sessionId)
-        viewModelScope.launch {
-            sessionListPreferencesRepository.markMainSessionRead(sessionId)
-        }
 
-        // Restore draft from disk
-        val draft = draftRepository.getDraft(sessionId)
-        if (draft != null) {
-            _draftText.value = draft.text
-            _draftAttachmentUris.value = draft.imageUris
-            if (draft.confirmedFilePaths.isNotEmpty()) {
-                _confirmedFilePaths.value = draft.confirmedFilePaths.toSet()
+        // Route guard (issue #27): if sessionId is missing after URL decode,
+        // surface an error state instead of triggering REST calls with an empty sessionId.
+        if (sessionId.isBlank()) {
+            Log.w(TAG, "ChatViewModel constructed with blank sessionId; entering error state")
+            _isLoading.value = false
+            _error.value = "Invalid session"
+        } else {
+            viewModelScope.launch {
+                sessionListPreferencesRepository.markMainSessionRead(sessionId)
             }
-            if (!draft.selectedAgent.isNullOrBlank()) {
-                _selectedAgent.value = draft.selectedAgent to true
-            }
-            if (!draft.selectedVariant.isNullOrBlank()) {
-                _selectedVariant.value = draft.selectedVariant
-            }
-        }
 
-        viewModelScope.launch {
-            settingsRepository.hiddenModels(serverId).collect { hidden ->
-                _hiddenModels.value = hidden
-                applyProviderFilter()
+            // Restore draft from disk
+            val draft = draftRepository.getDraft(sessionId)
+            if (draft != null) {
+                _draftText.value = draft.text
+                _draftAttachmentUris.value = draft.imageUris
+                if (draft.confirmedFilePaths.isNotEmpty()) {
+                    _confirmedFilePaths.value = draft.confirmedFilePaths.toSet()
+                }
+                if (!draft.selectedAgent.isNullOrBlank()) {
+                    _selectedAgent.value = draft.selectedAgent to true
+                }
+                if (!draft.selectedVariant.isNullOrBlank()) {
+                    _selectedVariant.value = draft.selectedVariant
+                }
             }
-        }
 
-        viewModelScope.launch {
-            settingsRepository.terminalFontSize.collect { size ->
-                terminalWorkspace.setDefaultFontSize(size)
+            viewModelScope.launch {
+                settingsRepository.hiddenModels(serverId).collect { hidden ->
+                    _hiddenModels.value = hidden
+                    applyProviderFilter()
+                }
             }
-        }
 
-        // Load initial message count from settings, then load data
-        viewModelScope.launch {
-            currentMessageLimit = settingsRepository.initialMessageCount.first()
-            loadSession()
-            loadMessages()
-            loadPendingQuestions()
+            viewModelScope.launch {
+                settingsRepository.terminalFontSize.collect { size ->
+                    terminalWorkspace.setDefaultFontSize(size)
+                }
+            }
+
+            // Load initial message count from settings, then load data
+            viewModelScope.launch {
+                currentMessageLimit = settingsRepository.initialMessageCount.first()
+                loadSession()
+                loadMessages()
+                loadPendingQuestions()
+            }
+            loadProviders()
+            loadAgents()
+            loadCommands()
         }
-        loadProviders()
-        loadAgents()
-        loadCommands()
 
     }
 

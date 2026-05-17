@@ -109,17 +109,17 @@ sealed class SseEvent {
     ) : SseEvent() {
         @Serializable
         data class Question(
-            val header: String,
-            val question: String,
+            val header: String = "",
+            val question: String = "",
             val multiple: Boolean = false,
             val custom: Boolean = true,
-            val options: List<Option>
+            val options: List<Option> = emptyList()
         )
 
         @Serializable
         data class Option(
-            val label: String,
-            val description: String
+            val label: String = "",
+            val description: String = ""
         )
     }
 
@@ -205,5 +205,4 @@ data class Project(
             ?: path.takeIf { it.isNotEmpty() }?.trimEnd('/')?.substringAfterLast('/')?.takeIf { it.isNotEmpty() }
             ?: id.take(8)
 }
-
 

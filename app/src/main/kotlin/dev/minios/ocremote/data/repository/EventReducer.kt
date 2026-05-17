@@ -217,8 +217,14 @@ class EventReducer @Inject constructor() {
     }
     
     // ============ Part Events ============
-    
+
+    private fun Part.isRenderablePart(): Boolean {
+        return this !is Part.Tool || (callId.isNotBlank() && tool.isNotBlank())
+    }
+
     private fun handleMessagePartUpdated(event: SseEvent.MessagePartUpdated) {
+        if (!event.part.isRenderablePart()) return
+
         val messageId = event.part.messageId
         _parts.update { current ->
             val messageParts = current[messageId]?.toMutableList() ?: mutableListOf()
@@ -413,7 +419,7 @@ class EventReducer @Inject constructor() {
         _messages.update { it + (sessionId to messages.map { msg -> msg.info }) }
         
         val partsMap = messages.associate { msg ->
-            msg.info.id to msg.parts
+            msg.info.id to msg.parts.filter { it.isRenderablePart() }
         }
         _parts.update { it + partsMap }
     }
