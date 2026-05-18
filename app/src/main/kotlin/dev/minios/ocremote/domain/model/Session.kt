@@ -16,7 +16,7 @@ data class Session(
     @SerialName("parentID") val parentId: String? = null,
     val title: String? = null,
     val version: String = "",
-    val time: Time,
+    val time: Time = Time(),
     val summary: Summary? = null,
     val share: Share? = null,
     val permission: List<PermissionRule>? = null,
@@ -24,8 +24,8 @@ data class Session(
 ) {
     @Serializable
     data class Time(
-        val created: Long,
-        val updated: Long,
+        val created: Long = 0L,
+        val updated: Long = 0L,
         val compacting: Long? = null,
         val archived: Long? = null
     )
@@ -39,11 +39,11 @@ data class Session(
     )
 
     @Serializable
-    data class Share(val url: String)
+    data class Share(val url: String = "")
 
     @Serializable
     data class Revert(
-        @SerialName("messageID") val messageId: String,
+        @SerialName("messageID") val messageId: String = "",
         @SerialName("partID") val partId: String? = null,
         val snapshot: String? = null,
         val diff: String? = null
@@ -51,7 +51,7 @@ data class Session(
 
     @Serializable
     data class PermissionRule(
-        val permission: String,
+        val permission: String = "ask",
         val pattern: String = "*",
         val action: String = "ask"
     )
