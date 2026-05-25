@@ -117,6 +117,9 @@ class ChatViewModel @Inject constructor(
     val sessionId: String = URLDecoder.decode(
         savedStateHandle.get<String>("sessionId") ?: "", "UTF-8"
     )
+    private val routeDirectory: String? = URLDecoder.decode(
+        savedStateHandle.get<String>("directory") ?: "", "UTF-8"
+    ).takeIf { it.isNotBlank() }
 
     private val conn = ServerConnection.from(serverUrl, username, password.ifEmpty { null })
 
@@ -132,7 +135,7 @@ class ChatViewModel @Inject constructor(
     // Track if the model was explicitly selected by the user to avoid overwriting it with defaults/history
     private var isModelExplicitlySelected = false
     /** The directory of this session's project — sent as x-opencode-directory so the server resolves the correct project context. */
-    private var sessionDirectory: String? = null
+    private var sessionDirectory: String? = routeDirectory
     /** Signals when [loadSession] has finished (successfully or with error), so that terminal
      *  creation can wait for [sessionDirectory] to be populated. */
     private val sessionLoaded = CompletableDeferred<Unit>()
@@ -141,6 +144,7 @@ class ChatViewModel @Inject constructor(
     private val _selectedAgent = MutableStateFlow("build" to false)
     private val _selectedVariant = MutableStateFlow<String?>(null)
     private val _commands = MutableStateFlow<List<CommandInfo>>(emptyList())
+    private var isCreatingSession = false
     private val terminalWorkspace = ServerTerminalRegistry.workspaceFor(serverId, api, conn).also {
         if (BuildConfig.DEBUG) {
             Log.d("TerminalZoom", "ChatViewModel init: workspaceId=${System.identityHashCode(it)} flowId=${System.identityHashCode(it.activeFontSizeSp)} serverId=$serverId vmId=${System.identityHashCode(this)}")
@@ -455,7 +459,7 @@ class ChatViewModel @Inject constructor(
     /** Load the session info to get its directory for correct project context. */
     private suspend fun loadSession() {
         try {
-            val session = api.getSession(conn, sessionId)
+            val session = api.getSession(conn, sessionId, directory = sessionDirectory)
             if (session.directory.isNotBlank()) {
                 sessionDirectory = session.directory
                 if (BuildConfig.DEBUG) Log.d(TAG, "Session directory: ${session.directory}")
@@ -472,7 +476,12 @@ class ChatViewModel @Inject constructor(
             _isLoading.value = true
             _error.value = null
             try {
-                val messages = api.listMessages(conn, sessionId, limit = currentMessageLimit)
+                val messages = api.listMessages(
+                    conn = conn,
+                    sessionId = sessionId,
+                    limit = currentMessageLimit,
+                    directory = sessionDirectory,
+                )
                 eventReducer.setMessages(sessionId, messages)
                 // If we got exactly the limit, there are likely more messages on the server
                 _hasOlderMessages.value = messages.size >= currentMessageLimit
@@ -484,7 +493,12 @@ class ChatViewModel @Inject constructor(
                     Log.w(TAG, "OOM loading messages, retrying with smaller limit")
                     currentMessageLimit = (currentMessageLimit / 2).coerceAtLeast(10)
                     try {
-                        val messages = api.listMessages(conn, sessionId, limit = currentMessageLimit)
+                        val messages = api.listMessages(
+                            conn = conn,
+                            sessionId = sessionId,
+                            limit = currentMessageLimit,
+                            directory = sessionDirectory,
+                        )
                         eventReducer.setMessages(sessionId, messages)
                         _hasOlderMessages.value = messages.size >= currentMessageLimit
                         if (BuildConfig.DEBUG) Log.d(TAG, "Retry succeeded: loaded ${messages.size} messages (limit=$currentMessageLimit)")
@@ -510,7 +524,12 @@ class ChatViewModel @Inject constructor(
             _isLoadingOlder.value = true
             currentMessageLimit *= 2
             try {
-                val messages = api.listMessages(conn, sessionId, limit = currentMessageLimit)
+                val messages = api.listMessages(
+                    conn = conn,
+                    sessionId = sessionId,
+                    limit = currentMessageLimit,
+                    directory = sessionDirectory,
+                )
                 eventReducer.setMessages(sessionId, messages)
                 _hasOlderMessages.value = messages.size >= currentMessageLimit
                 if (BuildConfig.DEBUG) Log.d(TAG, "Loaded older: ${messages.size} messages (limit=$currentMessageLimit, hasOlder=${_hasOlderMessages.value})")
@@ -1299,6 +1318,11 @@ class ChatViewModel @Inject constructor(
 
     /** Create a new session and return it. */
     fun createNewSession(onResult: (Session?) -> Unit) {
+        if (isCreatingSession) {
+            onResult(null)
+            return
+        }
+        isCreatingSession = true
         viewModelScope.launch {
             try {
                 val session = api.createSession(conn, directory = sessionDirectory)
@@ -1308,6 +1332,8 @@ class ChatViewModel @Inject constructor(
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to create session", e)
                 onResult(null)
+            } finally {
+                isCreatingSession = false
             }
         }
     }

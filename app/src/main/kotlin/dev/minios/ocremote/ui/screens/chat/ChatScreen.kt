@@ -23,6 +23,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.layout.WindowInsets
@@ -41,6 +42,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.foundation.text.selection.LocalTextSelectionColors
 import androidx.compose.foundation.text.selection.TextSelectionColors
 import androidx.compose.foundation.text.KeyboardOptions
@@ -54,6 +56,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -116,8 +119,7 @@ import com.mikepenz.markdown.m3.markdownColor
 import com.mikepenz.markdown.m3.markdownTypography
 import com.mikepenz.markdown.compose.components.markdownComponents
 import com.mikepenz.markdown.coil2.Coil2ImageTransformerImpl
-import com.mikepenz.markdown.compose.elements.highlightedCodeBlock
-import com.mikepenz.markdown.compose.elements.highlightedCodeFence
+import com.mikepenz.markdown.compose.elements.MarkdownTable
 import dev.minios.ocremote.domain.model.*
 import dev.minios.ocremote.data.api.AgentInfo
 import dev.minios.ocremote.data.api.CommandInfo
@@ -244,9 +246,28 @@ private fun agentColor(agentName: String, agents: List<AgentInfo> = emptyList())
 @Composable
 private fun Modifier.codeHorizontalScroll(): Modifier {
     return if (!LocalCodeWordWrap.current) {
-        this.horizontalScroll(rememberScrollState())
+        this
+            .horizontalDragGuard()
+            .horizontalScroll(rememberScrollState())
     } else {
         this
+    }
+}
+
+@Composable
+@OptIn(ExperimentalComposeUiApi::class)
+private fun Modifier.horizontalDragGuard(): Modifier {
+    val view = LocalView.current
+    return this.pointerInteropFilter { event ->
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> {
+                view.parent?.requestDisallowInterceptTouchEvent(true)
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                view.parent?.requestDisallowInterceptTouchEvent(false)
+            }
+        }
+        false
     }
 }
 
@@ -857,7 +878,7 @@ private suspend fun buildAttachmentFromUri(
 @Composable
 fun ChatScreen(
     onNavigateBack: () -> Unit,
-    onNavigateToSession: (sessionId: String) -> Unit = {},
+    onNavigateToSession: (sessionId: String, directory: String) -> Unit = { _, _ -> },
     onOpenInWebView: () -> Unit = {},
     initialSharedImages: List<Uri> = emptyList(),
     onSharedImagesConsumed: () -> Unit = {},
@@ -1532,7 +1553,7 @@ fun ChatScreen(
                                     showMenu = false
                                     viewModel.createNewSession { session ->
                                         if (session != null) {
-                                            onNavigateToSession(session.id)
+                                            onNavigateToSession(session.id, session.directory)
                                         } else {
                                             coroutineScope.launch {
                                                 snackbarHostState.showSnackbar(context.getString(R.string.chat_session_create_failed))
@@ -1550,7 +1571,7 @@ fun ChatScreen(
                                     showMenu = false
                                     viewModel.forkSession { session ->
                                         if (session != null) {
-                                            onNavigateToSession(session.id)
+                                            onNavigateToSession(session.id, session.directory)
                                         } else {
                                             coroutineScope.launch {
                                                 snackbarHostState.showSnackbar(context.getString(R.string.chat_fork_failed))
@@ -1850,7 +1871,7 @@ fun ChatScreen(
                             // Create a new session and navigate to it
                             viewModel.createNewSession { session ->
                                 if (session != null) {
-                                    onNavigateToSession(session.id)
+                                    onNavigateToSession(session.id, session.directory)
                                 } else {
                                     coroutineScope.launch {
                                         snackbarHostState.showSnackbar(context.getString(R.string.chat_session_create_failed))
@@ -1870,7 +1891,7 @@ fun ChatScreen(
                         "fork" -> {
                             viewModel.forkSession { session ->
                                 if (session != null) {
-                                    onNavigateToSession(session.id)
+                                    onNavigateToSession(session.id, session.directory)
                                 } else {
                                     coroutineScope.launch {
                                         snackbarHostState.showSnackbar(context.getString(R.string.chat_fork_failed))
@@ -4031,7 +4052,7 @@ private fun ChatMessageBubble(
                         }
                     }
                 },
-                enableDismissFromStartToEnd = true,
+                enableDismissFromStartToEnd = false,
                 enableDismissFromEndToStart = true
             ) {
                 bubbleContent()
@@ -4352,8 +4373,15 @@ private fun MarkdownContent(
     )
 
     val components = markdownComponents(
-        codeBlock = highlightedCodeBlock,
-        codeFence = highlightedCodeFence
+        codeBlock = safeHighlightedCodeBlock,
+        codeFence = safeHighlightedCodeFence,
+        table = {
+            DisableSelection {
+                Box(modifier = Modifier.horizontalDragGuard()) {
+                    MarkdownTable(it.content, it.node, bodyStyle)
+                }
+            }
+        }
     )
 
     SelectionContainer {
@@ -4960,8 +4988,8 @@ private fun EditToolCard(tool: Part.Tool) {
  */
 @Composable
 private fun DiffChangesInline(additions: Int, deletions: Int) {
-    val addColor = Color(0xFF4CAF50)
-    val delColor = Color(0xFFE53935)
+    val addColor = diffAddColor()
+    val delColor = diffDeleteColor()
     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         if (additions > 0) {
             Text(
@@ -4985,10 +5013,10 @@ private fun DiffChangesInline(additions: Int, deletions: Int) {
 @Composable
 private fun DiffView(before: String, after: String) {
     val isAmoled = isAmoledTheme()
-    val addColor = Color(0xFF4CAF50)
-    val delColor = Color(0xFFE53935)
-    val addBg = Color(0xFF4CAF50).copy(alpha = 0.1f)
-    val delBg = Color(0xFFE53935).copy(alpha = 0.1f)
+    val addColor = diffAddColor()
+    val delColor = diffDeleteColor()
+    val addBg = addColor.copy(alpha = if (isAmoled) 0.18f else 0.1f)
+    val delBg = delColor.copy(alpha = if (isAmoled) 0.18f else 0.1f)
 
     // Simple diff: show removed lines, then added lines
     // For a proper diff we'd need a diff library, but line-level comparison works for edit tools
@@ -5035,6 +5063,24 @@ private fun DiffView(before: String, after: String) {
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun diffAddColor(): Color {
+    return if (MaterialTheme.colorScheme.surface.luminance() < 0.5f) {
+        Color(0xFF7FD88F)
+    } else {
+        Color(0xFF2E7D32)
+    }
+}
+
+@Composable
+private fun diffDeleteColor(): Color {
+    return if (MaterialTheme.colorScheme.surface.luminance() < 0.5f) {
+        Color(0xFFFF8A80)
+    } else {
+        Color(0xFFC62828)
     }
 }
 

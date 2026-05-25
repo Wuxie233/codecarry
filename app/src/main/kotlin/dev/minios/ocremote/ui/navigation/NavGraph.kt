@@ -45,6 +45,7 @@ import dev.minios.ocremote.ui.screens.webview.WebViewScreen
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.firstOrNull
+import android.util.Base64
 import java.net.URLDecoder
 import java.text.SimpleDateFormat
 import java.util.*
@@ -129,7 +130,8 @@ fun NavGraph(
                     password = server.password ?: "",
                     serverName = server.displayName,
                     serverId = server.id,
-                    sessionId = session.id
+                    sessionId = session.id,
+                    directory = session.directory,
                 )
                 Log.i(TAG, "Share → navigating to session ${session.id} on ${server.displayName}")
                 navController.navigate(route) { launchSingleTop = true }
@@ -172,6 +174,7 @@ fun NavGraph(
                     .substringAfterLast("/session/", "")
                     .takeIf { it.isNotBlank() }
                     ?: deepLink.sessionId.takeIf { it.isNotBlank() }
+                val directory = directoryFromSessionPath(deepLink.sessionPath)
 
                 if (sessionId != null) {
                     // Navigate directly into the chat for this session
@@ -181,7 +184,8 @@ fun NavGraph(
                         password = deepLink.password,
                         serverName = deepLink.serverName,
                         serverId = "", // not available from deep-link; ViewModel handles it
-                        sessionId = sessionId
+                        sessionId = sessionId,
+                        directory = directory,
                     )
                     val currentSessionId = navController.currentBackStackEntry
                         ?.arguments
@@ -429,7 +433,7 @@ fun NavGraph(
             )
 
             SessionListScreen(
-                onNavigateToChat = { sessionId, openTerminal ->
+                onNavigateToChat = { sessionId, openTerminal, directory ->
                     navController.navigate(
                         Screen.Chat.createRoute(
                             serverUrl = serverUrl,
@@ -438,7 +442,8 @@ fun NavGraph(
                             serverName = serverName,
                             serverId = serverId,
                             sessionId = sessionId,
-                            openTerminal = openTerminal
+                            openTerminal = openTerminal,
+                            directory = directory,
                         )
                     )
                 },
@@ -450,7 +455,7 @@ fun NavGraph(
         
         // ============ Chat Screen (native) ============
         composable(
-            route = "chat?serverUrl={serverUrl}&username={username}&password={password}&serverName={serverName}&serverId={serverId}&sessionId={sessionId}&openTerminal={openTerminal}",
+            route = "chat?serverUrl={serverUrl}&username={username}&password={password}&serverName={serverName}&serverId={serverId}&sessionId={sessionId}&openTerminal={openTerminal}&directory={directory}",
             arguments = listOf(
                 navArgument("serverUrl") { type = NavType.StringType },
                 navArgument("username") { type = NavType.StringType },
@@ -458,7 +463,8 @@ fun NavGraph(
                 navArgument("serverName") { type = NavType.StringType },
                 navArgument("serverId") { type = NavType.StringType },
                 navArgument("sessionId") { type = NavType.StringType },
-                navArgument("openTerminal") { type = NavType.BoolType; defaultValue = false }
+                navArgument("openTerminal") { type = NavType.BoolType; defaultValue = false },
+                navArgument("directory") { type = NavType.StringType; defaultValue = "" }
             )
         ) { backStackEntry ->
             val serverUrl = URLDecoder.decode(
@@ -480,6 +486,9 @@ fun NavGraph(
                 backStackEntry.arguments?.getString("sessionId") ?: "", "UTF-8"
             )
             val openTerminal = backStackEntry.arguments?.getBoolean("openTerminal") ?: false
+            val directory = URLDecoder.decode(
+                backStackEntry.arguments?.getString("directory") ?: "", "UTF-8"
+            )
 
             // Only pass shared images to the targeted session, then clear them
             val imagesForThisSession = if (pendingShareSessionId == sessionId && pendingShareUris.isNotEmpty()) {
@@ -492,20 +501,19 @@ fun NavGraph(
                 onNavigateBack = {
                     navController.popBackStack()
                 },
-                onNavigateToSession = { newSessionId ->
+                onNavigateToSession = { newSessionId, newSessionDirectory ->
                     val route = Screen.Chat.createRoute(
                         serverUrl = serverUrl,
                         username = username,
                         password = password,
                         serverName = serverName,
                         serverId = serverId,
-                        sessionId = newSessionId
+                        sessionId = newSessionId,
+                        directory = newSessionDirectory,
                     )
+                    navController.popBackStack()
                     navController.navigate(route) {
-                        // Pop current chat so back goes to session list, not old session
-                        popUpTo("sessions?serverUrl={serverUrl}&username={username}&password={password}&serverName={serverName}&serverId={serverId}") {
-                            inclusive = false
-                        }
+                        launchSingleTop = true
                     }
                 },
                 onOpenInWebView = {
@@ -535,6 +543,21 @@ fun NavGraph(
             )
         }
     }
+}
+
+private fun directoryFromSessionPath(sessionPath: String): String {
+    val encodedDirectory = sessionPath
+        .trim('/')
+        .substringBefore("/session/", "")
+        .takeIf { it.isNotBlank() }
+        ?: return ""
+    val padded = encodedDirectory
+        .replace('-', '+')
+        .replace('_', '/')
+        .padEnd((encodedDirectory.length + 3) / 4 * 4, '=')
+    return runCatching {
+        String(Base64.decode(padded, Base64.DEFAULT), Charsets.UTF_8)
+    }.getOrDefault("")
 }
 
 /**

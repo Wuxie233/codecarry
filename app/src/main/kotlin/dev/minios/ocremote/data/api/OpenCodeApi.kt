@@ -131,9 +131,10 @@ class OpenCodeApi @Inject constructor(
         }.body()
     }
 
-    suspend fun getSession(conn: ServerConnection, sessionId: String): Session {
+    suspend fun getSession(conn: ServerConnection, sessionId: String, directory: String? = null): Session {
         return httpClient.get("${conn.baseUrl}/session/$sessionId") {
             conn.authHeader?.let { header("Authorization", it) }
+            directory?.let { header("x-opencode-directory", android.net.Uri.encode(it)) }
         }.body()
     }
 
@@ -476,9 +477,15 @@ class OpenCodeApi @Inject constructor(
 
     // ============ Messages ============
 
-    suspend fun listMessages(conn: ServerConnection, sessionId: String, limit: Int? = null): List<MessageWithParts> {
+    suspend fun listMessages(
+        conn: ServerConnection,
+        sessionId: String,
+        limit: Int? = null,
+        directory: String? = null,
+    ): List<MessageWithParts> {
         return httpClient.get("${conn.baseUrl}/session/$sessionId/message") {
             conn.authHeader?.let { header("Authorization", it) }
+            directory?.let { header("x-opencode-directory", android.net.Uri.encode(it)) }
             limit?.let { parameter("limit", it) }
         }.body()
     }
