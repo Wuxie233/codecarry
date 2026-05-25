@@ -5,6 +5,9 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonContentPolymorphicSerializer
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
@@ -181,7 +184,11 @@ sealed class Part {
         data class Time(val created: Long)
 
         val errorMessage: String
-            get() = error?.jsonObject?.get("message")?.jsonPrimitive?.content ?: "Unknown error"
+            get() = (error as? JsonObject)
+                ?.get("message")
+                ?.let { it as? JsonPrimitive }
+                ?.contentOrNull
+                ?: "Unknown error"
     }
 
     @Serializable
