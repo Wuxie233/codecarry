@@ -511,9 +511,14 @@ fun NavGraph(
                         sessionId = newSessionId,
                         directory = newSessionDirectory,
                     )
-                    navController.popBackStack()
+                    val currentChatDestinationId = navController.currentBackStackEntry?.destination?.id
                     navController.navigate(route) {
                         launchSingleTop = true
+                        currentChatDestinationId?.let { destinationId ->
+                            popUpTo(destinationId) {
+                                inclusive = true
+                            }
+                        }
                     }
                 },
                 onOpenInWebView = {

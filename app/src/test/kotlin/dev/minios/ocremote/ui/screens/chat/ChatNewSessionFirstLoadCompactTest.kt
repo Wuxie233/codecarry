@@ -8,6 +8,7 @@ import dev.minios.ocremote.data.preferences.SessionListPreferencesRepository
 import dev.minios.ocremote.data.repository.DraftRepository
 import dev.minios.ocremote.data.repository.EventReducer
 import dev.minios.ocremote.data.repository.SettingsRepository
+import dev.minios.ocremote.domain.model.Session
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
@@ -18,6 +19,7 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.utils.io.ByteReadChannel
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
@@ -113,6 +115,30 @@ class ChatNewSessionFirstLoadCompactTest {
         assertEquals("blank sessionId should not trigger REST calls", 0, requestCount)
     }
 
+    @Test
+    fun `createNewSession inherits blank compact response directory from current session directory`() = runTest(dispatcher) {
+        val eventReducer = EventReducer()
+        val createSessionDirectoryHeaders = Collections.synchronizedList(mutableListOf<String?>())
+        val vm = newViewModel(
+            savedStateHandle = savedStateHandle(sessionId = "ses_new", serverId = "srv-compact", directory = "/work/project"),
+            eventReducer = eventReducer,
+            api = createSessionApiWithBlankDirectoryResponse(createSessionDirectoryHeaders),
+            draftRepository = draftRepository(),
+            sessionListPreferencesRepository = sessionListPreferencesRepository(),
+            settingsRepository = settingsRepository(),
+        )
+        val emittedSession = CompletableDeferred<Session?>()
+        vm.createNewSession { emittedSession.complete(it) }
+        val session = emittedSession.await()
+
+        assertTrue(session != null)
+        assertEquals("/work/project", session?.directory)
+        assertEquals("/work/project", eventReducer.sessions.value.first { it.id == "ses_created" }.directory)
+        val createHeader = createSessionDirectoryHeaders.single()
+        assertTrue(createHeader?.contains("work") == true)
+        assertTrue(createHeader?.contains("project") == true)
+    }
+
     private fun savedStateHandle(sessionId: String, serverId: String) = SavedStateHandle(
         mapOf(
             "serverUrl" to "http%3A%2F%2Fexample.test%3A4096",
@@ -121,6 +147,18 @@ class ChatNewSessionFirstLoadCompactTest {
             "serverName" to "Local",
             "serverId" to serverId,
             "sessionId" to sessionId,
+        )
+    )
+
+    private fun savedStateHandle(sessionId: String, serverId: String, directory: String) = SavedStateHandle(
+        mapOf(
+            "serverUrl" to "http%3A%2F%2Fexample.test%3A4096",
+            "username" to "",
+            "password" to "",
+            "serverName" to "Local",
+            "serverId" to serverId,
+            "sessionId" to sessionId,
+            "directory" to directory,
         )
     )
 
@@ -133,6 +171,33 @@ class ChatNewSessionFirstLoadCompactTest {
             requestedPaths.add(request.url.encodedPath)
             val body = when (request.url.encodedPath) {
                 "/session/ses_new" -> """{"id":"ses_new","time":{}}"""
+                "/session/ses_new/message" -> "[]"
+                "/question" -> "[]"
+                "/config/providers" -> "{}"
+                "/agent" -> "[]"
+                "/command" -> "[]"
+                else -> "{}"
+            }
+            respond(
+                content = ByteReadChannel(body),
+                status = HttpStatusCode.OK,
+                headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
+            )
+        }
+        val client = HttpClient(engine) {
+            install(ContentNegotiation) { json(json) }
+        }
+        return OpenCodeApi(client, json)
+    }
+
+    private fun createSessionApiWithBlankDirectoryResponse(createSessionDirectoryHeaders: MutableList<String?>): OpenCodeApi {
+        val engine = MockEngine { request ->
+            if (request.url.encodedPath == "/session" && request.method.value == "POST") {
+                createSessionDirectoryHeaders.add(request.headers["x-opencode-directory"])
+            }
+            val body = when (request.url.encodedPath) {
+                "/session" -> """{"id":"ses_created","time":{}}"""
+                "/session/ses_new" -> """{"id":"ses_new","directory":"/work/project","time":{}}"""
                 "/session/ses_new/message" -> "[]"
                 "/question" -> "[]"
                 "/config/providers" -> "{}"

@@ -1325,10 +1325,19 @@ class ChatViewModel @Inject constructor(
         isCreatingSession = true
         viewModelScope.launch {
             try {
-                val session = api.createSession(conn, directory = sessionDirectory)
-                eventReducer.setSessions(serverId, listOf(session))
-                if (BuildConfig.DEBUG) Log.d(TAG, "Created new session: ${session.id}")
-                onResult(session)
+                if (!sessionLoaded.isCompleted) {
+                    sessionLoaded.await()
+                }
+                val requestedDirectory = sessionDirectory
+                val session = api.createSession(conn, directory = requestedDirectory)
+                val normalizedSession = if (session.directory.isBlank() && !requestedDirectory.isNullOrBlank()) {
+                    session.copy(directory = requestedDirectory)
+                } else {
+                    session
+                }
+                eventReducer.setSessions(serverId, listOf(normalizedSession))
+                if (BuildConfig.DEBUG) Log.d(TAG, "Created new session: ${normalizedSession.id}")
+                onResult(normalizedSession)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to create session", e)
                 onResult(null)
