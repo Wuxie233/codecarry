@@ -50,7 +50,7 @@ import dev.minios.ocremote.R
 @Composable
 fun ActiveConversationsBanner(
     items: List<ActiveConversationItem>,
-    onClick: (sessionId: String) -> Unit,
+    onClick: (sessionId: String, directory: String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     if (items.isEmpty()) return
@@ -102,7 +102,7 @@ fun ActiveConversationsBanner(
 private fun ActiveConversationCard(
     item: ActiveConversationItem,
     isAmoled: Boolean,
-    onClick: (sessionId: String) -> Unit,
+    onClick: (sessionId: String, directory: String) -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
     val unreadColor = Color(0xFF2196F3)
@@ -129,7 +129,7 @@ private fun ActiveConversationCard(
         modifier = Modifier
             .width(230.dp)
             .height(72.dp)
-            .clickable { onClick(item.sessionId) },
+            .clickable { onClick(item.sessionId, item.directory) },
         shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(
             containerColor = if (isAmoled) colors.surfaceContainerLow else colors.surface

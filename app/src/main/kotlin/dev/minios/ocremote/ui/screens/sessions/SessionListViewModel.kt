@@ -231,8 +231,8 @@ class SessionListViewModel @Inject constructor(
     private val _searchQuery = MutableStateFlow("")
     private val _filter = MutableStateFlow(SessionFilter.ALL)
     private val _showHiddenProjects = MutableStateFlow(false)
-    private val _navigateToSession = MutableSharedFlow<String>(extraBufferCapacity = 1)
-    val navigateToSession: SharedFlow<String> = _navigateToSession.asSharedFlow()
+    private val _navigateToSession = MutableSharedFlow<Session>(extraBufferCapacity = 1)
+    val navigateToSession: SharedFlow<Session> = _navigateToSession.asSharedFlow()
     private val _undoState = Channel<UndoAction>(Channel.BUFFERED)
     internal val undoState: kotlinx.coroutines.flow.Flow<UndoAction> = _undoState.receiveAsFlow()
     private val prefsFlow = preferencesRepo.preferences.stateIn(
@@ -489,7 +489,7 @@ class SessionListViewModel @Inject constructor(
                 val session = api.createSession(conn, directory = directory)
                 eventReducer.setSessions(serverId, listOf(session))
                 if (BuildConfig.DEBUG) Log.d(TAG, "Created new session: ${session.id}")
-                _navigateToSession.tryEmit(session.id)
+                _navigateToSession.tryEmit(session)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to create session", e)
                 _error.value = e.message ?: "Failed to create session"
@@ -919,6 +919,7 @@ internal fun buildActiveConversations(
 
             ActiveConversationItem(
                 sessionId = session.id,
+                directory = session.directory,
                 title = session.title,
                 projectName = displayName(normalizeDir(session.directory)),
                 status = conversationStatus,

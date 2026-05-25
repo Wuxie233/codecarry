@@ -2,6 +2,7 @@ package dev.minios.ocremote.ui.screens.sessions.components
 
 data class ActiveConversationItem(
     val sessionId: String,
+    val directory: String,
     val title: String?,
     val projectName: String?,
     val status: ConversationStatus,

@@ -40,6 +40,7 @@ class BuildActiveConversationsTest {
         assertEquals(1, items.size)
         assertEquals(ConversationStatus.BUSY, items[0].status)
         assertEquals(0, items[0].pendingCount)
+        assertEquals(root.directory, items[0].directory)
     }
 
     @Test

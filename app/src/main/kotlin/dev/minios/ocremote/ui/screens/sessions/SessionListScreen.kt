@@ -129,7 +129,7 @@ private fun PulsingDotsIndicator(
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun SessionListScreen(
-    onNavigateToChat: (sessionId: String, openTerminal: Boolean) -> Unit,
+    onNavigateToChat: (sessionId: String, openTerminal: Boolean, directory: String) -> Unit,
     onNavigateBack: () -> Unit,
     viewModel: SessionListViewModel = hiltViewModel(),
 ) {
@@ -151,8 +151,8 @@ fun SessionListScreen(
     // Navigate to newly created session
     LaunchedEffect(viewModel) {
         viewModel.navigateToSession
-            .onEach { sessionId ->
-                onNavigateToChat(sessionId, false)
+            .onEach { session ->
+                onNavigateToChat(session.id, false, session.directory)
             }
             .launchIn(this)
     }
@@ -381,7 +381,7 @@ fun SessionListScreen(
                     ) {
                         ActiveConversationsBanner(
                             items = uiState.activeConversations,
-                            onClick = { sessionId -> onNavigateToChat(sessionId, false) },
+                            onClick = { sessionId, directory -> onNavigateToChat(sessionId, false, directory) },
                         )
 
                         if (!uiState.isSelectionMode) {
@@ -556,7 +556,7 @@ fun SessionListScreen(
                                                 if (uiState.isSelectionMode) {
                                                     viewModel.toggleSelection(item.session.id)
                                                 } else {
-                                                    onNavigateToChat(item.session.id, false)
+                                                    onNavigateToChat(item.session.id, false, item.session.directory)
                                                 }
                                             },
                                             onLongClick = { viewModel.toggleSelection(item.session.id) },
@@ -576,8 +576,8 @@ fun SessionListScreen(
                                                 deleteSessionTitle = item.session.title ?: untitledLabel
                                                 showDeleteDialog = true
                                             },
-                                            onSubagentClick = { sessionId ->
-                                                onNavigateToChat(sessionId, false)
+                                            onSubagentClick = { sessionId, directory ->
+                                                onNavigateToChat(sessionId, false, directory)
                                             },
                                         )
                                         }
@@ -781,7 +781,7 @@ private fun SessionRowWithSubagents(
     onArchive: () -> Unit,
     onRestore: () -> Unit,
     onDelete: () -> Unit,
-    onSubagentClick: (sessionId: String) -> Unit,
+    onSubagentClick: (sessionId: String, directory: String) -> Unit,
 ) {
     val hasRunning = subagents.running.isNotEmpty()
     val hasHistorical = subagents.historical.isNotEmpty()
@@ -881,7 +881,7 @@ private fun SubagentDisclosureRow(
 private fun SubagentList(
     items: List<SessionItem>,
     isSelectionMode: Boolean,
-    onSubagentClick: (sessionId: String) -> Unit,
+    onSubagentClick: (sessionId: String, directory: String) -> Unit,
 ) {
     Column(
         modifier = Modifier.padding(start = 32.dp),
@@ -891,7 +891,7 @@ private fun SubagentList(
             SubagentSessionCard(
                 item = subagent,
                 enabled = !isSelectionMode,
-                onClick = { onSubagentClick(subagent.session.id) },
+                onClick = { onSubagentClick(subagent.session.id, subagent.session.directory) },
             )
         }
     }
