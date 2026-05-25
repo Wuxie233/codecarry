@@ -1,5 +1,6 @@
 package dev.minios.ocremote.ui.screens.chat
 
+import android.view.MotionEvent
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -7,8 +8,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.input.pointer.pointerInteropFilter
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
@@ -62,6 +67,7 @@ fun SafeMarkdownHighlightedCodeBlock(
 }
 
 @Composable
+@OptIn(ExperimentalComposeUiApi::class)
 fun SafeMarkdownHighlightedCode(
     code: String,
     language: String?,
@@ -69,15 +75,29 @@ fun SafeMarkdownHighlightedCode(
     style: TextStyle = LocalMarkdownTypography.current.code,
 ) {
     val backgroundCodeColor = LocalMarkdownColors.current.codeBackground
+    val codeTextColor = LocalMarkdownColors.current.codeText
     val codeBackgroundCornerSize = LocalMarkdownDimens.current.codeBackgroundCornerSize
     val codeBlockPadding = LocalMarkdownPadding.current.codeBlock
+    val view = LocalView.current
     val codeScrollModifier = if (LocalCodeWordWrap.current) {
         Modifier
     } else {
-        Modifier.horizontalScroll(rememberScrollState())
+        Modifier
+            .pointerInteropFilter { event ->
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> {
+                        view.parent?.requestDisallowInterceptTouchEvent(true)
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        view.parent?.requestDisallowInterceptTouchEvent(false)
+                    }
+                }
+                false
+            }
+            .horizontalScroll(rememberScrollState())
     }
-    val annotatedCode = remember(code, language, highlights) {
-        buildSafeHighlightedAnnotatedString(code, language, highlights)
+    val annotatedCode = remember(code, language, highlights, codeTextColor) {
+        buildSafeHighlightedAnnotatedString(code, language, highlights, codeTextColor)
     }
 
     MarkdownCodeBackground(
@@ -89,7 +109,7 @@ fun SafeMarkdownHighlightedCode(
     ) {
         MarkdownBasicText(
             annotatedCode,
-            color = LocalMarkdownColors.current.codeText,
+            color = codeTextColor,
             modifier = codeScrollModifier
                 .padding(codeBlockPadding),
             style = style,
@@ -101,6 +121,7 @@ internal fun buildSafeHighlightedAnnotatedString(
     code: String,
     language: String?,
     highlightsBuilder: Highlights.Builder,
+    codeTextColor: Color? = null,
 ): AnnotatedString {
     return runCatching {
         val syntaxLanguage = language?.let { SyntaxLanguage.getByName(it) }
@@ -116,7 +137,12 @@ internal fun buildSafeHighlightedAnnotatedString(
                 .filterIsInstance<ColorHighlight>()
                 .forEach { highlight ->
                     addSafeStyle(
-                        style = SpanStyle(color = Color(highlight.rgb).copy(alpha = 1f)),
+                        style = SpanStyle(
+                            color = readableHighlightColor(
+                                color = Color(highlight.rgb).copy(alpha = 1f),
+                                codeTextColor = codeTextColor,
+                            ),
+                        ),
                         start = highlight.location.start,
                         end = highlight.location.end,
                         textLength = code.length,
@@ -135,6 +161,16 @@ internal fun buildSafeHighlightedAnnotatedString(
                 }
         }
     }.getOrDefault(AnnotatedString(code))
+}
+
+private fun readableHighlightColor(color: Color, codeTextColor: Color?): Color {
+    if (codeTextColor == null) return color
+    val darkCodeBackground = codeTextColor.luminance() > 0.5f
+    return if (darkCodeBackground && color.luminance() < 0.24f) {
+        codeTextColor.copy(alpha = 0.92f)
+    } else {
+        color
+    }
 }
 
 private fun AnnotatedString.Builder.addSafeStyle(
