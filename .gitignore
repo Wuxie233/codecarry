@@ -68,3 +68,9 @@ fastlane/readme.md
 
 # Local agent workflow scratch (plans are committed separately; notepads stay local)
 .sisyphus/notepads/
+
+# Local tool indexes
+.codegraph/
+
+# Local continuation state
+.omo/run-continuation/
