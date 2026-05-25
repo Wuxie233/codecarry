@@ -487,9 +487,14 @@ class SessionListViewModel @Inject constructor(
                 _filter.value = SessionFilter.ALL
                 preferencesRepo.setScope(SessionScope.INBOX)
                 val session = api.createSession(conn, directory = directory)
-                eventReducer.setSessions(serverId, listOf(session))
-                if (BuildConfig.DEBUG) Log.d(TAG, "Created new session: ${session.id}")
-                _navigateToSession.tryEmit(session)
+                val normalizedSession = if (session.directory.isBlank() && !directory.isNullOrBlank()) {
+                    session.copy(directory = directory)
+                } else {
+                    session
+                }
+                eventReducer.setSessions(serverId, listOf(normalizedSession))
+                if (BuildConfig.DEBUG) Log.d(TAG, "Created new session: ${normalizedSession.id}")
+                _navigateToSession.tryEmit(normalizedSession)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to create session", e)
                 _error.value = e.message ?: "Failed to create session"
