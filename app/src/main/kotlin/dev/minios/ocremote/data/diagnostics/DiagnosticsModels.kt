@@ -4,6 +4,33 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 @Serializable
+enum class DiagnosticsLogType(
+    val storageSegment: String,
+    val defaultFileExtension: String,
+) {
+    @SerialName("app_event")
+    APP_EVENT("app-event", "log"),
+
+    @SerialName("session_diagnostic")
+    SESSION_DIAGNOSTIC("session-diagnostic", "json"),
+
+    @SerialName("network_diagnostic")
+    NETWORK_DIAGNOSTIC("network-diagnostic", "json"),
+}
+
+@Serializable
+data class DiagnosticsLogItem(
+    val id: String,
+    val type: DiagnosticsLogType,
+    val displayName: String,
+    val createdAtMillis: Long,
+    val sizeBytes: Long,
+    val relativePath: String,
+    val sessionId: String? = null,
+    val serverName: String? = null,
+)
+
+@Serializable
 data class DiagnosticsUploadResponse(
     val id: String,
     val filename: String,
