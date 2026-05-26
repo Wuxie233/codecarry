@@ -34,6 +34,7 @@ import dev.minios.ocremote.data.repository.SettingsRepository
 import dev.minios.ocremote.domain.model.ServerConfig
 import dev.minios.ocremote.domain.model.Session
 import dev.minios.ocremote.ui.screens.chat.ChatScreen
+import dev.minios.ocremote.ui.screens.diagnostics.DiagnosticsScreen
 import dev.minios.ocremote.ui.screens.home.HomeScreen
 import dev.minios.ocremote.ui.screens.about.AboutScreen
 import dev.minios.ocremote.ui.screens.sessions.SessionListScreen
@@ -279,6 +280,17 @@ fun NavGraph(
         // ============ Settings Screen ============
         composable(Screen.Settings.route) {
             SettingsScreen(
+                onNavigateBack = {
+                    navController.popBackStack()
+                },
+                onNavigateToDiagnostics = {
+                    navController.navigate(Screen.Diagnostics.route)
+                }
+            )
+        }
+
+        composable(Screen.Diagnostics.route) {
+            DiagnosticsScreen(
                 onNavigateBack = {
                     navController.popBackStack()
                 }

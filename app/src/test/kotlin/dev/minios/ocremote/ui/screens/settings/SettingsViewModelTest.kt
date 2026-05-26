@@ -2,10 +2,6 @@ package dev.minios.ocremote.ui.screens.settings
 
 import android.content.ContextWrapper
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
-import dev.minios.ocremote.data.diagnostics.DiagnosticsUploadClient
-import dev.minios.ocremote.data.diagnostics.DiagnosticsUploadFile
-import dev.minios.ocremote.data.diagnostics.DiagnosticsUploadRepository
-import dev.minios.ocremote.data.diagnostics.DiagnosticsUploadState
 import dev.minios.ocremote.data.repository.AppUpdateRepository
 import dev.minios.ocremote.data.repository.SettingsRepository
 import io.ktor.client.HttpClient
@@ -56,10 +52,6 @@ class SettingsViewModelTest {
         return SettingsViewModel(
             settingsRepository = settingsRepository,
             appUpdateRepository = appUpdateRepository,
-            diagnosticsUploadRepository = DiagnosticsUploadRepository(
-                settingsRepository = settingsRepository,
-                uploadClient = DiagnosticsUploadClient(HttpClient(MockEngine { throw AssertionError("unexpected diagnostics upload request") })),
-            ),
         )
     }
 
@@ -77,19 +69,6 @@ class SettingsViewModelTest {
 
         assertEquals("https://example.com/upload", viewModel.diagnosticsUploadUrl.first())
         assertEquals("token-value", viewModel.diagnosticsUploadToken.first())
-    }
-
-    @Test
-    fun `diagnostics picker cancellation keeps current upload state`() = testScope.runTest {
-        val settingsRepository = createSettingsRepository()
-        val viewModel = createViewModel(settingsRepository)
-        viewModel.selectDiagnosticsUploadFile(DiagnosticsUploadFile("bundle.zip", byteArrayOf(1), "application/zip"))
-        val beforeCancel = viewModel.diagnosticsUploadState.value
-
-        viewModel.onDiagnosticsUploadPickerCanceled()
-
-        assertEquals(beforeCancel, viewModel.diagnosticsUploadState.value)
-        assertEquals(DiagnosticsUploadState.FileSelected::class, viewModel.diagnosticsUploadState.value::class)
     }
 
     class MainDispatcherRule(

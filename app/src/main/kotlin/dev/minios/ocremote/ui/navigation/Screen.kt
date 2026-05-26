@@ -116,5 +116,6 @@ sealed class Screen(val route: String) {
     }
     
     data object Settings : Screen("settings")
+    data object Diagnostics : Screen("diagnostics")
     data object About : Screen("about")
 }

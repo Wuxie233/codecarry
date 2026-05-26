@@ -441,6 +441,7 @@
     <string name="settings_diagnostics_upload_url_desc">Endpoint for sending diagnostics files</string>
     <string name="settings_diagnostics_upload_token">Upload token</string>
     <string name="settings_diagnostics_upload_token_desc">Token required to upload diagnostics files</string>
+    <string name="settings_diagnostics_open_desc">Generate, select, delete, and upload diagnostics logs</string>
     <string name="settings_diagnostics_select_file">Select file</string>
     <string name="settings_diagnostics_selected_file">Selected file: %1$s</string>
     <string name="settings_diagnostics_upload">Upload</string>
@@ -451,6 +452,23 @@
     <string name="settings_diagnostics_unsupported_file">Unsupported file type</string>
     <string name="settings_diagnostics_clear_selection">Clear selection</string>
     <string name="settings_diagnostics_privacy_warning">Only upload files you want to share. Diagnostics may include sensitive data.</string>
+    <string name="diagnostics_title">Diagnostics</string>
+    <string name="diagnostics_generated_logs">Generated logs</string>
+    <string name="diagnostics_privacy_warning">Diagnostics may contain sensitive data. Review and upload only what you want to share.</string>
+    <string name="diagnostics_empty_title">No diagnostics yet</string>
+    <string name="diagnostics_empty_message">Generate diagnostics when you need to share app, session, and network summaries.</string>
+    <string name="diagnostics_generate_now">Generate diagnostics now</string>
+    <string name="diagnostics_generating">Generating…</string>
+    <string name="diagnostics_upload_selected">Upload selected</string>
+    <string name="diagnostics_select_to_upload">Select at least one log to upload.</string>
+    <string name="diagnostics_missing_config">Set both the upload URL and token in Settings before uploading.</string>
+    <string name="diagnostics_selected_count">%1$d selected</string>
+    <string name="diagnostics_select_all">Select all</string>
+    <string name="diagnostics_clear">Clear</string>
+    <string name="diagnostics_clear_selection">Clear selection</string>
+    <string name="diagnostics_delete_selected_title">Delete selected</string>
+    <string name="diagnostics_delete_selected_confirm">Delete %1$d diagnostics logs? This cannot be undone.</string>
+    <string name="diagnostics_refresh">Refresh diagnostics</string>
 
     <!-- Server Settings -->
     <string name="server_settings_title">Server Settings</string>
