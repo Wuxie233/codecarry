@@ -97,6 +97,24 @@ class ChatNewSessionFirstLoadCompactTest {
     }
 
     @Test
+    fun `ChatViewModel accepts already decoded route directory containing percent and plus`() = runTest(dispatcher) {
+        val requestedPaths = Collections.synchronizedList(mutableListOf<String>())
+        val directory = "/work/100% ready/a+b"
+        val vm = newViewModel(
+            savedStateHandle = savedStateHandle(sessionId = "ses_new", serverId = "srv-route", directory = directory),
+            eventReducer = EventReducer(),
+            api = compactFirstLoadApi(requestedPaths, sessionDirectory = directory),
+            draftRepository = draftRepository(),
+            sessionListPreferencesRepository = sessionListPreferencesRepository(),
+            settingsRepository = settingsRepository(),
+        )
+
+        val finalState = vm.uiState.first { !it.isLoading }
+
+        assertNull(finalState.error)
+    }
+
+    @Test
     fun `blank sessionId enters error state and does not call any API`() = runTest(dispatcher) {
         var requestCount = 0
         val vm = newViewModel(
@@ -165,12 +183,13 @@ class ChatNewSessionFirstLoadCompactTest {
     private fun compactFirstLoadApi(
         requestedPaths: MutableList<String> = mutableListOf(),
         onRequest: () -> Unit = {},
+        sessionDirectory: String = "",
     ): OpenCodeApi {
         val engine = MockEngine { request ->
             onRequest()
             requestedPaths.add(request.url.encodedPath)
             val body = when (request.url.encodedPath) {
-                "/session/ses_new" -> """{"id":"ses_new","time":{}}"""
+                "/session/ses_new" -> """{"id":"ses_new","directory":"$sessionDirectory","time":{}}"""
                 "/session/ses_new/message" -> "[]"
                 "/question" -> "[]"
                 "/config/providers" -> "{}"

@@ -36,6 +36,22 @@ import javax.inject.Inject
 
 private const val TAG = "ChatViewModel"
 
+private fun decodeRouteArg(value: String?): String {
+    val raw = value.orEmpty()
+    if (!raw.contains('%')) return raw
+    var index = raw.indexOf('%')
+    while (index >= 0) {
+        if (index + 2 >= raw.length || !raw[index + 1].isDigitOrHex() || !raw[index + 2].isDigitOrHex()) {
+            return raw
+        }
+        index = raw.indexOf('%', startIndex = index + 1)
+    }
+    return runCatching { URLDecoder.decode(raw, "UTF-8") }
+        .getOrDefault(raw)
+}
+
+private fun Char.isDigitOrHex(): Boolean = this in '0'..'9' || this in 'A'..'F' || this in 'a'..'f'
+
 data class ChatUiState(
     val sessionTitle: String = "",
     val serverName: String = "",
@@ -99,27 +115,13 @@ class ChatViewModel @Inject constructor(
     private val settingsRepository: SettingsRepository
 ) : ViewModel() {
 
-    private val serverUrl: String = URLDecoder.decode(
-        savedStateHandle.get<String>("serverUrl") ?: "", "UTF-8"
-    )
-    private val username: String = URLDecoder.decode(
-        savedStateHandle.get<String>("username") ?: "", "UTF-8"
-    )
-    private val password: String = URLDecoder.decode(
-        savedStateHandle.get<String>("password") ?: "", "UTF-8"
-    )
-    val serverName: String = URLDecoder.decode(
-        savedStateHandle.get<String>("serverName") ?: "", "UTF-8"
-    )
-    private val serverId: String = URLDecoder.decode(
-        savedStateHandle.get<String>("serverId") ?: "", "UTF-8"
-    )
-    val sessionId: String = URLDecoder.decode(
-        savedStateHandle.get<String>("sessionId") ?: "", "UTF-8"
-    )
-    private val routeDirectory: String? = URLDecoder.decode(
-        savedStateHandle.get<String>("directory") ?: "", "UTF-8"
-    ).takeIf { it.isNotBlank() }
+    private val serverUrl: String = decodeRouteArg(savedStateHandle.get<String>("serverUrl"))
+    private val username: String = decodeRouteArg(savedStateHandle.get<String>("username"))
+    private val password: String = decodeRouteArg(savedStateHandle.get<String>("password"))
+    val serverName: String = decodeRouteArg(savedStateHandle.get<String>("serverName"))
+    private val serverId: String = decodeRouteArg(savedStateHandle.get<String>("serverId"))
+    val sessionId: String = decodeRouteArg(savedStateHandle.get<String>("sessionId"))
+    private val routeDirectory: String? = decodeRouteArg(savedStateHandle.get<String>("directory")).takeIf { it.isNotBlank() }
 
     private val conn = ServerConnection.from(serverUrl, username, password.ifEmpty { null })
 

@@ -44,6 +44,22 @@ import javax.inject.Inject
 
 private const val TAG = "SessionListViewModel"
 
+private fun decodeRouteArg(value: String?): String {
+    val raw = value.orEmpty()
+    if (!raw.contains('%')) return raw
+    var index = raw.indexOf('%')
+    while (index >= 0) {
+        if (index + 2 >= raw.length || !raw[index + 1].isDigitOrHex() || !raw[index + 2].isDigitOrHex()) {
+            return raw
+        }
+        index = raw.indexOf('%', startIndex = index + 1)
+    }
+    return runCatching { URLDecoder.decode(raw, "UTF-8") }
+        .getOrDefault(raw)
+}
+
+private fun Char.isDigitOrHex(): Boolean = this in '0'..'9' || this in 'A'..'F' || this in 'a'..'f'
+
 private fun logErrorCompat(tag: String, message: String, throwable: Throwable) {
     try {
         Log.e(tag, message, throwable)
@@ -204,21 +220,11 @@ class SessionListViewModel @Inject constructor(
     private val settingsRepository: SettingsRepository,
 ) : ViewModel() {
 
-    val serverUrl: String = URLDecoder.decode(
-        savedStateHandle.get<String>("serverUrl") ?: "", "UTF-8"
-    )
-    private val username: String = URLDecoder.decode(
-        savedStateHandle.get<String>("username") ?: "", "UTF-8"
-    )
-    private val password: String = URLDecoder.decode(
-        savedStateHandle.get<String>("password") ?: "", "UTF-8"
-    )
-    val serverName: String = URLDecoder.decode(
-        savedStateHandle.get<String>("serverName") ?: "", "UTF-8"
-    )
-    val serverId: String = URLDecoder.decode(
-        savedStateHandle.get<String>("serverId") ?: "", "UTF-8"
-    )
+    val serverUrl: String = decodeRouteArg(savedStateHandle.get<String>("serverUrl"))
+    private val username: String = decodeRouteArg(savedStateHandle.get<String>("username"))
+    private val password: String = decodeRouteArg(savedStateHandle.get<String>("password"))
+    val serverName: String = decodeRouteArg(savedStateHandle.get<String>("serverName"))
+    val serverId: String = decodeRouteArg(savedStateHandle.get<String>("serverId"))
 
     private val conn = ServerConnection.from(serverUrl, username, password.ifEmpty { null })
     val currentConnection: ServerConnection = conn
