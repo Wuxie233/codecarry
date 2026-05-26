@@ -39,6 +39,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.yield
 import java.net.URLDecoder
 import javax.inject.Inject
 
@@ -236,11 +237,13 @@ class SessionListViewModel @Inject constructor(
     private val _selectedIds = MutableStateFlow<Set<String>>(emptySet())
     private val _searchQuery = MutableStateFlow("")
     private val _filter = MutableStateFlow(SessionFilter.ALL)
+    private val _scopeOverride = MutableStateFlow<SessionScope?>(null)
     private val _showHiddenProjects = MutableStateFlow(false)
     private val _navigateToSession = MutableSharedFlow<Session>(extraBufferCapacity = 1)
     val navigateToSession: SharedFlow<Session> = _navigateToSession.asSharedFlow()
     private val _undoState = Channel<UndoAction>(Channel.BUFFERED)
     internal val undoState: kotlinx.coroutines.flow.Flow<UndoAction> = _undoState.receiveAsFlow()
+    private var isCreatingSession = false
     private val prefsFlow = preferencesRepo.preferences.stateIn(
         viewModelScope,
         SharingStarted.Eagerly,
@@ -261,6 +264,7 @@ class SessionListViewModel @Inject constructor(
             prefsFlow,
             _searchQuery,
             _filter,
+            _scopeOverride,
             eventReducer.questions,
             eventReducer.permissions,
             _showHiddenProjects,
@@ -277,9 +281,10 @@ class SessionListViewModel @Inject constructor(
         val prefs = values[8] as SessionListPreferences
         val searchQuery = values[9] as String
         val filter = values[10] as SessionFilter
-        val pendingQuestions = values[11] as Map<String, List<SseEvent.QuestionAsked>>
-        val pendingPermissions = values[12] as Map<String, List<SseEvent.PermissionAsked>>
-        val showHiddenProjects = values[13] as Boolean
+        val scope = (values[11] as SessionScope?) ?: prefs.scope
+        val pendingQuestions = values[12] as Map<String, List<SseEvent.QuestionAsked>>
+        val pendingPermissions = values[13] as Map<String, List<SseEvent.PermissionAsked>>
+        val showHiddenProjects = values[14] as Boolean
         val unreadMainSessionIds = prefs.unreadMainSessionIds
 
         val serverSessionIds = serverSessions[serverId] ?: emptySet()
@@ -320,7 +325,7 @@ class SessionListViewModel @Inject constructor(
 
             val filteredRoots = groupedRoots
                 .filter { session ->
-                    matchesScopeAndFilter(itemsById.getValue(session.id), prefs.scope, filter)
+                    matchesScopeAndFilter(itemsById.getValue(session.id), scope, filter)
                 }
                 .filter { session ->
                     matchesSearch(
@@ -335,7 +340,7 @@ class SessionListViewModel @Inject constructor(
             val filteredRootItems = filteredRoots.map { itemsById.getValue(it.id) }
             val subagentRowsByParent = filteredRoots.associate { root ->
                 val childItems = (childBuckets[root.id] ?: emptyList())
-                    .filter { child -> matchesChildScope(child, prefs.scope) }
+                    .filter { child -> matchesChildScope(child, scope) }
                     .map { itemsById.getValue(it.id) }
                     .sortedWith(sessionItemComparator(prefs.sort))
                 root.id to partitionSubagentsByActivity(childItems)
@@ -404,7 +409,7 @@ class SessionListViewModel @Inject constructor(
             sessionGroups = legacySessionGroups,
             sort = prefs.sort,
             filter = filter,
-            scope = prefs.scope,
+            scope = scope,
             archivedCount = archivedCount,
             searchQuery = searchQuery,
             hasAnySessions = emptyState.hasAnySessions,
@@ -488,24 +493,44 @@ class SessionListViewModel @Inject constructor(
     }
 
     fun createNewSession(directory: String? = null) {
+        if (isCreatingSession) return
+        isCreatingSession = true
         viewModelScope.launch {
+            _isLoading.value = true
+            _error.value = null
             try {
                 _filter.value = SessionFilter.ALL
-                preferencesRepo.setScope(SessionScope.INBOX)
+                _scopeOverride.value = SessionScope.INBOX
                 val session = api.createSession(conn, directory = directory)
-                val normalizedSession = if (session.directory.isBlank() && !directory.isNullOrBlank()) {
-                    session.copy(directory = directory)
-                } else {
-                    session
+                if (session.id.isBlank()) {
+                    throw IllegalStateException("Failed to create session: blank session id")
                 }
+                val createdDirectory = if (session.directory.isBlank()) {
+                    resolveCreatedSessionDirectory(directory)
+                } else {
+                    session.directory
+                }
+                val normalizedSession = session.copy(directory = createdDirectory)
                 eventReducer.setSessions(serverId, listOf(normalizedSession))
                 if (BuildConfig.DEBUG) Log.d(TAG, "Created new session: ${normalizedSession.id}")
                 _navigateToSession.tryEmit(normalizedSession)
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to create session", e)
+                logErrorCompat(TAG, "Failed to create session", e)
                 _error.value = e.message ?: "Failed to create session"
+            } finally {
+                _isLoading.value = false
+                yield()
+                isCreatingSession = false
             }
         }
+    }
+
+    private suspend fun resolveCreatedSessionDirectory(requestedDirectory: String?): String {
+        requestedDirectory?.takeIf { it.isNotBlank() }?.let { return it }
+        val paths = api.getServerPaths(conn)
+        return paths.directory.takeIf { it.isNotBlank() }
+            ?: paths.worktree.takeIf { it.isNotBlank() }
+            ?: paths.home
     }
 
     fun deleteSession(sessionId: String) {
@@ -557,6 +582,7 @@ class SessionListViewModel @Inject constructor(
     }
 
     fun setScope(scope: SessionScope) {
+        _scopeOverride.value = scope
         viewModelScope.launch {
             preferencesRepo.setScope(scope)
         }

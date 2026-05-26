@@ -1,15 +1,92 @@
 package dev.minios.ocremote.ui.screens.sessions
 
+import android.content.ContextWrapper
+import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.viewModelScope
+import dev.minios.ocremote.data.api.OpenCodeApi
 import dev.minios.ocremote.data.preferences.SessionFilter
+import dev.minios.ocremote.data.preferences.SessionListPreferencesRepository
 import dev.minios.ocremote.data.preferences.SessionScope
+import dev.minios.ocremote.data.repository.EventReducer
+import dev.minios.ocremote.data.repository.SettingsRepository
 import dev.minios.ocremote.domain.model.Session
 import dev.minios.ocremote.domain.model.SessionStatus
+import dev.minios.ocremote.ui.navigation.Screen
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.respond
+import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpStatusCode
+import io.ktor.http.headersOf
+import io.ktor.serialization.kotlinx.json.json
+import io.ktor.utils.io.ByteReadChannel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.TestCoroutineScheduler
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.setMain
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.serialization.json.Json
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
+import java.io.File
+import java.io.IOException
+import java.net.URLDecoder
+import java.util.Collections
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class SessionListViewModelTest {
+
+    @get:Rule
+    val tmpFolder = TemporaryFolder()
+
+    private val scheduler = TestCoroutineScheduler()
+    private val dispatcher = StandardTestDispatcher(scheduler)
+    private val testScope = TestScope(dispatcher)
+    private val collectJobs = mutableListOf<Job>()
+    private val viewModels = mutableListOf<SessionListViewModel>()
+
+    private val json = Json {
+        prettyPrint = true
+        isLenient = true
+        ignoreUnknownKeys = true
+        coerceInputValues = true
+        encodeDefaults = true
+        explicitNulls = false
+    }
+
+    @Before
+    fun setUp() {
+        Dispatchers.setMain(dispatcher)
+    }
+
+    @After
+    fun tearDown() {
+        testScope.runCurrent()
+        collectJobs.forEach { it.cancel() }
+        collectJobs.clear()
+        viewModels.forEach { it.viewModelScope.cancel() }
+        viewModels.clear()
+        testScope.runCurrent()
+        Dispatchers.resetMain()
+    }
 
     @Test
     fun archivedSessionsAreHiddenInInboxScope() {
@@ -131,6 +208,125 @@ class SessionListViewModelTest {
         )
     }
 
+    @Test
+    fun `session list new conversation succeeds with special-character directory and safe chat route`() = runTest(dispatcher) {
+        val directory = "/work/100% ready/a+b?#中"
+        val createDirectoryHeaders = Collections.synchronizedList(mutableListOf<String?>())
+        val eventReducer = EventReducer()
+        val vm = newSessionListViewModel(
+            eventReducer = eventReducer,
+            api = sessionListApi(
+                createDirectoryHeaders = createDirectoryHeaders,
+                createResponseBody = """{"id":"ses_created","directory":"","time":{}}""",
+            ),
+        )
+        val navigated = Collections.synchronizedList(mutableListOf<Session>())
+        collectNavigation(vm) { navigated.add(it) }
+        collectUiState(vm)
+
+        vm.createNewSession(directory = directory)
+        advanceUntilIdle()
+
+        val session = navigated.single()
+        assertEquals("ses_created", session.id)
+        assertEquals(directory, session.directory)
+        assertEquals(directory, eventReducer.sessions.value.first { it.id == "ses_created" }.directory)
+        assertTrue(createDirectoryHeaders.single()?.contains("%25") == true)
+
+        val route = Screen.Chat.createRoute(
+            serverUrl = "http://example.test:4096",
+            username = "",
+            password = "",
+            serverName = "Local",
+            serverId = "srv-session-list",
+            sessionId = session.id,
+            directory = session.directory,
+        )
+        assertEquals(directory, decodedRouteQueryValue(route, "directory"))
+    }
+
+    @Test
+    fun `session list new conversation API exception leaves navigation empty`() = runTest(dispatcher) {
+        val vm = newSessionListViewModel(
+            api = sessionListApi(createFailure = IOException("create exploded")),
+        )
+        val navigated = Collections.synchronizedList(mutableListOf<Session>())
+        collectNavigation(vm) { navigated.add(it) }
+        collectUiState(vm)
+
+        vm.createNewSession(directory = "/work/project")
+        advanceUntilIdle()
+
+        assertTrue(navigated.isEmpty())
+        assertEquals("create exploded", vm.uiState.value.error)
+    }
+
+    @Test
+    fun `session list new conversation malformed response leaves navigation empty`() = runTest(dispatcher) {
+        val vm = newSessionListViewModel(
+            api = sessionListApi(createResponseBody = "{not-json"),
+        )
+        val navigated = Collections.synchronizedList(mutableListOf<Session>())
+        collectNavigation(vm) { navigated.add(it) }
+        collectUiState(vm)
+
+        vm.createNewSession(directory = "/work/project")
+        advanceUntilIdle()
+
+        assertTrue(navigated.isEmpty())
+        assertTrue(vm.uiState.value.error?.isNotBlank() == true)
+    }
+
+    @Test
+    fun `session list new conversation blank session id does not navigate`() = runTest(dispatcher) {
+        val vm = newSessionListViewModel(
+            api = sessionListApi(createResponseBody = """{"id":"","directory":"/work/project","time":{}}"""),
+        )
+        val navigated = Collections.synchronizedList(mutableListOf<Session>())
+        collectNavigation(vm) { navigated.add(it) }
+        collectUiState(vm)
+
+        vm.createNewSession(directory = "/work/project")
+        advanceUntilIdle()
+
+        assertTrue("blank session id must not navigate to Chat", navigated.none { it.id.isBlank() })
+    }
+
+    @Test
+    fun `session list new conversation repeated rapid create calls navigate once`() = runTest(dispatcher) {
+        var createCount = 0
+        val vm = newSessionListViewModel(
+            api = sessionListApi(onCreate = { createCount++ }),
+        )
+        val navigated = Collections.synchronizedList(mutableListOf<Session>())
+        collectNavigation(vm) { navigated.add(it) }
+        collectUiState(vm)
+
+        vm.createNewSession(directory = "/work/project")
+        vm.createNewSession(directory = "/work/project")
+        vm.createNewSession(directory = "/work/project")
+        advanceUntilIdle()
+
+        assertEquals("rapid taps should only create one conversation", 1, createCount)
+        assertEquals("rapid taps should only navigate once", 1, navigated.size)
+        assertEquals("ses_created_1", navigated.single().id)
+    }
+
+    private fun collectNavigation(
+        vm: SessionListViewModel,
+        onSession: (Session) -> Unit,
+    ) {
+        collectJobs += testScope.backgroundScope.launch(UnconfinedTestDispatcher(scheduler)) {
+            vm.navigateToSession.collect { onSession(it) }
+        }
+    }
+
+    private fun collectUiState(vm: SessionListViewModel) {
+        collectJobs += testScope.backgroundScope.launch(UnconfinedTestDispatcher(scheduler)) {
+            vm.uiState.collect { }
+        }
+    }
+
     private fun testSession(
         id: String,
         directory: String = "/workspace/project",
@@ -146,4 +342,86 @@ class SessionListViewModelTest {
             archived = archived,
         ),
     )
+
+    private fun newSessionListViewModel(
+        eventReducer: EventReducer = EventReducer(),
+        api: OpenCodeApi = sessionListApi(),
+    ): SessionListViewModel {
+        return SessionListViewModel(
+            savedStateHandle = SavedStateHandle(
+                mapOf(
+                    "serverUrl" to "http%3A%2F%2Fexample.test%3A4096",
+                    "username" to "",
+                    "password" to "",
+                    "serverName" to "Local",
+                    "serverId" to "srv-session-list",
+                )
+            ),
+            eventReducer = eventReducer,
+            api = api,
+            preferencesRepo = sessionListPreferencesRepository(),
+            settingsRepository = settingsRepository(),
+        ).also { viewModels.add(it) }
+    }
+
+    private fun sessionListApi(
+        createResponseBody: String = """{"id":"ses_created_1","directory":"/work/project","time":{}}""",
+        createFailure: Throwable? = null,
+        createDirectoryHeaders: MutableList<String?> = Collections.synchronizedList(mutableListOf()),
+        onCreate: () -> Unit = {},
+    ): OpenCodeApi {
+        val engine = MockEngine { request ->
+            val body = when (request.url.encodedPath) {
+                "/path" -> """{"home":"/home/test","worktree":"/work/project"}"""
+                "/project" -> """[{"id":"project-1","worktree":"/work/project","name":"project"}]"""
+                "/session" -> {
+                    if (request.method.value == "POST") {
+                        onCreate()
+                        createFailure?.let { throw it }
+                        createDirectoryHeaders.add(request.headers["x-opencode-directory"])
+                        createResponseBody
+                    } else {
+                        "[]"
+                    }
+                }
+                else -> "{}"
+            }
+            respond(
+                content = ByteReadChannel(body),
+                status = HttpStatusCode.OK,
+                headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
+            )
+        }
+        val client = HttpClient(engine) {
+            install(ContentNegotiation) { json(json) }
+        }
+        return OpenCodeApi(client, json)
+    }
+
+    private fun sessionListPreferencesRepository(): SessionListPreferencesRepository {
+        val dataStore = PreferenceDataStoreFactory.create(
+            scope = testScope.backgroundScope,
+            produceFile = { tmpFolder.newFile("session-list-${System.nanoTime()}.preferences_pb") },
+        )
+        return SessionListPreferencesRepository(dataStore)
+    }
+
+    private fun settingsRepository(): SettingsRepository {
+        val dataStore = PreferenceDataStoreFactory.create(
+            scope = testScope.backgroundScope,
+            produceFile = { tmpFolder.newFile("settings-${System.nanoTime()}.preferences_pb") },
+        )
+        val context = object : ContextWrapper(null) {
+            override fun getFilesDir(): File = tmpFolder.root
+        }
+        return SettingsRepository(dataStore, context)
+    }
+
+    private fun decodedRouteQueryValue(route: String, key: String): String {
+        val encoded = route.substringAfter('?')
+            .split('&')
+            .first { it.substringBefore('=') == key }
+            .substringAfter('=')
+        return URLDecoder.decode(encoded, "UTF-8")
+    }
 }
