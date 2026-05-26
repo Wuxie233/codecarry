@@ -1,25 +1,37 @@
 package dev.minios.ocremote.ui.screens.settings
 
+import android.content.ContentResolver
+import android.net.Uri
+import android.provider.OpenableColumns
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.minios.ocremote.BuildConfig
+import dev.minios.ocremote.data.diagnostics.DiagnosticsRedactor
+import dev.minios.ocremote.data.diagnostics.DiagnosticsSelectedFile
+import dev.minios.ocremote.data.diagnostics.DiagnosticsUploadFile
+import dev.minios.ocremote.data.diagnostics.DiagnosticsUploadRepository
+import dev.minios.ocremote.data.diagnostics.DiagnosticsUploadState
 import dev.minios.ocremote.data.repository.AppUpdateLogic
 import dev.minios.ocremote.data.repository.AppUpdateRepository
 import dev.minios.ocremote.data.repository.LocalServerManager
 import dev.minios.ocremote.data.repository.SettingsRepository
+import java.util.Locale
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     private val settingsRepository: SettingsRepository,
     private val appUpdateRepository: AppUpdateRepository,
+    private val diagnosticsUploadRepository: DiagnosticsUploadRepository,
 ) : ViewModel() {
     
     val appLanguage = settingsRepository.appLanguage.stateIn(
@@ -388,7 +400,21 @@ class SettingsViewModel @Inject constructor(
     private val _appUpdateUiState = MutableStateFlow<AppUpdateUiState>(AppUpdateUiState.Idle)
     val appUpdateUiState: StateFlow<AppUpdateUiState> = _appUpdateUiState.asStateFlow()
 
+    val diagnosticsUploadState: StateFlow<DiagnosticsUploadState> = diagnosticsUploadRepository.state
+
     val debugUpdateApiUrl = settingsRepository.debugUpdateApiUrl.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = "",
+    )
+
+    val diagnosticsUploadUrl = settingsRepository.diagnosticsUploadUrl.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = "",
+    )
+
+    val diagnosticsUploadToken = settingsRepository.diagnosticsUploadToken.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
         initialValue = "",
@@ -397,6 +423,63 @@ class SettingsViewModel @Inject constructor(
     fun setDebugUpdateApiUrl(url: String) {
         if (!BuildConfig.DEBUG) return
         viewModelScope.launch { settingsRepository.setDebugUpdateApiUrl(url) }
+    }
+
+    fun setDiagnosticsUploadUrl(url: String) {
+        viewModelScope.launch { settingsRepository.setDiagnosticsUploadUrl(url) }
+    }
+
+    fun setDiagnosticsUploadToken(token: String) {
+        viewModelScope.launch { settingsRepository.setDiagnosticsUploadToken(token) }
+    }
+
+    fun selectDiagnosticsUploadFile(file: DiagnosticsUploadFile) {
+        diagnosticsUploadRepository.selectFile(file)
+    }
+
+    fun selectDiagnosticsUploadFile(
+        file: DiagnosticsSelectedFile,
+        openFile: suspend () -> DiagnosticsUploadFile,
+    ) {
+        diagnosticsUploadRepository.selectFile(file, openFile)
+    }
+
+    fun selectDiagnosticsUploadUri(
+        contentResolver: ContentResolver,
+        uri: Uri,
+        unsupportedFileMessage: String,
+    ) {
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) { contentResolver.readDiagnosticsFileMetadata(uri) }
+            }.onSuccess { metadata ->
+                if (metadata == null) {
+                    diagnosticsUploadRepository.showError(unsupportedFileMessage)
+                    return@onSuccess
+                }
+                diagnosticsUploadRepository.selectFile(metadata) {
+                    withContext(Dispatchers.IO) { contentResolver.readDiagnosticsUploadFile(uri, metadata) }
+                }
+            }.onFailure { error ->
+                diagnosticsUploadRepository.showError(
+                    DiagnosticsRedactor.redact(error.message ?: unsupportedFileMessage).ifBlank { unsupportedFileMessage },
+                )
+            }
+        }
+    }
+
+    fun onDiagnosticsUploadPickerCanceled() = Unit
+
+    fun showDiagnosticsUploadError(message: String) {
+        diagnosticsUploadRepository.showError(message)
+    }
+
+    fun clearDiagnosticsUploadFile() {
+        diagnosticsUploadRepository.clearSelection()
+    }
+
+    fun uploadSelectedDiagnosticsFile() {
+        viewModelScope.launch { diagnosticsUploadRepository.uploadSelectedFile() }
     }
 
     fun checkForAppUpdates() {
@@ -446,5 +529,53 @@ class SettingsViewModel @Inject constructor(
 
     fun dismissAppUpdateDialog() {
         _appUpdateUiState.value = AppUpdateUiState.Idle
+    }
+
+    private fun ContentResolver.readDiagnosticsFileMetadata(uri: Uri): DiagnosticsSelectedFile? {
+        val projection = arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE)
+        val contentType = getType(uri)?.takeIf { it.isNotBlank() } ?: "application/octet-stream"
+        var displayName = uri.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
+        var sizeBytes = 0L
+
+        query(uri, projection, null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (nameIndex >= 0) {
+                    displayName = cursor.getString(nameIndex)?.takeIf { it.isNotBlank() } ?: displayName
+                }
+                val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+                if (sizeIndex >= 0 && !cursor.isNull(sizeIndex)) {
+                    sizeBytes = cursor.getLong(sizeIndex).coerceAtLeast(0L)
+                }
+            }
+        }
+
+        val filename = displayName?.takeIf { it.isNotBlank() } ?: return null
+        return DiagnosticsSelectedFile(
+            filename = filename,
+            sizeBytes = sizeBytes,
+            contentType = contentType.takeUnless { it == "application/octet-stream" }
+                ?: contentTypeForDiagnosticsFilename(filename),
+        )
+    }
+
+    private fun ContentResolver.readDiagnosticsUploadFile(
+        uri: Uri,
+        metadata: DiagnosticsSelectedFile,
+    ): DiagnosticsUploadFile {
+        val bytes = openInputStream(uri)?.use { it.readBytes() }
+            ?: error("Unable to read selected diagnostics file.")
+        return DiagnosticsUploadFile(
+            filename = metadata.filename,
+            bytes = bytes,
+            contentType = metadata.contentType,
+        )
+    }
+
+    private fun contentTypeForDiagnosticsFilename(filename: String): String = when (filename.substringAfterLast('.', "").lowercase(Locale.ROOT)) {
+        "zip" -> "application/zip"
+        "json" -> "application/json"
+        "log", "txt" -> "text/plain"
+        else -> "application/octet-stream"
     }
 }
