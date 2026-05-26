@@ -8,6 +8,7 @@ import dev.minios.ocremote.domain.model.Part
 import dev.minios.ocremote.domain.model.Session
 import dev.minios.ocremote.domain.model.SessionStatus
 import dev.minios.ocremote.domain.model.TimeInfo
+import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -28,7 +29,7 @@ class SessionDiagnosticsGeneratorTest {
             id = "ses_123",
             projectId = "project-token=project-secret",
             directory = "/work/project?secret=directory-secret",
-            title = "Investigate Authorization: Bearer title-token",
+            title = "Investigate Authorization: Bearer title-token secret=title-secret",
             time = Session.Time(created = 100L, updated = 200L),
             summary = Session.Summary(additions = 3, deletions = 1, files = 2),
         )
@@ -82,11 +83,11 @@ class SessionDiagnosticsGeneratorTest {
                 serverId = "srv_123",
                 serverName = "Local server password=server-password",
                 serverConnection = ServerConnection(
-                    baseUrl = "https://example.test/api?token=url-token&password=url-password",
+                    baseUrl = "https://example.test/api?token=url-token&password=url-password&secret=url-secret&uploadToken=url-upload-token",
                     authHeader = "Authorization: Bearer raw-auth-token",
                 ),
                 currentSource = "session-list?secret=source-secret",
-                currentContext = "active uploadToken=upload-token",
+                currentContext = "active token=context-token uploadToken=upload-token",
                 status = SessionStatus.Busy,
                 messages = messages,
                 pendingPermissionCount = 2,
@@ -110,6 +111,7 @@ class SessionDiagnosticsGeneratorTest {
         assertTrue(content.contains("\"has_auth_header\":true"))
         assertTrue(content.contains("\"additions\":3"))
         assertTrue(content.contains("Busy"))
+        Json.parseToJsonElement(content)
         assertTrue(content.contains("<redacted>"))
         assertFalse(content.contains("PROMPT_BODY_SHOULD_NOT_APPEAR"))
         assertFalse(content.contains("USER_MESSAGE_BODY_SHOULD_NOT_APPEAR"))
@@ -121,8 +123,12 @@ class SessionDiagnosticsGeneratorTest {
         assertFalse(content.contains("server-password"))
         assertFalse(content.contains("url-token"))
         assertFalse(content.contains("url-password"))
+        assertFalse(content.contains("url-secret"))
+        assertFalse(content.contains("url-upload-token"))
         assertFalse(content.contains("source-secret"))
+        assertFalse(content.contains("context-token"))
         assertFalse(content.contains("upload-token"))
+        assertFalse(content.contains("title-secret"))
         assertFalse(content.contains("project-secret"))
         assertFalse(item.serverName.orEmpty().contains("server-password"))
     }

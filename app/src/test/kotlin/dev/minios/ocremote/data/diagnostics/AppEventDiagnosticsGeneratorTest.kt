@@ -1,6 +1,7 @@
 package dev.minios.ocremote.data.diagnostics
 
 import android.content.ContextWrapper
+import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -38,7 +39,8 @@ class AppEventDiagnosticsGeneratorTest {
                     timestampMillis = 1200L,
                     details = mapOf(
                         "error" to "Authorization: Bearer failure-token password=failure-password token=failure-upload-token",
-                        "url" to "https://example.test/upload?secret=query-secret&token=query-token",
+                        "upload" to "uploadToken=app-upload-token",
+                        "url" to "https://example.test/upload?secret=query-secret&token=query-token&uploadToken=query-upload-token",
                     ),
                 ),
             ),
@@ -52,6 +54,7 @@ class AppEventDiagnosticsGeneratorTest {
         assertTrue(content.contains("create_new_tapped"))
         assertTrue(content.contains("create_new_success"))
         assertTrue(content.contains("create_new_failure"))
+        Json.parseToJsonElement(content)
         assertTrue(content.contains("<redacted>"))
         assertFalse(content.contains("server-secret"))
         assertFalse(content.contains("server-password"))
@@ -60,8 +63,10 @@ class AppEventDiagnosticsGeneratorTest {
         assertFalse(content.contains("Bearer failure-token"))
         assertFalse(content.contains("failure-password"))
         assertFalse(content.contains("failure-upload-token"))
+        assertFalse(content.contains("app-upload-token"))
         assertFalse(content.contains("query-secret"))
         assertFalse(content.contains("query-token"))
+        assertFalse(content.contains("query-upload-token"))
         assertFalse(item.serverName.orEmpty().contains("metadata-token"))
     }
 

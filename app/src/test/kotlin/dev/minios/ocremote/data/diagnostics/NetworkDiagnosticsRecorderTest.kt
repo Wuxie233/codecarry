@@ -1,6 +1,7 @@
 package dev.minios.ocremote.data.diagnostics
 
 import android.content.ContextWrapper
+import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -25,13 +26,13 @@ class NetworkDiagnosticsRecorderTest {
                 startedAtMillis = 1000L,
                 completedAtMillis = 1042L,
                 serverId = "srv-token=server-secret",
-                serverName = "Local password=server-password",
+                serverName = "Local password=server-password uploadToken=server-upload-token",
             ),
             NetworkDiagnosticSummaryBuilder.failure(
                 method = "GET Authorization: Bearer method-token",
                 path = "http://server.example/session/ses_123?secret=query-secret",
                 statusCode = 500,
-                failureType = "IOException: https://server.example/session/ses_123?token=exception-token Authorization: Bearer exception-token cookie=session-cookie",
+                failureType = "IOException: https://server.example/session/ses_123?token=exception-token&secret=exception-secret Authorization: Bearer exception-token cookie=session-cookie",
                 startedAtMillis = 2000L,
                 completedAtMillis = 2050L,
             ),
@@ -60,16 +61,19 @@ class NetworkDiagnosticsRecorderTest {
         assertTrue(content.contains("\"status_code\":200"))
         assertTrue(content.contains("\"duration_millis\":42"))
         assertTrue(content.contains("\"failure_type\":\"IOException\""))
+        Json.parseToJsonElement(content)
         assertFalse(content.contains("Authorization"))
         assertFalse(content.contains("Bearer"))
         assertFalse(content.contains("password"))
         assertFalse(content.contains("upload token"))
         assertFalse(content.contains("upload-token"))
+        assertFalse(content.contains("server-upload-token"))
         assertFalse(content.contains("cookie"))
         assertFalse(content.contains("query-token"))
         assertFalse(content.contains("query-password"))
         assertFalse(content.contains("query-secret"))
         assertFalse(content.contains("exception-token"))
+        assertFalse(content.contains("exception-secret"))
         assertFalse(content.contains("session-cookie"))
         assertFalse(content.contains("https://server.example"))
         assertFalse(content.contains("http://server.example"))

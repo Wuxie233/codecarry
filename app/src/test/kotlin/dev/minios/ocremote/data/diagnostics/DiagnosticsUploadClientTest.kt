@@ -163,9 +163,8 @@ class DiagnosticsUploadClientTest {
     fun `diagnostics redactor removes bearer password api key cookie and URL query secrets`() {
         val raw = """
             Authorization: Bearer auth-secret
-            password=hunter2 api_key=api-secret token: token-secret
+            {"message":"password=hunter2 api_key=api-secret token: token-secret secret=json-secret uploadToken=json-upload-token Authorization: Bearer json-bearer","url":"https://diagnostics.example/upload?token=query-token&api_key=query-key&secret=query-secret&uploadToken=query-upload-token&safe=value"}
             Cookie: session=abc123; theme=dark
-            https://diagnostics.example/upload?token=query-token&api_key=query-key&safe=value
             cookie=loose-cookie
         """.trimIndent()
 
@@ -175,9 +174,14 @@ class DiagnosticsUploadClientTest {
         assertFalse(redacted.contains("hunter2"))
         assertFalse(redacted.contains("api-secret"))
         assertFalse(redacted.contains("token-secret"))
+        assertFalse(redacted.contains("json-secret"))
+        assertFalse(redacted.contains("json-upload-token"))
+        assertFalse(redacted.contains("json-bearer"))
         assertFalse(redacted.contains("abc123"))
         assertFalse(redacted.contains("query-token"))
         assertFalse(redacted.contains("query-key"))
+        assertFalse(redacted.contains("query-secret"))
+        assertFalse(redacted.contains("query-upload-token"))
         assertFalse(redacted.contains("loose-cookie"))
         assertTrue(redacted.contains("safe=value"))
         assertTrue(redacted.contains("<redacted>"))
