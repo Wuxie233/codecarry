@@ -9,6 +9,7 @@ import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
+import dev.minios.ocremote.data.diagnostics.DiagnosticsHttpClient
 import io.ktor.client.*
 import io.ktor.client.engine.okhttp.*
 import io.ktor.client.plugins.*
@@ -36,6 +37,27 @@ object NetworkModule {
         coerceInputValues = true
         encodeDefaults = true
         explicitNulls = false
+    }
+
+    @Provides
+    @Singleton
+    @DiagnosticsHttpClient
+    fun provideDiagnosticsHttpClient(json: Json): HttpClient = HttpClient(OkHttp) {
+        install(ContentNegotiation) {
+            json(json)
+        }
+
+        install(HttpTimeout) {
+            requestTimeoutMillis = 120_000
+            connectTimeoutMillis = 15_000
+            socketTimeoutMillis = 120_000
+        }
+
+        engine {
+            config {
+                retryOnConnectionFailure(true)
+            }
+        }
     }
     
     @Provides
