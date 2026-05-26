@@ -72,5 +72,5 @@ fastlane/readme.md
 # Local tool indexes
 .codegraph/
 
-# Local continuation state
-.omo/run-continuation/
+# Local OMO workflow state
+.omo/
