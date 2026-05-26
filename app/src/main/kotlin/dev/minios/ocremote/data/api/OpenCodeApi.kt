@@ -2,6 +2,8 @@ package dev.minios.ocremote.data.api
 
 import android.util.Log
 import dev.minios.ocremote.BuildConfig
+import dev.minios.ocremote.data.diagnostics.NetworkDiagnosticSummaryBuilder
+import dev.minios.ocremote.data.diagnostics.NetworkDiagnosticsRecorder
 import dev.minios.ocremote.domain.model.*
 import io.ktor.client.*
 import io.ktor.client.call.*
@@ -28,6 +30,7 @@ import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.coroutines.CancellationException
 import java.io.IOException
 import java.net.URLEncoder
 import java.util.Base64
@@ -65,7 +68,8 @@ data class ServerConnection(
 @Singleton
 class OpenCodeApi @Inject constructor(
     private val httpClient: HttpClient,
-    private val json: Json
+    private val json: Json,
+    private val networkDiagnosticsRecorder: NetworkDiagnosticsRecorder? = null,
 ) {
     companion object {
         private const val TAG = "OpenCodeApi"
@@ -150,12 +154,39 @@ class OpenCodeApi @Inject constructor(
             title?.let { put("title", it) }
             parentId?.let { put("parentID", it) }
         }
-        return httpClient.post("${conn.baseUrl}/session") {
-            conn.authHeader?.let { header("Authorization", it) }
-            directory?.let { header("x-opencode-directory", android.net.Uri.encode(it)) }
-            contentType(ContentType.Application.Json)
-            setBody(body)
-        }.body()
+        val startedAtMillis = System.currentTimeMillis()
+        var statusCode: Int? = null
+        return try {
+            val response = httpClient.post("${conn.baseUrl}/session") {
+                conn.authHeader?.let { header("Authorization", it) }
+                directory?.let { header("x-opencode-directory", android.net.Uri.encode(it)) }
+                contentType(ContentType.Application.Json)
+                setBody(body)
+            }
+            statusCode = response.status.value
+            val session: Session = response.body()
+            networkDiagnosticsRecorder?.record(
+                NetworkDiagnosticSummaryBuilder.success(
+                    method = HttpMethod.Post.value,
+                    path = "/session",
+                    statusCode = statusCode,
+                    startedAtMillis = startedAtMillis,
+                ),
+            )
+            session
+        } catch (error: Throwable) {
+            if (error is CancellationException) throw error
+            networkDiagnosticsRecorder?.record(
+                NetworkDiagnosticSummaryBuilder.failure(
+                    method = HttpMethod.Post.value,
+                    path = "/session",
+                    statusCode = statusCode,
+                    failure = error,
+                    startedAtMillis = startedAtMillis,
+                ),
+            )
+            throw error
+        }
     }
 
     suspend fun deleteSession(conn: ServerConnection, sessionId: String): Boolean {
