@@ -40,13 +40,14 @@ class DiagnosticsUploadClientTest {
     }
 
     private fun newClient(
+        recorder: NetworkDiagnosticsRecorder? = null,
         handler: MockRequestHandleScope.(HttpRequestData) -> HttpResponseData,
     ): DiagnosticsUploadClient {
         val engine = MockEngine { request -> handler(request) }
         val client = HttpClient(engine) {
             install(ContentNegotiation) { json(json) }
         }
-        return DiagnosticsUploadClient(client)
+        return DiagnosticsUploadClient(client, recorder)
     }
 
     @Test
@@ -187,6 +188,61 @@ class DiagnosticsUploadClientTest {
         val client = NetworkModule.provideDiagnosticsHttpClient(json)
 
         assertEquals(null, client.pluginOrNull(Logging))
+    }
+
+    @Test
+    fun `upload records safe network summary without logging token or body`() = runBlocking {
+        val recorder = NetworkDiagnosticsRecorder(newLogRepository())
+        val uploadClient = newClient(recorder) { request ->
+            assertEquals("Bearer upload-token", request.headers[HttpHeaders.Authorization])
+            respondJson(
+                """
+                {
+                  "id": "diag_upload",
+                  "filename": "bundle.zip",
+                  "size": 3,
+                  "stored_at": "2026-05-26T04:00:00Z",
+                  "sha256": "abc123"
+                }
+                """.trimIndent(),
+            )
+        }
+
+        uploadClient.upload(
+            config = DiagnosticsUploadConfig(
+                uploadUrl = "https://diagnostics.example/upload?uploadToken=query-upload-token&cookie=query-cookie",
+                bearerToken = "upload-token",
+            ),
+            file = DiagnosticsUploadFile(
+                filename = "bundle.zip",
+                bytes = "zip request body password=body-password".toByteArray(),
+                contentType = "application/zip",
+            ),
+        )
+
+        val content = recorder.buildArtifactContent(recorder.snapshot(), generatedAtMillis = 9000L)
+        assertTrue(content.contains("\"path_category\":\"/upload\""))
+        assertTrue(content.contains("\"status_code\":200"))
+        assertFalse(content.contains("Authorization"))
+        assertFalse(content.contains("Bearer"))
+        assertFalse(content.contains("upload-token"))
+        assertFalse(content.contains("query-upload-token"))
+        assertFalse(content.contains("query-cookie"))
+        assertFalse(content.contains("zip request body"))
+        assertFalse(content.contains("password"))
+        assertFalse(content.contains("cookie"))
+        assertFalse(content.contains("https://diagnostics.example"))
+    }
+
+
+    private fun newLogRepository(): DiagnosticsLogRepository {
+        val filesDir = java.nio.file.Files.createTempDirectory("diagnostics-upload-files").toFile()
+        val cacheDir = java.nio.file.Files.createTempDirectory("diagnostics-upload-cache").toFile()
+        val context = object : android.content.ContextWrapper(null) {
+            override fun getFilesDir(): java.io.File = filesDir
+            override fun getCacheDir(): java.io.File = cacheDir
+        }
+        return DiagnosticsLogRepository(context)
     }
 
     private fun MockRequestHandleScope.respondJson(content: String) = respond(
