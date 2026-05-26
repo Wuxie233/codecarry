@@ -55,6 +55,8 @@ class SettingsRepository @Inject constructor(
         private val LOCAL_SERVER_RUN_IN_BACKGROUND_KEY = booleanPreferencesKey("local_server_run_in_background")
         private val LOCAL_SERVER_AUTO_START_KEY = booleanPreferencesKey("local_server_auto_start")
         private val LOCAL_SERVER_STARTUP_TIMEOUT_SEC_KEY = intPreferencesKey("local_server_startup_timeout_sec")
+        private val DIAGNOSTICS_UPLOAD_URL_KEY = stringPreferencesKey("diagnostics_upload_url")
+        private val DIAGNOSTICS_UPLOAD_TOKEN_KEY = stringPreferencesKey("diagnostics_upload_token")
 
         /** SharedPreferences name used for synchronous locale reads in attachBaseContext. */
         private const val LOCALE_PREFS = "locale_prefs"
@@ -511,6 +513,26 @@ class SettingsRepository @Inject constructor(
     suspend fun setDebugUpdateApiUrl(url: String) {
         dataStore.edit { preferences ->
             preferences[DEBUG_UPDATE_API_URL_KEY] = url.trim()
+        }
+    }
+
+    val diagnosticsUploadUrl: Flow<String> = dataStore.data.map { preferences ->
+        preferences[DIAGNOSTICS_UPLOAD_URL_KEY] ?: ""
+    }
+
+    suspend fun setDiagnosticsUploadUrl(url: String) {
+        dataStore.edit { preferences ->
+            preferences[DIAGNOSTICS_UPLOAD_URL_KEY] = url.trim()
+        }
+    }
+
+    val diagnosticsUploadToken: Flow<String> = dataStore.data.map { preferences ->
+        preferences[DIAGNOSTICS_UPLOAD_TOKEN_KEY] ?: ""
+    }
+
+    suspend fun setDiagnosticsUploadToken(token: String) {
+        dataStore.edit { preferences ->
+            preferences[DIAGNOSTICS_UPLOAD_TOKEN_KEY] = token.trim()
         }
     }
 
