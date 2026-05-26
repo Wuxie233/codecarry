@@ -1,6 +1,9 @@
 package dev.minios.ocremote.ui.screens.settings
 
+import android.net.Uri
 import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -15,6 +18,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.FormatSize
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Notifications
@@ -39,6 +44,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -50,6 +56,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import dev.minios.ocremote.BuildConfig
 import dev.minios.ocremote.R
+import dev.minios.ocremote.data.diagnostics.DiagnosticsUploadState
 import dev.minios.ocremote.data.repository.LocalServerManager
 import java.util.Locale
 import androidx.compose.material.icons.filled.CloudDownload
@@ -97,6 +104,10 @@ fun SettingsScreen(
     val localServerStartupTimeoutSec by viewModel.localServerStartupTimeoutSec.collectAsState()
     val appUpdateUiState by viewModel.appUpdateUiState.collectAsState()
     val debugUpdateApiUrl by viewModel.debugUpdateApiUrl.collectAsState()
+    val diagnosticsUploadUrl by viewModel.diagnosticsUploadUrl.collectAsState()
+    val diagnosticsUploadToken by viewModel.diagnosticsUploadToken.collectAsState()
+    val diagnosticsUploadState by viewModel.diagnosticsUploadState.collectAsState()
+    val context = LocalContext.current
 
     var showLanguageDialog by remember { mutableStateOf(false) }
     var showThemeDialog by remember { mutableStateOf(false) }
@@ -107,6 +118,8 @@ fun SettingsScreen(
     var showImageMaxSideDialog by remember { mutableStateOf(false) }
     var showImageQualityDialog by remember { mutableStateOf(false) }
     var showLocalLaunchOptionsDialog by remember { mutableStateOf(false) }
+    var showDiagnosticsUploadUrlDialog by remember { mutableStateOf(false) }
+    var showDiagnosticsUploadTokenDialog by remember { mutableStateOf(false) }
 
     val isAmoledTheme = MaterialTheme.colorScheme.background == Color.Black &&
         MaterialTheme.colorScheme.surface == Color.Black
@@ -121,6 +134,30 @@ fun SettingsScreen(
         )
     } else {
         SwitchDefaults.colors()
+    }
+    val diagnosticsUploadUrlSummary = if (diagnosticsUploadUrl.isBlank()) {
+        stringResource(R.string.settings_diagnostics_upload_url_desc)
+    } else {
+        diagnosticsUploadUrl
+    }
+    val diagnosticsUploadTokenSummary = if (diagnosticsUploadToken.isBlank()) {
+        stringResource(R.string.settings_diagnostics_upload_token_desc)
+    } else {
+        diagnosticsUploadToken.maskedDiagnosticsTokenSummary()
+    }
+    val unsupportedDiagnosticsFileMessage = stringResource(R.string.settings_diagnostics_unsupported_file)
+    val diagnosticsUploadLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri == null) {
+            viewModel.onDiagnosticsUploadPickerCanceled()
+            return@rememberLauncherForActivityResult
+        }
+        viewModel.selectDiagnosticsUploadUri(
+            contentResolver = context.applicationContext.contentResolver,
+            uri = uri,
+            unsupportedFileMessage = unsupportedDiagnosticsFileMessage,
+        )
     }
 
     Scaffold(
@@ -468,6 +505,30 @@ fun SettingsScreen(
                 )
             }
 
+            SectionHeader(stringResource(R.string.settings_section_diagnostics))
+
+            ListItem(
+                headlineContent = { Text(stringResource(R.string.settings_diagnostics_upload_url)) },
+                supportingContent = { Text(diagnosticsUploadUrlSummary) },
+                leadingContent = { Icon(Icons.Default.CloudDownload, contentDescription = null) },
+                modifier = Modifier.clickable { showDiagnosticsUploadUrlDialog = true },
+            )
+
+            ListItem(
+                headlineContent = { Text(stringResource(R.string.settings_diagnostics_upload_token)) },
+                supportingContent = { Text(diagnosticsUploadTokenSummary) },
+                leadingContent = { Icon(Icons.Default.VisibilityOff, contentDescription = null) },
+                modifier = Modifier.clickable { showDiagnosticsUploadTokenDialog = true },
+            )
+
+            DiagnosticsUploadCard(
+                state = diagnosticsUploadState,
+                hasUploadConfig = diagnosticsUploadUrl.isNotBlank() && diagnosticsUploadToken.isNotBlank(),
+                onSelectFile = { diagnosticsUploadLauncher.launch(DIAGNOSTICS_UPLOAD_MIME_TYPES) },
+                onUpload = { viewModel.uploadSelectedDiagnosticsFile() },
+                onClearSelection = { viewModel.clearDiagnosticsUploadFile() },
+            )
+
             HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
 
             // ======== Notifications ========
@@ -632,6 +693,34 @@ fun SettingsScreen(
                 },
             )
         }
+
+        if (showDiagnosticsUploadUrlDialog) {
+            DiagnosticsTextSettingDialog(
+                title = stringResource(R.string.settings_diagnostics_upload_url),
+                value = diagnosticsUploadUrl,
+                keyboardType = KeyboardType.Uri,
+                maskInput = false,
+                onDismiss = { showDiagnosticsUploadUrlDialog = false },
+                onSave = { value ->
+                    viewModel.setDiagnosticsUploadUrl(value)
+                    showDiagnosticsUploadUrlDialog = false
+                },
+            )
+        }
+
+        if (showDiagnosticsUploadTokenDialog) {
+            DiagnosticsTextSettingDialog(
+                title = stringResource(R.string.settings_diagnostics_upload_token),
+                value = diagnosticsUploadToken,
+                keyboardType = KeyboardType.Password,
+                maskInput = true,
+                onDismiss = { showDiagnosticsUploadTokenDialog = false },
+                onSave = { value ->
+                    viewModel.setDiagnosticsUploadToken(value)
+                    showDiagnosticsUploadTokenDialog = false
+                },
+            )
+        }
     }
 }
 
@@ -643,6 +732,199 @@ private fun SectionHeader(title: String) {
         color = MaterialTheme.colorScheme.primary,
         modifier = Modifier.padding(start = 16.dp, top = 16.dp, bottom = 4.dp)
     )
+}
+
+@Composable
+private fun DiagnosticsTextSettingDialog(
+    title: String,
+    value: String,
+    keyboardType: KeyboardType,
+    maskInput: Boolean,
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit,
+) {
+    var localValue by remember(value) { mutableStateOf(value) }
+    val saveLabel = stringResource(R.string.server_save)
+
+    AlertDialog(
+        modifier = amoledDialogModifier(),
+        onDismissRequest = onDismiss,
+        containerColor = amoledDialogContainerColor(),
+        title = { Text(title) },
+        text = {
+            OutlinedTextField(
+                value = localValue,
+                onValueChange = { localValue = it },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .semantics { contentDescription = title },
+                label = { Text(title) },
+                singleLine = true,
+                visualTransformation = if (maskInput) FullStringMaskTransformation else VisualTransformation.None,
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = keyboardType),
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = { onSave(localValue.trim()) }) {
+                Text(saveLabel)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.cancel))
+            }
+        },
+    )
+}
+
+private fun String.maskedDiagnosticsTokenSummary(): String {
+    if (isBlank()) return ""
+    return "\u2022".repeat(8)
+}
+
+private val DIAGNOSTICS_UPLOAD_MIME_TYPES = arrayOf(
+    "application/zip",
+    "application/json",
+    "text/plain",
+    "text/*",
+    "application/octet-stream",
+)
+
+@Composable
+private fun DiagnosticsUploadCard(
+    state: DiagnosticsUploadState,
+    hasUploadConfig: Boolean,
+    onSelectFile: () -> Unit,
+    onUpload: () -> Unit,
+    onClearSelection: () -> Unit,
+) {
+    val selectedFile = when (state) {
+        is DiagnosticsUploadState.FileSelected -> state.file
+        is DiagnosticsUploadState.Uploading -> state.file
+        is DiagnosticsUploadState.Success -> state.file
+        is DiagnosticsUploadState.Error -> state.file
+        DiagnosticsUploadState.Idle -> null
+    }
+    val isUploading = state is DiagnosticsUploadState.Uploading
+    val canUpload = selectedFile != null &&
+        hasUploadConfig &&
+        !isUploading &&
+        (state is DiagnosticsUploadState.FileSelected || state is DiagnosticsUploadState.Error)
+
+    ElevatedCard(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+        ),
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Default.Description, contentDescription = null)
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(R.string.settings_diagnostics_select_file),
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                    Text(
+                        text = stringResource(R.string.settings_diagnostics_privacy_warning),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
+            selectedFile?.let { file ->
+                AssistChip(
+                    onClick = onSelectFile,
+                    label = {
+                        Text(
+                            text = stringResource(
+                                R.string.settings_diagnostics_selected_file,
+                                "${file.filename} (${formatDiagnosticsFileSize(file.sizeBytes)})",
+                            ),
+                        )
+                    },
+                    leadingIcon = { Icon(Icons.Default.Description, contentDescription = null) },
+                )
+            }
+
+            if (!hasUploadConfig) {
+                Text(
+                    text = stringResource(R.string.settings_diagnostics_missing_config),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+
+            when (state) {
+                is DiagnosticsUploadState.Success -> Text(
+                    text = "${stringResource(R.string.settings_diagnostics_upload_success)}: ${state.reportId}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                is DiagnosticsUploadState.Error -> Text(
+                    text = "${stringResource(R.string.settings_diagnostics_upload_failed)}: ${state.message}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error,
+                )
+                else -> Unit
+            }
+
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                OutlinedButton(
+                    onClick = onSelectFile,
+                    enabled = !isUploading,
+                ) {
+                    Text(stringResource(R.string.settings_diagnostics_select_file))
+                }
+                Button(
+                    onClick = onUpload,
+                    enabled = canUpload,
+                ) {
+                    if (isUploading) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.onPrimary,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(stringResource(R.string.settings_diagnostics_uploading))
+                    } else {
+                        Text(stringResource(R.string.settings_diagnostics_upload))
+                    }
+                }
+                IconButton(
+                    onClick = onClearSelection,
+                    enabled = selectedFile != null && !isUploading,
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Delete,
+                        contentDescription = stringResource(R.string.settings_diagnostics_clear_selection),
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun formatDiagnosticsFileSize(bytes: Long): String {
+    val value = bytes.toDouble()
+    return when {
+        value >= 1024.0 * 1024.0 -> String.format(Locale.US, "%.2f MB", value / (1024.0 * 1024.0))
+        value >= 1024.0 -> String.format(Locale.US, "%.1f KB", value / 1024.0)
+        else -> "$bytes B"
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

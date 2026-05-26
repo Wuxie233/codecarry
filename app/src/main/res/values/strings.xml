@@ -393,6 +393,7 @@
     <string name="settings_section_chat_behavior">Chat Behavior</string>
     <string name="settings_section_notifications">Notifications</string>
     <string name="settings_section_advanced">Advanced</string>
+    <string name="settings_section_diagnostics">Diagnostics</string>
     <string name="settings_confirm_send_title">Send message?</string>
     <string name="settings_confirm_send_body">Do you want to send this message?</string>
     <string name="settings_send">Send</string>
@@ -436,6 +437,20 @@
     <string name="settings_update_ready">Ready to install version %1$s</string>
     <string name="settings_update_download">Download</string>
     <string name="settings_update_install">Install</string>
+    <string name="settings_diagnostics_upload_url">Upload URL</string>
+    <string name="settings_diagnostics_upload_url_desc">Endpoint for sending diagnostics files</string>
+    <string name="settings_diagnostics_upload_token">Upload token</string>
+    <string name="settings_diagnostics_upload_token_desc">Token required to upload diagnostics files</string>
+    <string name="settings_diagnostics_select_file">Select file</string>
+    <string name="settings_diagnostics_selected_file">Selected file: %1$s</string>
+    <string name="settings_diagnostics_upload">Upload</string>
+    <string name="settings_diagnostics_uploading">Uploading…</string>
+    <string name="settings_diagnostics_upload_success">Upload complete</string>
+    <string name="settings_diagnostics_upload_failed">Upload failed</string>
+    <string name="settings_diagnostics_missing_config">Set both the upload URL and token first</string>
+    <string name="settings_diagnostics_unsupported_file">Unsupported file type</string>
+    <string name="settings_diagnostics_clear_selection">Clear selection</string>
+    <string name="settings_diagnostics_privacy_warning">Only upload files you want to share. Diagnostics may include sensitive data.</string>
 
     <!-- Server Settings -->
     <string name="server_settings_title">Server Settings</string>
