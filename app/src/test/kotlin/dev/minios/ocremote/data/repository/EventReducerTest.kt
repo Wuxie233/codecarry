@@ -34,6 +34,22 @@ class EventReducerTest {
     }
 
     @Test
+    fun sessionCreatedUpsertsExistingSessionById() {
+        val reducer = EventReducer()
+        val optimisticSession = testSession(id = "ses_new", updated = 1L)
+        val createdSession = optimisticSession.copy(
+            title = "Created from SSE",
+            time = optimisticSession.time.copy(updated = 2L),
+        )
+
+        reducer.setSessions("server-1", listOf(optimisticSession))
+        reducer.processEvent(SseEvent.SessionCreated(createdSession), serverId = "server-1")
+
+        assertEquals(listOf("ses_new"), reducer.sessions.value.map { it.id })
+        assertEquals(createdSession, reducer.sessions.value.single())
+    }
+
+    @Test
     fun statusBeforeSessionCreatedIsClearedOnDisconnect() {
         val reducer = EventReducer()
         val session = testSession(id = "ses_new")

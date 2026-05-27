@@ -5,6 +5,8 @@ import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import dev.minios.ocremote.data.api.OpenCodeApi
+import dev.minios.ocremote.data.diagnostics.AppEventDiagnosticsGenerator
+import dev.minios.ocremote.data.diagnostics.DiagnosticsLogRepository
 import dev.minios.ocremote.data.preferences.SessionFilter
 import dev.minios.ocremote.data.preferences.SessionListPreferencesRepository
 import dev.minios.ocremote.data.preferences.SessionScope
@@ -213,12 +215,14 @@ class SessionListViewModelTest {
         val directory = "/work/100% ready/a+b?#中"
         val createDirectoryHeaders = Collections.synchronizedList(mutableListOf<String?>())
         val eventReducer = EventReducer()
+        val diagnosticsRepository = diagnosticsLogRepository()
         val vm = newSessionListViewModel(
             eventReducer = eventReducer,
             api = sessionListApi(
                 createDirectoryHeaders = createDirectoryHeaders,
                 createResponseBody = """{"id":"ses_created","directory":"","time":{}}""",
             ),
+            diagnosticsRepository = diagnosticsRepository,
         )
         val navigated = Collections.synchronizedList(mutableListOf<Session>())
         collectNavigation(vm) { navigated.add(it) }
@@ -243,12 +247,18 @@ class SessionListViewModelTest {
             directory = session.directory,
         )
         assertEquals(directory, decodedRouteQueryValue(route, "directory"))
+
+        val appEventContents = diagnosticsRepository.appEventContents()
+        assertTrue(appEventContents.any { it.contains("create_new_tapped") })
+        assertTrue(appEventContents.any { it.contains("create_new_success") && it.contains("ses_created") })
     }
 
     @Test
     fun `session list new conversation API exception leaves navigation empty`() = runTest(dispatcher) {
+        val diagnosticsRepository = diagnosticsLogRepository()
         val vm = newSessionListViewModel(
             api = sessionListApi(createFailure = IOException("create exploded")),
+            diagnosticsRepository = diagnosticsRepository,
         )
         val navigated = Collections.synchronizedList(mutableListOf<Session>())
         collectNavigation(vm) { navigated.add(it) }
@@ -259,6 +269,14 @@ class SessionListViewModelTest {
 
         assertTrue(navigated.isEmpty())
         assertEquals("create exploded", vm.uiState.value.error)
+
+        val appEventContents = diagnosticsRepository.appEventContents()
+        assertTrue(appEventContents.any { it.contains("create_new_tapped") })
+        assertTrue(appEventContents.any { content ->
+            content.contains("create_new_failure") &&
+                content.contains("java.io.IOException") &&
+                content.contains("create exploded")
+        })
     }
 
     @Test
@@ -346,6 +364,7 @@ class SessionListViewModelTest {
     private fun newSessionListViewModel(
         eventReducer: EventReducer = EventReducer(),
         api: OpenCodeApi = sessionListApi(),
+        diagnosticsRepository: DiagnosticsLogRepository = diagnosticsLogRepository(),
     ): SessionListViewModel {
         return SessionListViewModel(
             savedStateHandle = SavedStateHandle(
@@ -361,6 +380,7 @@ class SessionListViewModelTest {
             api = api,
             preferencesRepo = sessionListPreferencesRepository(),
             settingsRepository = settingsRepository(),
+            appEventDiagnosticsGenerator = AppEventDiagnosticsGenerator(diagnosticsRepository),
         ).also { viewModels.add(it) }
     }
 
@@ -415,6 +435,20 @@ class SessionListViewModelTest {
             override fun getFilesDir(): File = tmpFolder.root
         }
         return SettingsRepository(dataStore, context)
+    }
+
+    private fun diagnosticsLogRepository(): DiagnosticsLogRepository {
+        val filesDir = tmpFolder.newFolder("diagnostics-files-${System.nanoTime()}")
+        val cacheDir = tmpFolder.newFolder("diagnostics-cache-${System.nanoTime()}")
+        val context = object : ContextWrapper(null) {
+            override fun getFilesDir(): File = filesDir
+            override fun getCacheDir(): File = cacheDir
+        }
+        return DiagnosticsLogRepository(context)
+    }
+
+    private fun DiagnosticsLogRepository.appEventContents(): List<String> {
+        return listLogs().mapNotNull { item -> getArtifactFile(item)?.readText() }
     }
 
     private fun decodedRouteQueryValue(route: String, key: String): String {

@@ -10,6 +10,9 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.minios.ocremote.data.api.FileNode
 import dev.minios.ocremote.data.api.OpenCodeApi
 import dev.minios.ocremote.data.api.ServerConnection
+import dev.minios.ocremote.data.diagnostics.AppEventBreadcrumb
+import dev.minios.ocremote.data.diagnostics.AppEventDiagnosticsGenerator
+import dev.minios.ocremote.data.diagnostics.AppEventName
 import dev.minios.ocremote.data.preferences.SessionFilter
 import dev.minios.ocremote.data.preferences.SessionListPreferences
 import dev.minios.ocremote.data.preferences.SessionListPreferencesRepository
@@ -219,6 +222,7 @@ class SessionListViewModel @Inject constructor(
     private val api: OpenCodeApi,
     private val preferencesRepo: SessionListPreferencesRepository,
     private val settingsRepository: SettingsRepository,
+    private val appEventDiagnosticsGenerator: AppEventDiagnosticsGenerator,
 ) : ViewModel() {
 
     val serverUrl: String = decodeRouteArg(savedStateHandle.get<String>("serverUrl"))
@@ -499,6 +503,10 @@ class SessionListViewModel @Inject constructor(
             _isLoading.value = true
             _error.value = null
             try {
+                persistCreateNewEvent(
+                    name = AppEventName.CREATE_NEW_TAPPED,
+                    directory = directory,
+                )
                 _filter.value = SessionFilter.ALL
                 _scopeOverride.value = SessionScope.INBOX
                 val session = api.createSession(conn, directory = directory)
@@ -513,15 +521,55 @@ class SessionListViewModel @Inject constructor(
                 val normalizedSession = session.copy(directory = createdDirectory)
                 eventReducer.setSessions(serverId, listOf(normalizedSession))
                 if (BuildConfig.DEBUG) Log.d(TAG, "Created new session: ${normalizedSession.id}")
+                persistCreateNewEvent(
+                    name = AppEventName.CREATE_NEW_SUCCESS,
+                    directory = normalizedSession.directory,
+                    sessionId = normalizedSession.id,
+                )
                 _navigateToSession.tryEmit(normalizedSession)
             } catch (e: Exception) {
                 logErrorCompat(TAG, "Failed to create session", e)
+                persistCreateNewEvent(
+                    name = AppEventName.CREATE_NEW_FAILURE,
+                    directory = directory,
+                    details = mapOf(
+                        "error_class" to e::class.java.name,
+                        "error_message" to e.message.orEmpty(),
+                    ),
+                )
                 _error.value = e.message ?: "Failed to create session"
             } finally {
                 _isLoading.value = false
                 yield()
                 isCreatingSession = false
             }
+        }
+    }
+
+    private fun persistCreateNewEvent(
+        name: AppEventName,
+        directory: String?,
+        sessionId: String? = null,
+        details: Map<String, String> = emptyMap(),
+    ) {
+        try {
+            appEventDiagnosticsGenerator.createArtifact(
+                breadcrumbs = listOf(
+                    AppEventBreadcrumb(
+                        name = name,
+                        timestampMillis = System.currentTimeMillis(),
+                        sessionId = sessionId,
+                        serverId = serverId,
+                        serverName = serverName,
+                        directory = directory,
+                        details = details,
+                    )
+                ),
+                sessionId = sessionId,
+                serverName = serverName,
+            )
+        } catch (error: Exception) {
+            logErrorCompat(TAG, "Failed to persist create-new diagnostics", error)
         }
     }
 

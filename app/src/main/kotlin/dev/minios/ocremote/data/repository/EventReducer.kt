@@ -124,7 +124,14 @@ class EventReducer @Inject constructor() {
     private fun handleSessionCreated(event: SseEvent.SessionCreated, serverId: String) {
         trackSession(serverId, event.info.id)
         _sessions.update { current ->
-            (current + event.info).sortedByDescending { it.time.updated }
+            val existingIndex = current.indexOfFirst { it.id == event.info.id }
+            if (existingIndex >= 0) {
+                current.toMutableList()
+                    .apply { set(existingIndex, event.info) }
+                    .sortedByDescending { it.time.updated }
+            } else {
+                (current + event.info).sortedByDescending { it.time.updated }
+            }
         }
         _sessionStatuses.update { current ->
             if (event.info.id in current) current else current + (event.info.id to SessionStatus.Idle)
