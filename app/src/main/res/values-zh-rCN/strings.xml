@@ -14,17 +14,32 @@
     <string name="server_username_hint">opencode</string>
     <string name="server_password">密码</string>
     <string name="server_password_hint">可选</string>
+    <string name="server_password_show">显示密码</string>
+    <string name="server_password_hide">隐藏密码</string>
     <string name="server_save">保存</string>
     <string name="server_cancel">取消</string>
     <string name="server_delete">删除</string>
     <!-- Session Screen -->
     <string name="sessions_title">会话</string>
+    <string name="sessions_loading">正在加载会话…</string>
     <string name="sessions_new">新建会话</string>
     <string name="sessions_empty">尚无会话</string>
     <string name="session_status_idle">空闲</string>
     <string name="session_status_busy">处理中…</string>
     <string name="session_status_retry">重试中（%1$d/%2$d）</string>
     <!-- Chat Screen -->
+    <string name="message_actions_title">消息操作</string>
+    <string name="message_action_fork_from_here">从此处 Fork 对话</string>
+    <string name="message_action_copy_text">复制文本</string>
+    <string name="message_action_copy_markdown">复制为 Markdown</string>
+    <string name="message_action_quote">引用到输入框</string>
+    <string name="message_action_restore_here">恢复到此消息</string>
+    <string name="message_action_restore_confirm_title">要恢复对话吗？</string>
+    <string name="message_action_restore_confirm_body">这会将当前对话恢复到所选消息处。</string>
+    <string name="message_action_copied">已复制</string>
+    <string name="message_action_quoted">已引用到输入框</string>
+    <string name="message_action_fork_failed">无法从此消息 Fork</string>
+    <string name="message_action_unavailable_streaming">请等待当前回复完成</string>
     <string name="chat_input_hint">消息 OpenCode…</string>
     <string name="chat_send">发送</string>
     <string name="chat_abort">中止</string>
@@ -66,6 +81,7 @@
     <string name="close">关闭</string>
     <string name="home_connect">连接</string>
     <string name="home_connecting">正在连接…</string>
+    <string name="home_loading_servers">正在加载服务器…</string>
     <string name="home_disconnect">断开连接</string>
     <string name="home_edit">编辑</string>
     <string name="home_fix">修复</string>
@@ -127,6 +143,13 @@
     <string name="session_changes_deletions">-%1$d</string>
     <string name="chat_response">回复</string>
     <string name="chat_hide_steps">隐藏步骤</string>
+    <string name="chat_table_scroll_hint">左右滑动查看完整表格</string>
+    <string name="chat_pending_actions">有 %1$d 项待你处理</string>
+    <string name="chat_pending_tap_to_view">点击查看</string>
+    <string name="chat_send_disabled_not_ready">会话尚未就绪</string>
+    <string name="chat_send_disabled_pending">请先处理待回应的请求</string>
+    <string name="chat_send_disabled_sending">正在发送…</string>
+    <string name="chat_loading_messages">正在加载消息…</string>
     <string name="chat_status_edits">%1$d 次编辑</string>
     <string name="chat_status_edits_plural">%1$d 次编辑</string>
     <string name="chat_status_commands">%1$d 个命令</string>
