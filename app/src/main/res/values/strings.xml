@@ -10,6 +10,7 @@
     <string name="home_server_health_bad">Disconnected</string>
     <string name="home_connect">Connect</string>
     <string name="home_connecting">Connecting…</string>
+    <string name="home_loading_servers">Loading servers…</string>
     <string name="home_disconnect">Disconnect</string>
     <string name="home_edit">Edit</string>
     <string name="home_fix">Fix</string>
@@ -83,6 +84,8 @@
     <string name="server_username_hint">opencode</string>
     <string name="server_password">Password</string>
     <string name="server_password_hint">Optional</string>
+    <string name="server_password_show">Show password</string>
+    <string name="server_password_hide">Hide password</string>
     <string name="server_save">Save</string>
     <string name="server_cancel">Cancel</string>
     <string name="server_delete">Delete</string>
@@ -93,6 +96,7 @@
     
     <!-- Session Screen -->
     <string name="sessions_title">Sessions</string>
+    <string name="sessions_loading">Loading sessions…</string>
     <string name="sessions_new">New Session</string>
     <string name="sessions_create_folder">Create folder</string>
     <string name="sessions_create_folder_title">Create folder</string>
@@ -188,6 +192,18 @@
     <string name="session_unknown_error">Unknown error</string>
     
     <!-- Chat Screen -->
+    <string name="message_actions_title">Message actions</string>
+    <string name="message_action_fork_from_here">Fork from here</string>
+    <string name="message_action_copy_text">Copy text</string>
+    <string name="message_action_copy_markdown">Copy as Markdown</string>
+    <string name="message_action_quote">Quote into input</string>
+    <string name="message_action_restore_here">Restore to this message</string>
+    <string name="message_action_restore_confirm_title">Restore conversation?</string>
+    <string name="message_action_restore_confirm_body">This will revert the current conversation to the selected message.</string>
+    <string name="message_action_copied">Copied</string>
+    <string name="message_action_quoted">Quoted into input</string>
+    <string name="message_action_fork_failed">Could not fork from this message</string>
+    <string name="message_action_unavailable_streaming">Wait for this response to finish</string>
     <string name="chat_input_hint">Message OpenCode…</string>
     <string name="chat_send">Send</string>
     <string name="chat_send_shell">Send shell command</string>
@@ -235,6 +251,13 @@
     <string name="chat_commands_hint">Type / to see available commands</string>
     <string name="chat_response">Response</string>
     <string name="chat_hide_steps">Hide steps</string>
+    <string name="chat_table_scroll_hint">Swipe left/right to see the full table</string>
+    <string name="chat_pending_actions">%1$d action(s) waiting for your response</string>
+    <string name="chat_pending_tap_to_view">Tap to view</string>
+    <string name="chat_send_disabled_not_ready">Session not ready yet</string>
+    <string name="chat_send_disabled_pending">Answer the pending request first</string>
+    <string name="chat_send_disabled_sending">Sending…</string>
+    <string name="chat_loading_messages">Loading messages…</string>
     <string name="chat_status_edits">%1$d edit</string>
     <string name="chat_status_edits_plural">%1$d edits</string>
     <string name="chat_status_commands">%1$d command</string>
