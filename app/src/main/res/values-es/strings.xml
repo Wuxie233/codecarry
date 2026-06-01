@@ -14,17 +14,32 @@
     <string name="server_username_hint">opencode</string>
     <string name="server_password">Contraseña</string>
     <string name="server_password_hint">Opcional</string>
+    <string name="server_password_show">Show password</string>
+    <string name="server_password_hide">Hide password</string>
     <string name="server_save">Guardar</string>
     <string name="server_cancel">Cancelar</string>
     <string name="server_delete">Eliminar</string>
     <!-- Session Screen -->
     <string name="sessions_title">Sesiones</string>
+    <string name="sessions_loading">Loading sessions…</string>
     <string name="sessions_new">Nueva sesión</string>
     <string name="sessions_empty">Aún no hay sesiones</string>
     <string name="session_status_idle">Inactivo</string>
     <string name="session_status_busy">Trabajando…</string>
     <string name="session_status_retry">Reintentando (%1$d/%2$d)</string>
     <!-- Chat Screen -->
+    <string name="message_actions_title">Message actions</string>
+    <string name="message_action_fork_from_here">Fork from here</string>
+    <string name="message_action_copy_text">Copy text</string>
+    <string name="message_action_copy_markdown">Copy as Markdown</string>
+    <string name="message_action_quote">Quote into input</string>
+    <string name="message_action_restore_here">Restore to this message</string>
+    <string name="message_action_restore_confirm_title">Restore conversation?</string>
+    <string name="message_action_restore_confirm_body">This will revert the current conversation to the selected message.</string>
+    <string name="message_action_copied">Copied</string>
+    <string name="message_action_quoted">Quoted into input</string>
+    <string name="message_action_fork_failed">Could not fork from this message</string>
+    <string name="message_action_unavailable_streaming">Wait for this response to finish</string>
     <string name="chat_input_hint">Mensaje a OpenCode…</string>
     <string name="chat_send">Enviar</string>
     <string name="chat_abort">Abortar</string>
@@ -66,6 +81,7 @@
     <string name="close">Cerrar</string>
     <string name="home_connect">Conectar</string>
     <string name="home_connecting">Conectando…</string>
+    <string name="home_loading_servers">Loading servers…</string>
     <string name="home_disconnect">Desconectar</string>
     <string name="home_edit">Editar</string>
     <string name="home_fix">Corregir</string>
@@ -125,6 +141,13 @@
     <string name="session_changes_deletions">-%1$d</string>
     <string name="chat_response">Respuesta</string>
     <string name="chat_hide_steps">Ocultar pasos</string>
+    <string name="chat_table_scroll_hint">Swipe left/right to see the full table</string>
+    <string name="chat_pending_actions">%1$d action(s) waiting for your response</string>
+    <string name="chat_pending_tap_to_view">Tap to view</string>
+    <string name="chat_send_disabled_not_ready">Session not ready yet</string>
+    <string name="chat_send_disabled_pending">Answer the pending request first</string>
+    <string name="chat_send_disabled_sending">Sending…</string>
+    <string name="chat_loading_messages">Loading messages…</string>
     <string name="chat_status_edits">%1$d edición</string>
     <string name="chat_status_edits_plural">%1$d ediciones</string>
     <string name="chat_status_commands">%1$d comando</string>
