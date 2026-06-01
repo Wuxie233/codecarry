@@ -1137,6 +1137,15 @@ class ChatViewModel @Inject constructor(
      * Returns the new session or `null` on failure.
      */
     fun forkSession(onResult: (Session?) -> Unit) {
+        forkSession(messageId = null, onResult = onResult)
+    }
+
+    /** Fork the current session from a specific message. */
+    fun forkSessionFromMessage(messageId: String, onResult: (Session?) -> Unit) {
+        forkSession(messageId = messageId, onResult = onResult)
+    }
+
+    private fun forkSession(messageId: String?, onResult: (Session?) -> Unit) {
         viewModelScope.launch {
             try {
                 if (!sessionLoaded.isCompleted) {
@@ -1156,6 +1165,7 @@ class ChatViewModel @Inject constructor(
                 val session = api.forkSession(
                     conn = conn,
                     sessionId = sessionId,
+                    messageId = messageId,
                     directory = effectiveDirectory,
                 )
                 eventReducer.setSessions(serverId, listOf(session))

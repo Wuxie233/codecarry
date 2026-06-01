@@ -14,6 +14,8 @@ import io.ktor.serialization.kotlinx.json.json
 import io.ktor.utils.io.ByteReadChannel
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -99,7 +101,7 @@ class OpenCodeApiForkTest {
     }
 
     @Test
-    fun `forkSession forwards messageID in body when supplied`() = runBlocking {
+    fun `forkSession forwards messageID in body while preserving directory header`() = runBlocking {
         val captured = mutableListOf<HttpRequestData>()
         val api = newApi(captured)
         val conn = ServerConnection.from("http://example.test:4096")
@@ -108,13 +110,19 @@ class OpenCodeApiForkTest {
             conn = conn,
             sessionId = "ses_source",
             messageId = "msg_123",
-            directory = "/p",
+            directory = "/home/user/My Project",
         )
 
-        val body = (captured.single().body as io.ktor.http.content.OutgoingContent.ByteArrayContent)
+        val request = captured.single()
+        val directoryHeader = request.headers["x-opencode-directory"]
+        assertTrue(
+            "Expected encoded directory header, was: $directoryHeader",
+            directoryHeader?.contains("My%20Project") == true,
+        )
+        val body = (request.body as io.ktor.http.content.OutgoingContent.ByteArrayContent)
             .bytes()
             .toString(Charsets.UTF_8)
-        assert(body.contains("\"messageID\"")) { "messageID missing from body: $body" }
-        assert(body.contains("msg_123")) { "messageID value missing from body: $body" }
+        val bodyJson = json.parseToJsonElement(body).jsonObject
+        assertEquals("msg_123", bodyJson.getValue("messageID").jsonPrimitive.content)
     }
 }

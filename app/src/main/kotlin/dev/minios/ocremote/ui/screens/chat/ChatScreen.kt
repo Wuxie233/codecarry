@@ -47,7 +47,9 @@ import androidx.compose.foundation.text.selection.LocalTextSelectionColors
 import androidx.compose.foundation.text.selection.TextSelectionColors
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Article
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.CallSplit
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.*
@@ -119,7 +121,6 @@ import com.mikepenz.markdown.m3.markdownColor
 import com.mikepenz.markdown.m3.markdownTypography
 import com.mikepenz.markdown.compose.components.markdownComponents
 import com.mikepenz.markdown.coil2.Coil2ImageTransformerImpl
-import com.mikepenz.markdown.compose.elements.MarkdownTable
 import dev.minios.ocremote.domain.model.*
 import dev.minios.ocremote.data.api.AgentInfo
 import dev.minios.ocremote.data.api.CommandInfo
@@ -294,6 +295,227 @@ internal fun mergeSlashCommands(
         .filter { it.source != "skill" && it.name !in clientNames }
         .map { SlashCommand(it.name, it.description, "server", it.source) }
     return client + serverSlash
+}
+
+internal enum class MessageCardAction {
+    ForkFromHere,
+    CopyText,
+    CopyMarkdown,
+    QuoteIntoInput,
+    RestoreToHere,
+}
+
+internal enum class MessageCardActionDisabledReason {
+    StreamingOrBusy,
+}
+
+internal data class MessageCardActionState(
+    val action: MessageCardAction,
+    val visible: Boolean,
+    val enabled: Boolean,
+    val disabledReason: MessageCardActionDisabledReason? = null,
+)
+
+internal fun buildMessageCardActions(
+    chatMessage: ChatMessage,
+    selectedMessageStreaming: Boolean,
+    sessionBusy: Boolean,
+    sessionReady: Boolean,
+): List<MessageCardActionState> {
+    val hasStableMessageId = chatMessage.message.id.isNotBlank()
+    val hasCopyableText = messagePlainText(chatMessage).trim().isNotBlank()
+    val blockedByBusyOrStreaming = sessionBusy || selectedMessageStreaming
+    val canMutateSession = sessionReady && !blockedByBusyOrStreaming
+    val unavailableReason = if (blockedByBusyOrStreaming) {
+        MessageCardActionDisabledReason.StreamingOrBusy
+    } else {
+        null
+    }
+
+    return listOf(
+        MessageCardActionState(
+            action = MessageCardAction.ForkFromHere,
+            visible = hasStableMessageId,
+            enabled = hasStableMessageId && canMutateSession,
+            disabledReason = if (hasStableMessageId && !canMutateSession) unavailableReason else null,
+        ),
+        MessageCardActionState(
+            action = MessageCardAction.CopyText,
+            visible = hasCopyableText,
+            enabled = hasCopyableText,
+        ),
+        MessageCardActionState(
+            action = MessageCardAction.CopyMarkdown,
+            visible = hasCopyableText,
+            enabled = hasCopyableText,
+        ),
+        MessageCardActionState(
+            action = MessageCardAction.QuoteIntoInput,
+            visible = hasCopyableText,
+            enabled = hasCopyableText,
+        ),
+        MessageCardActionState(
+            action = MessageCardAction.RestoreToHere,
+            visible = chatMessage.isUser && hasStableMessageId,
+            enabled = chatMessage.isUser && hasStableMessageId && canMutateSession,
+            disabledReason = if (chatMessage.isUser && hasStableMessageId && !canMutateSession) unavailableReason else null,
+        ),
+    ).filter { it.visible }
+}
+
+internal fun messagePlainText(chatMessage: ChatMessage): String {
+    val text = chatMessage.parts
+        .filterIsInstance<Part.Text>()
+        .filter { it.synthetic != true && it.ignored != true }
+        .map { it.text.trim() }
+        .filter { it.isNotBlank() }
+
+    if (text.isNotEmpty()) {
+        return text.joinToString("\n\n")
+    }
+
+    val userMessage = chatMessage.message as? Message.User
+    return userMessage?.summary?.body?.takeIf { it.isNotBlank() }
+        ?: userMessage?.summary?.title?.takeIf { it.isNotBlank() }
+        ?: ""
+}
+
+internal fun messageMarkdown(chatMessage: ChatMessage): String {
+    val role = if (chatMessage.isUser) "User" else "Assistant"
+    return "> $role\n\n${messagePlainText(chatMessage)}".trimEnd()
+}
+
+internal fun quoteMessageText(chatMessage: ChatMessage): String {
+    val capped = capQuotedSource(messagePlainText(chatMessage), maxLines = 40, maxBytes = 8 * 1024)
+    if (capped.isBlank()) return ""
+
+    return capped
+        .lineSequence()
+        .joinToString("\n") { line -> "> $line" }
+        .plus("\n\n")
+}
+
+private fun capQuotedSource(text: String, maxLines: Int, maxBytes: Int): String {
+    val limitedByLines = text.lineSequence().take(maxLines + 1).toList()
+    val lineTruncated = limitedByLines.size > maxLines
+    val lineCapped = limitedByLines.take(maxLines).joinToString("\n")
+    val byteCapped = truncateUtf8(lineCapped, maxBytes)
+    val byteTruncated = byteCapped.length < lineCapped.length
+    return if (lineTruncated || byteTruncated) {
+        byteCapped.trimEnd() + "\n…"
+    } else {
+        byteCapped
+    }
+}
+
+private fun truncateUtf8(text: String, maxBytes: Int): String {
+    var usedBytes = 0
+    val builder = StringBuilder()
+    for (char in text) {
+        val charBytes = char.toString().toByteArray(Charsets.UTF_8).size
+        if (usedBytes + charBytes > maxBytes) break
+        builder.append(char)
+        usedBytes += charBytes
+    }
+    return builder.toString()
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MessageActionMenu(
+    actions: List<MessageCardActionState>,
+    onActionSelected: (MessageCardAction) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(start = 24.dp, end = 24.dp, bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(
+                text = stringResource(R.string.message_actions_title),
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+            actions.forEach { actionState ->
+                MessageActionMenuRow(
+                    actionState = actionState,
+                    onClick = { onActionSelected(actionState.action) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun MessageActionMenuRow(
+    actionState: MessageCardActionState,
+    onClick: () -> Unit,
+) {
+    val contentColor = if (actionState.enabled) {
+        MaterialTheme.colorScheme.onSurface
+    } else {
+        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+    }
+    val supportingText = when (actionState.disabledReason) {
+        MessageCardActionDisabledReason.StreamingOrBusy -> stringResource(R.string.message_action_unavailable_streaming)
+        null -> null
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(enabled = actionState.enabled, onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Icon(
+            imageVector = messageActionIcon(actionState.action),
+            contentDescription = null,
+            modifier = Modifier.size(20.dp),
+            tint = contentColor,
+        )
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = messageActionLabel(actionState.action),
+                style = MaterialTheme.typography.bodyLarge,
+                color = contentColor,
+            )
+            if (supportingText != null) {
+                Text(
+                    text = supportingText,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun messageActionLabel(action: MessageCardAction): String {
+    return when (action) {
+        MessageCardAction.ForkFromHere -> stringResource(R.string.message_action_fork_from_here)
+        MessageCardAction.CopyText -> stringResource(R.string.message_action_copy_text)
+        MessageCardAction.CopyMarkdown -> stringResource(R.string.message_action_copy_markdown)
+        MessageCardAction.QuoteIntoInput -> stringResource(R.string.message_action_quote)
+        MessageCardAction.RestoreToHere -> stringResource(R.string.message_action_restore_here)
+    }
+}
+
+private fun messageActionIcon(action: MessageCardAction) = when (action) {
+    MessageCardAction.ForkFromHere -> Icons.AutoMirrored.Filled.CallSplit
+    MessageCardAction.CopyText -> Icons.Default.ContentCopy
+    MessageCardAction.CopyMarkdown -> Icons.AutoMirrored.Filled.Article
+    MessageCardAction.QuoteIntoInput -> Icons.Default.FormatQuote
+    MessageCardAction.RestoreToHere -> Icons.AutoMirrored.Filled.Undo
 }
 
 private enum class ChatInputMode {
@@ -909,6 +1131,9 @@ fun ChatScreen(
     var showVariantPicker by remember { mutableStateOf(false) }
     var showRenameDialog by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
+    var actionMenuMessage by remember { mutableStateOf<ChatMessage?>(null) }
+    var restoreConfirmMessage by remember { mutableStateOf<ChatMessage?>(null) }
+    var forkFromMessageInFlight by remember { mutableStateOf(false) }
     var isTerminalMode by rememberSaveable { mutableStateOf(startInTerminalMode) }
     var terminalCtrlLatched by rememberSaveable { mutableStateOf(false) }
     var terminalAltLatched by rememberSaveable { mutableStateOf(false) }
@@ -1426,6 +1651,8 @@ fun ChatScreen(
     } ?: 0
     val pendingCount = uiState.pendingPermissions.size + uiState.pendingQuestions.size
     val isBusy = uiState.sessionStatus is SessionStatus.Busy
+    val sessionBusyForMessageActions = uiState.sessionStatus !is SessionStatus.Idle || uiState.isSending || forkFromMessageInFlight
+    val sessionReadyForMessageActions = !uiState.isLoading && uiState.error == null && viewModel.sessionId.isNotBlank()
     LaunchedEffect(messageCount, lastPartCount, lastContentLength, pendingCount, isBusy) {
         if (messageCount > 0 && autoScrollEnabled) {
             val lastIndex = listState.layoutInfo.totalItemsCount.coerceAtLeast(1) - 1
@@ -1692,6 +1919,14 @@ fun ChatScreen(
             } else ""
 
             if (!isTerminalMode) {
+                val sendDisabledReasonResId = when {
+                    uiState.isSending -> R.string.chat_send_disabled_sending
+                    pendingCount > 0 -> R.string.chat_send_disabled_pending
+                    uiState.isLoading || uiState.error != null ||
+                        viewModel.sessionId.isBlank() || (isShellMode && isBusy) -> R.string.chat_send_disabled_not_ready
+                    else -> null
+                }
+
                 Column(modifier = Modifier.fillMaxWidth()) {
                     // Issue #22: live session retry status renders directly above the
                     // composer so users do not need to scroll to the top of the message
@@ -1822,6 +2057,7 @@ fun ChatScreen(
                 },
                 isSending = uiState.isSending,
                 isBusy = uiState.sessionStatus is SessionStatus.Busy,
+                sendDisabledReasonResId = sendDisabledReasonResId,
                 messages = uiState.messages,
                 attachments = attachments,
                 onAttach = { imagePickerLauncher.launch("image/*") },
@@ -2276,9 +2512,18 @@ fun ChatScreen(
                     }
                 }
                 uiState.isLoading && uiState.messages.isEmpty() -> {
-                    PulsingDotsIndicator(
-                        modifier = Modifier.align(Alignment.Center)
-                    )
+                    Column(
+                        modifier = Modifier.align(Alignment.Center),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        PulsingDotsIndicator()
+                        Text(
+                            text = stringResource(R.string.chat_loading_messages),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
                 uiState.error != null && uiState.messages.isEmpty() -> {
                     Column(
@@ -2304,7 +2549,7 @@ fun ChatScreen(
                         }
                     }
                 }
-                uiState.messages.isEmpty() && !uiState.isLoading -> {
+                uiState.messages.isEmpty() && !uiState.isLoading && pendingCount == 0 -> {
                     Column(
                         modifier = Modifier
                             .align(Alignment.Center)
@@ -2326,12 +2571,38 @@ fun ChatScreen(
                 }
                 else -> {
                     val messageSpacing = if (LocalCompactMessages.current) 4.dp else 12.dp
-                    LazyColumn(
-                        state = listState,
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                        verticalArrangement = Arrangement.spacedBy(messageSpacing)
-                    ) {
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        AnimatedVisibility(
+                            visible = pendingCount > 0,
+                            enter = fadeIn(),
+                            exit = fadeOut()
+                        ) {
+                            PendingActionsBanner(
+                                pendingCount = pendingCount,
+                                onClick = {
+                                    coroutineScope.launch {
+                                        // Pending cards are rendered after the optional older-loader,
+                                        // all messages, and the optional revert banner.
+                                        val pendingStartIndex =
+                                            (if (uiState.hasOlderMessages) 1 else 0) +
+                                                    uiState.messages.size +
+                                                    (if (uiState.revert != null) 1 else 0)
+                                        val maxIndex = listState.layoutInfo.totalItemsCount.coerceAtLeast(1) - 1
+                                        listState.animateScrollToItem(pendingStartIndex.coerceIn(0, maxIndex))
+                                        autoScrollEnabled = false
+                                    }
+                                }
+                            )
+                        }
+
+                        LazyColumn(
+                            state = listState,
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth(),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(messageSpacing)
+                        ) {
                         // "Load earlier messages" button at the top
                     if (uiState.hasOlderMessages) {
                         item(key = "load_older") {
@@ -2467,7 +2738,8 @@ fun ChatScreen(
                                             snackbarHostState.showSnackbar(context.getString(R.string.chat_copied_clipboard))
                                         }
                                     }
-                                }
+                                },
+                                onMessageActionsRequested = { actionMenuMessage = it }
                             )
                         }
 
@@ -2514,6 +2786,7 @@ fun ChatScreen(
                                 }
                             )
                         }
+                    }
                     }
 
                     // Scroll-to-bottom FAB
@@ -2614,6 +2887,129 @@ fun ChatScreen(
                 showVariantPicker = false
             },
             onDismiss = { showVariantPicker = false },
+        )
+    }
+
+    actionMenuMessage?.let { selectedMessage ->
+        val selectedMessageStreaming = selectedMessage.parts.any { part ->
+            part is Part.Tool && part.state is ToolState.Running
+        }
+        MessageActionMenu(
+            actions = buildMessageCardActions(
+                chatMessage = selectedMessage,
+                selectedMessageStreaming = selectedMessageStreaming,
+                sessionBusy = sessionBusyForMessageActions,
+                sessionReady = sessionReadyForMessageActions,
+            ),
+            onActionSelected = { action ->
+                actionMenuMessage = null
+                when (action) {
+                    MessageCardAction.CopyText -> {
+                        clipboardManager.setText(AnnotatedString(messagePlainText(selectedMessage)))
+                        coroutineScope.launch {
+                            snackbarHostState.showSnackbar(context.getString(R.string.message_action_copied))
+                        }
+                    }
+                    MessageCardAction.CopyMarkdown -> {
+                        clipboardManager.setText(AnnotatedString(messageMarkdown(selectedMessage)))
+                        coroutineScope.launch {
+                            snackbarHostState.showSnackbar(context.getString(R.string.message_action_copied))
+                        }
+                    }
+                    MessageCardAction.QuoteIntoInput -> {
+                        val quotedText = quoteMessageText(selectedMessage)
+                        val updatedText = if (inputText.text.isBlank()) {
+                            quotedText
+                        } else {
+                            inputText.text + "\n\n" + quotedText
+                        }
+                        inputText = TextFieldValue(updatedText, TextRange(updatedText.length))
+                        viewModel.updateDraftText(updatedText)
+                        coroutineScope.launch {
+                            snackbarHostState.showSnackbar(context.getString(R.string.message_action_quoted))
+                        }
+                    }
+                    MessageCardAction.ForkFromHere -> {
+                        val messageId = selectedMessage.message.id
+                        if (messageId.isBlank() || forkFromMessageInFlight) {
+                            coroutineScope.launch {
+                                snackbarHostState.showSnackbar(context.getString(R.string.message_action_fork_failed))
+                            }
+                        } else {
+                            forkFromMessageInFlight = true
+                            viewModel.forkSessionFromMessage(messageId) { session ->
+                                forkFromMessageInFlight = false
+                                if (session != null) {
+                                    onNavigateToSession(session.id, session.directory)
+                                } else {
+                                    coroutineScope.launch {
+                                        snackbarHostState.showSnackbar(context.getString(R.string.message_action_fork_failed))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    MessageCardAction.RestoreToHere -> {
+                        restoreConfirmMessage = selectedMessage
+                    }
+                }
+            },
+            onDismiss = { actionMenuMessage = null },
+        )
+    }
+
+    restoreConfirmMessage?.let { selectedMessage ->
+        AlertDialog(
+            onDismissRequest = { restoreConfirmMessage = null },
+            title = { Text(stringResource(R.string.message_action_restore_confirm_title)) },
+            text = { Text(stringResource(R.string.message_action_restore_confirm_body)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val messageId = selectedMessage.message.id
+                        val revertedText = if (selectedMessage.isUser) messagePlainText(selectedMessage) else null
+                        restoreConfirmMessage = null
+                        viewModel.revertMessage(messageId, revertedText) { ok ->
+                            coroutineScope.launch {
+                                snackbarHostState.showSnackbar(
+                                    if (ok) context.getString(R.string.chat_message_reverted) else context.getString(R.string.chat_message_revert_failed)
+                                )
+                            }
+                        }
+                    }
+                ) {
+                    Text(stringResource(R.string.chat_revert), color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { restoreConfirmMessage = null }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            }
+        )
+    }
+
+    if (forkFromMessageInFlight) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text(stringResource(R.string.message_action_fork_from_here)) },
+            text = {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        strokeWidth = 2.dp,
+                    )
+                    Text(
+                        text = stringResource(R.string.message_action_fork_from_here),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            confirmButton = {},
         )
     }
 
@@ -3668,12 +4064,13 @@ private fun resolveStepsStatus(stepParts: List<Part>): String {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 private fun ChatMessageBubble(
     chatMessage: ChatMessage,
     onRevert: (() -> Unit)? = null,
-    onCopyText: (() -> Unit)? = null
+    onCopyText: (() -> Unit)? = null,
+    onMessageActionsRequested: (ChatMessage) -> Unit = {},
 ) {
     val isUser = chatMessage.isUser
     val isAmoled = isAmoledTheme()
@@ -3770,6 +4167,10 @@ private fun ChatMessageBubble(
 
     // Check if any tool is currently running (show spinner)
     val hasRunningTool = stepParts.any { it is Part.Tool && it.state is ToolState.Running }
+    val requestMessageActions = {
+        performHaptic(hapticView, hapticOn)
+        onMessageActionsRequested(chatMessage)
+    }
 
         val bubbleContent: @Composable () -> Unit = {
         Surface(
@@ -3785,10 +4186,13 @@ private fun ChatMessageBubble(
             modifier = Modifier.fillMaxWidth()
         ) {
             val compact = LocalCompactMessages.current
-            Column(
+            val horizontalPadding = if (compact) 10.dp else 16.dp
+            val verticalPadding = if (compact) 8.dp else 14.dp
+            Box(modifier = Modifier.fillMaxWidth()) {
+                Column(
                     modifier = Modifier.padding(
-                        horizontal = if (compact) 10.dp else 16.dp,
-                        vertical = if (compact) 8.dp else 14.dp
+                        horizontal = horizontalPadding,
+                        vertical = verticalPadding
                     ),
                     verticalArrangement = Arrangement.spacedBy(if (compact) 4.dp else 10.dp)
                 ) {
@@ -3959,6 +4363,12 @@ private fun ChatMessageBubble(
                         )
                     }
                 }
+                MessageActionChromeGestureLayer(
+                    modifier = Modifier,
+                    verticalPadding = verticalPadding,
+                    onRequest = requestMessageActions,
+                )
+            }
         }
     }
 
@@ -4063,6 +4473,35 @@ private fun ChatMessageBubble(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun BoxScope.MessageActionChromeGestureLayer(
+    modifier: Modifier,
+    verticalPadding: Dp,
+    onRequest: () -> Unit,
+) {
+    val gestureModifier = Modifier.combinedClickable(
+        onClick = {},
+        onDoubleClick = onRequest,
+        onLongClick = onRequest,
+    )
+
+    Box(
+        modifier = modifier
+            .align(Alignment.TopCenter)
+            .fillMaxWidth()
+            .height(verticalPadding)
+            .then(gestureModifier)
+    )
+    Box(
+        modifier = modifier
+            .align(Alignment.BottomCenter)
+            .fillMaxWidth()
+            .height(verticalPadding)
+            .then(gestureModifier)
+    )
+}
+
 private fun isBubbleRenderablePart(part: Part): Boolean {
     return when (part) {
         is Part.Text,
@@ -4120,6 +4559,57 @@ private fun resolveUserCommandLabel(parts: List<Part>): String? {
             if (hasNonRenderableOnly) stringResource(R.string.chat_tool_running_command) else null
         }
         else -> stringResource(R.string.chat_tool_running_command)
+    }
+}
+
+/**
+ * Sticky cue shown above the chat list while permission or question cards wait below.
+ */
+@Composable
+private fun PendingActionsBanner(
+    pendingCount: Int,
+    onClick: () -> Unit
+) {
+    val hapticView = LocalView.current
+    val hapticOn = LocalHapticFeedbackEnabled.current
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.68f),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+            .clickable { performHaptic(hapticView, hapticOn); onClick() }
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                Icons.Default.PendingActions,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+                tint = MaterialTheme.colorScheme.onTertiaryContainer
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(R.string.chat_pending_actions, pendingCount),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer
+                )
+                Text(
+                    text = stringResource(R.string.chat_pending_tap_to_view),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.72f)
+                )
+            }
+            Icon(
+                Icons.Default.KeyboardArrowDown,
+                contentDescription = stringResource(R.string.chat_pending_tap_to_view),
+                modifier = Modifier.size(20.dp),
+                tint = MaterialTheme.colorScheme.onTertiaryContainer
+            )
+        }
     }
 }
 
@@ -4377,9 +4867,14 @@ private fun MarkdownContent(
         codeFence = safeHighlightedCodeFence,
         table = {
             DisableSelection {
-                Box(modifier = Modifier.horizontalDragGuard()) {
-                    MarkdownTable(it.content, it.node, bodyStyle)
-                }
+                val rawTable = runCatching {
+                    it.content.substring(it.node.startOffset, it.node.endOffset)
+                }.getOrElse { _ -> it.content }
+                ScrollableMarkdownTable(
+                    rawTable = rawTable,
+                    textStyle = bodyStyle,
+                    textColor = textColor
+                )
             }
         }
     )
@@ -4394,6 +4889,184 @@ private fun MarkdownContent(
             modifier = Modifier.fillMaxWidth()
         )
     }
+}
+
+@Composable
+private fun ScrollableMarkdownTable(
+    rawTable: String,
+    textStyle: TextStyle,
+    textColor: Color
+) {
+    val parsed = remember(rawTable) { parseMarkdownTable(rawTable) }
+    if (parsed == null) {
+        Text(
+            text = rawTable.trim(),
+            style = textStyle,
+            color = textColor
+        )
+        return
+    }
+
+    val (header, rows) = parsed
+    val columnCount = header.size
+    val scrollState = rememberScrollState()
+    val tableShape = RoundedCornerShape(8.dp)
+    val borderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)
+    val dividerColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalDragGuard()
+                .horizontalScroll(scrollState)
+        ) {
+            Column(
+                modifier = Modifier
+                    .clip(tableShape)
+                    .border(BorderStroke(1.dp, borderColor), tableShape)
+                    .background(MaterialTheme.colorScheme.surface)
+            ) {
+                MarkdownTableRow(
+                    cells = header,
+                    columnCount = columnCount,
+                    isHeader = true,
+                    textStyle = textStyle,
+                    textColor = textColor,
+                    dividerColor = dividerColor
+                )
+                if (rows.isNotEmpty()) {
+                    HorizontalDivider(color = dividerColor)
+                }
+                rows.forEachIndexed { index, row ->
+                    MarkdownTableRow(
+                        cells = row,
+                        columnCount = columnCount,
+                        isHeader = false,
+                        textStyle = textStyle,
+                        textColor = textColor,
+                        dividerColor = dividerColor
+                    )
+                    if (index != rows.lastIndex) {
+                        HorizontalDivider(color = dividerColor)
+                    }
+                }
+            }
+        }
+        if (scrollState.maxValue > 0) {
+            Text(
+                text = stringResource(R.string.chat_table_scroll_hint),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 4.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun MarkdownTableRow(
+    cells: List<String>,
+    columnCount: Int,
+    isHeader: Boolean,
+    textStyle: TextStyle,
+    textColor: Color,
+    dividerColor: Color
+) {
+    val backgroundColor = if (isHeader) {
+        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
+    } else {
+        MaterialTheme.colorScheme.surface
+    }
+    Row(
+        modifier = Modifier
+            .height(IntrinsicSize.Min)
+            .background(backgroundColor)
+    ) {
+        repeat(columnCount) { index ->
+            if (index > 0) {
+                VerticalDivider(
+                    color = dividerColor,
+                    modifier = Modifier.fillMaxHeight()
+                )
+            }
+            Text(
+                text = cells.getOrElse(index) { "" },
+                style = textStyle.copy(
+                    fontWeight = if (isHeader) FontWeight.SemiBold else textStyle.fontWeight
+                ),
+                color = textColor,
+                modifier = Modifier
+                    .width(176.dp)
+                    .padding(horizontal = 12.dp, vertical = 10.dp)
+            )
+        }
+    }
+}
+
+internal fun parseMarkdownTable(raw: String): Pair<List<String>, List<List<String>>>? {
+    val lines = raw.lines()
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+    if (lines.size < 2) return null
+
+    val header = splitMarkdownTableRow(lines[0]).map(::cleanInlineTableMarkdown)
+    val divider = splitMarkdownTableRow(lines[1])
+    if (header.isEmpty() || divider.size != header.size) return null
+
+    val dividerPattern = Regex(":?-{3,}:?")
+    if (!divider.all { dividerPattern.matches(it.trim()) }) return null
+
+    val rows = lines.drop(2)
+        .map { line -> splitMarkdownTableRow(line).map(::cleanInlineTableMarkdown) }
+        .filter { cells -> cells.any { it.isNotBlank() } }
+        .map { cells -> List(header.size) { index -> cells.getOrElse(index) { "" } } }
+    return header to rows
+}
+
+internal fun splitMarkdownTableRow(line: String): List<String> {
+    var row = line.trim()
+    if (row.startsWith("|")) {
+        row = row.drop(1)
+    }
+    if (row.endsWith("|") && !row.isPipeEscaped(row.lastIndex)) {
+        row = row.dropLast(1)
+    }
+
+    val cells = mutableListOf<String>()
+    val current = StringBuilder()
+    row.forEachIndexed { index, char ->
+        if (char == '|' && !row.isPipeEscaped(index)) {
+            cells += current.toString().trim()
+            current.clear()
+        } else {
+            current.append(char)
+        }
+    }
+    cells += current.toString().trim()
+    return cells
+}
+
+internal fun cleanInlineTableMarkdown(cell: String): String {
+    return cell
+        .replace(Regex("(?i)<br\\s*/?>"), "\n")
+        .replace("**", "")
+        .replace("`", "")
+        .replace("\\|", "|")
+        .trim()
+}
+
+private fun String.isPipeEscaped(index: Int): Boolean {
+    var slashCount = 0
+    var position = index - 1
+    while (position >= 0 && this[position] == '\\') {
+        slashCount++
+        position--
+    }
+    return slashCount % 2 == 1
 }
 
 private val HtmlDocumentHintRegex = Regex("(?is)<!doctype\\s+html\\b|<\\s*html\\b")
@@ -6280,6 +6953,7 @@ private fun ChatInputBar(
     onSend: () -> Unit,
     isSending: Boolean,
     isBusy: Boolean = false,
+    sendDisabledReasonResId: Int? = null,
     messages: List<ChatMessage> = emptyList(),
     attachments: List<ImageAttachment> = emptyList(),
     onAttach: () -> Unit = {},
@@ -6321,7 +6995,12 @@ private fun ChatInputBar(
     }
 
     val text = textFieldValue.text
-    val canSend = (text.isNotBlank() || attachments.isNotEmpty()) && !isSending && (!isShellMode || !isBusy)
+    val hasSendContent = text.isNotBlank() || attachments.isNotEmpty()
+    val hasBlockingReason = sendDisabledReasonResId != null
+    val canSend = hasSendContent && !isSending && (!isShellMode || !isBusy) && !hasBlockingReason
+    val sendDisabledReasonText = sendDisabledReasonResId
+        ?.takeIf { !canSend }
+        ?.let { stringResource(it) }
     var previewAttachmentIndex by remember { mutableStateOf(-1) }
 
     // Build merged slash commands: client commands + server commands (deduplicated)
@@ -6963,6 +7642,20 @@ private fun ChatInputBar(
 
                     }
                 }
+            }
+
+            if (sendDisabledReasonText != null) {
+                Text(
+                    text = sendDisabledReasonText,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(end = 8.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.End,
+                )
             }
         }
     }
