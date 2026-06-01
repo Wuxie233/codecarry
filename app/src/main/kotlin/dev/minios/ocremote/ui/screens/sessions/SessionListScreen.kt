@@ -318,11 +318,21 @@ fun SessionListScreen(
         ) {
             when {
                 uiState.isLoading && !uiState.hasAnySessions -> {
-                    PulsingDotsIndicator(
+                    Column(
                         modifier = Modifier.align(Alignment.Center),
-                        dotSize = 12.dp,
-                        dotSpacing = 8.dp
-                    )
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        PulsingDotsIndicator(
+                            dotSize = 12.dp,
+                            dotSpacing = 8.dp
+                        )
+                        Text(
+                            text = stringResource(R.string.sessions_loading),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
                 uiState.error != null && !uiState.hasAnySessions -> {
                     Column(

@@ -213,11 +213,21 @@ fun HomeScreen(
         ) {
             when {
                 uiState.isLoading -> {
-                    PulsingDotsIndicator(
+                    Column(
                         modifier = Modifier.align(Alignment.Center),
-                        dotSize = 12.dp,
-                        dotSpacing = 8.dp
-                    )
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        PulsingDotsIndicator(
+                            dotSize = 12.dp,
+                            dotSpacing = 8.dp
+                        )
+                        Text(
+                            text = stringResource(R.string.home_loading_servers),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
                 else -> {
                     val localServer = uiState.servers.firstOrNull { it.url == LocalServerManager.LOCAL_SERVER_URL }

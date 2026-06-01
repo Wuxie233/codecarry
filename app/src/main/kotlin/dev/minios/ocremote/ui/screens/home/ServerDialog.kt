@@ -6,6 +6,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -15,9 +18,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import dev.minios.ocremote.R
 import dev.minios.ocremote.domain.model.ServerConfig
@@ -86,6 +91,7 @@ fun ServerDialog(
     var url by remember { mutableStateOf(server?.url ?: "http://") }
     var username by remember { mutableStateOf(server?.username ?: "opencode") }
     var password by remember { mutableStateOf(server?.password ?: "") }
+    var passwordVisible by remember { mutableStateOf(false) }
     var autoConnect by remember { mutableStateOf(server?.autoConnect ?: false) }
 
     var urlError by remember { mutableStateOf<String?>(null) }
@@ -94,6 +100,9 @@ fun ServerDialog(
     val urlLabel = stringResource(R.string.server_url)
     val usernameLabel = stringResource(R.string.server_username)
     val passwordLabel = stringResource(R.string.server_password)
+    val passwordToggleDescription = stringResource(
+        if (passwordVisible) R.string.server_password_hide else R.string.server_password_show
+    )
     val saveLabel = stringResource(R.string.server_save)
     val addServerLabel = stringResource(R.string.server_add)
     val editServerLabel = stringResource(R.string.home_edit)
@@ -150,6 +159,7 @@ fun ServerDialog(
                         label = { Text(nameLabel) },
                         placeholder = { Text(stringResource(R.string.server_name_hint)) },
                         singleLine = true,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
                         modifier = Modifier
                             .fillMaxWidth()
                             .semantics { contentDescription = nameLabel }
@@ -169,7 +179,10 @@ fun ServerDialog(
                         } else {
                             { Text(stringResource(R.string.server_url_example)) }
                         },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Uri,
+                            imeAction = ImeAction.Next
+                        ),
                         singleLine = true,
                         modifier = Modifier
                             .fillMaxWidth()
@@ -182,6 +195,7 @@ fun ServerDialog(
                         label = { Text(usernameLabel) },
                         placeholder = { Text(stringResource(R.string.server_username_hint)) },
                         singleLine = true,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
                         modifier = Modifier
                             .fillMaxWidth()
                             .semantics { contentDescription = usernameLabel }
@@ -191,8 +205,19 @@ fun ServerDialog(
                         value = password,
                         onValueChange = { password = it },
                         label = { Text(passwordLabel) },
-                        visualTransformation = PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Password,
+                            imeAction = ImeAction.Done
+                        ),
+                        trailingIcon = {
+                            IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                                Icon(
+                                    imageVector = if (passwordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                    contentDescription = passwordToggleDescription
+                                )
+                            }
+                        },
                         singleLine = true,
                         modifier = Modifier
                             .fillMaxWidth()
