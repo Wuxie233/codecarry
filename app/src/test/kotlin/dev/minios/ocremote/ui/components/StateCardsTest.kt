@@ -24,7 +24,7 @@ class StateCardsTest {
     fun errorStateCard_definesRetryActionText() {
         val source = java.io.File("src/main/kotlin/dev/minios/ocremote/ui/components/StateCards.kt").readText()
 
-        assertTrue(source.contains("Retry"))
+        assertTrue(source.contains("val retryLabel = stringResource(R.string.retry)"))
     }
 
     @Test
@@ -58,7 +58,7 @@ class StateCardsTest {
         val source = java.io.File("src/main/kotlin/dev/minios/ocremote/ui/components/StateCards.kt").readText()
 
         val retryButtonContentDescription = Regex(
-            """Button\([\s\S]*?onClick\s*=\s*retry,[\s\S]*?\.semantics\s*\{\s*contentDescription\s*=\s*"Retry loading state"\s*\}[\s\S]*?\)\s*\{\s*Text\("Retry"\)\s*\}""",
+            """Button\([\s\S]*?onClick\s*=\s*retry,[\s\S]*?\.semantics\s*\{\s*contentDescription\s*=\s*retryLabel\s*\}[\s\S]*?\)\s*\{\s*Text\(retryLabel\)\s*\}""",
         )
         assertTrue(retryButtonContentDescription.containsMatchIn(source))
     }

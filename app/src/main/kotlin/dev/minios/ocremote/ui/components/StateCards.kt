@@ -17,10 +17,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import dev.minios.ocremote.R
 
 @Composable
 fun LoadingStateCard(
@@ -92,6 +94,8 @@ fun ErrorStateCard(
     onRetry: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
+    val retryLabel = stringResource(R.string.retry)
+
     StateCardSurface(modifier = modifier) {
         Column(
             modifier = Modifier
@@ -119,9 +123,9 @@ fun ErrorStateCard(
                     onClick = retry,
                     modifier = Modifier
                         .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
-                        .semantics { contentDescription = "Retry loading state" },
+                        .semantics { contentDescription = retryLabel },
                 ) {
-                    Text("Retry")
+                    Text(retryLabel)
                 }
             }
         }
