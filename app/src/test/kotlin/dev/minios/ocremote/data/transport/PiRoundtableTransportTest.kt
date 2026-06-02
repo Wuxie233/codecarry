@@ -75,6 +75,24 @@ class PiTransportTest {
     }
 
     @Test
+    fun `fallback then skip fixture preserves failed turn events and resumes round`() = runTest {
+        val events = PiRoundtableEventProcessor(json).processSnapshot(fixtureEvents("fallback-then-skip.json"))
+        val outcome = assembleTransportEvents(events)
+
+        assertCanonicalOutcome(outcome)
+        assertEquals("completed", outcome.roundEndReason)
+        assertFalse(outcome.messages.containsKey("turn-turing-001"))
+        assertEquals(
+            listOf("agent_turn_start", "agent_retry", "agent_fallback", "agent_error", "awaiting_skip"),
+            events.filter { event -> event.envelope.turnId == "turn-turing-001" }.map { event -> event.envelope.type },
+        )
+        val resumedAdaTurn = events.filterIsInstance<PiTransportEvent.AgentTurnStart>()
+            .first { event -> event.envelope.turnId == "turn-ada-001" }
+        assertEquals("Skip command removed the failed persona from the active schedule", resumedAdaTurn.reason)
+        assertTrue(outcome.messageIntegrity.all { it })
+    }
+
+    @Test
     fun `unknown type and extra fields are ignored without crashing`() = runTest {
         val happy = fixtureEvents("happy-one-round.json")
         val unknown = happy.first().copy(
