@@ -94,7 +94,12 @@ sealed class Message {
         val error: ErrorInfo? = null,
         val structured: JsonElement? = null,
         val variant: String? = null,
-        val summary: Boolean? = null
+        val summary: Boolean? = null,
+        val senderId: String? = null,
+        val senderName: String? = null,
+        val mbti: String? = null,
+        val senderRole: String? = null,
+        val colorSeed: String? = null
     ) : Message() {
         @Serializable
         data class PathInfo(

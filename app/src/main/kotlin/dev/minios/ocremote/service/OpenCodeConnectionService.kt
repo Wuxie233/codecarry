@@ -457,11 +457,10 @@ class OpenCodeConnectionService : Service() {
                                 attempt = 0
                                 updatePersistentNotification()
                             }
-                            val event = when (transportEvent) {
-                                is TransportEvent.OpenCode -> transportEvent.event
-                                is TransportEvent.Pi -> null
+                            when (transportEvent) {
+                                is TransportEvent.OpenCode -> processEvent(server, transportEvent.event)
+                                is TransportEvent.Pi -> eventReducer.processEvent(transportEvent, server.id)
                             }
-                            if (event != null) processEvent(server, event)
                         }
 
                     // Flow completed normally (server closed connection)

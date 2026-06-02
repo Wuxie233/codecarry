@@ -3,6 +3,8 @@ package dev.minios.ocremote.data.repository
 import android.util.Log
 import dev.minios.ocremote.BuildConfig
 import dev.minios.ocremote.domain.model.*
+import dev.minios.ocremote.domain.transport.PiTransportEvent
+import dev.minios.ocremote.domain.transport.TransportEvent
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -65,6 +67,22 @@ class EventReducer @Inject constructor() {
     
     private val _projectInfo = MutableStateFlow<Project?>(null)
     val projectInfo: StateFlow<Project?> = _projectInfo.asStateFlow()
+
+    private val _serverRoundtables = MutableStateFlow<Map<String, Set<String>>>(emptyMap())
+
+    private val _roundtables = MutableStateFlow<Map<String, Roundtable>>(emptyMap())
+    val roundtables: StateFlow<Map<String, Roundtable>> = _roundtables.asStateFlow()
+
+    private val _roundtableMessages = MutableStateFlow<Map<String, List<Message>>>(emptyMap())
+    val roundtableMessages: StateFlow<Map<String, List<Message>>> = _roundtableMessages.asStateFlow()
+
+    private val _roundtableParts = MutableStateFlow<Map<String, List<Part>>>(emptyMap())
+    val roundtableParts: StateFlow<Map<String, List<Part>>> = _roundtableParts.asStateFlow()
+
+    private val _roundtableEvents = MutableStateFlow<Map<String, List<PiTransportEvent>>>(emptyMap())
+    val roundtableEvents: StateFlow<Map<String, List<PiTransportEvent>>> = _roundtableEvents.asStateFlow()
+
+    private val piTurnInfo = mutableMapOf<String, PiTurnInfo>()
     
     // ============ Event Processing ============
     
@@ -107,6 +125,192 @@ class EventReducer @Inject constructor() {
             is SseEvent.ProjectUpdated -> handleProjectUpdated(event)
         }
     }
+
+    fun processEvent(event: TransportEvent, serverId: String) {
+        when (event) {
+            is TransportEvent.OpenCode -> processEvent(event.event, serverId)
+            is TransportEvent.Pi -> processPiEvent(event.event, serverId)
+        }
+    }
+
+    private fun processPiEvent(event: PiTransportEvent, serverId: String) {
+        val roundtableId = event.envelope.roundId
+        trackRoundtable(serverId, roundtableId)
+        appendRoundtableEvent(roundtableId, event)
+
+        when (event) {
+            is PiTransportEvent.RoundStart -> updateRoundtable(
+                event = event,
+                status = Roundtable.Status.Running,
+                topic = event.topic,
+                rosterSummary = event.participantIds.joinToString(", "),
+                incrementRound = true,
+            )
+            is PiTransportEvent.AgentTurnStart -> handlePiAgentTurnStart(event)
+            is PiTransportEvent.MessageDelta -> handlePiMessageDelta(event)
+            is PiTransportEvent.MessageEnd -> handlePiMessageEnd(event)
+            is PiTransportEvent.ModeratorSynthesis -> handlePiModeratorSynthesis(event)
+            is PiTransportEvent.AgentRetry -> updateRoundtable(event, Roundtable.Status.Running)
+            is PiTransportEvent.AgentFallback -> updateRoundtable(event, Roundtable.Status.Running)
+            is PiTransportEvent.AgentError -> updateRoundtable(event, Roundtable.Status.Error)
+            is PiTransportEvent.AwaitingSkip -> updateRoundtable(event, Roundtable.Status.AwaitingSkip)
+            is PiTransportEvent.AwaitingCommand -> updateRoundtable(event, Roundtable.Status.AwaitingCommand)
+            is PiTransportEvent.RoundEnd -> updateRoundtable(
+                event = event,
+                status = Roundtable.Status.Completed,
+                completedAt = event.envelope.ts,
+            )
+            is PiTransportEvent.Error -> updateRoundtable(event, Roundtable.Status.Error)
+        }
+    }
+
+    private fun trackRoundtable(serverId: String, roundtableId: String) {
+        _serverRoundtables.update { current ->
+            val existing = current[serverId] ?: emptySet()
+            current + (serverId to (existing + roundtableId))
+        }
+    }
+
+    private fun appendRoundtableEvent(roundtableId: String, event: PiTransportEvent) {
+        _roundtableEvents.update { current ->
+            val events = (current[roundtableId].orEmpty() + event)
+                .sortedWith(compareBy<PiTransportEvent> { it.envelope.sequence }.thenBy { it.envelope.eventId })
+            current + (roundtableId to events)
+        }
+    }
+
+    private fun updateRoundtable(
+        event: PiTransportEvent,
+        status: Roundtable.Status,
+        topic: String? = null,
+        rosterSummary: String? = null,
+        incrementRound: Boolean = false,
+        completedAt: String? = null,
+    ) {
+        val roundtableId = event.envelope.roundId
+        _roundtables.update { current ->
+            val existing = current[roundtableId]
+            val time = existing?.time ?: Roundtable.Time(created = event.envelope.ts)
+            val updated = (existing ?: Roundtable(id = roundtableId)).copy(
+                topic = topic ?: existing?.topic,
+                status = status,
+                roundCount = if (incrementRound) (existing?.roundCount ?: 0) + 1 else existing?.roundCount ?: 0,
+                rosterSummary = rosterSummary ?: existing?.rosterSummary,
+                time = time.copy(updated = event.envelope.ts, completed = completedAt ?: time.completed),
+            )
+            current + (roundtableId to updated)
+        }
+    }
+
+    private fun handlePiAgentTurnStart(event: PiTransportEvent.AgentTurnStart) {
+        updateRoundtable(event, Roundtable.Status.Running)
+        val turnId = event.envelope.turnId ?: return
+        piTurnInfo[turnId] = PiTurnInfo(
+            roundtableId = event.envelope.roundId,
+            turnId = turnId,
+            providerId = event.providerId,
+            modelId = event.model,
+            author = event.envelope.author,
+            startedSequence = event.envelope.sequence,
+        )
+    }
+
+    private fun handlePiMessageDelta(event: PiTransportEvent.MessageDelta) {
+        updateRoundtable(event, Roundtable.Status.Running)
+        val turnId = event.envelope.turnId ?: return
+        ensurePiMessage(event.envelope.roundId, turnId, event.envelope.sequence, event.envelope.author)
+        ensurePiTextPart(event.envelope.roundId, turnId)
+        _roundtableParts.update { current ->
+            appendPartDelta(current, messageId = turnId, partId = piTextPartId(turnId), delta = event.chunk)
+        }
+    }
+
+    private fun handlePiMessageEnd(event: PiTransportEvent.MessageEnd) {
+        updateRoundtable(event, Roundtable.Status.Running)
+        val turnId = event.envelope.turnId ?: return
+        ensurePiMessage(event.envelope.roundId, turnId, event.envelope.sequence, event.envelope.author, finish = event.finishReason)
+        ensurePiTextPart(event.envelope.roundId, turnId)
+        _roundtableParts.update { current ->
+            upsertPart(
+                current,
+                Part.Text(
+                    id = piTextPartId(turnId),
+                    sessionId = event.envelope.roundId,
+                    messageId = turnId,
+                    text = event.assembledText,
+                )
+            )
+        }
+        _roundtableMessages.update { current ->
+            upsertMessage(current, event.envelope.roundId, piAssistantMessage(event.envelope.roundId, turnId, event.envelope.sequence, event.envelope.author, finish = event.finishReason))
+        }
+    }
+
+    private fun handlePiModeratorSynthesis(event: PiTransportEvent.ModeratorSynthesis) {
+        updateRoundtable(event, Roundtable.Status.Running)
+        val messageId = event.envelope.turnId ?: "moderator-${event.envelope.eventId}"
+        _roundtableMessages.update { current ->
+            upsertMessage(current, event.envelope.roundId, piAssistantMessage(event.envelope.roundId, messageId, event.envelope.sequence, event.envelope.author, finish = "stop"))
+        }
+        _roundtableParts.update { current ->
+            upsertPart(
+                current,
+                Part.Text(
+                    id = piTextPartId(messageId),
+                    sessionId = event.envelope.roundId,
+                    messageId = messageId,
+                    text = event.markdownBody,
+                )
+            )
+        }
+    }
+
+    private fun ensurePiMessage(roundtableId: String, turnId: String, sequence: Long, author: dev.minios.ocremote.domain.transport.PiAuthor, finish: String? = null) {
+        _roundtableMessages.update { current ->
+            val exists = current[roundtableId].orEmpty().any { message -> message.id == turnId }
+            if (exists && finish == null) current else upsertMessage(current, roundtableId, piAssistantMessage(roundtableId, turnId, sequence, author, finish))
+        }
+    }
+
+    private fun ensurePiTextPart(roundtableId: String, turnId: String) {
+        _roundtableParts.update { current ->
+            val partId = piTextPartId(turnId)
+            val exists = current[turnId].orEmpty().any { part -> part.id == partId }
+            if (exists) current else upsertPart(
+                current,
+                Part.Text(
+                    id = partId,
+                    sessionId = roundtableId,
+                    messageId = turnId,
+                )
+            )
+        }
+    }
+
+    private fun piAssistantMessage(
+        roundtableId: String,
+        turnId: String,
+        sequence: Long,
+        author: dev.minios.ocremote.domain.transport.PiAuthor,
+        finish: String? = null,
+    ): Message.Assistant {
+        val turn = piTurnInfo[turnId]
+        return Message.Assistant(
+            id = turnId,
+            sessionId = roundtableId,
+            time = TimeInfo(created = turn?.startedSequence ?: sequence, completed = if (finish == null) null else sequence),
+            modelId = turn?.modelId,
+            providerId = turn?.providerId,
+            finish = finish,
+            senderId = author.id,
+            senderName = author.name,
+            mbti = author.mbti,
+            senderRole = author.role,
+            colorSeed = author.colorSeed,
+        )
+    }
+
+    private fun piTextPartId(turnId: String): String = "$turnId-text"
     
     // ============ Server Events ============
     
@@ -196,19 +400,7 @@ class EventReducer @Inject constructor() {
     
     private fun handleMessageUpdated(event: SseEvent.MessageUpdated) {
         val sessionId = event.info.sessionId
-        _messages.update { current ->
-            val sessionMessages = current[sessionId]?.toMutableList() ?: mutableListOf()
-            val existingIndex = sessionMessages.indexOfFirst { it.id == event.info.id }
-            
-            if (existingIndex >= 0) {
-                sessionMessages[existingIndex] = event.info
-            } else {
-                sessionMessages.add(event.info)
-                sessionMessages.sortBy { it.time.toString() } // Sort by time
-            }
-            
-            current + (sessionId to sessionMessages)
-        }
+        _messages.update { current -> upsertMessage(current, sessionId, event.info) }
     }
     
     private fun handleMessageRemoved(event: SseEvent.MessageRemoved) {
@@ -232,39 +424,66 @@ class EventReducer @Inject constructor() {
     private fun handleMessagePartUpdated(event: SseEvent.MessagePartUpdated) {
         if (!event.part.isRenderablePart()) return
 
-        val messageId = event.part.messageId
-        _parts.update { current ->
-            val messageParts = current[messageId]?.toMutableList() ?: mutableListOf()
-            val existingIndex = messageParts.indexOfFirst { it.id == event.part.id }
-            
-            if (existingIndex >= 0) {
-                messageParts[existingIndex] = event.part
-            } else {
-                messageParts.add(event.part)
-            }
-            
-            current + (messageId to messageParts)
-        }
+        _parts.update { current -> upsertPart(current, event.part) }
     }
     
     private fun handleMessagePartDelta(event: SseEvent.MessagePartDelta) {
         // Append text delta to existing part
-        _parts.update { current ->
-            val messageParts = current[event.messageId]?.toMutableList() ?: return@update current
-            val partIndex = messageParts.indexOfFirst { it.id == event.partId }
-            
-            if (partIndex < 0) return@update current
-            
-            val part = messageParts[partIndex]
-            val updatedPart = when (part) {
-                is Part.Text -> part.copy(text = part.text + event.delta)
-                is Part.Reasoning -> part.copy(text = part.text + event.delta)
-                else -> part
-            }
-            
-            messageParts[partIndex] = updatedPart
-            current + (event.messageId to messageParts)
+        _parts.update { current -> appendPartDelta(current, event.messageId, event.partId, event.delta) }
+    }
+
+    private fun upsertMessage(
+        current: Map<String, List<Message>>,
+        conversationId: String,
+        message: Message,
+    ): Map<String, List<Message>> {
+        val conversationMessages = current[conversationId]?.toMutableList() ?: mutableListOf()
+        val existingIndex = conversationMessages.indexOfFirst { it.id == message.id }
+
+        if (existingIndex >= 0) {
+            conversationMessages[existingIndex] = message
+        } else {
+            conversationMessages.add(message)
+            conversationMessages.sortBy { it.time.created }
         }
+
+        return current + (conversationId to conversationMessages)
+    }
+
+    private fun upsertPart(current: Map<String, List<Part>>, part: Part): Map<String, List<Part>> {
+        if (!part.isRenderablePart()) return current
+        val messageParts = current[part.messageId]?.toMutableList() ?: mutableListOf()
+        val existingIndex = messageParts.indexOfFirst { it.id == part.id }
+
+        if (existingIndex >= 0) {
+            messageParts[existingIndex] = part
+        } else {
+            messageParts.add(part)
+        }
+
+        return current + (part.messageId to messageParts)
+    }
+
+    private fun appendPartDelta(
+        current: Map<String, List<Part>>,
+        messageId: String,
+        partId: String,
+        delta: String,
+    ): Map<String, List<Part>> {
+        val messageParts = current[messageId]?.toMutableList() ?: return current
+        val partIndex = messageParts.indexOfFirst { it.id == partId }
+
+        if (partIndex < 0) return current
+
+        val part = messageParts[partIndex]
+        val updatedPart = when (part) {
+            is Part.Text -> part.copy(text = part.text + delta)
+            is Part.Reasoning -> part.copy(text = part.text + delta)
+            else -> part
+        }
+
+        messageParts[partIndex] = updatedPart
+        return current + (messageId to messageParts)
     }
     
     private fun handleMessagePartRemoved(event: SseEvent.MessagePartRemoved) {
@@ -447,6 +666,12 @@ class EventReducer @Inject constructor() {
         _todos.value = emptyMap()
         _vcsBranch.value = null
         _projectInfo.value = null
+        _serverRoundtables.value = emptyMap()
+        _roundtables.value = emptyMap()
+        _roundtableMessages.value = emptyMap()
+        _roundtableParts.value = emptyMap()
+        _roundtableEvents.value = emptyMap()
+        piTurnInfo.clear()
     }
     
     /**
@@ -455,13 +680,16 @@ class EventReducer @Inject constructor() {
      */
     fun clearForServer(serverId: String) {
         val sessionIds = _serverSessions.value[serverId] ?: emptySet()
-        if (sessionIds.isEmpty()) {
+        val roundtableIds = _serverRoundtables.value[serverId] ?: emptySet()
+        if (sessionIds.isEmpty() && roundtableIds.isEmpty()) {
             _serverSessions.update { it - serverId }
+            _serverRoundtables.update { it - serverId }
             return
         }
         
         // Remove the server's session tracking
         _serverSessions.update { it - serverId }
+        _serverRoundtables.update { it - serverId }
         
         // Remove sessions
         _sessions.update { it.filter { s -> s.id !in sessionIds } }
@@ -481,11 +709,23 @@ class EventReducer @Inject constructor() {
         _messages.update { it - sessionIds }
         _parts.update { it - messageIds }
 
+        val roundtableMessageIds = _roundtableMessages.value
+            .filterKeys { it in roundtableIds }
+            .values
+            .flatten()
+            .map { it.id }
+            .toSet()
+        _roundtables.update { it - roundtableIds }
+        _roundtableMessages.update { it - roundtableIds }
+        _roundtableParts.update { it - roundtableMessageIds }
+        _roundtableEvents.update { it - roundtableIds }
+        piTurnInfo.keys.removeAll(roundtableMessageIds)
+
         if (_activeSessionId.value in sessionIds) {
             _activeSessionId.value = null
         }
 
-        if (BuildConfig.DEBUG) Log.d(TAG, "Clearing state for server $serverId (${sessionIds.size} sessions)")
+        if (BuildConfig.DEBUG) Log.d(TAG, "Clearing state for server $serverId (${sessionIds.size} sessions, ${roundtableIds.size} roundtables)")
     }
     
     // ============ Todo Events ============
@@ -506,3 +746,12 @@ class EventReducer @Inject constructor() {
         _projectInfo.value = event.info
     }
 }
+
+private data class PiTurnInfo(
+    val roundtableId: String,
+    val turnId: String,
+    val providerId: String,
+    val modelId: String,
+    val author: dev.minios.ocremote.domain.transport.PiAuthor,
+    val startedSequence: Long,
+)

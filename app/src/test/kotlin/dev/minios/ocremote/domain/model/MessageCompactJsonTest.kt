@@ -38,6 +38,25 @@ class MessageCompactJsonTest {
     }
 
     @Test
+    fun `assistant without sender metadata serializes as legacy JSON`() {
+        val legacy = Message.Assistant(
+            id = "a",
+            sessionId = "s",
+            time = TimeInfo(created = 1L, completed = 2L),
+            parentId = "u",
+            modelId = "gpt",
+            providerId = "openai",
+        )
+
+        val encoded = json.encodeToString(Message.Assistant.serializer(), legacy)
+
+        assertEquals(
+            """{"id":"a","sessionID":"s","role":"assistant","time":{"created":1,"completed":2},"parentID":"u","modelID":"gpt","providerID":"openai"}""",
+            encoded,
+        )
+    }
+
+    @Test
     fun `decodes message list mixing user and assistant with missing time`() {
         val list = json.decodeFromString(
             kotlinx.serialization.builtins.ListSerializer(MessageSerializer),
