@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AssistChip
@@ -66,6 +67,7 @@ import dev.minios.ocremote.ui.screens.chat.piSenderAccentColor
 @Composable
 fun RoundtableCenterScreen(
     onNavigateBack: () -> Unit,
+    onOpenPersonaLibrary: () -> Unit,
     viewModel: RoundtableCenterViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -92,6 +94,9 @@ fun RoundtableCenterScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = onOpenPersonaLibrary) {
+                        Icon(Icons.Default.Tune, contentDescription = "Open persona library")
+                    }
                     IconButton(onClick = viewModel::refresh) {
                         Icon(Icons.Default.Refresh, contentDescription = "Refresh roundtables")
                     }

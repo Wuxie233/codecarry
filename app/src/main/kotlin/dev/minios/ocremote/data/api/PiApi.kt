@@ -6,7 +6,9 @@ import io.ktor.client.plugins.timeout
 import io.ktor.client.request.header
 import io.ktor.client.request.prepareGet
 import io.ktor.client.request.delete
+import io.ktor.client.request.get
 import io.ktor.client.request.post
+import io.ktor.client.request.put
 import io.ktor.client.request.setBody
 import io.ktor.client.request.url
 import io.ktor.client.statement.bodyAsChannel
@@ -144,6 +146,46 @@ class PiApi(
         return response.status.isSuccess()
     }
 
+
+    suspend fun listPersonas(conn: PiConnection): List<PiPersonaDto> {
+        val body = httpClient.prepareGet("${conn.baseUrl}/personas") {
+            applyPiHeaders(conn)
+        }.execute { response ->
+            if (!response.status.isSuccess()) throw PiApiException("GET /personas failed with HTTP ${response.status.value}")
+            response.bodyAsText()
+        }
+        return decodePersonaList(body)
+    }
+
+    suspend fun getPersona(conn: PiConnection, personaId: String): PiPersonaDto {
+        return httpClient.get("${conn.baseUrl}/personas/$personaId") {
+            applyPiHeaders(conn)
+        }.bodyFromPersonaEnvelope("GET /personas/:id")
+    }
+
+    suspend fun createPersona(conn: PiConnection, persona: PiPersonaDto): PiPersonaDto {
+        return httpClient.post("${conn.baseUrl}/personas") {
+            applyPiHeaders(conn)
+            contentType(ContentType.Application.Json)
+            setBody(persona)
+        }.bodyFromPersonaEnvelope("POST /personas")
+    }
+
+    suspend fun updatePersona(conn: PiConnection, personaId: String, persona: PiPersonaDto): PiPersonaDto {
+        return httpClient.put("${conn.baseUrl}/personas/$personaId") {
+            applyPiHeaders(conn)
+            contentType(ContentType.Application.Json)
+            setBody(persona.copy(id = personaId))
+        }.bodyFromPersonaEnvelope("PUT /personas/:id")
+    }
+
+    suspend fun deletePersona(conn: PiConnection, personaId: String): Boolean {
+        val response = httpClient.delete("${conn.baseUrl}/personas/$personaId") {
+            applyPiHeaders(conn)
+        }
+        return response.status.isSuccess()
+    }
+
     fun connectEvents(
         conn: PiConnection,
         roundId: String,
@@ -192,6 +234,30 @@ class PiApi(
                 parseEvent(trailingData)?.let { emit(it) }
             }
         }
+    }
+
+
+    private fun decodePersonaList(body: String): List<PiPersonaDto> {
+        val root = json.parseToJsonElement(body)
+        val serializer = ListSerializer(PiPersonaDto.serializer())
+        return when (root) {
+            is JsonArray -> json.decodeFromJsonElement(serializer, root)
+            is JsonObject -> {
+                val personas = root["personas"] ?: root["items"] ?: root["data"]
+                when (personas) {
+                    is JsonArray -> json.decodeFromJsonElement(serializer, personas)
+                    else -> root["item"]?.let { listOf(json.decodeFromJsonElement(PiPersonaDto.serializer(), it)) } ?: listOf(json.decodeFromJsonElement(PiPersonaDto.serializer(), root))
+                }
+            }
+            else -> emptyList()
+        }
+    }
+
+    private suspend fun io.ktor.client.statement.HttpResponse.bodyFromPersonaEnvelope(path: String): PiPersonaDto {
+        if (!status.isSuccess()) throw PiApiException("$path failed with HTTP ${status.value}")
+        val root = json.parseToJsonElement(bodyAsText())
+        val item = (root as? JsonObject)?.get("item") ?: root
+        return json.decodeFromJsonElement(PiPersonaDto.serializer(), item)
     }
 
     private fun parseEvent(data: String): RoundtableSseEvent? = runCatching {

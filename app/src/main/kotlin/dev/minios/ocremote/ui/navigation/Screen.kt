@@ -57,6 +57,21 @@ sealed class Screen(val route: String) {
         }
     }
     
+
+    data object PersonaLibrary : Screen("persona_library") {
+        fun createRoute(
+            serverUrl: String,
+            token: String,
+            serverName: String,
+            serverId: String,
+        ): String {
+            val encodedUrl = URLEncoder.encode(serverUrl, "UTF-8")
+            val encodedToken = URLEncoder.encode(token, "UTF-8")
+            val encodedName = URLEncoder.encode(serverName, "UTF-8")
+            val encodedServerId = URLEncoder.encode(serverId, "UTF-8")
+            return "persona_library?serverUrl=$encodedUrl&token=$encodedToken&serverName=$encodedName&serverId=$encodedServerId"
+        }
+    }
     data object Chat : Screen("chat") {
         fun createRoute(
             serverUrl: String,

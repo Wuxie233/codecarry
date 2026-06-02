@@ -37,6 +37,7 @@ import dev.minios.ocremote.ui.screens.chat.ChatScreen
 import dev.minios.ocremote.ui.screens.diagnostics.DiagnosticsScreen
 import dev.minios.ocremote.ui.screens.home.HomeScreen
 import dev.minios.ocremote.ui.screens.roundtable.RoundtableCenterScreen
+import dev.minios.ocremote.ui.screens.roundtable.PersonaLibraryScreen
 import dev.minios.ocremote.ui.screens.about.AboutScreen
 import dev.minios.ocremote.ui.screens.sessions.SessionListScreen
 import dev.minios.ocremote.ui.screens.settings.SettingsScreen
@@ -476,7 +477,29 @@ fun NavGraph(
                 navArgument("serverId") { type = NavType.StringType },
             )
         ) {
+            val serverUrl = decodeRouteArg(it.arguments?.getString("serverUrl"))
+            val token = decodeRouteArg(it.arguments?.getString("token"))
+            val serverName = decodeRouteArg(it.arguments?.getString("serverName"))
+            val serverId = decodeRouteArg(it.arguments?.getString("serverId"))
             RoundtableCenterScreen(
+                onNavigateBack = { navController.popBackStack() },
+                onOpenPersonaLibrary = {
+                    navController.navigate(Screen.PersonaLibrary.createRoute(serverUrl, token, serverName, serverId))
+                }
+            )
+        }
+
+
+        composable(
+            route = "persona_library?serverUrl={serverUrl}&token={token}&serverName={serverName}&serverId={serverId}",
+            arguments = listOf(
+                navArgument("serverUrl") { type = NavType.StringType },
+                navArgument("token") { type = NavType.StringType },
+                navArgument("serverName") { type = NavType.StringType },
+                navArgument("serverId") { type = NavType.StringType },
+            )
+        ) {
+            PersonaLibraryScreen(
                 onNavigateBack = { navController.popBackStack() }
             )
         }
