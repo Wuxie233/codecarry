@@ -13,6 +13,7 @@ import dev.minios.ocremote.BuildConfig
 import dev.minios.ocremote.MainActivity
 import dev.minios.ocremote.R
 import dev.minios.ocremote.data.api.OpenCodeApi
+import dev.minios.ocremote.data.api.PiApi
 import dev.minios.ocremote.data.api.SseClient
 import dev.minios.ocremote.data.preferences.SessionListPreferencesRepository
 import dev.minios.ocremote.data.repository.EventReducer
@@ -20,6 +21,7 @@ import dev.minios.ocremote.data.repository.LocalServerManager
 import dev.minios.ocremote.data.repository.ServerRepository
 import dev.minios.ocremote.data.repository.SettingsRepository
 import dev.minios.ocremote.data.transport.OpenCodeTransport
+import dev.minios.ocremote.data.transport.PiRoundtableTransport
 import dev.minios.ocremote.domain.model.Message
 import dev.minios.ocremote.domain.model.Part
 import dev.minios.ocremote.domain.model.ServerConfig
@@ -39,6 +41,7 @@ import kotlinx.coroutines.flow.update
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
+import kotlinx.serialization.json.Json
 
 private const val TAG = "OpenCodeService"
 private const val NOTIFICATION_CHANNEL_ID = "opencode_connection"
@@ -98,7 +101,13 @@ class OpenCodeConnectionService : Service() {
     lateinit var api: OpenCodeApi
 
     @Inject
+    lateinit var piApi: PiApi
+
+    @Inject
     lateinit var sseClient: SseClient
+
+    @Inject
+    lateinit var json: Json
 
     @Inject
     lateinit var eventReducer: EventReducer
@@ -450,8 +459,9 @@ class OpenCodeConnectionService : Service() {
                             }
                             val event = when (transportEvent) {
                                 is TransportEvent.OpenCode -> transportEvent.event
+                                is TransportEvent.Pi -> null
                             }
-                            processEvent(server, event)
+                            if (event != null) processEvent(server, event)
                         }
 
                     // Flow completed normally (server closed connection)
@@ -603,8 +613,7 @@ class OpenCodeConnectionService : Service() {
 
     private fun createTransport(server: ServerConfig): AgentTransport = when (server.type) {
         ServerType.OPENCODE -> OpenCodeTransport(server, api, sseClient)
-        // Placeholder for Task 10. Pi transport must implement AgentTransport without routing through OpenCode APIs.
-        ServerType.PI_ROUNDTABLE -> throw UnsupportedOperationException("Pi Roundtable transport is not implemented yet")
+        ServerType.PI_ROUNDTABLE -> PiRoundtableTransport(server, piApi, json)
     }
 
     private fun List<TransportRoom>.openCodeSessions(): List<dev.minios.ocremote.domain.model.Session> =

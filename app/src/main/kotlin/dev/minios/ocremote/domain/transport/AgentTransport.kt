@@ -46,6 +46,7 @@ interface AgentTransport {
 
 sealed interface TransportEvent {
     data class OpenCode(val event: SseEvent) : TransportEvent
+    data class Pi(val event: PiTransportEvent) : TransportEvent
 }
 
 sealed interface TransportRoom {
@@ -57,6 +58,12 @@ sealed interface TransportRoom {
         override val id: String = session.id
         override val directory: String = session.directory
         override val parentId: String? = session.parentId
+    }
+
+    data class Pi(val room: PiRoundtableRoom) : TransportRoom {
+        override val id: String = room.id
+        override val directory: String = room.directory.orEmpty()
+        override val parentId: String? = null
     }
 }
 
