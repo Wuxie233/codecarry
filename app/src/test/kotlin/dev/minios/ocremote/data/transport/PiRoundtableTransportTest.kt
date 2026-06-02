@@ -166,6 +166,7 @@ class PiTransportTest {
             }
         }
 
+        val requestStart = captured.size
         transport.listRooms()
         transport.sendMessage("round-fixture-001", listOf(TransportMessagePart(type = "text", text = "hello")))
         assertTrue(transport.sendCommand("round-fixture-001", "可", "continue"))
@@ -173,13 +174,14 @@ class PiTransportTest {
         val streamJob = async { transport.openEventStream().take(1).toList() }
         streamJob.await()
 
-        assertEquals(5, captured.size)
-        captured.forEach { request -> assertEquals("Bearer pi-token", request.headers[HttpHeaders.Authorization]) }
-        assertEquals(HttpMethod.Get, captured[0].method)
-        assertEquals(HttpMethod.Post, captured[1].method)
-        assertEquals(HttpMethod.Post, captured[2].method)
-        assertEquals(HttpMethod.Post, captured[3].method)
-        assertEquals(HttpMethod.Get, captured[4].method)
+        val ownRequests = captured.drop(requestStart)
+        assertEquals(5, ownRequests.size)
+        ownRequests.forEach { request -> assertEquals("Bearer pi-token", request.headers[HttpHeaders.Authorization]) }
+        assertEquals(HttpMethod.Get, ownRequests[0].method)
+        assertEquals(HttpMethod.Post, ownRequests[1].method)
+        assertEquals(HttpMethod.Post, ownRequests[2].method)
+        assertEquals(HttpMethod.Post, ownRequests[3].method)
+        assertEquals(HttpMethod.Get, ownRequests[4].method)
     }
 
     private fun parseFixtureOutcome(name: String): FixtureOutcome = assembleWireEvents(fixtureEvents(name))
