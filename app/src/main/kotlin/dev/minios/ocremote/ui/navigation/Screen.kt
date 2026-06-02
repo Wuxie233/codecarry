@@ -43,50 +43,27 @@ sealed class Screen(val route: String) {
     }
 
     data object RoundtableCenter : Screen("roundtable_center") {
-        fun createRoute(
-            serverUrl: String,
-            token: String,
-            serverName: String,
-            serverId: String,
-        ): String {
-            val encodedUrl = URLEncoder.encode(serverUrl, "UTF-8")
-            val encodedToken = URLEncoder.encode(token, "UTF-8")
-            val encodedName = URLEncoder.encode(serverName, "UTF-8")
+        fun createRoute(serverId: String): String {
             val encodedServerId = URLEncoder.encode(serverId, "UTF-8")
-            return "roundtable_center?serverUrl=$encodedUrl&token=$encodedToken&serverName=$encodedName&serverId=$encodedServerId"
+            return "roundtable_center?serverId=$encodedServerId"
         }
     }
 
     data object RoundtableSummary : Screen("roundtable_summary") {
         fun createRoute(
-            serverUrl: String,
-            token: String,
-            serverName: String,
             serverId: String,
             roundtableId: String,
         ): String {
-            val encodedUrl = URLEncoder.encode(serverUrl, "UTF-8")
-            val encodedToken = URLEncoder.encode(token, "UTF-8")
-            val encodedName = URLEncoder.encode(serverName, "UTF-8")
             val encodedServerId = URLEncoder.encode(serverId, "UTF-8")
             val encodedRoundtableId = URLEncoder.encode(roundtableId, "UTF-8")
-            return "roundtable_summary?serverUrl=$encodedUrl&token=$encodedToken&serverName=$encodedName&serverId=$encodedServerId&roundtableId=$encodedRoundtableId"
+            return "roundtable_summary?serverId=$encodedServerId&roundtableId=$encodedRoundtableId"
         }
     }
-     
 
     data object PersonaLibrary : Screen("persona_library") {
-        fun createRoute(
-            serverUrl: String,
-            token: String,
-            serverName: String,
-            serverId: String,
-        ): String {
-            val encodedUrl = URLEncoder.encode(serverUrl, "UTF-8")
-            val encodedToken = URLEncoder.encode(token, "UTF-8")
-            val encodedName = URLEncoder.encode(serverName, "UTF-8")
+        fun createRoute(serverId: String): String {
             val encodedServerId = URLEncoder.encode(serverId, "UTF-8")
-            return "persona_library?serverUrl=$encodedUrl&token=$encodedToken&serverName=$encodedName&serverId=$encodedServerId"
+            return "persona_library?serverId=$encodedServerId"
         }
     }
     data object Chat : Screen("chat") {

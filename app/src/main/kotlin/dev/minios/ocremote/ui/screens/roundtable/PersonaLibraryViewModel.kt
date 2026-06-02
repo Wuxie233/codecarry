@@ -10,6 +10,7 @@ import dev.minios.ocremote.data.api.PiConnection
 import dev.minios.ocremote.data.api.PiGeneratePersonaRequest
 import dev.minios.ocremote.data.api.PiModelRefDto
 import dev.minios.ocremote.data.api.PiPersonaDto
+import dev.minios.ocremote.data.repository.ServerRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -73,13 +74,12 @@ data class PersonaEditorState(
 class PersonaLibraryViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val api: PiApi,
+    private val serverRepository: ServerRepository,
 ) : ViewModel() {
-    private val serverUrl: String = decodeRouteArg(savedStateHandle.get<String>("serverUrl"))
-    private val token: String = decodeRouteArg(savedStateHandle.get<String>("token"))
-    private val conn = PiConnection.from(serverUrl, token.ifBlank { null })
+    private val serverId: String = decodeRouteArg(savedStateHandle.get<String>("serverId"))
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true; explicitNulls = false; isLenient = true; coerceInputValues = true; prettyPrint = true }
 
-    private val _uiState = MutableStateFlow(PersonaLibraryUiState(serverName = decodeRouteArg(savedStateHandle.get<String>("serverName")).ifBlank { "Roundtable" }))
+    private val _uiState = MutableStateFlow(PersonaLibraryUiState(serverName = "Roundtable"))
     val uiState: StateFlow<PersonaLibraryUiState> = _uiState
 
     init {
@@ -90,6 +90,7 @@ class PersonaLibraryViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
             try {
+                val conn = resolveConnection()
                 val personas = api.listPersonas(conn).sortedWith(compareBy<PiPersonaDto> { !it.enabled }.thenBy { it.name.lowercase() })
                 _uiState.update { it.copy(isLoading = false, personas = personas) }
             } catch (error: Exception) {
@@ -120,6 +121,7 @@ class PersonaLibraryViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isGenerating = true, error = null) }
             try {
+                val conn = resolveConnection()
                 val draft = api.generatePersona(conn, PiGeneratePersonaRequest(requirement = requirement))
                 _uiState.update {
                     it.copy(
@@ -154,7 +156,7 @@ class PersonaLibraryViewModel @Inject constructor(
 
     fun saveEditor() {
         val editor = _uiState.value.editor ?: return
-        mutate {
+        mutate { conn ->
             val persona = editor.toPersona()
             val originalId = editor.originalId
             if (originalId == null) api.createPersona(conn, persona) else api.updatePersona(conn, originalId, persona)
@@ -163,12 +165,12 @@ class PersonaLibraryViewModel @Inject constructor(
 
     fun togglePersona(persona: PiPersonaDto) {
         val id = persona.id ?: return
-        mutate { api.updatePersona(conn, id, persona.copy(enabled = !persona.enabled)) }
+        mutate { conn -> api.updatePersona(conn, id, persona.copy(enabled = !persona.enabled)) }
     }
 
     fun deletePersona(persona: PiPersonaDto) {
         val id = persona.id ?: return
-        mutate { api.deletePersona(conn, id) }
+        mutate { conn -> api.deletePersona(conn, id) }
     }
 
     fun exportPersona(persona: PiPersonaDto) {
@@ -185,7 +187,7 @@ class PersonaLibraryViewModel @Inject constructor(
 
     fun importJson() {
         val raw = _uiState.value.importText
-        mutate {
+        mutate { conn ->
             val personas = parsePersonas(raw)
             for (persona in personas) {
                 val id = persona.id
@@ -198,17 +200,24 @@ class PersonaLibraryViewModel @Inject constructor(
         }
     }
 
-    private fun mutate(block: suspend () -> Unit) {
+    private fun mutate(block: suspend (PiConnection) -> Unit) {
         viewModelScope.launch {
             _uiState.update { it.copy(isMutating = true, error = null) }
             try {
-                block()
+                val conn = resolveConnection()
+                block(conn)
                 val personas = api.listPersonas(conn).sortedWith(compareBy<PiPersonaDto> { !it.enabled }.thenBy { it.name.lowercase() })
                 _uiState.update { it.copy(isMutating = false, isLoading = false, personas = personas, editor = null, importText = "") }
             } catch (error: Exception) {
                 _uiState.update { it.copy(isMutating = false, isLoading = false, error = error.message ?: "Persona action failed") }
             }
         }
+    }
+
+    private suspend fun resolveConnection(): PiConnection {
+        val server = serverRepository.getServer(serverId) ?: error("Saved Pi server not found")
+        _uiState.update { it.copy(serverName = server.displayName.ifBlank { "Roundtable" }) }
+        return PiConnection.from(server.url, server.token)
     }
 
     private fun parsePersonas(raw: String): List<PiPersonaDto> {

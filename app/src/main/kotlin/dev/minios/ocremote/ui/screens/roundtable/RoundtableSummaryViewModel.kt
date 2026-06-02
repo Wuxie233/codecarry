@@ -11,6 +11,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.minios.ocremote.data.api.PiApi
 import dev.minios.ocremote.data.api.PiConnection
 import dev.minios.ocremote.data.api.RoundEndPayloadDto
+import dev.minios.ocremote.data.repository.ServerRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -50,14 +51,13 @@ class RoundtableSummaryViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val api: PiApi,
     private val json: Json,
+    private val serverRepository: ServerRepository,
 ) : ViewModel() {
-    private val serverUrl: String = decodeRouteArg(savedStateHandle.get<String>("serverUrl"))
-    private val token: String = decodeRouteArg(savedStateHandle.get<String>("token"))
-    private val conn = PiConnection.from(serverUrl, token.ifBlank { null })
+    private val serverId: String = decodeRouteArg(savedStateHandle.get<String>("serverId"))
     private val roundtableId: String = decodeRouteArg(savedStateHandle.get<String>("roundtableId"))
     private val _uiState = MutableStateFlow(
         RoundtableSummaryUiState(
-            serverName = decodeRouteArg(savedStateHandle.get<String>("serverName")).ifBlank { "Roundtable" },
+            serverName = "Roundtable",
             roundtableId = roundtableId,
         ),
     )
@@ -71,6 +71,7 @@ class RoundtableSummaryViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
             try {
+                val conn = resolveConnection()
                 val markdown = api.getTranscriptMarkdown(conn, roundtableId)
                 val transcript = api.getTranscript(conn, roundtableId)
                 val finalPayload = transcript.events
@@ -91,6 +92,12 @@ class RoundtableSummaryViewModel @Inject constructor(
                 _uiState.update { it.copy(isLoading = false, error = error.message ?: "Failed to load roundtable summary") }
             }
         }
+    }
+
+    private suspend fun resolveConnection(): PiConnection {
+        val server = serverRepository.getServer(serverId) ?: error("Saved Pi server not found")
+        _uiState.update { it.copy(serverName = server.displayName.ifBlank { "Roundtable" }) }
+        return PiConnection.from(server.url, server.token)
     }
 
     fun exportToUri(context: Context, uri: Uri, onResult: (Boolean) -> Unit) {

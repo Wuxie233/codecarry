@@ -15,6 +15,7 @@ import dev.minios.ocremote.data.api.PiPersonaDto
 import dev.minios.ocremote.data.api.PiRoundLimitsDto
 import dev.minios.ocremote.data.api.PiRoundtableDto
 import dev.minios.ocremote.data.api.PiSpeakerPolicyDto
+import dev.minios.ocremote.data.repository.ServerRepository
 import dev.minios.ocremote.data.repository.SettingsRepository
 import dev.minios.ocremote.domain.model.Roundtable
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -156,13 +157,11 @@ class RoundtableCenterViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val api: PiApi,
     private val settingsRepository: SettingsRepository,
+    private val serverRepository: ServerRepository,
 ) : ViewModel() {
 
-    private val serverUrl: String = decodeRouteArg(savedStateHandle.get<String>("serverUrl"))
-    val serverName: String = decodeRouteArg(savedStateHandle.get<String>("serverName")).ifBlank { "Roundtable" }
     private val serverId: String = decodeRouteArg(savedStateHandle.get<String>("serverId"))
-    private val token: String = decodeRouteArg(savedStateHandle.get<String>("token"))
-    private val conn = PiConnection.from(serverUrl, token.ifBlank { null })
+    private val _serverName = MutableStateFlow("Roundtable")
     private val templateJson = Json { ignoreUnknownKeys = true; encodeDefaults = true; explicitNulls = false }
 
     private val _roundtables = MutableStateFlow<List<Roundtable>>(emptyList())
@@ -188,15 +187,18 @@ class RoundtableCenterViewModel @Inject constructor(
         "[]",
     )
 
-    private val secondaryState = combine(_isLoading, _isMutating, _error, sort, filter) { loading, mutating, error, sortWire, filterWire ->
-        RoundtableCenterSecondaryState(loading, mutating, error, sortWire, filterWire)
+    private val loadingState = combine(_serverName, _isLoading, _isMutating, _error) { serverName, loading, mutating, error ->
+        RoundtableCenterLoadingState(serverName, loading, mutating, error)
+    }
+    private val secondaryState = combine(loadingState, sort, filter) { loading, sortWire, filterWire ->
+        RoundtableCenterSecondaryState(loading.serverName, loading.loading, loading.mutating, loading.error, sortWire, filterWire)
     }
 
     val uiState: StateFlow<RoundtableCenterUiState> = combine(_roundtables, secondaryState, _configEditor, _lineupTemplates) { roundtables, secondary, configEditor, templates ->
         val selectedSort = secondary.sortWire.toRoundtableSort()
         val selectedFilter = secondary.filterWire.toRoundtableFilter()
         RoundtableCenterUiState(
-            serverName = serverName,
+            serverName = secondary.serverName,
             isLoading = secondary.loading,
             isMutating = secondary.mutating,
             error = secondary.error,
@@ -210,7 +212,7 @@ class RoundtableCenterViewModel @Inject constructor(
     }.stateIn(
         viewModelScope,
         SharingStarted.Eagerly,
-        RoundtableCenterUiState(serverName = serverName),
+        RoundtableCenterUiState(),
     )
 
     init {
@@ -225,6 +227,7 @@ class RoundtableCenterViewModel @Inject constructor(
             _isLoading.value = true
             _error.value = null
             try {
+                val conn = resolveConnection()
                 _roundtables.value = api.listRoundtables(conn).mapNotNull { dto -> dto.toDomain() }
             } catch (error: Exception) {
                 _error.value = error.message ?: "Failed to load roundtables"
@@ -243,6 +246,7 @@ class RoundtableCenterViewModel @Inject constructor(
         )
         viewModelScope.launch {
             try {
+                val conn = resolveConnection()
                 val personas = api.listPersonas(conn).filter { it.enabled }
                 val catalog = api.listCatalog(conn)
                 _configEditor.value = _configEditor.value?.copy(
@@ -276,6 +280,7 @@ class RoundtableCenterViewModel @Inject constructor(
         _configEditor.value = editor.copy(isProposing = true, error = null)
         viewModelScope.launch {
             try {
+                val conn = resolveConnection()
                 val proposal = api.proposeLineup(conn, PiLineupProposalRequest(topic = editor.topic.trim()))
                 val roles = proposal.items.map { item -> item.persona.toRoleConfigEditor(item.reason) }
                 _configEditor.value = _configEditor.value?.copy(
@@ -433,7 +438,7 @@ class RoundtableCenterViewModel @Inject constructor(
             _configEditor.value = editor.copy(error = (listOfNotNull("Topic is required".takeIf { editor.topic.isBlank() }, sizeError) + errors).first())
             return
         }
-        mutate {
+        mutate { conn ->
             api.createRoundtable(
                 conn,
                 PiCreateRoundtableRequest(
@@ -447,7 +452,7 @@ class RoundtableCenterViewModel @Inject constructor(
     }
 
     fun resumeRoundtable(roundtableId: String) {
-        mutate {
+        mutate { conn ->
             api.sendCommand(
                 conn = conn,
                 roundId = roundtableId,
@@ -457,15 +462,15 @@ class RoundtableCenterViewModel @Inject constructor(
     }
 
     fun archiveRoundtable(roundtableId: String) {
-        mutate { api.archiveRoundtable(conn, roundtableId) }
+        mutate { conn -> api.archiveRoundtable(conn, roundtableId) }
     }
 
     fun deleteRoundtable(roundtableId: String) {
-        mutate { api.deleteRoundtable(conn, roundtableId) }
+        mutate { conn -> api.deleteRoundtable(conn, roundtableId) }
     }
 
     fun duplicateAsTemplate(roundtable: Roundtable) {
-        mutate {
+        mutate { conn ->
             val baseTopic = roundtable.topic?.takeIf { it.isNotBlank() } ?: "Roundtable topic"
             api.createRoundtable(
                 conn,
@@ -485,12 +490,13 @@ class RoundtableCenterViewModel @Inject constructor(
         viewModelScope.launch { settingsRepository.setRoundtableFilter(serverId, filter.wireName) }
     }
 
-    private fun mutate(block: suspend () -> Unit) {
+    private fun mutate(block: suspend (PiConnection) -> Unit) {
         viewModelScope.launch {
             _isMutating.value = true
             _error.value = null
             try {
-                block()
+                val conn = resolveConnection()
+                block(conn)
                 _roundtables.value = api.listRoundtables(conn).mapNotNull { dto -> dto.toDomain() }
                 _configEditor.value = null
             } catch (error: Exception) {
@@ -500,6 +506,12 @@ class RoundtableCenterViewModel @Inject constructor(
                 _isLoading.value = false
             }
         }
+    }
+
+    private suspend fun resolveConnection(): PiConnection {
+        val server = serverRepository.getServer(serverId) ?: error("Saved Pi server not found")
+        _serverName.value = server.displayName.ifBlank { "Roundtable" }
+        return PiConnection.from(server.url, server.token)
     }
 
     private fun decodeTemplates(raw: String): List<LineupTemplateState> = runCatching {
@@ -520,7 +532,15 @@ class RoundtableCenterViewModel @Inject constructor(
     )
 }
 
+private data class RoundtableCenterLoadingState(
+    val serverName: String,
+    val loading: Boolean,
+    val mutating: Boolean,
+    val error: String?,
+)
+
 private data class RoundtableCenterSecondaryState(
+    val serverName: String,
     val loading: Boolean,
     val mutating: Boolean,
     val error: String?,

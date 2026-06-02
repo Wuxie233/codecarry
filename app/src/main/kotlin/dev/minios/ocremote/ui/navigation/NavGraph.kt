@@ -267,9 +267,9 @@ fun NavGraph(
                         Screen.SessionList.createRoute(serverUrl, username, password, serverName, serverId)
                     )
                 },
-                onNavigateToRoundtables = { serverUrl, token, serverName, serverId ->
+                onNavigateToRoundtables = { _, _, _, serverId ->
                     navController.navigate(
-                        Screen.RoundtableCenter.createRoute(serverUrl, token, serverName, serverId)
+                        Screen.RoundtableCenter.createRoute(serverId)
                     )
                 },
                 onNavigateToServerSettings = { serverUrl, username, password, serverName, serverId ->
@@ -471,36 +471,26 @@ fun NavGraph(
         }
 
         composable(
-            route = "roundtable_center?serverUrl={serverUrl}&token={token}&serverName={serverName}&serverId={serverId}",
+            route = "roundtable_center?serverId={serverId}",
             arguments = listOf(
-                navArgument("serverUrl") { type = NavType.StringType },
-                navArgument("token") { type = NavType.StringType },
-                navArgument("serverName") { type = NavType.StringType },
                 navArgument("serverId") { type = NavType.StringType },
             )
-        ) {
-            val serverUrl = decodeRouteArg(it.arguments?.getString("serverUrl"))
-            val token = decodeRouteArg(it.arguments?.getString("token"))
-            val serverName = decodeRouteArg(it.arguments?.getString("serverName"))
-            val serverId = decodeRouteArg(it.arguments?.getString("serverId"))
+        ) { backStackEntry ->
+            val serverId = decodeRouteArg(backStackEntry.arguments?.getString("serverId"))
             RoundtableCenterScreen(
                 onNavigateBack = { navController.popBackStack() },
                 onOpenRoundtable = { roundtableId ->
-                    navController.navigate(Screen.RoundtableSummary.createRoute(serverUrl, token, serverName, serverId, roundtableId))
+                    navController.navigate(Screen.RoundtableSummary.createRoute(serverId, roundtableId))
                 },
                 onOpenPersonaLibrary = {
-                    navController.navigate(Screen.PersonaLibrary.createRoute(serverUrl, token, serverName, serverId))
+                    navController.navigate(Screen.PersonaLibrary.createRoute(serverId))
                 }
             )
         }
 
-
         composable(
-            route = "persona_library?serverUrl={serverUrl}&token={token}&serverName={serverName}&serverId={serverId}",
+            route = "persona_library?serverId={serverId}",
             arguments = listOf(
-                navArgument("serverUrl") { type = NavType.StringType },
-                navArgument("token") { type = NavType.StringType },
-                navArgument("serverName") { type = NavType.StringType },
                 navArgument("serverId") { type = NavType.StringType },
             )
         ) {
@@ -509,13 +499,9 @@ fun NavGraph(
             )
         }
 
-
         composable(
-            route = "roundtable_summary?serverUrl={serverUrl}&token={token}&serverName={serverName}&serverId={serverId}&roundtableId={roundtableId}",
+            route = "roundtable_summary?serverId={serverId}&roundtableId={roundtableId}",
             arguments = listOf(
-                navArgument("serverUrl") { type = NavType.StringType },
-                navArgument("token") { type = NavType.StringType },
-                navArgument("serverName") { type = NavType.StringType },
                 navArgument("serverId") { type = NavType.StringType },
                 navArgument("roundtableId") { type = NavType.StringType },
             )

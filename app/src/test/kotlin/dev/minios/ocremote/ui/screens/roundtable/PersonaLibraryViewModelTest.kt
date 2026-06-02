@@ -2,9 +2,13 @@ package dev.minios.ocremote.ui.screens.roundtable
 
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
+import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import dev.minios.ocremote.data.api.OpenCodeApi
 import dev.minios.ocremote.data.api.PiApi
 import dev.minios.ocremote.data.api.PiModelRefDto
 import dev.minios.ocremote.data.api.PiPersonaDto
+import dev.minios.ocremote.data.repository.ServerRepository
+import dev.minios.ocremote.domain.model.ServerType
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.MockRequestHandleScope
@@ -48,12 +52,18 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
+import java.io.File
 import java.net.URLEncoder
 import java.util.Collections
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class PersonaLibraryViewModelTest {
+    @get:Rule
+    val tmpFolder = TemporaryFolder()
+
     private val scheduler = TestCoroutineScheduler()
     private val dispatcher = StandardTestDispatcher(scheduler)
     private val json = Json {
@@ -83,7 +93,8 @@ class PersonaLibraryViewModelTest {
     fun `create edit model and reread server truth`() = runTest(dispatcher) {
         val requests = Collections.synchronizedList(mutableListOf<HttpRequestData>())
         val service = FakePersonaService()
-        val vm = PersonaLibraryViewModel(savedStateHandle(), piApi(requests, service)).also { viewModels.add(it) }
+        val serverFixture = serverFixture(backgroundScope)
+        val vm = PersonaLibraryViewModel(savedStateHandle(serverFixture.serverId), piApi(requests, service), serverFixture.repository).also { viewModels.add(it) }
         collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
         advanceUntilIdle()
 
@@ -113,7 +124,8 @@ class PersonaLibraryViewModelTest {
     fun `AI generate shows draft and does not save until confirmation`() = runTest(dispatcher) {
         val requests = Collections.synchronizedList(mutableListOf<HttpRequestData>())
         val service = FakePersonaService()
-        val vm = PersonaLibraryViewModel(savedStateHandle(), piApi(requests, service)).also { viewModels.add(it) }
+        val serverFixture = serverFixture(backgroundScope)
+        val vm = PersonaLibraryViewModel(savedStateHandle(serverFixture.serverId), piApi(requests, service), serverFixture.repository).also { viewModels.add(it) }
         collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
         advanceUntilIdle()
 
@@ -141,7 +153,8 @@ class PersonaLibraryViewModelTest {
     fun `export edit and import round trip remains persona schema shaped`() = runTest(dispatcher) {
         val requests = Collections.synchronizedList(mutableListOf<HttpRequestData>())
         val service = FakePersonaService()
-        val vm = PersonaLibraryViewModel(savedStateHandle(), piApi(requests, service)).also { viewModels.add(it) }
+        val serverFixture = serverFixture(backgroundScope)
+        val vm = PersonaLibraryViewModel(savedStateHandle(serverFixture.serverId), piApi(requests, service), serverFixture.repository).also { viewModels.add(it) }
         collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
         advanceUntilIdle()
 
@@ -162,6 +175,21 @@ class PersonaLibraryViewModelTest {
         assertTrue(requests.any { it.method == HttpMethod.Put && it.url.encodedPath == "/personas/${source.id}" })
     }
 
+    @Test
+    fun `persona library resolves bearer token from server repository`() = runTest(dispatcher) {
+        val requests = Collections.synchronizedList(mutableListOf<HttpRequestData>())
+        val service = FakePersonaService()
+        val serverFixture = serverFixture(backgroundScope, token = "repository-token")
+        val vm = PersonaLibraryViewModel(savedStateHandle(serverFixture.serverId), piApi(requests, service), serverFixture.repository).also { viewModels.add(it) }
+        collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
+        advanceUntilIdle()
+
+        val loaded = vm.uiState.first { !it.isLoading }
+        assertEquals("Pi Test", loaded.serverName)
+        val listRequest = requests.first { it.method == HttpMethod.Get && it.url.encodedPath == "/personas" }
+        assertEquals("Bearer repository-token", listRequest.headers[HttpHeaders.Authorization])
+    }
+
     private fun piApi(requests: MutableList<HttpRequestData>, service: FakePersonaService): PiApi {
         val engine = MockEngine { request ->
             requests += request
@@ -179,13 +207,33 @@ class PersonaLibraryViewModelTest {
         return PiApi(client, json)
     }
 
-    private fun savedStateHandle(): SavedStateHandle = SavedStateHandle(
+    private fun savedStateHandle(serverId: String): SavedStateHandle = SavedStateHandle(
         mapOf(
-            "serverUrl" to encode("https://pi.example.test"),
-            "token" to encode("pi-token"),
-            "serverName" to encode("Pi Test"),
-            "serverId" to encode("srv-pi"),
+            "serverId" to encode(serverId),
         )
+    )
+
+    private suspend fun serverFixture(scope: kotlinx.coroutines.CoroutineScope, token: String = "pi-token"): ServerFixture {
+        val dataStore = PreferenceDataStoreFactory.create(
+            scope = scope,
+            produceFile = { tmpFolder.newFile("persona-servers-${System.nanoTime()}.preferences_pb") },
+        )
+        val client = HttpClient(MockEngine { respond("{}", HttpStatusCode.NotFound) }) {
+            install(ContentNegotiation) { json(json) }
+        }
+        val repository = ServerRepository(dataStore, OpenCodeApi(client, json), json)
+        val server = repository.addServer(
+            url = "https://pi.example.test",
+            type = ServerType.PI_ROUNDTABLE,
+            token = token,
+            name = "Pi Test",
+        )
+        return ServerFixture(repository, server.id)
+    }
+
+    private data class ServerFixture(
+        val repository: ServerRepository,
+        val serverId: String,
     )
 
     private fun MockRequestHandleScope.respondJson(content: String) = respond(
