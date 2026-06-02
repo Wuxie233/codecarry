@@ -22,11 +22,14 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.utils.io.ByteReadChannel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.async
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.take
+import kotlinx.coroutines.flow.transformWhile
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.builtins.ListSerializer
@@ -124,25 +127,30 @@ class PiTransportTest {
                 request.url.encodedPath == "/roundtables" -> respondJson("""[{"id":"round-fixture-001","topic":"fixture"}]""")
                 request.url.encodedPath == "/roundtables/round-fixture-001/events" -> {
                     eventRequestCount++
-                    if (eventRequestCount == 1) {
-                        respondSse(firstChunk)
-                    } else {
-                        assertEquals("3", request.headers["Last-Event-ID"])
-                        respondSse(secondChunk)
+                    when (eventRequestCount) {
+                        1 -> respondSse(firstChunk)
+                        2 -> {
+                            assertEquals("3", request.headers["Last-Event-ID"])
+                            respondSse(secondChunk)
+                        }
+                        else -> respondSse("")
                     }
                 }
                 else -> respond(status = HttpStatusCode.NotFound, content = ByteReadChannel(""))
             }
         }
 
-        val collected = async {
+        val collected = withRealTimeout {
             transport.openEventStream()
                 .filterIsInstance<TransportEvent.Pi>()
                 .map { event -> event.event }
-                .take(12)
+                .transformWhile { event ->
+                    emit(event)
+                    event !is PiTransportEvent.RoundEnd
+                }
                 .toList()
         }
-        val outcome = assembleTransportEvents(collected.await())
+        val outcome = assembleTransportEvents(collected)
 
         assertCanonicalOutcome(outcome)
         val eventRequests = captured.filter { request -> request.url.encodedPath.endsWith("/events") }
@@ -171,8 +179,7 @@ class PiTransportTest {
         transport.sendMessage("round-fixture-001", listOf(TransportMessagePart(type = "text", text = "hello")))
         assertTrue(transport.sendCommand("round-fixture-001", "可", "continue"))
         assertTrue(transport.sendCommand("round-fixture-001", "cancel", ""))
-        val streamJob = async { transport.openEventStream().take(1).toList() }
-        streamJob.await()
+        withRealTimeout { transport.openEventStream().take(1).toList() }
 
         val ownRequests = captured.drop(requestStart)
         assertEquals(5, ownRequests.size)
@@ -240,6 +247,10 @@ class PiTransportTest {
         eventIds = emptyList(),
         eventTypes = eventTypes.filter { type -> type in listOf("message_end", "moderator_synthesis", "awaiting_command", "round_end") },
     )
+
+    private suspend fun <T> withRealTimeout(block: suspend () -> T): T = withContext(Dispatchers.Default) {
+        withTimeout(5_000) { block() }
+    }
 
     private fun newTransport(
         captured: MutableList<HttpRequestData>,
