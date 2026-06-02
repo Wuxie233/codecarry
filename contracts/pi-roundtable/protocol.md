@@ -94,4 +94,50 @@ Consumers MUST NOT treat unknown fields as control instructions. Only documented
 
 No schema, example, transcript, catalog, persona, or evidence artifact may contain key, token, secret, password, or credential values. Gateway credentials are server-side only and are not part of this contract.
 
-TODO(task-2): Bearer authentication, shared fixtures, and fake-provider specifications land in Task 2. Do not infer auth headers or credential fixtures from this v1 protocol freeze.
+## Authentication
+
+Pi Roundtable authentication uses the HTTP header `Authorization: Bearer <token>` on every endpoint except `GET /health`. This applies equally to normal JSON HTTP requests and to the protected SSE stream at `GET /roundtables/:id/events`; the SSE connection request MUST include the same `Authorization` header before events are sent.
+
+Protected endpoints include, at minimum:
+
+- `GET /roundtables`
+- `POST /roundtables`
+- `GET /roundtables/:id`
+- `POST /roundtables/:id/command`
+- `GET /roundtables/:id/events`
+- Any future Pi Roundtable endpoint unless it is explicitly documented as public
+
+`GET /health` is public so deployment probes and local readiness checks do not need credentials.
+
+A missing, empty, or malformed `Authorization` header MUST return HTTP `401` with `Content-Type: application/json`. A malformed header includes any value that is not exactly the Bearer scheme followed by one non-empty credential segment. The response body follows the existing `error` event payload style without requiring an SSE envelope:
+
+```json
+{
+  "protocolVersion": 1,
+  "type": "error",
+  "payload": {
+    "code": "auth_invalid",
+    "message": "Missing, empty, or malformed Authorization header.",
+    "severity": "error",
+    "retryable": false
+  }
+}
+```
+
+The service MUST NOT emit an SSE `error` event for an unauthenticated SSE connection. It rejects the HTTP request with the same `401` JSON body before opening the event stream.
+
+### oc-remote Client Storage Decision
+
+The oc-remote client stores the Pi Roundtable Bearer credential in a new optional `ServerConfig.token` field. `ServerConfig.password` remains reserved for OpenCode basic-auth and MUST NOT be overloaded for Pi Roundtable auth. Task 9 should add `ServerConfig.type` for server kind selection and `token: String? = null` for Pi Roundtable only.
+
+When `ServerConfig.type` selects a Pi Roundtable server and `ServerConfig.token` is present, the client sends `Authorization: Bearer <token>` on every Pi HTTP request and on the `GET /roundtables/:id/events` SSE connection. No schema, fixture, example, transcript, catalog, persona, evidence artifact, or fake-provider script stores an actual credential value.
+
+## Shared Fixtures
+
+Canonical cross-platform fixture streams live in `fixtures/*.json`. Each fixture is a JSON array of `RoundtableSseEvent` objects validating against `schema/roundtable-sse-event.json`. Consumers should deduplicate by `eventId`, sort accepted events by `sequence` then `eventId`, and reassemble each message by `turnId` plus `deltaIndex` before validating `message_end.payload.deltaCount`, `finalText`, and `contentSha256`.
+
+`fixtures/README.md` defines the expected assembled outcome for each fixture. `happy-one-round.json` is the canonical successful output; `reconnect-midturn.json`, `out-of-order.json`, and `duplicate-events.json` must converge to the same successful assembled messages and moderator synthesis. `fallback-then-skip.json` adds a failed skipped persona turn while preserving the same successful Ada and Curie messages used by the happy fixture.
+
+## Fake-Provider Spec
+
+The deterministic fake-provider contract is documented in `fixtures/fake-provider.md`. A fake-provider script describes persona/turn replies, failure injection, streaming cadence, truncation/half-delta behavior, and illegal output cases using data fields only; it does not call a real model and does not contain credentials.

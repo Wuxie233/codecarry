@@ -1,0 +1,298 @@
+[
+  {
+    "protocolVersion": 1,
+    "roundId": "round-fixture-001",
+    "ts": "2026-06-02T13:00:00Z",
+    "eventId": 1,
+    "sequence": 1,
+    "type": "round_start",
+    "author": {
+      "id": "system",
+      "name": "Pi Roundtable",
+      "mbti": "N/A",
+      "role": "system",
+      "colorSeed": "system"
+    },
+    "payload": {
+      "topic": "Should a roundtable optimize for truth seeking or broad coverage?",
+      "roundTitle": "Truth and Coverage Fixture",
+      "speakerPolicy": {
+        "mode": "moderator_routed",
+        "maxTurnsPerRound": 6,
+        "allowInterruptions": true
+      },
+      "participantIds": [
+        "persona-ada",
+        "persona-curie"
+      ],
+      "moderatorId": "moderator-main",
+      "limits": {
+        "maxTurnsPerRound": 6,
+        "maxRetriesPerTurn": 3,
+        "maxRoundMs": 300000,
+        "maxTranscriptBytes": 200000
+      }
+    },
+    "turnId": null
+  },
+  {
+    "protocolVersion": 1,
+    "roundId": "round-fixture-001",
+    "ts": "2026-06-02T13:00:00Z",
+    "eventId": 3,
+    "sequence": 3,
+    "type": "message_delta",
+    "author": {
+      "id": "persona-ada",
+      "name": "Ada",
+      "mbti": "INTJ",
+      "role": "persona",
+      "colorSeed": 42
+    },
+    "payload": {
+      "chunk": "Truth seeking should lead because ",
+      "deltaIndex": 0,
+      "charStart": 0,
+      "encoding": "utf-8"
+    },
+    "turnId": "turn-ada-001"
+  },
+  {
+    "protocolVersion": 1,
+    "roundId": "round-fixture-001",
+    "ts": "2026-06-02T13:00:00Z",
+    "eventId": 2,
+    "sequence": 2,
+    "type": "agent_turn_start",
+    "author": {
+      "id": "persona-ada",
+      "name": "Ada",
+      "mbti": "INTJ",
+      "role": "persona",
+      "colorSeed": 42
+    },
+    "payload": {
+      "personaId": "persona-ada",
+      "providerId": "local-gateway",
+      "model": "pi-agent-alpha",
+      "attempt": 1,
+      "actionTag": "陈述",
+      "speakerPolicyMode": "moderator_routed",
+      "reason": "Moderator selected the first framing speaker"
+    },
+    "turnId": "turn-ada-001"
+  },
+  {
+    "protocolVersion": 1,
+    "roundId": "round-fixture-001",
+    "ts": "2026-06-02T13:00:00Z",
+    "eventId": 5,
+    "sequence": 5,
+    "type": "message_end",
+    "author": {
+      "id": "persona-ada",
+      "name": "Ada",
+      "mbti": "INTJ",
+      "role": "persona",
+      "colorSeed": 42
+    },
+    "payload": {
+      "deltaCount": 2,
+      "finalText": "Truth seeking should lead because coverage without pressure-testing becomes trivia.",
+      "contentSha256": "ed09bbb66b36c76d284bcae5b6e708e3603e957d98423a0c629ba6743ca76f87",
+      "finishReason": "stop"
+    },
+    "turnId": "turn-ada-001"
+  },
+  {
+    "protocolVersion": 1,
+    "roundId": "round-fixture-001",
+    "ts": "2026-06-02T13:00:00Z",
+    "eventId": 4,
+    "sequence": 4,
+    "type": "message_delta",
+    "author": {
+      "id": "persona-ada",
+      "name": "Ada",
+      "mbti": "INTJ",
+      "role": "persona",
+      "colorSeed": 42
+    },
+    "payload": {
+      "chunk": "coverage without pressure-testing becomes trivia.",
+      "deltaIndex": 1,
+      "charStart": 34,
+      "encoding": "utf-8"
+    },
+    "turnId": "turn-ada-001"
+  },
+  {
+    "protocolVersion": 1,
+    "roundId": "round-fixture-001",
+    "ts": "2026-06-02T13:00:00Z",
+    "eventId": 7,
+    "sequence": 7,
+    "type": "message_delta",
+    "author": {
+      "id": "persona-curie",
+      "name": "Curie",
+      "mbti": "ENFP",
+      "role": "persona",
+      "colorSeed": 84
+    },
+    "payload": {
+      "chunk": "Coverage still matters when it maps ",
+      "deltaIndex": 0,
+      "charStart": 0,
+      "encoding": "utf-8"
+    },
+    "turnId": "turn-curie-001"
+  },
+  {
+    "protocolVersion": 1,
+    "roundId": "round-fixture-001",
+    "ts": "2026-06-02T13:00:00Z",
+    "eventId": 6,
+    "sequence": 6,
+    "type": "agent_turn_start",
+    "author": {
+      "id": "persona-curie",
+      "name": "Curie",
+      "mbti": "ENFP",
+      "role": "persona",
+      "colorSeed": 84
+    },
+    "payload": {
+      "personaId": "persona-curie",
+      "providerId": "backup-gateway",
+      "model": "pi-agent-gamma",
+      "attempt": 1,
+      "actionTag": "补充",
+      "speakerPolicyMode": "moderator_routed",
+      "reason": "Moderator selected the coverage mapper"
+    },
+    "turnId": "turn-curie-001"
+  },
+  {
+    "protocolVersion": 1,
+    "roundId": "round-fixture-001",
+    "ts": "2026-06-02T13:00:00Z",
+    "eventId": 9,
+    "sequence": 9,
+    "type": "message_end",
+    "author": {
+      "id": "persona-curie",
+      "name": "Curie",
+      "mbti": "ENFP",
+      "role": "persona",
+      "colorSeed": 84
+    },
+    "payload": {
+      "deltaCount": 2,
+      "finalText": "Coverage still matters when it maps the disagreement space before depth.",
+      "contentSha256": "775516bc108e67c4b16a9909158a577326443b81c8c435a7fc227d6e23a49aed",
+      "finishReason": "stop"
+    },
+    "turnId": "turn-curie-001"
+  },
+  {
+    "protocolVersion": 1,
+    "roundId": "round-fixture-001",
+    "ts": "2026-06-02T13:00:00Z",
+    "eventId": 8,
+    "sequence": 8,
+    "type": "message_delta",
+    "author": {
+      "id": "persona-curie",
+      "name": "Curie",
+      "mbti": "ENFP",
+      "role": "persona",
+      "colorSeed": 84
+    },
+    "payload": {
+      "chunk": "the disagreement space before depth.",
+      "deltaIndex": 1,
+      "charStart": 36,
+      "encoding": "utf-8"
+    },
+    "turnId": "turn-curie-001"
+  },
+  {
+    "protocolVersion": 1,
+    "roundId": "round-fixture-001",
+    "ts": "2026-06-02T13:00:00Z",
+    "eventId": 11,
+    "sequence": 11,
+    "type": "awaiting_command",
+    "author": {
+      "id": "system",
+      "name": "Pi Roundtable",
+      "mbti": "N/A",
+      "role": "system",
+      "colorSeed": "system"
+    },
+    "payload": {
+      "prompt": "Choose the next steering command.",
+      "allowedCommands": [
+        "可",
+        "止",
+        "深入",
+        "引入新人物",
+        "@mention",
+        "inject",
+        "switch_cadence"
+      ],
+      "commandEndpoint": "/roundtables/round-fixture-001/command",
+      "expiresAt": null
+    },
+    "turnId": null
+  },
+  {
+    "protocolVersion": 1,
+    "roundId": "round-fixture-001",
+    "ts": "2026-06-02T13:00:00Z",
+    "eventId": 10,
+    "sequence": 10,
+    "type": "moderator_synthesis",
+    "author": {
+      "id": "moderator-main",
+      "name": "Moderator",
+      "mbti": "ENFJ",
+      "role": "moderator",
+      "colorSeed": "moderator-main"
+    },
+    "payload": {
+      "markdownBody": "The round keeps truth as the goal and coverage as the map.\n\n```mermaid\ngraph TD\n  A[Truth seeking] --> B[Pressure-test claims]\n  C[Coverage] --> D[Map disagreement space]\n  B --> E[Next experiment]\n  D --> E\n```\n",
+      "nextQuestion": "Which pressure test should the group run next?",
+      "coveredTurnIds": [
+        "turn-ada-001",
+        "turn-curie-001"
+      ],
+      "openQuestions": [
+        "What evidence would distinguish shallow coverage from useful mapping?"
+      ]
+    },
+    "turnId": "turn-moderator-001"
+  },
+  {
+    "protocolVersion": 1,
+    "roundId": "round-fixture-001",
+    "ts": "2026-06-02T13:00:00Z",
+    "eventId": 12,
+    "sequence": 12,
+    "type": "round_end",
+    "author": {
+      "id": "moderator-main",
+      "name": "Moderator",
+      "mbti": "ENFJ",
+      "role": "moderator",
+      "colorSeed": "moderator-main"
+    },
+    "payload": {
+      "reason": "completed",
+      "finalSummaryMarkdown": "Completed after a single clean round.",
+      "turnCount": 2
+    },
+    "turnId": null
+  }
+]
