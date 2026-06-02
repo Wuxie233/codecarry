@@ -26,6 +26,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import dev.minios.ocremote.R
 import dev.minios.ocremote.domain.model.ServerConfig
+import dev.minios.ocremote.domain.model.ServerType
 
 /**
  * Parse and validate a server URL string.
@@ -85,12 +86,22 @@ private fun deriveServerNameFromUrl(normalizedUrl: String): String {
 fun ServerDialog(
     server: ServerConfig?,
     onDismiss: () -> Unit,
-    onSave: (name: String, url: String, username: String, password: String, autoConnect: Boolean) -> Unit
+    onSave: (
+        name: String,
+        url: String,
+        type: ServerType,
+        username: String,
+        password: String?,
+        token: String?,
+        autoConnect: Boolean,
+    ) -> Unit,
 ) {
     var name by remember { mutableStateOf(server?.name ?: "") }
+    var serverType by remember { mutableStateOf(server?.type ?: ServerType.OPENCODE) }
     var url by remember { mutableStateOf(server?.url ?: "http://") }
     var username by remember { mutableStateOf(server?.username ?: "opencode") }
     var password by remember { mutableStateOf(server?.password ?: "") }
+    var token by remember { mutableStateOf(server?.token ?: "") }
     var passwordVisible by remember { mutableStateOf(false) }
     var autoConnect by remember { mutableStateOf(server?.autoConnect ?: false) }
 
@@ -100,6 +111,7 @@ fun ServerDialog(
     val urlLabel = stringResource(R.string.server_url)
     val usernameLabel = stringResource(R.string.server_username)
     val passwordLabel = stringResource(R.string.server_password)
+    val tokenLabel = stringResource(R.string.server_token)
     val passwordToggleDescription = stringResource(
         if (passwordVisible) R.string.server_password_hide else R.string.server_password_show
     )
@@ -165,6 +177,35 @@ fun ServerDialog(
                             .semantics { contentDescription = nameLabel }
                     )
 
+                    Text(
+                        text = stringResource(R.string.server_type),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    val serverTypeOptions = listOf(ServerType.OPENCODE, ServerType.PI_ROUNDTABLE)
+                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                        serverTypeOptions.forEachIndexed { index, option ->
+                            SegmentedButton(
+                                selected = serverType == option,
+                                onClick = { serverType = option },
+                                shape = SegmentedButtonDefaults.itemShape(
+                                    index = index,
+                                    count = serverTypeOptions.size,
+                                ),
+                                label = {
+                                    Text(
+                                        text = stringResource(
+                                            when (option) {
+                                                ServerType.OPENCODE -> R.string.server_type_opencode
+                                                ServerType.PI_ROUNDTABLE -> R.string.server_type_pi_roundtable
+                                            }
+                                        )
+                                    )
+                                },
+                            )
+                        }
+                    }
+
                     OutlinedTextField(
                         value = url,
                         onValueChange = {
@@ -189,40 +230,54 @@ fun ServerDialog(
                             .semantics { contentDescription = urlLabel }
                     )
 
-                    OutlinedTextField(
-                        value = username,
-                        onValueChange = { username = it },
-                        label = { Text(usernameLabel) },
-                        placeholder = { Text(stringResource(R.string.server_username_hint)) },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .semantics { contentDescription = usernameLabel }
-                    )
+                    if (serverType == ServerType.OPENCODE) {
+                        OutlinedTextField(
+                            value = username,
+                            onValueChange = { username = it },
+                            label = { Text(usernameLabel) },
+                            placeholder = { Text(stringResource(R.string.server_username_hint)) },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .semantics { contentDescription = usernameLabel }
+                        )
 
-                    OutlinedTextField(
-                        value = password,
-                        onValueChange = { password = it },
-                        label = { Text(passwordLabel) },
-                        visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(
-                            keyboardType = KeyboardType.Password,
-                            imeAction = ImeAction.Done
-                        ),
-                        trailingIcon = {
-                            IconButton(onClick = { passwordVisible = !passwordVisible }) {
-                                Icon(
-                                    imageVector = if (passwordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                                    contentDescription = passwordToggleDescription
-                                )
-                            }
-                        },
-                        singleLine = true,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .semantics { contentDescription = passwordLabel }
-                    )
+                        OutlinedTextField(
+                            value = password,
+                            onValueChange = { password = it },
+                            label = { Text(passwordLabel) },
+                            visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Password,
+                                imeAction = ImeAction.Done
+                            ),
+                            trailingIcon = {
+                                IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                                    Icon(
+                                        imageVector = if (passwordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                        contentDescription = passwordToggleDescription
+                                    )
+                                }
+                            },
+                            singleLine = true,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .semantics { contentDescription = passwordLabel }
+                        )
+                    } else {
+                        OutlinedTextField(
+                            value = token,
+                            onValueChange = { token = it },
+                            label = { Text(tokenLabel) },
+                            placeholder = { Text(stringResource(R.string.server_token_hint)) },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .semantics { contentDescription = tokenLabel }
+                        )
+                    }
 
                     Surface(
                         shape = RoundedCornerShape(12.dp),
@@ -283,8 +338,10 @@ fun ServerDialog(
                                 onSave(
                                     finalName,
                                     normalizedUrl,
+                                    serverType,
                                     username.ifBlank { "opencode" },
-                                    password,
+                                    password.takeIf { serverType == ServerType.OPENCODE },
+                                    token.trim().takeIf { serverType == ServerType.PI_ROUNDTABLE && it.isNotBlank() },
                                     autoConnect
                                 )
                             }

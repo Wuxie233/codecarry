@@ -375,8 +375,8 @@ fun HomeScreen(
             ServerDialog(
                 server = uiState.editingServer,
                 onDismiss = { viewModel.hideServerDialog() },
-                onSave = { name, url, username, password, autoConnect ->
-                    viewModel.saveServer(name, url, username, password, autoConnect)
+                onSave = { name, url, type, username, password, token, autoConnect ->
+                    viewModel.saveServer(name, url, type, username, password, token, autoConnect)
                 }
             )
         }

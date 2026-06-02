@@ -18,6 +18,7 @@ import dev.minios.ocremote.domain.model.McpServer
 import dev.minios.ocremote.domain.model.McpSource
 import dev.minios.ocremote.domain.model.ServerConfig
 import dev.minios.ocremote.domain.model.ServerHealth
+import dev.minios.ocremote.domain.model.ServerType
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.map
@@ -68,16 +69,20 @@ class ServerRepository @Inject constructor(
      */
     suspend fun addServer(
         url: String,
+        type: ServerType = ServerType.OPENCODE,
         username: String = "opencode",
         password: String? = null,
+        token: String? = null,
         name: String? = null,
         autoConnect: Boolean = false,
     ): ServerConfig {
         val server = ServerConfig(
             id = UUID.randomUUID().toString(),
+            type = type,
             url = url.trimEnd('/'),
             username = username,
             password = password,
+            token = token,
             name = name,
             autoConnect = autoConnect,
             lastConnected = null,

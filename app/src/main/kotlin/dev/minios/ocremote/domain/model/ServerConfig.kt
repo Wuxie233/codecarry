@@ -2,15 +2,23 @@ package dev.minios.ocremote.domain.model
 
 import kotlinx.serialization.Serializable
 
+@Serializable
+enum class ServerType {
+    OPENCODE,
+    PI_ROUNDTABLE,
+}
+
 /**
  * Server Configuration - stored server connection details
  */
 @Serializable
 data class ServerConfig(
     val id: String, // UUID
+    val type: ServerType = ServerType.OPENCODE,
     val url: String, // e.g. http://192.168.1.100:4096
     val username: String = "opencode",
     val password: String? = null,
+    val token: String? = null,
     val name: String? = null, // User-friendly name
     val autoConnect: Boolean = false,
     val lastConnected: Long? = null,

@@ -1,10 +1,13 @@
 package dev.minios.ocremote.data.repository
 
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
 import dev.minios.ocremote.data.api.OpenCodeApi
 import dev.minios.ocremote.data.api.OpenCodeFileNotFoundException
 import dev.minios.ocremote.data.api.ServerConnection
 import dev.minios.ocremote.domain.model.McpConfigLoadState
+import dev.minios.ocremote.domain.model.ServerType
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.MockRequestHandleScope
@@ -21,6 +24,7 @@ import io.ktor.serialization.kotlinx.json.json
 import io.ktor.utils.io.ByteReadChannel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -37,7 +41,11 @@ class ServerRepositoryTest {
     @get:Rule
     val tmpFolder = TemporaryFolder()
 
-    private val json = Json { ignoreUnknownKeys = true }
+    private val json = Json {
+        ignoreUnknownKeys = true
+        encodeDefaults = true
+        explicitNulls = false
+    }
 
     private val candidatePaths = listOf(
         "/workspace/project/.opencode/opencode.json",
@@ -46,6 +54,78 @@ class ServerRepositoryTest {
         "/home/user/.config/opencode/opencode.json",
         "/home/user/.config/opencode/config.json",
     )
+
+    @Test
+    fun legacyServerJsonWithoutTypeDefaultsToOpenCode() = runTest {
+        val dataStore = PreferenceDataStoreFactory.create(
+            scope = backgroundScope,
+            produceFile = { tmpFolder.newFile("server_repo_legacy_${System.nanoTime()}.preferences_pb") },
+        )
+        dataStore.edit { preferences ->
+            preferences[stringPreferencesKey("servers")] =
+                """
+                [
+                  {
+                    "id": "legacy-1",
+                    "url": "http://legacy.example:4096",
+                    "username": "legacy-user",
+                    "password": "legacy-pass",
+                    "name": "Legacy Server",
+                    "autoConnect": true,
+                    "lastConnected": 123456789,
+                    "isHealthy": true,
+                    "futureField": "ignored"
+                  }
+                ]
+                """.trimIndent()
+        }
+        val repository = ServerRepository(
+            dataStore = dataStore,
+            api = OpenCodeApi(HttpClient(OkHttp), json),
+            json = json,
+        )
+
+        val server = repository.getAllServers().first().single()
+
+        assertEquals("legacy-1", server.id)
+        assertEquals(ServerType.OPENCODE, server.type)
+        assertEquals("http://legacy.example:4096", server.url)
+        assertEquals("legacy-user", server.username)
+        assertEquals("legacy-pass", server.password)
+        assertEquals(null, server.token)
+        assertEquals("Legacy Server", server.name)
+        assertEquals(true, server.autoConnect)
+        assertEquals(123456789L, server.lastConnected)
+        assertEquals(true, server.isHealthy)
+    }
+
+    @Test
+    fun piRoundtableServerWithTokenRoundTripsThroughRepository() = runTest {
+        val repository = newRepository(
+            api = OpenCodeApi(HttpClient(OkHttp), json),
+            scope = backgroundScope,
+        )
+
+        val saved = repository.addServer(
+            url = "https://pi.example.test/",
+            type = ServerType.PI_ROUNDTABLE,
+            username = "opencode",
+            password = null,
+            token = "pi-token-123",
+            name = "Pi Roundtable",
+            autoConnect = true,
+        )
+        val reread = repository.getServer(saved.id)!!
+
+        assertEquals(saved.id, reread.id)
+        assertEquals(ServerType.PI_ROUNDTABLE, reread.type)
+        assertEquals("https://pi.example.test", reread.url)
+        assertEquals("opencode", reread.username)
+        assertEquals(null, reread.password)
+        assertEquals("pi-token-123", reread.token)
+        assertEquals("Pi Roundtable", reread.name)
+        assertEquals(true, reread.autoConnect)
+    }
 
     @Test
     fun resolveMcpConfigLoadStateStopsAfterLoadedCandidateInPriorityOrder() = runTest {

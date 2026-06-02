@@ -21,6 +21,7 @@ import dev.minios.ocremote.data.repository.LocalServerManager
 import dev.minios.ocremote.data.repository.ServerRepository
 import dev.minios.ocremote.data.repository.SettingsRepository
 import dev.minios.ocremote.domain.model.ServerConfig
+import dev.minios.ocremote.domain.model.ServerType
 import dev.minios.ocremote.service.OpenCodeConnectionService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
@@ -321,8 +322,10 @@ class HomeViewModel @Inject constructor(
     fun saveServer(
         name: String,
         url: String,
+        type: ServerType,
         username: String,
-        password: String,
+        password: String?,
+        token: String?,
         autoConnect: Boolean
     ) {
         viewModelScope.launch {
@@ -332,16 +335,20 @@ class HomeViewModel @Inject constructor(
                 val updatedServer = editingServer.copy(
                     name = name,
                     url = url,
+                    type = type,
                     username = username,
                     password = password,
+                    token = token,
                     autoConnect = autoConnect
                 )
                 serverRepository.updateServer(updatedServer)
             } else {
                 serverRepository.addServer(
                     url = url,
+                    type = type,
                     username = username,
                     password = password,
+                    token = token,
                     name = name,
                     autoConnect = autoConnect
                 )
