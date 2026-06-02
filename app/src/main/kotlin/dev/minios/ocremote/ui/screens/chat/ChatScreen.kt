@@ -5182,7 +5182,7 @@ private fun MarkdownContent(
 
     val components = markdownComponents(
         codeBlock = safeHighlightedCodeBlock,
-        codeFence = safeHighlightedCodeFence,
+        codeFence = mermaidAwareCodeFence,
         table = {
             DisableSelection {
                 val rawTable = runCatching {
