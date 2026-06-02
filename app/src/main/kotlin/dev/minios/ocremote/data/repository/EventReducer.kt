@@ -211,6 +211,7 @@ class EventReducer @Inject constructor() {
             providerId = event.providerId,
             modelId = event.model,
             author = event.envelope.author,
+            actionTag = event.actionTag,
             startedSequence = event.envelope.sequence,
         )
     }
@@ -307,6 +308,7 @@ class EventReducer @Inject constructor() {
             mbti = author.mbti,
             senderRole = author.role,
             colorSeed = author.colorSeed,
+            actionTag = turn?.actionTag,
         )
     }
 
@@ -753,5 +755,6 @@ private data class PiTurnInfo(
     val providerId: String,
     val modelId: String,
     val author: dev.minios.ocremote.domain.transport.PiAuthor,
+    val actionTag: String?,
     val startedSequence: Long,
 )

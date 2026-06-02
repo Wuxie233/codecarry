@@ -32,6 +32,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
@@ -238,6 +239,95 @@ private fun agentColor(agentName: String, agents: List<AgentInfo> = emptyList())
     } else {
         agentColorCycle[0]
     }
+}
+
+internal data class PiSenderIdentity(
+    val id: String?,
+    val name: String,
+    val mbti: String?,
+    val role: String?,
+    val colorSeed: String,
+)
+
+internal data class PiInShortContent(
+    val highlight: String?,
+    val markdown: String,
+)
+
+internal fun piSenderIdentity(message: Message.Assistant?): PiSenderIdentity? {
+    if (message == null) return null
+    val hasSenderFields = listOf(
+        message.senderId,
+        message.senderName,
+        message.mbti,
+        message.senderRole,
+        message.colorSeed,
+    ).any { !it.isNullOrBlank() }
+    if (!hasSenderFields) return null
+
+    val fallbackName = message.senderId?.takeIf { it.isNotBlank() } ?: "Pi"
+    val name = message.senderName?.takeIf { it.isNotBlank() } ?: fallbackName
+    val seed = message.colorSeed?.takeIf { it.isNotBlank() }
+        ?: message.senderId?.takeIf { it.isNotBlank() }
+        ?: name
+
+    return PiSenderIdentity(
+        id = message.senderId?.takeIf { it.isNotBlank() },
+        name = name,
+        mbti = message.mbti?.takeIf { it.isNotBlank() },
+        role = message.senderRole?.takeIf { it.isNotBlank() },
+        colorSeed = seed,
+    )
+}
+
+internal fun piSenderAccentColor(identity: PiSenderIdentity): Color =
+    agentColorCycle[Math.floorMod(identity.colorSeed.hashCode(), agentColorCycle.size)]
+
+internal fun isPiModerator(identity: PiSenderIdentity?): Boolean =
+    identity?.role.equals("moderator", ignoreCase = true)
+
+internal fun isSamePiSender(current: ChatMessage, previous: ChatMessage?): Boolean {
+    val currentIdentity = piSenderIdentity(current.message as? Message.Assistant) ?: return false
+    val previousIdentity = piSenderIdentity(previous?.message as? Message.Assistant) ?: return false
+    return currentIdentity.senderGroupingKey() == previousIdentity.senderGroupingKey()
+}
+
+private fun PiSenderIdentity.senderGroupingKey(): String = id ?: colorSeed.ifBlank { name }
+
+internal fun splitPiInShortHighlight(markdown: String): PiInShortContent {
+    val lines = markdown.lines()
+    val highlightIndex = lines.indexOfFirst { line -> line.isPiInShortLine() }
+    if (highlightIndex < 0) return PiInShortContent(highlight = null, markdown = markdown)
+
+    val highlight = lines[highlightIndex].cleanPiInShortLine()
+    val remaining = lines
+        .filterIndexed { index, _ -> index != highlightIndex }
+        .joinToString("\n")
+        .replace(Regex("\n{3,}"), "\n\n")
+        .trim()
+    return PiInShortContent(highlight = highlight, markdown = remaining)
+}
+
+private fun String.isPiInShortLine(): Boolean {
+    val normalized = trim()
+        .removePrefix("-")
+        .removePrefix("*")
+        .removePrefix(">")
+        .trim()
+        .removePrefix("**")
+        .removePrefix("__")
+    return normalized.startsWith("简言之")
+}
+
+private fun String.cleanPiInShortLine(): String {
+    return trim()
+        .removePrefix("-")
+        .removePrefix("*")
+        .removePrefix(">")
+        .trim()
+        .replace("**", "")
+        .replace("__", "")
+        .trim()
 }
 
 /**
@@ -2637,10 +2727,10 @@ fun ChatScreen(
                             }
                         }
 
-                        items(
+                        itemsIndexed(
                             uiState.messages,
-                            key = { it.message.id }
-                        ) { chatMessage ->
+                            key = { _, item -> item.message.id }
+                        ) { index, chatMessage ->
                             // Detect compaction trigger messages (user messages with Part.Compaction)
                             val isCompactionTrigger = chatMessage.isUser &&
                                 chatMessage.parts.any { it is Part.Compaction }
@@ -2706,11 +2796,15 @@ fun ChatScreen(
                                         color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
                                     )
                                 }
-                                return@items
+                                return@itemsIndexed
                             }
 
                             ChatMessageBubble(
                                 chatMessage = chatMessage,
+                                showSenderHeader = !isSamePiSender(
+                                    current = chatMessage,
+                                    previous = uiState.messages.getOrNull(index - 1),
+                                ),
                                 onRevert = if (chatMessage.isUser) {
                                     {
                                         val revertText = chatMessage.parts
@@ -4068,17 +4162,25 @@ private fun resolveStepsStatus(stepParts: List<Part>): String {
 @Composable
 private fun ChatMessageBubble(
     chatMessage: ChatMessage,
+    showSenderHeader: Boolean = true,
     onRevert: (() -> Unit)? = null,
     onCopyText: (() -> Unit)? = null,
     onMessageActionsRequested: (ChatMessage) -> Unit = {},
 ) {
     val isUser = chatMessage.isUser
     val isAmoled = isAmoledTheme()
+    val userMessage = chatMessage.message as? Message.User
+    val assistantMessage = chatMessage.message as? Message.Assistant
+    val senderIdentity = piSenderIdentity(assistantMessage)
+    val senderAccentColor = senderIdentity?.let(::piSenderAccentColor)
+    val isModeratorMessage = isPiModerator(senderIdentity)
     val alignment = if (isUser) Alignment.End else Alignment.Start
     val backgroundColor = if (isAmoled) {
         Color.Black
     } else if (isUser) {
         MaterialTheme.colorScheme.primaryContainer
+    } else if (isModeratorMessage) {
+        MaterialTheme.colorScheme.surfaceContainerHighest
     } else {
         MaterialTheme.colorScheme.surfaceContainerHigh
     }
@@ -4089,17 +4191,20 @@ private fun ChatMessageBubble(
     } else {
         MaterialTheme.colorScheme.onSurface
     }
-    val bubbleBorder = if (isAmoled) {
-        BorderStroke(
+    val bubbleBorder = when {
+        isAmoled -> BorderStroke(
             1.dp,
-            if (isUser) {
-                MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)
-            } else {
-                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.75f)
+            when {
+                isUser -> MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)
+                senderAccentColor != null -> senderAccentColor.copy(alpha = if (isModeratorMessage) 0.85f else 0.65f)
+                else -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.75f)
             }
         )
-    } else {
-        null
+        senderAccentColor != null -> BorderStroke(
+            1.dp,
+            senderAccentColor.copy(alpha = if (isModeratorMessage) 0.42f else 0.28f)
+        )
+        else -> null
     }
     val hapticView = LocalView.current
     val hapticOn = LocalHapticFeedbackEnabled.current
@@ -4116,8 +4221,6 @@ private fun ChatMessageBubble(
         chatMessage.parts
     }
 
-    val userMessage = chatMessage.message as? Message.User
-    val assistantMessage = chatMessage.message as? Message.Assistant
     val assistantErrorText = formatAssistantErrorMessage(assistantMessage?.error)
     val userFallbackText = userMessage?.summary?.body?.takeIf { it.isNotBlank() }
         ?: userMessage?.summary?.title?.takeIf { it.isNotBlank() }
@@ -4199,40 +4302,53 @@ private fun ChatMessageBubble(
                     // "Response" header with provider icon and copy button — assistant messages only
                     if (!isUser) {
                         val assistantMsg = assistantMessage
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
+                        if (senderIdentity != null && senderAccentColor != null) {
+                            PiSenderHeader(
+                                identity = senderIdentity,
+                                accentColor = senderAccentColor,
+                                textColor = textColor,
+                                showSenderHeader = showSenderHeader,
+                                actionTag = assistantMsg?.actionTag,
+                                onCopyText = onCopyText?.let { copy ->
+                                    { performHaptic(hapticView, hapticOn); copy() }
+                                },
+                            )
+                        } else {
                             Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                if (assistantMsg?.providerId != null) {
-                                    ProviderIcon(
-                                        providerId = assistantMsg.providerId,
-                                        size = 12.dp,
-                                        tint = textColor.copy(alpha = 0.4f)
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                ) {
+                                    if (assistantMsg?.providerId != null) {
+                                        ProviderIcon(
+                                            providerId = assistantMsg.providerId,
+                                            size = 12.dp,
+                                            tint = textColor.copy(alpha = 0.4f)
+                                        )
+                                    }
+                                    Text(
+                                        text = stringResource(R.string.chat_response),
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            letterSpacing = 0.8.sp,
+                                            fontWeight = FontWeight.Medium
+                                        ),
+                                        color = textColor.copy(alpha = 0.4f)
                                     )
                                 }
-                                Text(
-                                    text = stringResource(R.string.chat_response),
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        letterSpacing = 0.8.sp,
-                                        fontWeight = FontWeight.Medium
-                                    ),
-                                    color = textColor.copy(alpha = 0.4f)
-                                )
-                            }
-                            if (onCopyText != null) {
-                                Icon(
-                                    Icons.Default.ContentCopy,
-                                    contentDescription = stringResource(R.string.chat_copy),
-                                    modifier = Modifier
-                                        .size(15.dp)
-                                        .clickable { performHaptic(hapticView, hapticOn); onCopyText() },
-                                    tint = textColor.copy(alpha = 0.3f)
-                                )
+                                if (onCopyText != null) {
+                                    Icon(
+                                        Icons.Default.ContentCopy,
+                                        contentDescription = stringResource(R.string.chat_copy),
+                                        modifier = Modifier
+                                            .size(15.dp)
+                                            .clickable { performHaptic(hapticView, hapticOn); onCopyText() },
+                                        tint = textColor.copy(alpha = 0.3f)
+                                    )
+                                }
                             }
                         }
                     }
@@ -4302,11 +4418,20 @@ private fun ChatMessageBubble(
 
                     // Render remaining parts
                     for (part in renderableOtherParts) {
-                        PartContent(
-                            part = part,
-                            textColor = textColor,
-                            isUser = isUser
-                        )
+                        if (senderIdentity != null && part is Part.Text) {
+                            PiSenderTextPartContent(
+                                part = part,
+                                textColor = textColor,
+                                isUser = isUser,
+                                accentColor = senderAccentColor ?: textColor,
+                            )
+                        } else {
+                            PartContent(
+                                part = part,
+                                textColor = textColor,
+                                isUser = isUser
+                            )
+                        }
                     }
 
                     if (isUser && imageFiles.isEmpty() && renderableOtherParts.isEmpty() && userCommandLabel != null) {
@@ -4469,6 +4594,199 @@ private fun ChatMessageBubble(
             }
         } else {
             bubbleContent()
+        }
+    }
+}
+
+@Composable
+private fun PiSenderHeader(
+    identity: PiSenderIdentity,
+    accentColor: Color,
+    textColor: Color,
+    showSenderHeader: Boolean,
+    actionTag: String?,
+    onCopyText: (() -> Unit)?,
+) {
+    if (!showSenderHeader) {
+        if (onCopyText != null) {
+            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
+                Icon(
+                    Icons.Default.ContentCopy,
+                    contentDescription = stringResource(R.string.chat_copy),
+                    modifier = Modifier
+                        .size(15.dp)
+                        .clickable { onCopyText() },
+                    tint = textColor.copy(alpha = 0.3f),
+                )
+            }
+        }
+        return
+    }
+
+    val isModerator = isPiModerator(identity)
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Row(
+                modifier = Modifier.weight(1f),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Surface(
+                    modifier = Modifier.size(28.dp),
+                    shape = CircleShape,
+                    color = accentColor.copy(alpha = if (isModerator) 0.22f else 0.14f),
+                    border = BorderStroke(1.dp, accentColor.copy(alpha = if (isModerator) 0.8f else 0.55f)),
+                ) {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(
+                            text = identity.name.firstOrNull()?.uppercase() ?: "P",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                            color = accentColor,
+                        )
+                    }
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = identity.name,
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+                        color = accentColor,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (isModerator) {
+                        Text(
+                            text = "主持总结",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = textColor.copy(alpha = 0.58f),
+                            maxLines = 1,
+                        )
+                    }
+                }
+            }
+            if (onCopyText != null) {
+                Icon(
+                    Icons.Default.ContentCopy,
+                    contentDescription = stringResource(R.string.chat_copy),
+                    modifier = Modifier
+                        .size(15.dp)
+                        .clickable { onCopyText() },
+                    tint = textColor.copy(alpha = 0.3f),
+                )
+            }
+        }
+
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            identity.mbti?.let { mbti ->
+                PiSenderChip(
+                    label = mbti,
+                    accentColor = accentColor,
+                    textColor = textColor,
+                )
+            }
+            if (isModerator) {
+                PiSenderChip(
+                    label = "综合",
+                    accentColor = accentColor,
+                    textColor = textColor,
+                )
+            }
+            actionTag?.takeIf { it.isNotBlank() }?.let { tag ->
+                PiSenderChip(
+                    label = tag,
+                    accentColor = accentColor,
+                    textColor = textColor,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PiSenderChip(
+    label: String,
+    accentColor: Color,
+    textColor: Color,
+) {
+    Surface(
+        shape = CircleShape,
+        color = accentColor.copy(alpha = 0.10f),
+        border = BorderStroke(1.dp, accentColor.copy(alpha = 0.32f)),
+        tonalElevation = 0.dp,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium),
+            color = textColor.copy(alpha = 0.78f),
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+        )
+    }
+}
+
+@Composable
+private fun PiSenderTextPartContent(
+    part: Part.Text,
+    textColor: Color,
+    isUser: Boolean,
+    accentColor: Color,
+) {
+    if (part.text.isBlank() || part.synthetic == true || part.ignored == true) return
+
+    val inShort = remember(part.text) { splitPiInShortHighlight(part.text) }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        inShort.highlight?.let { highlight ->
+            PiInShortHighlight(
+                text = highlight,
+                accentColor = accentColor,
+                textColor = textColor,
+            )
+        }
+        if (inShort.markdown.isNotBlank()) {
+            MarkdownContent(
+                markdown = inShort.markdown,
+                textColor = textColor,
+                isUser = isUser,
+            )
+        }
+    }
+}
+
+@Composable
+private fun PiInShortHighlight(
+    text: String,
+    accentColor: Color,
+    textColor: Color,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(10.dp),
+        color = accentColor.copy(alpha = 0.10f),
+        border = BorderStroke(1.dp, accentColor.copy(alpha = 0.30f)),
+        tonalElevation = 0.dp,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            Box(
+                modifier = Modifier
+                    .padding(top = 6.dp)
+                    .size(6.dp)
+                    .background(accentColor, CircleShape),
+            )
+            Text(
+                text = text,
+                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+                color = textColor.copy(alpha = 0.88f),
+                modifier = Modifier.weight(1f),
+            )
         }
     }
 }

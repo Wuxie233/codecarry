@@ -99,7 +99,8 @@ sealed class Message {
         val senderName: String? = null,
         val mbti: String? = null,
         val senderRole: String? = null,
-        val colorSeed: String? = null
+        val colorSeed: String? = null,
+        val actionTag: String? = null
     ) : Message() {
         @Serializable
         data class PathInfo(
