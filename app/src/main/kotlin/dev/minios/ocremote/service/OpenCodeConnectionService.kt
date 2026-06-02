@@ -28,6 +28,7 @@ import dev.minios.ocremote.domain.model.ServerConfig
 import dev.minios.ocremote.domain.model.ServerType
 import dev.minios.ocremote.domain.model.SseEvent
 import dev.minios.ocremote.domain.transport.AgentTransport
+import dev.minios.ocremote.domain.transport.PiTransportEvent
 import dev.minios.ocremote.domain.transport.TransportEvent
 import dev.minios.ocremote.domain.transport.TransportRoom
 import dagger.hilt.android.AndroidEntryPoint
@@ -143,6 +144,7 @@ class OpenCodeConnectionService : Service() {
 
     /** Dedup response-ready notifications per session by last assistant message ID. */
     private val lastNotifiedAssistantMessageBySession = ConcurrentHashMap<String, String>()
+    private val postedPiNotificationKeys = ConcurrentHashMap.newKeySet<String>()
 
     inner class LocalBinder : Binder() {
         fun getService(): OpenCodeConnectionService = this@OpenCodeConnectionService
@@ -463,7 +465,10 @@ class OpenCodeConnectionService : Service() {
                             }
                             when (transportEvent) {
                                 is TransportEvent.OpenCode -> processEvent(server, transportEvent.event)
-                                is TransportEvent.Pi -> eventReducer.processEvent(transportEvent, server.id)
+                                is TransportEvent.Pi -> {
+                                    eventReducer.processEvent(transportEvent, server.id)
+                                    maybeShowPiNotification(server, transportEvent.event)
+                                }
                             }
                         }
 
@@ -595,6 +600,17 @@ class OpenCodeConnectionService : Service() {
         }
     }
 
+    private fun maybeShowPiNotification(server: ServerConfig, event: PiTransportEvent) {
+        val decision = decidePiNotification(event) ?: return
+        val scopedKey = "${server.id}:${decision.eventKey}"
+        if (!postedPiNotificationKeys.add(scopedKey)) return
+
+        serviceScope.launch {
+            if (!settingsRepository.notificationsEnabled.first()) return@launch
+            showPiRoundtableNotification(server, decision)
+        }
+    }
+
     private fun maybeMarkSessionUnread(sessionId: String, previousStatus: dev.minios.ocremote.domain.model.SessionStatus?) {
         if (isChildSession(sessionId)) return
         if (previousStatus !is dev.minios.ocremote.domain.model.SessionStatus.Busy && previousStatus !is dev.minios.ocremote.domain.model.SessionStatus.Retry) {
@@ -722,6 +738,18 @@ class OpenCodeConnectionService : Service() {
             requestCode,
             intent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+    }
+
+    private fun createAppPendingIntent(requestCode: Int): PendingIntent {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+        return PendingIntent.getActivity(
+            this,
+            requestCode,
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
     }
 
@@ -1035,6 +1063,29 @@ class OpenCodeConnectionService : Service() {
             .build()
 
         notificationManager.notify(notifId, notification)
+        showServerGroupSummary(server)
+    }
+
+    private suspend fun showPiRoundtableNotification(server: ServerConfig, decision: PiNotificationDecision) {
+        val silent = settingsRepository.silentNotifications.first()
+        val channelId = if (silent) NOTIFICATION_CHANNEL_TASKS_SILENT_ID else NOTIFICATION_CHANNEL_TASKS_ID
+        val notifId = (server.id + decision.eventKey).hashCode()
+        val builder = NotificationCompat.Builder(this, channelId)
+            .setContentTitle(decision.title)
+            .setContentText(decision.message)
+            .setSubText(server.displayName)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentIntent(createAppPendingIntent(notifId))
+            .setAutoCancel(true)
+            .setPriority(if (silent) NotificationCompat.PRIORITY_LOW else NotificationCompat.PRIORITY_HIGH)
+            .setGroup("server_${server.id}")
+
+        if (!silent) {
+            builder.setDefaults(NotificationCompat.DEFAULT_ALL)
+                .setVibrate(longArrayOf(0, 500, 200, 500))
+        }
+
+        notificationManager.notify(notifId, builder.build())
         showServerGroupSummary(server)
     }
 

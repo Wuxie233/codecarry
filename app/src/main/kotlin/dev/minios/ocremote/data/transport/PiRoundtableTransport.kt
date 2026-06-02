@@ -55,6 +55,7 @@ import java.security.MessageDigest
 private const val PI_RECONNECT_BASE_DELAY_MS = 1_000L
 private const val PI_RECONNECT_MAX_DELAY_MS = 30_000L
 private const val PI_RECONNECT_BACKOFF_FACTOR = 2.0
+private const val PI_RECONNECT_MAX_ATTEMPTS = 6
 
 class PiRoundtableTransport(
     server: ServerConfig,
@@ -63,6 +64,7 @@ class PiRoundtableTransport(
     private val baseReconnectDelayMs: Long = PI_RECONNECT_BASE_DELAY_MS,
     private val maxReconnectDelayMs: Long = PI_RECONNECT_MAX_DELAY_MS,
     private val backoffFactor: Double = PI_RECONNECT_BACKOFF_FACTOR,
+    private val maxReconnectAttempts: Int = PI_RECONNECT_MAX_ATTEMPTS,
 ) : AgentTransport {
     private val conn = PiConnection.from(server.url, server.token)
     private var activeRoundId: String? = null
@@ -79,7 +81,7 @@ class PiRoundtableTransport(
     override fun openEventStream(directory: String?): Flow<TransportEvent> = flow {
         val roundId = resolveRoundId(directory)
         val processor = PiRoundtableEventProcessor(json)
-        var attempt = 0
+        var reconnectAttempts = 0
 
         while (currentCoroutineContext().isActive) {
             try {
@@ -87,19 +89,19 @@ class PiRoundtableTransport(
                     lastEventId = maxOf(lastEventId ?: wireEvent.eventId, wireEvent.eventId)
                     val events = processor.accept(wireEvent)
                     events.forEach { event -> emit(TransportEvent.Pi(event)) }
-                    attempt = 0
+                    reconnectAttempts = 0
                 }
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Throwable) {
                 if (!currentCoroutineContext().isActive || error.isFlowCancellation()) throw error
-                attempt++
             }
 
             if (!currentCoroutineContext().isActive) break
-            val delayMs = calculateBackoff(attempt.coerceAtLeast(1))
+            if (reconnectAttempts >= maxReconnectAttempts.coerceAtLeast(0)) break
+            reconnectAttempts += 1
+            val delayMs = calculateBackoff(reconnectAttempts)
             delay(delayMs)
-            attempt++
         }
     }
 

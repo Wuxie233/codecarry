@@ -23,6 +23,9 @@ import java.io.File
 import java.net.URLDecoder
 import javax.inject.Inject
 
+private const val DEFAULT_TRANSCRIPT_RENDER_CHUNK_CHARS = 4_000
+private const val DEFAULT_TRANSCRIPT_RENDER_MAX_CHUNKS = 120
+
 data class RoundtableSummaryUiState(
     val serverName: String = "Roundtable",
     val roundtableId: String = "",
@@ -34,6 +37,12 @@ data class RoundtableSummaryUiState(
     val knowledgeNetworkMermaid: String? = null,
     val openQuestions: List<String> = emptyList(),
     val exportReadyUri: Uri? = null,
+)
+
+data class TranscriptRenderChunk(
+    val index: Int,
+    val text: String,
+    val isOmissionNotice: Boolean = false,
 )
 
 @HiltViewModel
@@ -133,6 +142,30 @@ internal fun extractOpenQuestions(markdown: String): List<String> {
     return markdown.lines().drop(start + 1).takeWhile { line -> !line.startsWith("## ") }.mapNotNull { line ->
         line.trim().removePrefix("-").trim().takeIf { it.isNotBlank() }
     }
+}
+
+internal fun splitTranscriptForRendering(
+    markdown: String,
+    maxChunkChars: Int = DEFAULT_TRANSCRIPT_RENDER_CHUNK_CHARS,
+    maxChunks: Int = DEFAULT_TRANSCRIPT_RENDER_MAX_CHUNKS,
+): List<TranscriptRenderChunk> {
+    if (markdown.isBlank()) return emptyList()
+
+    val safeChunkChars = maxChunkChars.coerceAtLeast(256)
+    val safeMaxChunks = maxChunks.coerceAtLeast(1)
+    val maxRenderedChars = (safeChunkChars.toLong() * safeMaxChunks.toLong())
+        .coerceAtMost(Int.MAX_VALUE.toLong())
+        .toInt()
+    val rendered = markdown.take(maxRenderedChars)
+    val chunks = rendered.chunked(safeChunkChars).mapIndexed { index, chunk ->
+        TranscriptRenderChunk(index = index, text = chunk)
+    }
+    val omittedChars = markdown.length - rendered.length
+    if (omittedChars <= 0) return chunks
+
+    val notice = "Transcript rendering is capped after ${rendered.length} characters; " +
+        "$omittedChars more characters remain available through Export or Share."
+    return chunks + TranscriptRenderChunk(index = chunks.size, text = notice, isOmissionNotice = true)
 }
 
 private fun safeFilePart(value: String): String = value.lowercase().replace(Regex("[^a-z0-9._-]+"), "-").trim('-').ifBlank { "roundtable" }

@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -135,6 +136,7 @@ private fun RoundtableSummaryContent(
     onShare: () -> Unit,
 ) {
     val isAmoled = MaterialTheme.colorScheme.background == Color.Black && MaterialTheme.colorScheme.surface == Color.Black
+    val transcriptChunks = remember(uiState.markdown) { splitTranscriptForRendering(uiState.markdown) }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 32.dp),
@@ -180,14 +182,23 @@ private fun RoundtableSummaryContent(
         }
         item {
             SummarySectionCard(title = "Verbatim minutes", isAmoled = isAmoled) {
+                val visibleChunks = transcriptChunks.count { !it.isOmissionNotice }
                 Text(
-                    text = uiState.markdown,
-                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                    text = "Transcript is rendered lazily in $visibleChunks chunk${if (visibleChunks == 1) "" else "s"}; Export and Share keep the full Markdown.",
+                    style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
                 )
+            }
+        }
+        itemsIndexed(
+            items = transcriptChunks,
+            key = { _, chunk -> "transcript-${chunk.index}-${chunk.isOmissionNotice}" },
+        ) { index, chunk ->
+            SummarySectionCard(
+                title = if (chunk.isOmissionNotice) "Transcript render limit" else "Transcript chunk ${index + 1}",
+                isAmoled = isAmoled,
+            ) {
+                MonospaceBlock(chunk.text)
             }
         }
     }

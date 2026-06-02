@@ -116,10 +116,10 @@ class PiTransportTest {
     }
 
     @Test
-    fun `openEventStream resumes reconnect midturn with Last-Event-ID and no dup no loss`() = runTest {
+    fun `openEventStream resumes reconnect replay with Last-Event-ID and no dup no loss`() = runTest {
         val captured = mutableListOf<HttpRequestData>()
         val firstChunk = sseFrame(fixtureEvents("happy-one-round.json").take(3))
-        val secondChunk = sseFrame(fixtureEvents("reconnect-midturn.json").drop(3))
+        val secondChunk = sseFrame(fixtureEvents("happy-one-round.json").drop(2))
         var eventRequestCount = 0
         val transport = newTransport(captured) { request ->
             captured += request
@@ -153,11 +153,39 @@ class PiTransportTest {
         val outcome = assembleTransportEvents(collected)
 
         assertCanonicalOutcome(outcome)
+        assertEquals((1L..12L).toList(), outcome.eventIds)
+        assertEquals(outcome.eventIds.distinct(), outcome.eventIds)
         val eventRequests = captured.filter { request -> request.url.encodedPath.endsWith("/events") }
         assertEquals(null, eventRequests[0].headers["Last-Event-ID"])
         assertEquals("3", eventRequests[1].headers["Last-Event-ID"])
         assertEquals(2, eventRequestCount)
         assertTrue(outcome.messageIntegrity.all { it })
+    }
+
+    @Test
+    fun `openEventStream stops after bounded empty reconnect attempts`() = runTest {
+        val captured = mutableListOf<HttpRequestData>()
+        var eventRequestCount = 0
+        val transport = newTransport(captured, maxReconnectAttempts = 2) { request ->
+            captured += request
+            when {
+                request.url.encodedPath == "/roundtables" -> respondJson("""[{"id":"round-fixture-001","topic":"fixture"}]""")
+                request.url.encodedPath == "/roundtables/round-fixture-001/events" -> {
+                    eventRequestCount++
+                    respondSse("")
+                }
+                else -> respond(status = HttpStatusCode.NotFound, content = ByteReadChannel(""))
+            }
+        }
+
+        val collected = withRealTimeout {
+            transport.openEventStream()
+                .filterIsInstance<TransportEvent.Pi>()
+                .toList()
+        }
+
+        assertTrue(collected.isEmpty())
+        assertEquals(3, eventRequestCount)
     }
 
     @Test
@@ -254,6 +282,7 @@ class PiTransportTest {
 
     private fun newTransport(
         captured: MutableList<HttpRequestData>,
+        maxReconnectAttempts: Int = 6,
         handler: MockRequestHandleScope.(HttpRequestData) -> HttpResponseData,
     ): PiRoundtableTransport {
         val engine = MockEngine { request -> handler(request) }
@@ -272,6 +301,7 @@ class PiTransportTest {
             json = json,
             baseReconnectDelayMs = 1,
             maxReconnectDelayMs = 1,
+            maxReconnectAttempts = maxReconnectAttempts,
         )
     }
 
