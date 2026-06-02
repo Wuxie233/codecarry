@@ -1,0 +1,66 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://schemas.oc-remote.local/pi-roundtable/v1/persona.json",
+  "title": "Pi Roundtable Persona",
+  "type": "object",
+  "propertyNames": {
+    "not": {
+      "pattern": "([Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd])"
+    }
+  },
+  "required": [
+    "name",
+    "mbti",
+    "stancePrompt",
+    "style",
+    "actionTagPrefs",
+    "provider",
+    "model",
+    "fallback",
+    "enabled"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "mbti": {
+      "$ref": "common.json#/definitions/Mbti"
+    },
+    "stancePrompt": {
+      "type": "string",
+      "minLength": 1
+    },
+    "style": {
+      "type": "string",
+      "minLength": 1
+    },
+    "actionTagPrefs": {
+      "type": "array",
+      "items": {
+        "$ref": "common.json#/definitions/ActionTag"
+      },
+      "minItems": 1
+    },
+    "provider": {
+      "$ref": "common.json#/definitions/ProviderId"
+    },
+    "model": {
+      "$ref": "common.json#/definitions/ModelId"
+    },
+    "fallback": {
+      "type": "array",
+      "items": {
+        "$ref": "common.json#/definitions/ModelRef"
+      }
+    },
+    "enabled": {
+      "type": "boolean"
+    }
+  },
+  "additionalProperties": true
+}

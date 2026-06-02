@@ -1,0 +1,22 @@
+{
+  "protocolVersion": 1,
+  "roundId": "round-demo-001",
+  "ts": "2026-06-02T12:04:00Z",
+  "eventId": 4,
+  "sequence": 4,
+  "type": "message_end",
+  "author": {
+    "id": "persona-ada",
+    "name": "Ada",
+    "mbti": "INTJ",
+    "role": "persona",
+    "colorSeed": 42
+  },
+  "payload": {
+    "deltaCount": 1,
+    "finalText": "We should optimize for truthful depth, not shallow coverage.",
+    "contentSha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "finishReason": "stop"
+  },
+  "turnId": "turn-ada-001"
+}

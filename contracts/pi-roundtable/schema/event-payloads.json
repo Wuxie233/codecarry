@@ -1,0 +1,500 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://schemas.oc-remote.local/pi-roundtable/v1/event-payloads.json",
+  "title": "Pi Roundtable Event Payloads",
+  "type": "object",
+  "definitions": {
+    "RoundStartPayload": {
+      "type": "object",
+      "propertyNames": {
+        "not": {
+          "pattern": "([Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd])"
+        }
+      },
+      "required": [
+        "topic",
+        "speakerPolicy",
+        "participantIds",
+        "moderatorId"
+      ],
+      "properties": {
+        "topic": {
+          "type": "string",
+          "minLength": 1
+        },
+        "roundTitle": {
+          "type": "string"
+        },
+        "speakerPolicy": {
+          "$ref": "common.json#/definitions/SpeakerPolicy"
+        },
+        "participantIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "moderatorId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "limits": {
+          "type": "object",
+          "propertyNames": {
+            "not": {
+              "pattern": "([Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd])"
+            }
+          },
+          "properties": {
+            "maxTurnsPerRound": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "maxRetriesPerTurn": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "maxRoundMs": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "maxTranscriptBytes": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "AgentTurnStartPayload": {
+      "type": "object",
+      "propertyNames": {
+        "not": {
+          "pattern": "([Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd])"
+        }
+      },
+      "required": [
+        "personaId",
+        "providerId",
+        "model",
+        "attempt"
+      ],
+      "properties": {
+        "personaId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "providerId": {
+          "$ref": "common.json#/definitions/ProviderId"
+        },
+        "model": {
+          "$ref": "common.json#/definitions/ModelId"
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "actionTag": {
+          "$ref": "common.json#/definitions/ActionTag"
+        },
+        "speakerPolicyMode": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "MessageDeltaPayload": {
+      "type": "object",
+      "propertyNames": {
+        "not": {
+          "pattern": "([Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd])"
+        }
+      },
+      "required": [
+        "chunk",
+        "deltaIndex"
+      ],
+      "properties": {
+        "chunk": {
+          "type": "string"
+        },
+        "deltaIndex": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "charStart": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "encoding": {
+          "type": "string",
+          "enum": [
+            "utf-8"
+          ]
+        }
+      },
+      "additionalProperties": true
+    },
+    "MessageEndPayload": {
+      "type": "object",
+      "propertyNames": {
+        "not": {
+          "pattern": "([Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd])"
+        }
+      },
+      "required": [
+        "deltaCount"
+      ],
+      "properties": {
+        "deltaCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "finalText": {
+          "type": "string"
+        },
+        "contentSha256": {
+          "$ref": "common.json#/definitions/Sha256Hex"
+        },
+        "finishReason": {
+          "type": "string",
+          "enum": [
+            "stop",
+            "length",
+            "tool_limit",
+            "cancelled",
+            "error",
+            "skipped"
+          ]
+        }
+      },
+      "additionalProperties": true
+    },
+    "ModeratorSynthesisPayload": {
+      "type": "object",
+      "propertyNames": {
+        "not": {
+          "pattern": "([Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd])"
+        }
+      },
+      "required": [
+        "markdownBody",
+        "nextQuestion"
+      ],
+      "properties": {
+        "markdownBody": {
+          "type": "string",
+          "pattern": "```mermaid[\\s\\S]*```"
+        },
+        "nextQuestion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "coveredTurnIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "openQuestions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "AwaitingCommandPayload": {
+      "type": "object",
+      "propertyNames": {
+        "not": {
+          "pattern": "([Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd])"
+        }
+      },
+      "required": [
+        "prompt",
+        "allowedCommands"
+      ],
+      "properties": {
+        "prompt": {
+          "type": "string",
+          "minLength": 1
+        },
+        "allowedCommands": {
+          "type": "array",
+          "items": {
+            "$ref": "common.json#/definitions/CommandName"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "commandEndpoint": {
+          "type": "string",
+          "pattern": "^/roundtables/[^/]+/command$"
+        },
+        "expiresAt": {
+          "oneOf": [
+            {
+              "$ref": "common.json#/definitions/IsoTimestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": true
+    },
+    "AgentRetryPayload": {
+      "type": "object",
+      "propertyNames": {
+        "not": {
+          "pattern": "([Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd])"
+        }
+      },
+      "required": [
+        "personaId",
+        "providerId",
+        "model",
+        "attempt",
+        "reason",
+        "retryAfterMs"
+      ],
+      "properties": {
+        "personaId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "providerId": {
+          "$ref": "common.json#/definitions/ProviderId"
+        },
+        "model": {
+          "$ref": "common.json#/definitions/ModelId"
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxAttempts": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "retryAfterMs": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": true
+    },
+    "AgentFallbackPayload": {
+      "type": "object",
+      "propertyNames": {
+        "not": {
+          "pattern": "([Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd])"
+        }
+      },
+      "required": [
+        "personaId",
+        "from",
+        "to",
+        "attempt",
+        "reason"
+      ],
+      "properties": {
+        "personaId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "from": {
+          "$ref": "common.json#/definitions/ModelRef"
+        },
+        "to": {
+          "$ref": "common.json#/definitions/ModelRef"
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": true
+    },
+    "AgentErrorPayload": {
+      "type": "object",
+      "propertyNames": {
+        "not": {
+          "pattern": "([Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd])"
+        }
+      },
+      "required": [
+        "personaId",
+        "providerId",
+        "model",
+        "attempt",
+        "reason",
+        "recoverable"
+      ],
+      "properties": {
+        "personaId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "providerId": {
+          "$ref": "common.json#/definitions/ProviderId"
+        },
+        "model": {
+          "$ref": "common.json#/definitions/ModelId"
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "errorCode": {
+          "type": "string"
+        },
+        "recoverable": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": true
+    },
+    "AwaitingSkipPayload": {
+      "type": "object",
+      "propertyNames": {
+        "not": {
+          "pattern": "([Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd])"
+        }
+      },
+      "required": [
+        "personaId",
+        "providerId",
+        "model",
+        "attempt",
+        "reason",
+        "skipCommand"
+      ],
+      "properties": {
+        "personaId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "providerId": {
+          "$ref": "common.json#/definitions/ProviderId"
+        },
+        "model": {
+          "$ref": "common.json#/definitions/ModelId"
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "skipCommand": {
+          "type": "string",
+          "const": "awaiting_skip"
+        }
+      },
+      "additionalProperties": true
+    },
+    "RoundEndPayload": {
+      "type": "object",
+      "propertyNames": {
+        "not": {
+          "pattern": "([Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd])"
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "properties": {
+        "reason": {
+          "type": "string",
+          "enum": [
+            "completed",
+            "stopped",
+            "max_turns",
+            "max_round_ms",
+            "max_transcript_bytes",
+            "error"
+          ]
+        },
+        "finalSummaryMarkdown": {
+          "type": "string"
+        },
+        "endedByCommandId": {
+          "type": "string"
+        },
+        "turnCount": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": true
+    },
+    "ErrorPayload": {
+      "type": "object",
+      "propertyNames": {
+        "not": {
+          "pattern": "([Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd])"
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "severity"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 1
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "info",
+            "warning",
+            "error",
+            "fatal"
+          ]
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "relatedEventId": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false
+}

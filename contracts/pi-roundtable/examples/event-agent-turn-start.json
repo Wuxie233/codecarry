@@ -1,0 +1,25 @@
+{
+  "protocolVersion": 1,
+  "roundId": "round-demo-001",
+  "ts": "2026-06-02T12:02:00Z",
+  "eventId": 2,
+  "sequence": 2,
+  "type": "agent_turn_start",
+  "author": {
+    "id": "persona-ada",
+    "name": "Ada",
+    "mbti": "INTJ",
+    "role": "persona",
+    "colorSeed": 42
+  },
+  "payload": {
+    "personaId": "persona-ada",
+    "providerId": "local-gateway",
+    "model": "pi-agent-alpha",
+    "attempt": 1,
+    "actionTag": "陈述",
+    "speakerPolicyMode": "moderator_routed",
+    "reason": "Moderator selected first framing speaker"
+  },
+  "turnId": "turn-ada-001"
+}

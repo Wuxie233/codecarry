@@ -1,0 +1,25 @@
+{
+  "protocolVersion": 1,
+  "roundId": "round-demo-001",
+  "ts": "2026-06-02T12:09:00Z",
+  "eventId": 9,
+  "sequence": 9,
+  "type": "agent_error",
+  "author": {
+    "id": "system",
+    "name": "Pi Roundtable",
+    "mbti": "N/A",
+    "role": "system",
+    "colorSeed": "system"
+  },
+  "payload": {
+    "personaId": "persona-turing",
+    "providerId": "backup-gateway",
+    "model": "pi-agent-beta-fallback",
+    "attempt": 3,
+    "reason": "provider unavailable after fallback",
+    "errorCode": "provider_unavailable",
+    "recoverable": false
+  },
+  "turnId": "turn-turing-001"
+}

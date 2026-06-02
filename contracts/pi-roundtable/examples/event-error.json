@@ -1,0 +1,23 @@
+{
+  "protocolVersion": 1,
+  "roundId": "round-demo-001",
+  "ts": "2026-06-02T12:12:00Z",
+  "eventId": 12,
+  "sequence": 12,
+  "type": "error",
+  "author": {
+    "id": "system",
+    "name": "Pi Roundtable",
+    "mbti": "N/A",
+    "role": "system",
+    "colorSeed": "system"
+  },
+  "payload": {
+    "code": "stream_reconnect_window_missed",
+    "message": "Client reconnected after retained event window.",
+    "severity": "warning",
+    "retryable": true,
+    "relatedEventId": 6
+  },
+  "turnId": null
+}

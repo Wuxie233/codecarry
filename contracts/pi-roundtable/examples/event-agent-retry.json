@@ -1,0 +1,25 @@
+{
+  "protocolVersion": 1,
+  "roundId": "round-demo-001",
+  "ts": "2026-06-02T12:07:00Z",
+  "eventId": 7,
+  "sequence": 7,
+  "type": "agent_retry",
+  "author": {
+    "id": "system",
+    "name": "Pi Roundtable",
+    "mbti": "N/A",
+    "role": "system",
+    "colorSeed": "system"
+  },
+  "payload": {
+    "personaId": "persona-turing",
+    "providerId": "local-gateway",
+    "model": "pi-agent-beta",
+    "attempt": 2,
+    "maxAttempts": 3,
+    "reason": "stream timeout before first chunk",
+    "retryAfterMs": 500
+  },
+  "turnId": "turn-turing-001"
+}

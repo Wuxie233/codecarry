@@ -1,0 +1,28 @@
+{
+  "providerId": "local-gateway",
+  "displayName": "Local Gateway",
+  "baseUrl": "https://pi.example.invalid/v1",
+  "api": "openai-compatible",
+  "models": [
+    {
+      "id": "pi-agent-alpha",
+      "displayName": "Pi Agent Alpha",
+      "contextWindow": 128000,
+      "supportsStreaming": true,
+      "enabled": true
+    }
+  ],
+  "fallback": [
+    {
+      "providerId": "backup-gateway",
+      "model": "pi-agent-alpha-fallback"
+    }
+  ],
+  "enabled": true,
+  "validation": {
+    "status": "valid",
+    "checkedAt": "2026-06-02T12:00:00Z",
+    "message": "streaming endpoint reachable",
+    "streamingChecked": true
+  }
+}

@@ -1,0 +1,431 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://schemas.oc-remote.local/pi-roundtable/v1/command.json",
+  "title": "Pi Roundtable Command Payload",
+  "oneOf": [
+    {
+      "allOf": [
+        {
+          "type": "object",
+          "propertyNames": {
+            "not": {
+              "pattern": "([Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd])"
+            }
+          },
+          "required": [
+            "protocolVersion",
+            "command",
+            "roundId"
+          ],
+          "properties": {
+            "protocolVersion": {
+              "$ref": "common.json#/definitions/ProtocolVersion"
+            },
+            "command": {
+              "$ref": "common.json#/definitions/CommandName"
+            },
+            "roundId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "clientCommandId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "ts": {
+              "$ref": "common.json#/definitions/IsoTimestamp"
+            }
+          },
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "required": [
+            "command"
+          ],
+          "properties": {
+            "command": {
+              "const": "可"
+            },
+            "note": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": true
+        }
+      ]
+    },
+    {
+      "allOf": [
+        {
+          "type": "object",
+          "propertyNames": {
+            "not": {
+              "pattern": "([Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd])"
+            }
+          },
+          "required": [
+            "protocolVersion",
+            "command",
+            "roundId"
+          ],
+          "properties": {
+            "protocolVersion": {
+              "$ref": "common.json#/definitions/ProtocolVersion"
+            },
+            "command": {
+              "$ref": "common.json#/definitions/CommandName"
+            },
+            "roundId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "clientCommandId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "ts": {
+              "$ref": "common.json#/definitions/IsoTimestamp"
+            }
+          },
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "required": [
+            "command"
+          ],
+          "properties": {
+            "command": {
+              "const": "止"
+            },
+            "wrapUpInstruction": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": true
+        }
+      ]
+    },
+    {
+      "allOf": [
+        {
+          "type": "object",
+          "propertyNames": {
+            "not": {
+              "pattern": "([Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd])"
+            }
+          },
+          "required": [
+            "protocolVersion",
+            "command",
+            "roundId"
+          ],
+          "properties": {
+            "protocolVersion": {
+              "$ref": "common.json#/definitions/ProtocolVersion"
+            },
+            "command": {
+              "$ref": "common.json#/definitions/CommandName"
+            },
+            "roundId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "clientCommandId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "ts": {
+              "$ref": "common.json#/definitions/IsoTimestamp"
+            }
+          },
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "required": [
+            "command",
+            "target"
+          ],
+          "properties": {
+            "command": {
+              "const": "深入"
+            },
+            "target": {
+              "type": "object",
+              "propertyNames": {
+                "not": {
+                  "pattern": "([Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd])"
+                }
+              },
+              "properties": {
+                "turnId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "topicNodeId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "quote": {
+                  "type": "string"
+                }
+              },
+              "minProperties": 1,
+              "additionalProperties": true
+            },
+            "instruction": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": true
+        }
+      ]
+    },
+    {
+      "allOf": [
+        {
+          "type": "object",
+          "propertyNames": {
+            "not": {
+              "pattern": "([Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd])"
+            }
+          },
+          "required": [
+            "protocolVersion",
+            "command",
+            "roundId"
+          ],
+          "properties": {
+            "protocolVersion": {
+              "$ref": "common.json#/definitions/ProtocolVersion"
+            },
+            "command": {
+              "$ref": "common.json#/definitions/CommandName"
+            },
+            "roundId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "clientCommandId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "ts": {
+              "$ref": "common.json#/definitions/IsoTimestamp"
+            }
+          },
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "required": [
+            "command",
+            "persona"
+          ],
+          "properties": {
+            "command": {
+              "const": "引入新人物"
+            },
+            "persona": {
+              "$ref": "persona.json"
+            }
+          },
+          "additionalProperties": true
+        }
+      ]
+    },
+    {
+      "allOf": [
+        {
+          "type": "object",
+          "propertyNames": {
+            "not": {
+              "pattern": "([Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd])"
+            }
+          },
+          "required": [
+            "protocolVersion",
+            "command",
+            "roundId"
+          ],
+          "properties": {
+            "protocolVersion": {
+              "$ref": "common.json#/definitions/ProtocolVersion"
+            },
+            "command": {
+              "$ref": "common.json#/definitions/CommandName"
+            },
+            "roundId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "clientCommandId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "ts": {
+              "$ref": "common.json#/definitions/IsoTimestamp"
+            }
+          },
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "required": [
+            "command",
+            "targetPersonaId",
+            "content"
+          ],
+          "properties": {
+            "command": {
+              "const": "@mention"
+            },
+            "targetPersonaId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "content": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "additionalProperties": true
+        }
+      ]
+    },
+    {
+      "allOf": [
+        {
+          "type": "object",
+          "propertyNames": {
+            "not": {
+              "pattern": "([Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd])"
+            }
+          },
+          "required": [
+            "protocolVersion",
+            "command",
+            "roundId"
+          ],
+          "properties": {
+            "protocolVersion": {
+              "$ref": "common.json#/definitions/ProtocolVersion"
+            },
+            "command": {
+              "$ref": "common.json#/definitions/CommandName"
+            },
+            "roundId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "clientCommandId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "ts": {
+              "$ref": "common.json#/definitions/IsoTimestamp"
+            }
+          },
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "required": [
+            "command",
+            "content"
+          ],
+          "properties": {
+            "command": {
+              "const": "inject"
+            },
+            "participant": {
+              "type": "object",
+              "propertyNames": {
+                "not": {
+                  "pattern": "([Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd])"
+                }
+              },
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "role": {
+                  "const": "user"
+                }
+              },
+              "additionalProperties": true
+            },
+            "content": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "additionalProperties": true
+        }
+      ]
+    },
+    {
+      "allOf": [
+        {
+          "type": "object",
+          "propertyNames": {
+            "not": {
+              "pattern": "([Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd])"
+            }
+          },
+          "required": [
+            "protocolVersion",
+            "command",
+            "roundId"
+          ],
+          "properties": {
+            "protocolVersion": {
+              "$ref": "common.json#/definitions/ProtocolVersion"
+            },
+            "command": {
+              "$ref": "common.json#/definitions/CommandName"
+            },
+            "roundId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "clientCommandId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "ts": {
+              "$ref": "common.json#/definitions/IsoTimestamp"
+            }
+          },
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "required": [
+            "command",
+            "speakerPolicy"
+          ],
+          "properties": {
+            "command": {
+              "const": "switch_cadence"
+            },
+            "speakerPolicy": {
+              "$ref": "common.json#/definitions/SpeakerPolicy"
+            }
+          },
+          "additionalProperties": true
+        }
+      ]
+    }
+  ]
+}

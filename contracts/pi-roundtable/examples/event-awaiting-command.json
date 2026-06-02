@@ -1,0 +1,30 @@
+{
+  "protocolVersion": 1,
+  "roundId": "round-demo-001",
+  "ts": "2026-06-02T12:06:00Z",
+  "eventId": 6,
+  "sequence": 6,
+  "type": "awaiting_command",
+  "author": {
+    "id": "system",
+    "name": "Pi Roundtable",
+    "mbti": "N/A",
+    "role": "system",
+    "colorSeed": "system"
+  },
+  "payload": {
+    "prompt": "Choose the next steering command.",
+    "allowedCommands": [
+      "可",
+      "止",
+      "深入",
+      "引入新人物",
+      "@mention",
+      "inject",
+      "switch_cadence"
+    ],
+    "commandEndpoint": "/roundtables/round-demo-001/command",
+    "expiresAt": null
+  },
+  "turnId": null
+}

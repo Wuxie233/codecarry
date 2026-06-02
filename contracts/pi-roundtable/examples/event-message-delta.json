@@ -1,0 +1,22 @@
+{
+  "protocolVersion": 1,
+  "roundId": "round-demo-001",
+  "ts": "2026-06-02T12:03:00Z",
+  "eventId": 3,
+  "sequence": 3,
+  "type": "message_delta",
+  "author": {
+    "id": "persona-ada",
+    "name": "Ada",
+    "mbti": "INTJ",
+    "role": "persona",
+    "colorSeed": 42
+  },
+  "payload": {
+    "chunk": "We should optimize for truthful depth, ",
+    "deltaIndex": 0,
+    "charStart": 0,
+    "encoding": "utf-8"
+  },
+  "turnId": "turn-ada-001"
+}

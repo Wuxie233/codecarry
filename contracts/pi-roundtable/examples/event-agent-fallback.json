@@ -1,0 +1,29 @@
+{
+  "protocolVersion": 1,
+  "roundId": "round-demo-001",
+  "ts": "2026-06-02T12:08:00Z",
+  "eventId": 8,
+  "sequence": 8,
+  "type": "agent_fallback",
+  "author": {
+    "id": "system",
+    "name": "Pi Roundtable",
+    "mbti": "N/A",
+    "role": "system",
+    "colorSeed": "system"
+  },
+  "payload": {
+    "personaId": "persona-turing",
+    "from": {
+      "providerId": "local-gateway",
+      "model": "pi-agent-beta"
+    },
+    "to": {
+      "providerId": "backup-gateway",
+      "model": "pi-agent-beta-fallback"
+    },
+    "attempt": 3,
+    "reason": "primary model exceeded retry cap"
+  },
+  "turnId": "turn-turing-001"
+}

@@ -1,0 +1,9 @@
+{
+  "protocolVersion": 1,
+  "roundId": "round-demo-001",
+  "clientCommandId": "cmd-mention-001",
+  "command": "@mention",
+  "targetPersonaId": "persona-ada",
+  "content": "Please challenge the current synthesis.",
+  "ts": "2026-06-02T12:24:00Z"
+}

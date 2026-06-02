@@ -1,0 +1,36 @@
+{
+  "protocolVersion": 1,
+  "roundId": "round-demo-001",
+  "ts": "2026-06-02T12:01:00Z",
+  "eventId": 1,
+  "sequence": 1,
+  "type": "round_start",
+  "author": {
+    "id": "system",
+    "name": "Pi Roundtable",
+    "mbti": "N/A",
+    "role": "system",
+    "colorSeed": "system"
+  },
+  "payload": {
+    "topic": "Should AI agents debate by seeking truth or coverage?",
+    "roundTitle": "Truth Seeking Protocol",
+    "speakerPolicy": {
+      "mode": "moderator_routed",
+      "maxTurnsPerRound": 6,
+      "allowInterruptions": true
+    },
+    "participantIds": [
+      "persona-ada",
+      "persona-turing"
+    ],
+    "moderatorId": "moderator-main",
+    "limits": {
+      "maxTurnsPerRound": 6,
+      "maxRetriesPerTurn": 3,
+      "maxRoundMs": 300000,
+      "maxTranscriptBytes": 200000
+    }
+  },
+  "turnId": null
+}

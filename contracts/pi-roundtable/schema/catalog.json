@@ -1,0 +1,130 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://schemas.oc-remote.local/pi-roundtable/v1/catalog.json",
+  "title": "Pi Roundtable Gateway Model Catalog Entry",
+  "type": "object",
+  "propertyNames": {
+    "not": {
+      "pattern": "([Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd])"
+    }
+  },
+  "required": [
+    "providerId",
+    "displayName",
+    "baseUrl",
+    "api",
+    "models",
+    "fallback",
+    "enabled",
+    "validation"
+  ],
+  "properties": {
+    "providerId": {
+      "$ref": "common.json#/definitions/ProviderId"
+    },
+    "displayName": {
+      "type": "string",
+      "minLength": 1
+    },
+    "baseUrl": {
+      "type": "string",
+      "format": "uri"
+    },
+    "api": {
+      "type": "string",
+      "enum": [
+        "openai-compatible",
+        "anthropic",
+        "google",
+        "pi-ai",
+        "custom"
+      ]
+    },
+    "models": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "propertyNames": {
+          "not": {
+            "pattern": "([Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd])"
+          }
+        },
+        "required": [
+          "id",
+          "displayName",
+          "enabled"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "common.json#/definitions/ModelId"
+          },
+          "displayName": {
+            "type": "string",
+            "minLength": 1
+          },
+          "contextWindow": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "supportsStreaming": {
+            "type": "boolean"
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "fallback": {
+      "type": "array",
+      "items": {
+        "$ref": "common.json#/definitions/ModelRef"
+      }
+    },
+    "enabled": {
+      "type": "boolean"
+    },
+    "validation": {
+      "type": "object",
+      "propertyNames": {
+        "not": {
+          "pattern": "([Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd])"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "unknown",
+            "valid",
+            "invalid",
+            "disabled"
+          ]
+        },
+        "checkedAt": {
+          "oneOf": [
+            {
+              "$ref": "common.json#/definitions/IsoTimestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "streamingChecked": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

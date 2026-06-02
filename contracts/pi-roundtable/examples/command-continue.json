@@ -1,0 +1,8 @@
+{
+  "protocolVersion": 1,
+  "roundId": "round-demo-001",
+  "clientCommandId": "cmd-continue-001",
+  "command": "可",
+  "note": "Continue to the next useful speaker.",
+  "ts": "2026-06-02T12:20:00Z"
+}

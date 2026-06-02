@@ -1,0 +1,307 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://schemas.oc-remote.local/pi-roundtable/v1/roundtable-sse-event.json",
+  "title": "RoundtableSseEvent",
+  "type": "object",
+  "propertyNames": {
+    "not": {
+      "pattern": "([Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd])"
+    }
+  },
+  "required": [
+    "protocolVersion",
+    "eventId",
+    "roundId",
+    "turnId",
+    "sequence",
+    "type",
+    "author",
+    "payload",
+    "ts"
+  ],
+  "properties": {
+    "protocolVersion": {
+      "$ref": "common.json#/definitions/ProtocolVersion"
+    },
+    "eventId": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "roundId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "turnId": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "type": {
+      "type": "string",
+      "enum": [
+        "round_start",
+        "agent_turn_start",
+        "message_delta",
+        "message_end",
+        "moderator_synthesis",
+        "awaiting_command",
+        "agent_retry",
+        "agent_fallback",
+        "agent_error",
+        "awaiting_skip",
+        "round_end",
+        "error"
+      ]
+    },
+    "author": {
+      "$ref": "common.json#/definitions/Author"
+    },
+    "payload": {
+      "type": "object"
+    },
+    "ts": {
+      "$ref": "common.json#/definitions/IsoTimestamp"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "round_start"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "event-payloads.json#/definitions/RoundStartPayload"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "agent_turn_start"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "event-payloads.json#/definitions/AgentTurnStartPayload"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "message_delta"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "event-payloads.json#/definitions/MessageDeltaPayload"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "message_end"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "event-payloads.json#/definitions/MessageEndPayload"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "moderator_synthesis"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "event-payloads.json#/definitions/ModeratorSynthesisPayload"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "awaiting_command"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "event-payloads.json#/definitions/AwaitingCommandPayload"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "agent_retry"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "event-payloads.json#/definitions/AgentRetryPayload"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "agent_fallback"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "event-payloads.json#/definitions/AgentFallbackPayload"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "agent_error"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "event-payloads.json#/definitions/AgentErrorPayload"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "awaiting_skip"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "event-payloads.json#/definitions/AwaitingSkipPayload"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "round_end"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "event-payloads.json#/definitions/RoundEndPayload"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "error"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "$ref": "event-payloads.json#/definitions/ErrorPayload"
+          }
+        }
+      }
+    }
+  ],
+  "additionalProperties": true
+}

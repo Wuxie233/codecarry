@@ -1,0 +1,9 @@
+{
+  "protocolVersion": 1,
+  "roundId": "round-demo-001",
+  "clientCommandId": "cmd-stop-001",
+  "command": "止",
+  "wrapUpInstruction": "Synthesize the useful disagreements and stop.",
+  "reason": "User wants wrap-up.",
+  "ts": "2026-06-02T12:21:00Z"
+}

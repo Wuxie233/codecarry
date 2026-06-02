@@ -1,0 +1,222 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://schemas.oc-remote.local/pi-roundtable/v1/common.json",
+  "title": "Pi Roundtable Common Types",
+  "type": "object",
+  "definitions": {
+    "ProtocolVersion": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "IsoTimestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "Mbti": {
+      "type": "string",
+      "enum": [
+        "INTJ",
+        "INTP",
+        "ENTJ",
+        "ENTP",
+        "INFJ",
+        "INFP",
+        "ENFJ",
+        "ENFP",
+        "ISTJ",
+        "ISFJ",
+        "ESTJ",
+        "ESFJ",
+        "ISTP",
+        "ISFP",
+        "ESTP",
+        "ESFP",
+        "N/A"
+      ]
+    },
+    "Role": {
+      "type": "string",
+      "enum": [
+        "persona",
+        "moderator",
+        "user",
+        "system"
+      ]
+    },
+    "Author": {
+      "type": "object",
+      "propertyNames": {
+        "not": {
+          "pattern": "([Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd])"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "mbti",
+        "role",
+        "colorSeed"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mbti": {
+          "$ref": "#/definitions/Mbti"
+        },
+        "role": {
+          "$ref": "#/definitions/Role"
+        },
+        "colorSeed": {
+          "oneOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string",
+              "minLength": 1
+            }
+          ]
+        }
+      },
+      "additionalProperties": true
+    },
+    "ProviderId": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "ModelId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "ModelRef": {
+      "type": "object",
+      "propertyNames": {
+        "not": {
+          "pattern": "([Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd])"
+        }
+      },
+      "required": [
+        "providerId",
+        "model"
+      ],
+      "properties": {
+        "providerId": {
+          "$ref": "#/definitions/ProviderId"
+        },
+        "model": {
+          "$ref": "#/definitions/ModelId"
+        }
+      },
+      "additionalProperties": true
+    },
+    "ActionTag": {
+      "type": "string",
+      "enum": [
+        "陈述",
+        "质疑",
+        "补充",
+        "反驳",
+        "修正",
+        "综合"
+      ]
+    },
+    "SpeakerPolicy": {
+      "type": "object",
+      "propertyNames": {
+        "not": {
+          "pattern": "([Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd])"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "moderator_routed",
+            "round_robin",
+            "free_roundtable",
+            "mention_reactive"
+          ]
+        },
+        "maxTurnsPerRound": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "allowInterruptions": {
+          "type": "boolean"
+        },
+        "maxConsecutiveTurnsPerPersona": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": true
+    },
+    "RetrySignalBase": {
+      "type": "object",
+      "propertyNames": {
+        "not": {
+          "pattern": "([Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd])"
+        }
+      },
+      "required": [
+        "personaId",
+        "providerId",
+        "model",
+        "attempt",
+        "reason"
+      ],
+      "properties": {
+        "personaId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "providerId": {
+          "$ref": "#/definitions/ProviderId"
+        },
+        "model": {
+          "$ref": "#/definitions/ModelId"
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxAttempts": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": true
+    },
+    "Sha256Hex": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "CommandName": {
+      "type": "string",
+      "enum": [
+        "可",
+        "止",
+        "深入",
+        "引入新人物",
+        "@mention",
+        "inject",
+        "switch_cadence"
+      ]
+    }
+  },
+  "additionalProperties": false
+}

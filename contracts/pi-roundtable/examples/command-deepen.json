@@ -1,0 +1,12 @@
+{
+  "protocolVersion": 1,
+  "roundId": "round-demo-001",
+  "clientCommandId": "cmd-deepen-001",
+  "command": "深入",
+  "target": {
+    "turnId": "turn-ada-001",
+    "quote": "truthful depth"
+  },
+  "instruction": "Probe operational consequences.",
+  "ts": "2026-06-02T12:22:00Z"
+}

@@ -1,0 +1,26 @@
+{
+  "protocolVersion": 1,
+  "roundId": "round-demo-001",
+  "ts": "2026-06-02T12:05:00Z",
+  "eventId": 5,
+  "sequence": 5,
+  "type": "moderator_synthesis",
+  "author": {
+    "id": "moderator-main",
+    "name": "Moderator",
+    "mbti": "ENFJ",
+    "role": "moderator",
+    "colorSeed": "moderator-main"
+  },
+  "payload": {
+    "markdownBody": "The group converged on depth.\n\n```mermaid\ngraph TD\n  A[Truth] --> B[Depth]\n  A --> C[Action]\n```\n",
+    "nextQuestion": "Which disagreement deserves the next layer of analysis?",
+    "coveredTurnIds": [
+      "turn-ada-001"
+    ],
+    "openQuestions": [
+      "What is the smallest decisive experiment?"
+    ]
+  },
+  "turnId": "turn-moderator-001"
+}

@@ -1,0 +1,165 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://schemas.oc-remote.local/pi-roundtable/v1/transcript.json",
+  "title": "Pi Roundtable Transcript",
+  "type": "object",
+  "propertyNames": {
+    "not": {
+      "pattern": "([Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd])"
+    }
+  },
+  "required": [
+    "protocolVersion",
+    "roundId",
+    "events",
+    "commands",
+    "assembled"
+  ],
+  "properties": {
+    "protocolVersion": {
+      "$ref": "common.json#/definitions/ProtocolVersion"
+    },
+    "roundId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "$ref": "roundtable-sse-event.json"
+      },
+      "x-appendOnly": true
+    },
+    "commands": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "propertyNames": {
+          "not": {
+            "pattern": "([Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd])"
+          }
+        },
+        "required": [
+          "receivedAt",
+          "accepted",
+          "payload"
+        ],
+        "properties": {
+          "receivedAt": {
+            "$ref": "common.json#/definitions/IsoTimestamp"
+          },
+          "accepted": {
+            "type": "boolean"
+          },
+          "payload": {
+            "$ref": "command.json"
+          },
+          "resultEventId": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "additionalProperties": true
+      },
+      "x-appendOnly": true
+    },
+    "assembled": {
+      "type": "object",
+      "propertyNames": {
+        "not": {
+          "pattern": "([Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd])"
+        }
+      },
+      "required": [
+        "status",
+        "messages",
+        "retryLog",
+        "skipLog",
+        "errors",
+        "moderatorSyntheses"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "running",
+            "awaiting_command",
+            "awaiting_skip",
+            "ended",
+            "error"
+          ]
+        },
+        "messages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "propertyNames": {
+              "not": {
+                "pattern": "([Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd])"
+              }
+            },
+            "required": [
+              "turnId",
+              "author",
+              "text",
+              "contentSha256",
+              "startedAt",
+              "endedAt"
+            ],
+            "properties": {
+              "turnId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "author": {
+                "$ref": "common.json#/definitions/Author"
+              },
+              "text": {
+                "type": "string"
+              },
+              "contentSha256": {
+                "$ref": "common.json#/definitions/Sha256Hex"
+              },
+              "startedAt": {
+                "$ref": "common.json#/definitions/IsoTimestamp"
+              },
+              "endedAt": {
+                "$ref": "common.json#/definitions/IsoTimestamp"
+              },
+              "failed": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": true
+          }
+        },
+        "retryLog": {
+          "type": "array",
+          "items": {
+            "$ref": "event-payloads.json#/definitions/AgentRetryPayload"
+          }
+        },
+        "skipLog": {
+          "type": "array",
+          "items": {
+            "$ref": "event-payloads.json#/definitions/AwaitingSkipPayload"
+          }
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "$ref": "event-payloads.json#/definitions/AgentErrorPayload"
+          }
+        },
+        "moderatorSyntheses": {
+          "type": "array",
+          "items": {
+            "$ref": "event-payloads.json#/definitions/ModeratorSynthesisPayload"
+          }
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

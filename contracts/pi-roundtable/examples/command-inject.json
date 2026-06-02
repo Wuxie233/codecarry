@@ -1,0 +1,13 @@
+{
+  "protocolVersion": 1,
+  "roundId": "round-demo-001",
+  "clientCommandId": "cmd-inject-001",
+  "command": "inject",
+  "participant": {
+    "id": "user-local",
+    "name": "User",
+    "role": "user"
+  },
+  "content": "I think the next node should be evidence quality.",
+  "ts": "2026-06-02T12:25:00Z"
+}

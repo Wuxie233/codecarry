@@ -1,0 +1,13 @@
+{
+  "protocolVersion": 1,
+  "roundId": "round-demo-001",
+  "clientCommandId": "cmd-cadence-001",
+  "command": "switch_cadence",
+  "speakerPolicy": {
+    "mode": "mention_reactive",
+    "maxTurnsPerRound": 4,
+    "allowInterruptions": true,
+    "maxConsecutiveTurnsPerPersona": 1
+  },
+  "ts": "2026-06-02T12:26:00Z"
+}
