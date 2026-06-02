@@ -5,9 +5,12 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.minios.ocremote.data.api.PiApi
+import dev.minios.ocremote.data.api.PiCatalogEntryDto
 import dev.minios.ocremote.data.api.PiCommandRequest
 import dev.minios.ocremote.data.api.PiConnection
 import dev.minios.ocremote.data.api.PiCreateRoundtableRequest
+import dev.minios.ocremote.data.api.PiModelRefDto
+import dev.minios.ocremote.data.api.PiPersonaDto
 import dev.minios.ocremote.data.api.PiRoundtableDto
 import dev.minios.ocremote.data.repository.SettingsRepository
 import dev.minios.ocremote.domain.model.Roundtable
@@ -19,6 +22,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.net.URLDecoder
+import java.net.URI
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 import javax.inject.Inject
@@ -44,8 +48,46 @@ data class RoundtableCenterUiState(
     val items: List<Roundtable> = emptyList(),
     val sort: RoundtableSort = RoundtableSort.LastActivity,
     val filter: RoundtableFilter = RoundtableFilter.Active,
+    val configEditor: RoundtableConfigEditorState? = null,
 ) {
     val runningCount: Int = items.count { it.status == Roundtable.Status.Running }
+}
+
+data class RoundtableConfigEditorState(
+    val topic: String = "Roundtable topic 1",
+    val roles: List<RoleConfigEditorState> = emptyList(),
+    val catalog: List<PiCatalogEntryDto> = emptyList(),
+    val error: String? = null,
+    val isLoadingCatalog: Boolean = false,
+) {
+    val validationErrors: List<String>
+        get() = roles.flatMap { role -> role.validationErrors(catalog) }
+}
+
+data class RoleConfigEditorState(
+    val roleId: String,
+    val name: String,
+    val mbti: String,
+    val stancePrompt: String,
+    val style: String,
+    val actionTagPrefs: List<String>,
+    val provider: String,
+    val model: String,
+    val fallback: List<PiModelRefDto> = emptyList(),
+    val enabled: Boolean = true,
+) {
+    fun toPersonaDto(): PiPersonaDto = PiPersonaDto(
+        id = roleId,
+        name = name,
+        mbti = mbti,
+        stancePrompt = stancePrompt,
+        style = style,
+        actionTagPrefs = actionTagPrefs,
+        provider = provider,
+        model = model,
+        fallback = fallback,
+        enabled = enabled,
+    )
 }
 
 @HiltViewModel
@@ -65,6 +107,7 @@ class RoundtableCenterViewModel @Inject constructor(
     private val _isLoading = MutableStateFlow(true)
     private val _isMutating = MutableStateFlow(false)
     private val _error = MutableStateFlow<String?>(null)
+    private val _configEditor = MutableStateFlow<RoundtableConfigEditorState?>(null)
 
     private val sort = settingsRepository.roundtableSort(serverId).stateIn(
         viewModelScope,
@@ -81,7 +124,7 @@ class RoundtableCenterViewModel @Inject constructor(
         RoundtableCenterSecondaryState(loading, mutating, error, sortWire, filterWire)
     }
 
-    val uiState: StateFlow<RoundtableCenterUiState> = combine(_roundtables, secondaryState) { roundtables, secondary ->
+    val uiState: StateFlow<RoundtableCenterUiState> = combine(_roundtables, secondaryState, _configEditor) { roundtables, secondary, configEditor ->
         val selectedSort = secondary.sortWire.toRoundtableSort()
         val selectedFilter = secondary.filterWire.toRoundtableFilter()
         RoundtableCenterUiState(
@@ -94,6 +137,7 @@ class RoundtableCenterViewModel @Inject constructor(
             items = roundtables
                 .filter { it.matches(selectedFilter) }
                 .sortedWith(selectedSort.comparator()),
+            configEditor = configEditor,
         )
     }.stateIn(
         viewModelScope,
@@ -120,9 +164,110 @@ class RoundtableCenterViewModel @Inject constructor(
     }
 
     fun createRoundtable() {
+        val nextIndex = _roundtables.value.size + 1
+        _configEditor.value = RoundtableConfigEditorState(
+            topic = "Roundtable topic $nextIndex",
+            isLoadingCatalog = true,
+        )
+        viewModelScope.launch {
+            try {
+                val personas = api.listPersonas(conn).filter { it.enabled }.take(3)
+                val catalog = api.listCatalog(conn)
+                _configEditor.value = RoundtableConfigEditorState(
+                    topic = "Roundtable topic $nextIndex",
+                    roles = personas.map { it.toRoleConfigEditor() },
+                    catalog = catalog,
+                )
+            } catch (error: Exception) {
+                _configEditor.value = _configEditor.value?.copy(
+                    isLoadingCatalog = false,
+                    error = error.message ?: "Failed to load provider catalog",
+                )
+            }
+        }
+    }
+
+    fun dismissConfigEditor() {
+        _configEditor.value = null
+    }
+
+    fun updateConfigTopic(value: String) {
+        _configEditor.update { editor -> editor?.copy(topic = value, error = null) }
+    }
+
+    fun updateRoleProvider(roleId: String, providerId: String) {
+        _configEditor.update { editor ->
+            editor?.copy(
+                error = null,
+                roles = editor.roles.map { role ->
+                    if (role.roleId != roleId) return@map role
+                    val provider = editor.catalog.firstOrNull { it.providerId == providerId }
+                    val model = provider?.models?.firstOrNull { it.enabled }?.id ?: role.model
+                    role.copy(provider = providerId, model = model, fallback = provider?.fallback ?: emptyList())
+                },
+            )
+        }
+    }
+
+    fun updateRoleModel(roleId: String, model: String) {
+        _configEditor.update { editor ->
+            editor?.copy(error = null, roles = editor.roles.map { role -> if (role.roleId == roleId) role.copy(model = model) else role })
+        }
+    }
+
+    fun addRoleFallback(roleId: String, providerId: String, model: String) {
+        _configEditor.update { editor ->
+            editor?.copy(
+                error = null,
+                roles = editor.roles.map { role ->
+                    if (role.roleId == roleId) role.copy(fallback = role.fallback + PiModelRefDto(providerId, model)) else role
+                },
+            )
+        }
+    }
+
+    fun removeRoleFallback(roleId: String, index: Int) {
+        _configEditor.update { editor ->
+            editor?.copy(
+                error = null,
+                roles = editor.roles.map { role ->
+                    if (role.roleId == roleId) role.copy(fallback = role.fallback.filterIndexed { itemIndex, _ -> itemIndex != index }) else role
+                },
+            )
+        }
+    }
+
+    fun moveRoleFallback(roleId: String, fromIndex: Int, toIndex: Int) {
+        _configEditor.update { editor ->
+            editor?.copy(
+                error = null,
+                roles = editor.roles.map { role ->
+                    if (role.roleId != roleId) return@map role
+                    val mutable = role.fallback.toMutableList()
+                    if (fromIndex !in mutable.indices || toIndex !in mutable.indices) return@map role
+                    val item = mutable.removeAt(fromIndex)
+                    mutable.add(toIndex, item)
+                    role.copy(fallback = mutable)
+                },
+            )
+        }
+    }
+
+    fun saveConfigEditor() {
+        val editor = _configEditor.value ?: return
+        val errors = editor.validationErrors
+        if (editor.topic.isBlank() || errors.isNotEmpty()) {
+            _configEditor.value = editor.copy(error = (listOfNotNull("Topic is required".takeIf { editor.topic.isBlank() }) + errors).first())
+            return
+        }
         mutate {
-            val nextIndex = _roundtables.value.size + 1
-            api.createRoundtable(conn, PiCreateRoundtableRequest(topic = "Roundtable topic $nextIndex"))
+            api.createRoundtable(
+                conn,
+                PiCreateRoundtableRequest(
+                    topic = editor.topic.trim(),
+                    roster = editor.roles.map { it.toPersonaDto() },
+                ),
+            )
         }
     }
 
@@ -172,6 +317,7 @@ class RoundtableCenterViewModel @Inject constructor(
             try {
                 block()
                 _roundtables.value = api.listRoundtables(conn).mapNotNull { dto -> dto.toDomain() }
+                _configEditor.value = null
             } catch (error: Exception) {
                 _error.value = error.message ?: "Roundtable action failed"
             } finally {
@@ -188,6 +334,50 @@ private data class RoundtableCenterSecondaryState(
     val error: String?,
     val sortWire: String,
     val filterWire: String,
+)
+
+internal fun RoleConfigEditorState.validationErrors(catalog: List<PiCatalogEntryDto>): List<String> {
+    val providerEntry = catalog.firstOrNull { it.providerId == provider }
+    val errors = mutableListOf<String>()
+    if (providerEntry == null) {
+        errors += "$name uses unknown provider $provider"
+    } else {
+        if (!providerEntry.baseUrl.isHttpUrl()) errors += "$name provider ${providerEntry.displayName} has a bad baseUrl"
+        if (!providerEntry.enabled || providerEntry.validation.status == "disabled") errors += "$name provider ${providerEntry.displayName} is disabled"
+        if (providerEntry.validation.status == "invalid") errors += "$name provider ${providerEntry.displayName}: ${providerEntry.validation.message ?: "validation failed"}"
+        val modelEntry = providerEntry.models.firstOrNull { it.id == model }
+        if (modelEntry == null) errors += "$name uses unknown model $model"
+        else if (!modelEntry.enabled) errors += "$name model ${modelEntry.displayName} is disabled"
+    }
+    fallback.forEachIndexed { index, ref ->
+        val fallbackProvider = catalog.firstOrNull { it.providerId == ref.providerId }
+        if (fallbackProvider == null) {
+            errors += "$name fallback ${index + 1} uses unknown provider ${ref.providerId}"
+        } else if (!fallbackProvider.enabled || fallbackProvider.validation.status == "disabled") {
+            errors += "$name fallback ${index + 1} provider ${fallbackProvider.displayName} is disabled"
+        } else if (fallbackProvider.models.none { it.id == ref.model && it.enabled }) {
+            errors += "$name fallback ${index + 1} uses unknown model ${ref.model}"
+        }
+    }
+    return errors
+}
+
+private fun String.isHttpUrl(): Boolean = runCatching {
+    val uri = URI(this)
+    uri.scheme == "http" || uri.scheme == "https"
+}.getOrDefault(false)
+
+private fun PiPersonaDto.toRoleConfigEditor(): RoleConfigEditorState = RoleConfigEditorState(
+    roleId = id.orEmpty().ifBlank { name.lowercase().replace(Regex("[^a-z0-9._-]+"), "-").trim('-') },
+    name = name,
+    mbti = mbti,
+    stancePrompt = stancePrompt,
+    style = style,
+    actionTagPrefs = actionTagPrefs,
+    provider = provider,
+    model = model,
+    fallback = fallback,
+    enabled = enabled,
 )
 
 private fun PiRoundtableDto.toDomain(): Roundtable? {

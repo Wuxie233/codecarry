@@ -3,6 +3,7 @@ package dev.minios.ocremote.ui.screens.roundtable
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,11 +27,14 @@ import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.BasicAlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -43,8 +47,11 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -62,6 +69,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import dev.minios.ocremote.domain.model.Roundtable
 import dev.minios.ocremote.ui.screens.chat.PiSenderIdentity
 import dev.minios.ocremote.ui.screens.chat.piSenderAccentColor
+import dev.minios.ocremote.data.api.PiCatalogEntryDto
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -165,6 +173,190 @@ fun RoundtableCenterScreen(
                 }
             }
         }
+    }
+
+    uiState.configEditor?.let { editor ->
+        RoundtableConfigDialog(
+            editor = editor,
+            onTopicChange = viewModel::updateConfigTopic,
+            onProviderChange = viewModel::updateRoleProvider,
+            onModelChange = viewModel::updateRoleModel,
+            onAddFallback = viewModel::addRoleFallback,
+            onRemoveFallback = viewModel::removeRoleFallback,
+            onMoveFallback = viewModel::moveRoleFallback,
+            onSave = viewModel::saveConfigEditor,
+            onDismiss = viewModel::dismissConfigEditor,
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun RoundtableConfigDialog(
+    editor: RoundtableConfigEditorState,
+    onTopicChange: (String) -> Unit,
+    onProviderChange: (String, String) -> Unit,
+    onModelChange: (String, String) -> Unit,
+    onAddFallback: (String, String, String) -> Unit,
+    onRemoveFallback: (String, Int) -> Unit,
+    onMoveFallback: (String, Int, Int) -> Unit,
+    onSave: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val errors = editor.validationErrors
+    BasicAlertDialog(onDismissRequest = onDismiss) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 720.dp),
+            shape = RoundedCornerShape(20.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp,
+        ) {
+            Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("Configure roundtable models", style = MaterialTheme.typography.titleLarge)
+                Text(
+                    text = "Each role starts from the persona library default. Change provider, model, or ordered fallbacks for this roundtable only.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedTextField(
+                    value = editor.topic,
+                    onValueChange = onTopicChange,
+                    label = { Text("Topic") },
+                    modifier = Modifier.fillMaxWidth(),
+                    isError = editor.topic.isBlank(),
+                )
+                if (editor.isLoadingCatalog) {
+                    CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.weight(1f, fill = false),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        items(editor.roles, key = { it.roleId }) { role ->
+                            RoleConfigCard(
+                                role = role,
+                                catalog = editor.catalog,
+                                onProviderChange = { provider -> onProviderChange(role.roleId, provider) },
+                                onModelChange = { model -> onModelChange(role.roleId, model) },
+                                onAddFallback = { provider, model -> onAddFallback(role.roleId, provider, model) },
+                                onRemoveFallback = { index -> onRemoveFallback(role.roleId, index) },
+                                onMoveFallback = { from, to -> onMoveFallback(role.roleId, from, to) },
+                            )
+                        }
+                    }
+                }
+                (editor.error ?: errors.firstOrNull())?.let { error ->
+                    Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = onDismiss) { Text("Cancel") }
+                    Button(onClick = onSave, enabled = !editor.isLoadingCatalog && editor.topic.isNotBlank() && errors.isEmpty()) {
+                        Text("Create roundtable")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RoleConfigCard(
+    role: RoleConfigEditorState,
+    catalog: List<PiCatalogEntryDto>,
+    onProviderChange: (String) -> Unit,
+    onModelChange: (String) -> Unit,
+    onAddFallback: (String, String) -> Unit,
+    onRemoveFallback: (Int) -> Unit,
+    onMoveFallback: (Int, Int) -> Unit,
+) {
+    val provider = catalog.firstOrNull { it.providerId == role.provider }
+    val roleErrors = role.validationErrors(catalog)
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHighest),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
+    ) {
+        Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(role.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text("Persona library default · override for this roundtable", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                AssistChip(onClick = {}, label = { Text(provider?.displayName ?: role.provider) })
+            }
+            CatalogDropdown(
+                label = "Gateway",
+                value = provider?.displayName ?: role.provider,
+                options = catalog.map { it.providerId to it.displayName },
+                onSelect = onProviderChange,
+            )
+            CatalogDropdown(
+                label = "Model",
+                value = provider?.models?.firstOrNull { it.id == role.model }?.displayName ?: role.model,
+                options = (provider?.models ?: emptyList()).map { it.id to it.displayName },
+                onSelect = onModelChange,
+            )
+            Text("Ordered fallback list", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            role.fallback.forEachIndexed { index, fallback ->
+                FallbackRow(
+                    index = index,
+                    ref = fallback,
+                    canMoveUp = index > 0,
+                    canMoveDown = index < role.fallback.lastIndex,
+                    onMoveUp = { onMoveFallback(index, index - 1) },
+                    onMoveDown = { onMoveFallback(index, index + 1) },
+                    onRemove = { onRemoveFallback(index) },
+                )
+            }
+            val addProvider = catalog.firstOrNull { it.enabled && it.models.any { model -> model.enabled } }
+            val addModel = addProvider?.models?.firstOrNull { it.enabled }
+            TextButton(onClick = { if (addProvider != null && addModel != null) onAddFallback(addProvider.providerId, addModel.id) }, enabled = addProvider != null && addModel != null) {
+                Text("Add fallback")
+            }
+            roleErrors.firstOrNull()?.let { error ->
+                Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+@Composable
+private fun CatalogDropdown(label: String, value: String, options: List<Pair<String, String>>, onSelect: (String) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        OutlinedTextField(
+            value = value,
+            onValueChange = {},
+            readOnly = true,
+            label = { Text(label) },
+            trailingIcon = { Icon(Icons.Default.KeyboardArrowDown, contentDescription = null) },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            options.forEach { (id, displayName) ->
+                DropdownMenuItem(text = { Text(displayName) }, onClick = { expanded = false; onSelect(id) })
+            }
+        }
+        Box(modifier = Modifier.matchParentSize().clickable { expanded = true })
+    }
+}
+
+@Composable
+private fun FallbackRow(
+    index: Int,
+    ref: dev.minios.ocremote.data.api.PiModelRefDto,
+    canMoveUp: Boolean,
+    canMoveDown: Boolean,
+    onMoveUp: () -> Unit,
+    onMoveDown: () -> Unit,
+    onRemove: () -> Unit,
+) {
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        AssistChip(onClick = {}, label = { Text("${index + 1}. ${ref.providerId} · ${ref.model}") }, modifier = Modifier.weight(1f))
+        IconButton(onClick = onMoveUp, enabled = canMoveUp) { Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Move fallback up") }
+        IconButton(onClick = onMoveDown, enabled = canMoveDown) { Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Move fallback down") }
+        IconButton(onClick = onRemove) { Icon(Icons.Default.Delete, contentDescription = "Remove fallback") }
     }
 }
 

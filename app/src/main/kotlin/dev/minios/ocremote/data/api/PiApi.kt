@@ -157,6 +157,28 @@ class PiApi(
         return decodePersonaList(body)
     }
 
+    suspend fun listCatalog(conn: PiConnection): List<PiCatalogEntryDto> {
+        val body = httpClient.prepareGet("${conn.baseUrl}/catalog") {
+            applyPiHeaders(conn)
+        }.execute { response ->
+            if (!response.status.isSuccess()) throw PiApiException("GET /catalog failed with HTTP ${response.status.value}")
+            response.bodyAsText()
+        }
+        val root = json.parseToJsonElement(body)
+        val serializer = ListSerializer(PiCatalogEntryDto.serializer())
+        return when (root) {
+            is JsonArray -> json.decodeFromJsonElement(serializer, root)
+            is JsonObject -> {
+                val items = root["items"] ?: root["catalog"] ?: root["data"]
+                when (items) {
+                    is JsonArray -> json.decodeFromJsonElement(serializer, items)
+                    else -> root["item"]?.let { listOf(json.decodeFromJsonElement(PiCatalogEntryDto.serializer(), it)) } ?: listOf(json.decodeFromJsonElement(PiCatalogEntryDto.serializer(), root))
+                }
+            }
+            else -> emptyList()
+        }
+    }
+
     suspend fun getPersona(conn: PiConnection, personaId: String): PiPersonaDto {
         return httpClient.get("${conn.baseUrl}/personas/$personaId") {
             applyPiHeaders(conn)
@@ -340,6 +362,8 @@ data class PiCreateRoundtableRequest(
     val roundTitle: String? = null,
     val initialMessage: String? = null,
     val templateOf: String? = null,
+    val roster: List<PiPersonaDto>? = null,
+    val moderator: PiPersonaDto? = null,
 )
 
 @Serializable
@@ -402,6 +426,35 @@ data class PiPersonaDto(
     val model: String,
     val fallback: List<PiModelRefDto> = emptyList(),
     val enabled: Boolean = true,
+)
+
+@Serializable
+data class PiCatalogEntryDto(
+    val providerId: String,
+    val displayName: String,
+    val baseUrl: String,
+    val api: String,
+    val models: List<PiCatalogModelDto> = emptyList(),
+    val fallback: List<PiModelRefDto> = emptyList(),
+    val enabled: Boolean = true,
+    val validation: PiCatalogValidationDto,
+)
+
+@Serializable
+data class PiCatalogModelDto(
+    val id: String,
+    val displayName: String,
+    val contextWindow: Int? = null,
+    val supportsStreaming: Boolean? = null,
+    val enabled: Boolean = true,
+)
+
+@Serializable
+data class PiCatalogValidationDto(
+    val status: String,
+    val checkedAt: String? = null,
+    val message: String? = null,
+    val streamingChecked: Boolean? = null,
 )
 
 @Serializable
