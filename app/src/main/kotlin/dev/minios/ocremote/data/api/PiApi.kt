@@ -422,6 +422,7 @@ data class PiCommandRequest(
     val target: PiCommandTargetDto? = null,
     val instruction: String? = null,
     val persona: PiPersonaDto? = null,
+    val personaId: String? = null,
     val targetPersonaId: String? = null,
     val participant: PiCommandParticipantDto? = null,
     val content: String? = null,

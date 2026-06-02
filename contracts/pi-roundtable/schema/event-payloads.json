@@ -415,7 +415,7 @@
         },
         "skipCommand": {
           "type": "string",
-          "const": "awaiting_skip"
+          "const": "skip"
         }
       },
       "additionalProperties": true
@@ -439,6 +439,7 @@
             "max_turns",
             "max_round_ms",
             "max_transcript_bytes",
+            "max_token_budget",
             "error"
           ]
         },

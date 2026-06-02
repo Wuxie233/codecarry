@@ -177,7 +177,7 @@
         "model": "pi-agent-beta-fallback",
         "attempt": 3,
         "reason": "all configured models unavailable",
-        "skipCommand": "awaiting_skip"
+        "skipCommand": "skip"
       },
       "turnId": "turn-turing-001"
     }
@@ -239,7 +239,7 @@
         "model": "pi-agent-beta-fallback",
         "attempt": 3,
         "reason": "all configured models unavailable",
-        "skipCommand": "awaiting_skip"
+        "skipCommand": "skip"
       }
     ],
     "errors": [

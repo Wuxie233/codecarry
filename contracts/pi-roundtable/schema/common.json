@@ -214,6 +214,7 @@
         "引入新人物",
         "@mention",
         "inject",
+        "skip",
         "switch_cadence"
       ]
     }

@@ -93,6 +93,63 @@
         {
           "type": "object",
           "required": [
+            "command",
+            "personaId"
+          ],
+          "properties": {
+            "command": {
+              "const": "skip"
+            },
+            "personaId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "note": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": true
+        }
+      ]
+    },
+    {
+      "allOf": [
+        {
+          "type": "object",
+          "propertyNames": {
+            "not": {
+              "pattern": "([Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd])"
+            }
+          },
+          "required": [
+            "protocolVersion",
+            "command",
+            "roundId"
+          ],
+          "properties": {
+            "protocolVersion": {
+              "$ref": "common.json#/definitions/ProtocolVersion"
+            },
+            "command": {
+              "$ref": "common.json#/definitions/CommandName"
+            },
+            "roundId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "clientCommandId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "ts": {
+              "$ref": "common.json#/definitions/IsoTimestamp"
+            }
+          },
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "required": [
             "command"
           ],
           "properties": {

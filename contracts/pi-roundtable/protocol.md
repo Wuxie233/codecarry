@@ -50,7 +50,7 @@ Payload schemas live in `schema/event-payloads.json`.
 - `agent_retry`: same provider/model is being retried; includes persona, provider, model, attempt, reason, and retry delay.
 - `agent_fallback`: provider/model changed; includes persona, previous model ref, next model ref, attempt, and reason.
 - `agent_error`: current persona/model attempt failed; includes recoverability.
-- `awaiting_skip`: all configured attempts for the persona are exhausted or paused; UI should offer skip.
+- `awaiting_skip`: all configured attempts for the persona are exhausted or paused; UI should offer the advertised `skipCommand` value (`"skip"`) and send the exhausted `personaId` in the command payload.
 - `round_end`: round stopped or completed.
 - `error`: stream/system error not attributable to a single persona turn.
 

@@ -248,8 +248,7 @@ class PiRoundtableTransport(
             "skip" -> PiCommandRequest(
                 roundId = roundId,
                 command = this,
-                targetPersonaId = trimmedArguments,
-                arguments = trimmedArguments,
+                personaId = trimmedArguments,
             )
             else -> PiCommandRequest(roundId = roundId, command = this, arguments = trimmedArguments)
         }

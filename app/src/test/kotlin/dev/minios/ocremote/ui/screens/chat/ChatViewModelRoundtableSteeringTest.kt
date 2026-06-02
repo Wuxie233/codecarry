@@ -8,13 +8,13 @@ import dev.minios.ocremote.data.api.OpenCodeApi
 import dev.minios.ocremote.data.api.PiApi
 import dev.minios.ocremote.data.api.PiCommandRequest
 import dev.minios.ocremote.data.api.PiPersonaDto
+import dev.minios.ocremote.data.api.RoundtableSseEvent
+import dev.minios.ocremote.data.transport.PiRoundtableEventProcessor
 import dev.minios.ocremote.data.preferences.SessionListPreferencesRepository
 import dev.minios.ocremote.data.repository.DraftRepository
 import dev.minios.ocremote.data.repository.EventReducer
 import dev.minios.ocremote.data.repository.SettingsRepository
 import dev.minios.ocremote.domain.model.ServerType
-import dev.minios.ocremote.domain.transport.PiAuthor
-import dev.minios.ocremote.domain.transport.PiEventEnvelope
 import dev.minios.ocremote.domain.transport.PiTransportEvent
 import dev.minios.ocremote.domain.transport.TransportEvent
 import io.ktor.client.HttpClient
@@ -52,12 +52,15 @@ import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -128,7 +131,8 @@ class ChatViewModelRoundtableSteeringTest {
     fun `awaiting skip run state sends skip command`() = runTest(dispatcher) {
         val eventReducer = EventReducer()
         val sentCommands = Collections.synchronizedList(mutableListOf<PiCommandRequest>())
-        val vm = newViewModel(sentCommands, eventReducer)
+        val sentBodies = Collections.synchronizedList(mutableListOf<String>())
+        val vm = newViewModel(sentCommands, eventReducer, sentBodies)
         collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
         advanceUntilIdle()
 
@@ -141,8 +145,13 @@ class ChatViewModelRoundtableSteeringTest {
         val command = sentCommands.single()
         assertEquals("skip", command.command)
         assertEquals(ROUND_ID, command.roundId)
-        assertEquals("ada", command.targetPersonaId)
-        assertEquals("ada", command.arguments)
+        assertEquals("persona-turing", command.personaId)
+        assertEquals(null, command.targetPersonaId)
+        assertEquals(null, command.arguments)
+        val requestBody = sentBodies.single()
+        assertTrue(requestBody.contains("\"command\":\"skip\""))
+        assertTrue(requestBody.contains("\"personaId\":\"persona-turing\""))
+        assertFalse(requestBody.contains("targetPersonaId"))
     }
 
     private suspend fun sendAndAwait(send: ((Boolean) -> Unit) -> Unit) {
@@ -155,12 +164,13 @@ class ChatViewModelRoundtableSteeringTest {
     private fun newViewModel(
         sentCommands: MutableList<PiCommandRequest>,
         eventReducer: EventReducer = EventReducer(),
+        sentBodies: MutableList<String>? = null,
     ): ChatViewModel {
         return ChatViewModel(
             savedStateHandle = savedStateHandle(),
             eventReducer = eventReducer,
             api = openCodeApi(),
-            piApi = piApi(sentCommands),
+            piApi = piApi(sentCommands, sentBodies),
             json = json,
             draftRepository = draftRepository(),
             sessionListPreferencesRepository = sessionListPreferencesRepository(),
@@ -180,13 +190,15 @@ class ChatViewModelRoundtableSteeringTest {
         )
     )
 
-    private fun piApi(sentCommands: MutableList<PiCommandRequest>): PiApi {
+    private fun piApi(sentCommands: MutableList<PiCommandRequest>, sentBodies: MutableList<String>? = null): PiApi {
         val engine = MockEngine { request ->
             when {
                 request.url.encodedPath == "/roundtables" && request.method == HttpMethod.Get -> respondJson(roundtablesJson())
                 request.url.encodedPath == "/personas" && request.method == HttpMethod.Get -> respondJson(personasJson())
                 request.url.encodedPath == "/roundtables/$ROUND_ID/command" && request.method == HttpMethod.Post -> {
-                    sentCommands += json.decodeFromString(PiCommandRequest.serializer(), request.body.bodyAsText())
+                    val body = request.body.bodyAsText()
+                    sentBodies?.add(body)
+                    sentCommands += json.decodeFromString(PiCommandRequest.serializer(), body)
                     respondJson("""{"accepted":true}""")
                 }
                 else -> respond("{}", HttpStatusCode.NotFound)
@@ -227,24 +239,25 @@ class ChatViewModelRoundtableSteeringTest {
         )
     )
 
-    private fun awaitingSkipEvent() = PiTransportEvent.AwaitingSkip(
-        envelope = PiEventEnvelope(
-            protocolVersion = 1,
-            eventId = 41,
-            roundId = ROUND_ID,
-            turnId = "turn-ada-001",
-            sequence = 41,
-            type = "awaiting_skip",
-            author = PiAuthor(id = "ada", name = "Ada", mbti = "INTP", role = "analyst", colorSeed = "ada"),
-            ts = "2026-06-03T00:00:00Z",
-        ),
-        personaId = "ada",
-        providerId = "fake-provider",
-        model = "fake-model",
-        attempt = 2,
-        reason = "model quota exhausted",
-        skipCommand = "skip",
+    private fun awaitingSkipEvent(): PiTransportEvent.AwaitingSkip {
+        return PiRoundtableEventProcessor(json)
+            .processSnapshot(fixtureEvents("fallback-then-skip.json"))
+            .filterIsInstance<PiTransportEvent.AwaitingSkip>()
+            .single()
+    }
+
+    private fun fixtureEvents(name: String): List<RoundtableSseEvent> = json.decodeFromString(
+        ListSerializer(RoundtableSseEvent.serializer()),
+        fixtureFile(name).readText(),
     )
+
+    private fun fixtureFile(name: String): File {
+        val start = File(System.getProperty("user.dir") ?: ".").absoluteFile
+        return generateSequence(start) { file -> file.parentFile }
+            .map { root -> File(root, "contracts/pi-roundtable/fixtures/$name") }
+            .firstOrNull { file -> file.exists() }
+            ?: error("Missing Pi roundtable fixture $name from $start")
+    }
 
     private fun draftRepository(): DraftRepository {
         val filesDir = tmpFolder.newFolder("drafts-${System.nanoTime()}")
@@ -279,7 +292,7 @@ class ChatViewModelRoundtableSteeringTest {
 
     companion object {
         private const val SERVER_ID = "srv-pi"
-        private const val ROUND_ID = "round-steering"
+        private const val ROUND_ID = "round-fixture-001"
     }
 }
 
