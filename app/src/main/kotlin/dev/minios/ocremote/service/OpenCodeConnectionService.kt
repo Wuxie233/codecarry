@@ -13,17 +13,21 @@ import dev.minios.ocremote.BuildConfig
 import dev.minios.ocremote.MainActivity
 import dev.minios.ocremote.R
 import dev.minios.ocremote.data.api.OpenCodeApi
-import dev.minios.ocremote.data.api.ServerConnection
 import dev.minios.ocremote.data.api.SseClient
 import dev.minios.ocremote.data.preferences.SessionListPreferencesRepository
 import dev.minios.ocremote.data.repository.EventReducer
 import dev.minios.ocremote.data.repository.LocalServerManager
 import dev.minios.ocremote.data.repository.ServerRepository
 import dev.minios.ocremote.data.repository.SettingsRepository
+import dev.minios.ocremote.data.transport.OpenCodeTransport
 import dev.minios.ocremote.domain.model.Message
 import dev.minios.ocremote.domain.model.Part
 import dev.minios.ocremote.domain.model.ServerConfig
+import dev.minios.ocremote.domain.model.ServerType
 import dev.minios.ocremote.domain.model.SseEvent
+import dev.minios.ocremote.domain.transport.AgentTransport
+import dev.minios.ocremote.domain.transport.TransportEvent
+import dev.minios.ocremote.domain.transport.TransportRoom
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -54,7 +58,7 @@ private const val RECONNECT_BACKOFF_FACTOR = 2.0
  */
 private data class ServerConnectionState(
     val config: ServerConfig,
-    val conn: ServerConnection,
+    val transport: AgentTransport,
     val sseJob: Job,
     val isConnected: Boolean = false
 )
@@ -233,17 +237,17 @@ class OpenCodeConnectionService : Service() {
 
         ensureForegroundStarted()
 
-        val conn = ServerConnection.from(server.url, server.username, server.password)
+        val transport = createTransport(server)
 
         // Acquire wake lock (shared — first connect acquires, last disconnect releases)
         acquireWakeLock()
 
         // Start SSE connection with auto-reconnect
-        val job = startSseConnection(server, conn)
+        val job = startSseConnection(server, transport)
 
         connections[server.id] = ServerConnectionState(
             config = server,
-            conn = conn,
+            transport = transport,
             sseJob = job,
             isConnected = false
         )
@@ -399,7 +403,7 @@ class OpenCodeConnectionService : Service() {
 
     // ============ SSE Connection with Auto-Reconnect ============
 
-    private fun startSseConnection(server: ServerConfig, conn: ServerConnection): Job {
+    private fun startSseConnection(server: ServerConfig, transport: AgentTransport): Job {
         return serviceScope.launch {
             var attempt = 0
 
@@ -408,15 +412,15 @@ class OpenCodeConnectionService : Service() {
                 Log.i(TAG, "[${server.displayName}] SSE connection attempt #$attempt")
 
                 try {
-                    val roots = api.listSessions(conn, rootsOnly = true)
+                    val roots = transport.listRooms(rootsOnly = true).openCodeSessions()
                     eventReducer.setSessions(server.id, roots)
                     Log.i(TAG, "[${server.displayName}] Pre-loaded ${roots.size} root sessions")
 
-                    val projects = try { api.listProjects(conn) } catch (_: Exception) { emptyList() }
+                    val projects = try { transport.listRoomScopes() } catch (_: Exception) { emptyList() }
                     var childCount = 0
                     for (project in projects) {
                         try {
-                            val all = api.listSessions(conn, directory = project.worktree, rootsOnly = false)
+                            val all = transport.listRooms(directory = project.directory, rootsOnly = false).openCodeSessions()
                             val children = all.filter { it.parentId != null }
                             if (children.isNotEmpty()) {
                                 eventReducer.setSessions(server.id, children)
@@ -432,17 +436,20 @@ class OpenCodeConnectionService : Service() {
                 }
 
                 try {
-                    sseClient.connectToGlobalEvents(conn)
+                    transport.openEventStream()
                         .catch { error ->
                             Log.e(TAG, "[${server.displayName}] SSE stream error", error)
                             updateServerConnected(server.id, false)
                             throw error
                         }
-                        .collect { event ->
+                        .collect { transportEvent ->
                             if (connections[server.id]?.isConnected != true) {
                                 updateServerConnected(server.id, true)
                                 attempt = 0
                                 updatePersistentNotification()
+                            }
+                            val event = when (transportEvent) {
+                                is TransportEvent.OpenCode -> transportEvent.event
                             }
                             processEvent(server, event)
                         }
@@ -589,14 +596,19 @@ class OpenCodeConnectionService : Service() {
 
     // ============ Helpers ============
 
-    private fun getServerConnection(server: ServerConfig): ServerConnection? {
-        return connections[server.id]?.conn
-    }
-
     private fun getSessionInfo(sessionId: String): Pair<String?, String?> {
         val session = eventReducer.sessions.value.find { it.id == sessionId }
         return Pair(session?.title, session?.directory)
     }
+
+    private fun createTransport(server: ServerConfig): AgentTransport = when (server.type) {
+        ServerType.OPENCODE -> OpenCodeTransport(server, api, sseClient)
+        // Placeholder for Task 10. Pi transport must implement AgentTransport without routing through OpenCode APIs.
+        ServerType.PI_ROUNDTABLE -> throw UnsupportedOperationException("Pi Roundtable transport is not implemented yet")
+    }
+
+    private fun List<TransportRoom>.openCodeSessions(): List<dev.minios.ocremote.domain.model.Session> =
+        mapNotNull { room -> (room as? TransportRoom.OpenCode)?.session }
 
     private fun handlePermissionAction(serverId: String, sessionId: String, requestId: String, replyValue: String) {
         if (replyValue !in setOf(PERMISSION_REPLY_ONCE, PERMISSION_REPLY_ALWAYS, PERMISSION_REPLY_REJECT)) {
@@ -614,8 +626,7 @@ class OpenCodeConnectionService : Service() {
         val (_, directory) = getSessionInfo(sessionId)
         serviceScope.launch {
             val success = try {
-                api.replyToPermission(
-                    conn = state.conn,
+                state.transport.replyToPermission(
                     requestId = requestId,
                     reply = replyValue,
                     directory = directory
