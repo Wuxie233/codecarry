@@ -218,11 +218,36 @@ class PiRoundtableTransport(
         return when (this) {
             "可" -> PiCommandRequest(roundId = roundId, command = this, note = trimmedArguments)
             "止" -> PiCommandRequest(roundId = roundId, command = this, wrapUpInstruction = trimmedArguments)
+            "switch_cadence" -> PiCommandRequest(
+                roundId = roundId,
+                command = this,
+                speakerPolicy = trimmedArguments?.let { PiSpeakerPolicyDto(mode = it) },
+                arguments = trimmedArguments,
+            )
+            "@mention" -> {
+                val targetPersonaId = trimmedArguments?.substringBefore(' ')?.takeIf { it.isNotBlank() }
+                val instruction = trimmedArguments
+                    ?.substringAfter(' ', missingDelimiterValue = "")
+                    ?.takeIf { it.isNotBlank() }
+                PiCommandRequest(
+                    roundId = roundId,
+                    command = this,
+                    targetPersonaId = targetPersonaId,
+                    instruction = instruction,
+                    arguments = trimmedArguments,
+                )
+            }
             "inject" -> PiCommandRequest(
                 roundId = roundId,
                 command = this,
                 participant = PiCommandParticipantDto(id = "user-local", name = "User"),
                 content = trimmedArguments.orEmpty(),
+            )
+            "skip" -> PiCommandRequest(
+                roundId = roundId,
+                command = this,
+                targetPersonaId = trimmedArguments,
+                arguments = trimmedArguments,
             )
             else -> PiCommandRequest(roundId = roundId, command = this, arguments = trimmedArguments)
         }

@@ -76,6 +76,7 @@ import dev.minios.ocremote.data.api.PiCatalogEntryDto
 @Composable
 fun RoundtableCenterScreen(
     onNavigateBack: () -> Unit,
+    onOpenRoundtable: (String) -> Unit,
     onOpenPersonaLibrary: () -> Unit,
     viewModel: RoundtableCenterViewModel = hiltViewModel(),
 ) {
@@ -156,6 +157,7 @@ fun RoundtableCenterScreen(
                             RoundtableCard(
                                 roundtable = roundtable,
                                 isAmoled = isAmoled,
+                                onOpen = { onOpenRoundtable(roundtable.id) },
                                 onResume = { viewModel.resumeRoundtable(roundtable.id) },
                                 onArchive = { viewModel.archiveRoundtable(roundtable.id) },
                                 onDelete = { viewModel.deleteRoundtable(roundtable.id) },
@@ -487,6 +489,7 @@ private fun RoundtableCenterControls(
 private fun RoundtableCard(
     roundtable: Roundtable,
     isAmoled: Boolean,
+    onOpen: () -> Unit,
     onResume: () -> Unit,
     onArchive: () -> Unit,
     onDelete: () -> Unit,
@@ -497,7 +500,9 @@ private fun RoundtableCard(
     val outline = MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isAmoled) 0.72f else 0.35f)
 
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onOpen),
         colors = CardDefaults.cardColors(containerColor = containerColor),
         border = BorderStroke(1.dp, outline),
     ) {

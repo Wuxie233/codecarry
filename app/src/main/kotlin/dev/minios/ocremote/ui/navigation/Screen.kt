@@ -82,6 +82,7 @@ sealed class Screen(val route: String) {
             sessionId: String,
             openTerminal: Boolean = false,
             directory: String = "",
+            serverType: String = "OPENCODE",
         ): String {
             val encodedUrl = URLEncoder.encode(serverUrl, "UTF-8")
             val encodedUsername = URLEncoder.encode(username, "UTF-8")
@@ -90,7 +91,8 @@ sealed class Screen(val route: String) {
             val encodedServerId = URLEncoder.encode(serverId, "UTF-8")
             val encodedSessionId = URLEncoder.encode(sessionId, "UTF-8")
             val encodedDirectory = URLEncoder.encode(directory, "UTF-8")
-            return "chat?serverUrl=$encodedUrl&username=$encodedUsername&password=$encodedPassword&serverName=$encodedName&serverId=$encodedServerId&sessionId=$encodedSessionId&openTerminal=$openTerminal&directory=$encodedDirectory"
+            val encodedServerType = URLEncoder.encode(serverType, "UTF-8")
+            return "chat?serverUrl=$encodedUrl&username=$encodedUsername&password=$encodedPassword&serverName=$encodedName&serverId=$encodedServerId&sessionId=$encodedSessionId&openTerminal=$openTerminal&directory=$encodedDirectory&serverType=$encodedServerType"
         }
     }
 

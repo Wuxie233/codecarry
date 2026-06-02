@@ -11,6 +11,8 @@ import dev.minios.ocremote.data.api.AgentInfo
 import dev.minios.ocremote.data.api.CommandInfo
 import dev.minios.ocremote.data.api.ModelSelection
 import dev.minios.ocremote.data.api.OpenCodeApi
+import dev.minios.ocremote.data.api.PiApi
+import dev.minios.ocremote.data.api.PiPersonaDto
 import dev.minios.ocremote.data.api.PromptPart
 import dev.minios.ocremote.data.api.ProviderInfo
 import dev.minios.ocremote.data.api.ServerConnection
@@ -18,7 +20,18 @@ import dev.minios.ocremote.data.preferences.SessionListPreferencesRepository
 import dev.minios.ocremote.data.repository.DraftRepository
 import dev.minios.ocremote.data.repository.EventReducer
 import dev.minios.ocremote.data.repository.SettingsRepository
+import dev.minios.ocremote.data.transport.PiRoundtableTransport
 import dev.minios.ocremote.domain.model.*
+import dev.minios.ocremote.domain.transport.PiRoundtableRoom
+import dev.minios.ocremote.domain.transport.PiTransportEvent
+import dev.minios.ocremote.domain.transport.PiTransportEvent.AgentError
+import dev.minios.ocremote.domain.transport.PiTransportEvent.AgentFallback
+import dev.minios.ocremote.domain.transport.PiTransportEvent.AgentRetry
+import dev.minios.ocremote.domain.transport.PiTransportEvent.AwaitingCommand
+import dev.minios.ocremote.domain.transport.PiTransportEvent.AwaitingSkip
+import dev.minios.ocremote.domain.transport.PiTransportEvent.RoundStart
+import dev.minios.ocremote.domain.transport.TransportMessagePart
+import dev.minios.ocremote.domain.transport.TransportRoom
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -31,6 +44,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.Json
 import java.net.URLDecoder
 import javax.inject.Inject
 
@@ -85,8 +99,44 @@ data class ChatUiState(
     /** Context window size of the current model (0 if unknown). */
     val contextWindow: Int = 0,
     /** Total tokens from the last assistant message with output > 0 (current context usage). */
-    val lastContextTokens: Int = 0
+    val lastContextTokens: Int = 0,
+    val isPiRoundtable: Boolean = false,
+    val roundtable: Roundtable? = null,
+    val roundtableEvents: List<PiTransportEvent> = emptyList(),
+    val activeRoster: List<Roundtable.RoleSummary> = emptyList(),
+    val personaLibrary: List<PiPersonaDto> = emptyList(),
+    val runState: RoundtableRunState = RoundtableRunState(),
 )
+
+data class RoundtableRunState(
+    val cadence: RoundtableCadenceMode = RoundtableCadenceMode.ModeratorRouted,
+    val awaitingCommand: PiTransportEvent.AwaitingCommand? = null,
+    val awaitingSkip: PiTransportEvent.AwaitingSkip? = null,
+    val roleStates: List<PiRoleRunState> = emptyList(),
+)
+
+data class PiRoleRunState(
+    val personaId: String,
+    val name: String,
+    val role: String,
+    val colorSeed: String,
+    val retry: PiTransportEvent.AgentRetry? = null,
+    val fallback: PiTransportEvent.AgentFallback? = null,
+    val error: PiTransportEvent.AgentError? = null,
+    val awaitingSkip: PiTransportEvent.AwaitingSkip? = null,
+)
+
+private data class PiRoundtableCatalogState(
+    val commands: List<CommandInfo> = emptyList(),
+    val personaLibrary: List<PiPersonaDto> = emptyList(),
+)
+
+enum class RoundtableCadenceMode(val wireName: String, val label: String) {
+    ModeratorRouted("moderator_routed", "主持调度"),
+    RoundRobin("round_robin", "轮流发言"),
+    FreeRoundtable("free_roundtable", "自由讨论"),
+    MentionReactive("mention_reactive", "点名响应"),
+}
 
 data class RevertedDraftPayload(
     val text: String,
@@ -110,6 +160,8 @@ class ChatViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val eventReducer: EventReducer,
     private val api: OpenCodeApi,
+    private val piApi: PiApi,
+    private val json: Json,
     private val draftRepository: DraftRepository,
     private val sessionListPreferencesRepository: SessionListPreferencesRepository,
     private val settingsRepository: SettingsRepository
@@ -122,8 +174,29 @@ class ChatViewModel @Inject constructor(
     private val serverId: String = decodeRouteArg(savedStateHandle.get<String>("serverId"))
     val sessionId: String = decodeRouteArg(savedStateHandle.get<String>("sessionId"))
     private val routeDirectory: String? = decodeRouteArg(savedStateHandle.get<String>("directory")).takeIf { it.isNotBlank() }
+    private val serverType: ServerType = runCatching {
+        ServerType.valueOf(decodeRouteArg(savedStateHandle.get<String>("serverType")).ifBlank { ServerType.OPENCODE.name })
+    }.getOrDefault(ServerType.OPENCODE)
+    private val isPiRoundtable: Boolean = serverType == ServerType.PI_ROUNDTABLE
 
     private val conn = ServerConnection.from(serverUrl, username, password.ifEmpty { null })
+    private val piTransport: PiRoundtableTransport? = if (isPiRoundtable) {
+        PiRoundtableTransport(
+            server = ServerConfig(
+                id = serverId,
+                type = ServerType.PI_ROUNDTABLE,
+                url = serverUrl,
+                username = username.ifBlank { "pi" },
+                password = null,
+                token = password.takeIf { it.isNotBlank() },
+                name = serverName.takeIf { it.isNotBlank() },
+            ),
+            api = piApi,
+            json = json,
+        )
+    } else {
+        null
+    }
 
     private val _isLoading = MutableStateFlow(true)
     private val _error = MutableStateFlow<String?>(null)
@@ -215,6 +288,7 @@ class ChatViewModel @Inject constructor(
     private val _hasOlderMessages = MutableStateFlow(false)
     /** Whether a "load older" request is in flight. */
     private val _isLoadingOlder = MutableStateFlow(false)
+    private val _piPersonas = MutableStateFlow<List<PiPersonaDto>>(emptyList())
 
     val uiState: StateFlow<ChatUiState> = combine(
         eventReducer.sessions,
@@ -223,6 +297,10 @@ class ChatViewModel @Inject constructor(
         eventReducer.sessionStatuses,
         eventReducer.permissions,
         eventReducer.questions,
+        eventReducer.roundtables,
+        eventReducer.roundtableMessages,
+        eventReducer.roundtableParts,
+        eventReducer.roundtableEvents,
         _isLoading,
         _error,
         _isSending,
@@ -234,9 +312,11 @@ class ChatViewModel @Inject constructor(
         _agents,
         _selectedAgent,
         _selectedVariant,
-        _commands,
+        combine(_commands, _piPersonas) { commands, piPersonas ->
+            PiRoundtableCatalogState(commands = commands, personaLibrary = piPersonas)
+        },
         _hasOlderMessages,
-        _isLoadingOlder
+        _isLoadingOlder,
     ) { args ->
         @Suppress("UNCHECKED_CAST")
         val allSessions = args[0] as List<Session>
@@ -245,26 +325,43 @@ class ChatViewModel @Inject constructor(
         val statuses = args[3] as Map<String, SessionStatus>
         val permissions = args[4] as Map<String, List<SseEvent.PermissionAsked>>
         val questions = args[5] as Map<String, List<SseEvent.QuestionAsked>>
-        val loading = args[6] as Boolean
-        val error = args[7] as String?
-        val sending = args[8] as Boolean
-        val selProviderId = args[9] as String?
-        val selModelId = args[10] as String?
-        val allProviders = args[11] as List<ProviderInfo>
-        val providers = args[12] as List<ProviderInfo>
-        val defaultModels = args[13] as Map<String, String>
-        val agents = args[14] as List<AgentInfo>
         @Suppress("UNCHECKED_CAST")
-        val agentSelection = args[15] as Pair<String, Boolean>
+        val roundtables = args[6] as Map<String, Roundtable>
+        @Suppress("UNCHECKED_CAST")
+        val roundtableMessages = args[7] as Map<String, List<Message>>
+        @Suppress("UNCHECKED_CAST")
+        val roundtableParts = args[8] as Map<String, List<Part>>
+        @Suppress("UNCHECKED_CAST")
+        val roundtableEvents = args[9] as Map<String, List<PiTransportEvent>>
+        val loading = args[10] as Boolean
+        val error = args[11] as String?
+        val sending = args[12] as Boolean
+        val selProviderId = args[13] as String?
+        val selModelId = args[14] as String?
+        val allProviders = args[15] as List<ProviderInfo>
+        val providers = args[16] as List<ProviderInfo>
+        val defaultModels = args[17] as Map<String, String>
+        val agents = args[18] as List<AgentInfo>
+        @Suppress("UNCHECKED_CAST")
+        val agentSelection = args[19] as Pair<String, Boolean>
         val selectedAgent = agentSelection.first
         val isAgentExplicitlySelected = agentSelection.second
-        val selectedVariant = args[16] as String?
-        val commands = args[17] as List<CommandInfo>
-        val hasOlderMessages = args[18] as Boolean
-        val isLoadingOlder = args[19] as Boolean
+        val selectedVariant = args[20] as String?
+        val catalogState = args[21] as PiRoundtableCatalogState
+        val commands = catalogState.commands
+        val hasOlderMessages = args[22] as Boolean
+        val isLoadingOlder = args[23] as Boolean
+        val piPersonas = catalogState.personaLibrary
 
         val session = allSessions.find { it.id == sessionId }
-        val sessionMessages = allMessages[sessionId] ?: emptyList()
+        val roundtable = roundtables[sessionId]
+        val piEvents = roundtableEvents[sessionId].orEmpty()
+        val sessionMessages = if (isPiRoundtable) {
+            roundtableMessages[sessionId] ?: emptyList()
+        } else {
+            allMessages[sessionId] ?: emptyList()
+        }
+        val partsByMessage = if (isPiRoundtable) roundtableParts else allParts
         val revertState = session?.revert
 
         // While the REST call is still loading, suppress SSE-only messages to prevent
@@ -285,7 +382,7 @@ class ChatViewModel @Inject constructor(
             suppressRepeatedPatchCards(visible.map { msg ->
                 ChatMessage(
                     message = msg,
-                    parts = allParts[msg.id] ?: emptyList()
+                    parts = partsByMessage[msg.id] ?: emptyList()
                 )
             })
         }
@@ -366,13 +463,17 @@ class ChatViewModel @Inject constructor(
         val availableVariants = currentModel?.variants?.keys?.toList()?.sorted() ?: emptyList()
 
         ChatUiState(
-            sessionTitle = session?.title ?: "Chat",
+            sessionTitle = if (isPiRoundtable) {
+                roundtable?.topic?.takeIf { it.isNotBlank() } ?: "Roundtable"
+            } else {
+                session?.title ?: "Chat"
+            },
             serverName = serverName,
             messages = chatMessages,
             revert = revertState,
-            sessionStatus = statuses[sessionId] ?: SessionStatus.Idle,
-            pendingPermissions = permissions[sessionId] ?: emptyList(),
-            pendingQuestions = questions[sessionId] ?: emptyList(),
+            sessionStatus = if (isPiRoundtable) SessionStatus.Idle else statuses[sessionId] ?: SessionStatus.Idle,
+            pendingPermissions = if (isPiRoundtable) emptyList() else permissions[sessionId] ?: emptyList(),
+            pendingQuestions = if (isPiRoundtable) emptyList() else questions[sessionId] ?: emptyList(),
             isLoading = loading,
             error = error,
             isSending = sending,
@@ -393,7 +494,13 @@ class ChatViewModel @Inject constructor(
             isLoadingOlder = isLoadingOlder,
             shareUrl = session?.share?.url?.takeIf { it.isNotBlank() },
             contextWindow = currentModel?.limit?.context ?: 0,
-            lastContextTokens = lastContextTokens
+            lastContextTokens = lastContextTokens,
+            isPiRoundtable = isPiRoundtable,
+            roundtable = roundtable,
+            roundtableEvents = piEvents,
+            activeRoster = resolveActiveRoster(roundtable, chatMessages, piEvents),
+            personaLibrary = piPersonas,
+            runState = buildRoundtableRunState(roundtable, chatMessages, piEvents),
         )
     }.stateIn(
         viewModelScope,
@@ -410,6 +517,14 @@ class ChatViewModel @Inject constructor(
             Log.w(TAG, "ChatViewModel constructed with blank sessionId; entering error state")
             _isLoading.value = false
             _error.value = "Invalid session"
+        } else if (isPiRoundtable) {
+            sessionLoaded.complete(Unit)
+            viewModelScope.launch {
+                settingsRepository.terminalFontSize.collect { size ->
+                    terminalWorkspace.setDefaultFontSize(size)
+                }
+            }
+            loadPiRoundtable()
         } else {
             viewModelScope.launch {
                 sessionListPreferencesRepository.markMainSessionRead(sessionId)
@@ -456,6 +571,28 @@ class ChatViewModel @Inject constructor(
             loadCommands()
         }
 
+    }
+
+    fun loadPiRoundtable() {
+        val transport = piTransport ?: return
+        viewModelScope.launch {
+            _isLoading.value = true
+            _error.value = null
+            try {
+                val rooms = transport.listRooms().mapNotNull { room ->
+                    (room as? TransportRoom.Pi)?.room?.toRoundtable()
+                }
+                _piPersonas.value = piApi.listPersonas(
+                    dev.minios.ocremote.data.api.PiConnection.from(serverUrl, password.takeIf { it.isNotBlank() })
+                ).filter { it.enabled }
+                eventReducer.setRoundtables(serverId, rooms)
+            } catch (error: Exception) {
+                Log.e(TAG, "Failed to load Pi roundtable", error)
+                _error.value = error.message ?: "Failed to load roundtable"
+            } finally {
+                _isLoading.value = false
+            }
+        }
     }
 
     /** Load the session info to get its directory for correct project context. */
@@ -819,6 +956,23 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch {
             _isSending.value = true
             try {
+                if (isPiRoundtable) {
+                    piTransport?.sendMessage(
+                        roomId = sessionId,
+                        parts = parts.map { part ->
+                            TransportMessagePart(
+                                type = part.type,
+                                text = part.text,
+                                path = part.path,
+                                mime = part.mime,
+                                url = part.url,
+                                filename = part.filename,
+                            )
+                        },
+                        directory = sessionDirectory,
+                    )
+                    return@launch
+                }
                 val model = if (_selectedProviderId.value != null && _selectedModelId.value != null) {
                     ModelSelection(
                         providerId = _selectedProviderId.value!!,
@@ -843,6 +997,73 @@ class ChatViewModel @Inject constructor(
                 _isSending.value = false
             }
         }
+    }
+
+    fun sendRoundtableCommand(command: String, arguments: String = "", onResult: (Boolean) -> Unit = {}) {
+        val transport = piTransport
+        if (transport == null || command.isBlank()) {
+            onResult(false)
+            return
+        }
+        viewModelScope.launch {
+            val ok = try {
+                transport.sendCommand(
+                    roomId = sessionId,
+                    command = command,
+                    arguments = arguments,
+                    directory = sessionDirectory,
+                )
+            } catch (error: Exception) {
+                Log.e(TAG, "Failed to send roundtable command $command", error)
+                _error.value = error.message ?: "Failed to send roundtable command"
+                false
+            }
+            onResult(ok)
+        }
+    }
+
+    fun switchRoundtableCadence(cadence: RoundtableCadenceMode, onResult: (Boolean) -> Unit = {}) {
+        sendRoundtableCommand("switch_cadence", cadence.wireName, onResult)
+    }
+
+    fun continueRoundtable(onResult: (Boolean) -> Unit = {}) {
+        sendRoundtableCommand("可", onResult = onResult)
+    }
+
+    fun stopRoundtable(onResult: (Boolean) -> Unit = {}) {
+        sendRoundtableCommand("止", onResult = onResult)
+    }
+
+    fun deepenRoundtableSection(onResult: (Boolean) -> Unit = {}) {
+        sendRoundtableCommand("深入", onResult = onResult)
+    }
+
+    fun mentionRoundtableRole(roleId: String, content: String, onResult: (Boolean) -> Unit = {}) {
+        val arguments = listOf(roleId.trim(), content.trim()).filter { it.isNotBlank() }.joinToString(" ")
+        sendRoundtableCommand("@mention", arguments, onResult)
+    }
+
+    fun injectAsParticipant(content: String, onResult: (Boolean) -> Unit = {}) {
+        sendRoundtableCommand("inject", content.trim(), onResult)
+    }
+
+    fun introducePersona(personaId: String, onResult: (Boolean) -> Unit = {}) {
+        sendRoundtableCommand("引入新人物", personaId.trim(), onResult)
+    }
+
+    fun skipAwaitingPersona(onResult: (Boolean) -> Unit = {}) {
+        val awaitingSkip = uiState.value.runState.awaitingSkip
+        if (awaitingSkip == null) {
+            onResult(false)
+            return
+        }
+        sendRoundtableCommand(awaitingSkip.skipCommand.ifBlank { "skip" }, awaitingSkip.personaId, onResult)
+    }
+
+    fun roundtableRoundIndexes(): List<Int> {
+        return uiState.value.roundtableEvents
+            .filterIsInstance<RoundStart>()
+            .mapIndexed { index, _ -> index + 1 }
     }
 
     /**
@@ -1378,6 +1599,117 @@ class ChatViewModel @Inject constructor(
             .ifBlank { null }
     }
 }
+
+private fun PiRoundtableRoom.toRoundtable(): Roundtable = Roundtable(
+    id = id,
+    topic = topic ?: title,
+    status = status.toRoundtableStatus(),
+    roundCount = roundCount,
+    rosterSummary = roster.joinToString(", ") { role -> role.name },
+    roster = roster,
+    time = Roundtable.Time(
+        created = createdAt,
+        updated = updatedAt,
+        completed = archivedAt,
+    ),
+)
+
+private fun String?.toRoundtableStatus(): Roundtable.Status = when (this?.lowercase()) {
+    "running" -> Roundtable.Status.Running
+    "awaiting_command" -> Roundtable.Status.AwaitingCommand
+    "awaiting_skip" -> Roundtable.Status.AwaitingSkip
+    "paused", "awaiting" -> Roundtable.Status.Paused
+    "ended", "completed", "cancelled" -> Roundtable.Status.Completed
+    "archived" -> Roundtable.Status.Archived
+    "error" -> Roundtable.Status.Error
+    else -> Roundtable.Status.Unknown
+}
+
+private fun resolveActiveRoster(
+    roundtable: Roundtable?,
+    messages: List<ChatMessage>,
+    events: List<PiTransportEvent>,
+): List<Roundtable.RoleSummary> {
+    val roster = linkedMapOf<String, Roundtable.RoleSummary>()
+    roundtable?.roster.orEmpty().forEach { role -> roster[role.id] = role }
+
+    messages.mapNotNull { chatMessage -> chatMessage.message as? Message.Assistant }
+        .forEach { assistant ->
+            val id = assistant.senderId?.takeIf { it.isNotBlank() } ?: return@forEach
+            roster.putIfAbsent(
+                id,
+                Roundtable.RoleSummary(
+                    id = id,
+                    name = assistant.senderName?.takeIf { it.isNotBlank() } ?: id,
+                    role = assistant.senderRole?.takeIf { it.isNotBlank() } ?: "persona",
+                    colorSeed = assistant.colorSeed?.takeIf { it.isNotBlank() } ?: id,
+                ),
+            )
+        }
+
+    events.forEach { event ->
+        val author = event.envelope.author
+        if (author.id.isNotBlank()) {
+            roster.putIfAbsent(
+                author.id,
+                Roundtable.RoleSummary(
+                    id = author.id,
+                    name = author.name.ifBlank { author.id },
+                    role = author.role.ifBlank { "persona" },
+                    colorSeed = author.colorSeed.ifBlank { author.id },
+                ),
+            )
+        }
+    }
+    return roster.values.filterNot { it.role.equals("moderator", ignoreCase = true) }
+}
+
+private fun buildRoundtableRunState(
+    roundtable: Roundtable?,
+    messages: List<ChatMessage>,
+    events: List<PiTransportEvent>,
+): RoundtableRunState {
+    val latestAwaitingCommand = events.filterIsInstance<AwaitingCommand>().maxByOrNull { it.envelope.sequence }
+    val latestAwaitingSkip = events.filterIsInstance<AwaitingSkip>().maxByOrNull { it.envelope.sequence }
+    val latestRoundStart = events.filterIsInstance<RoundStart>().maxByOrNull { it.envelope.sequence }
+    val activeRoster = resolveActiveRoster(roundtable, messages, events)
+
+    val retryByPersona = events.filterIsInstance<AgentRetry>().latestByPersona { it.personaId }
+    val fallbackByPersona = events.filterIsInstance<AgentFallback>().latestByPersona { it.personaId }
+    val errorByPersona = events.filterIsInstance<AgentError>().latestByPersona { it.personaId }
+    val skipByPersona = events.filterIsInstance<AwaitingSkip>().latestByPersona { it.personaId }
+    val personaIds = (activeRoster.map { it.id } + retryByPersona.keys + fallbackByPersona.keys + errorByPersona.keys + skipByPersona.keys)
+        .distinct()
+
+    val rolesById = activeRoster.associateBy { it.id }
+    val roleStates = personaIds.map { personaId ->
+        val role = rolesById[personaId]
+        PiRoleRunState(
+            personaId = personaId,
+            name = role?.name ?: personaId,
+            role = role?.role ?: "persona",
+            colorSeed = role?.colorSeed ?: personaId,
+            retry = retryByPersona[personaId],
+            fallback = fallbackByPersona[personaId],
+            error = errorByPersona[personaId],
+            awaitingSkip = skipByPersona[personaId],
+        )
+    }
+
+    return RoundtableRunState(
+        cadence = latestRoundStart?.speakerPolicy?.mode?.toRoundtableCadenceMode() ?: RoundtableCadenceMode.ModeratorRouted,
+        awaitingCommand = latestAwaitingCommand,
+        awaitingSkip = latestAwaitingSkip,
+        roleStates = roleStates,
+    )
+}
+
+private inline fun <T : PiTransportEvent> List<T>.latestByPersona(personaId: (T) -> String): Map<String, T> {
+    return groupBy(personaId).mapValues { (_, events) -> events.maxBy { it.envelope.sequence } }
+}
+
+private fun String.toRoundtableCadenceMode(): RoundtableCadenceMode =
+    RoundtableCadenceMode.entries.firstOrNull { it.wireName == this } ?: RoundtableCadenceMode.ModeratorRouted
 
 /** Holds server connection info for navigation purposes. */
 data class ConnectionParams(

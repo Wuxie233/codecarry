@@ -154,7 +154,7 @@ class EventReducer @Inject constructor() {
             is PiTransportEvent.AgentFallback -> updateRoundtable(event, Roundtable.Status.Running)
             is PiTransportEvent.AgentError -> updateRoundtable(event, Roundtable.Status.Error)
             is PiTransportEvent.AwaitingSkip -> updateRoundtable(event, Roundtable.Status.AwaitingSkip)
-            is PiTransportEvent.AwaitingCommand -> updateRoundtable(event, Roundtable.Status.Paused)
+            is PiTransportEvent.AwaitingCommand -> updateRoundtable(event, Roundtable.Status.AwaitingCommand)
             is PiTransportEvent.RoundEnd -> updateRoundtable(
                 event = event,
                 status = Roundtable.Status.Completed,
@@ -628,6 +628,17 @@ class EventReducer @Inject constructor() {
     fun updateSessionStatus(sessionId: String, status: SessionStatus) {
         _sessionStatuses.update { it + (sessionId to status) }
         if (BuildConfig.DEBUG) Log.d(TAG, "Manually updated session $sessionId status to $status")
+    }
+
+    fun setRoundtables(serverId: String, roundtables: List<Roundtable>) {
+        val roundtableIds = roundtables.map { it.id }.toSet()
+        _serverRoundtables.update { current ->
+            val existing = current[serverId] ?: emptySet()
+            current + (serverId to (existing + roundtableIds))
+        }
+        _roundtables.update { current ->
+            current + roundtables.associateBy { it.id }
+        }
     }
 
     fun setActiveSessionId(sessionId: String?) {

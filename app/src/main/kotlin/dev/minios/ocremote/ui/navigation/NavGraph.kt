@@ -32,6 +32,7 @@ import dev.minios.ocremote.data.repository.EventReducer
 import dev.minios.ocremote.data.repository.ServerRepository
 import dev.minios.ocremote.data.repository.SettingsRepository
 import dev.minios.ocremote.domain.model.ServerConfig
+import dev.minios.ocremote.domain.model.ServerType
 import dev.minios.ocremote.domain.model.Session
 import dev.minios.ocremote.ui.screens.chat.ChatScreen
 import dev.minios.ocremote.ui.screens.diagnostics.DiagnosticsScreen
@@ -483,6 +484,20 @@ fun NavGraph(
             val serverId = decodeRouteArg(it.arguments?.getString("serverId"))
             RoundtableCenterScreen(
                 onNavigateBack = { navController.popBackStack() },
+                onOpenRoundtable = { roundtableId ->
+                    navController.navigate(
+                        Screen.Chat.createRoute(
+                            serverUrl = serverUrl,
+                            username = "",
+                            password = token,
+                            serverName = serverName,
+                            serverId = serverId,
+                            sessionId = roundtableId,
+                            directory = roundtableId,
+                            serverType = ServerType.PI_ROUNDTABLE.name,
+                        )
+                    )
+                },
                 onOpenPersonaLibrary = {
                     navController.navigate(Screen.PersonaLibrary.createRoute(serverUrl, token, serverName, serverId))
                 }
@@ -506,7 +521,7 @@ fun NavGraph(
 
         // ============ Chat Screen (native) ============
         composable(
-            route = "chat?serverUrl={serverUrl}&username={username}&password={password}&serverName={serverName}&serverId={serverId}&sessionId={sessionId}&openTerminal={openTerminal}&directory={directory}",
+            route = "chat?serverUrl={serverUrl}&username={username}&password={password}&serverName={serverName}&serverId={serverId}&sessionId={sessionId}&openTerminal={openTerminal}&directory={directory}&serverType={serverType}",
             arguments = listOf(
                 navArgument("serverUrl") { type = NavType.StringType },
                 navArgument("username") { type = NavType.StringType },
@@ -515,7 +530,8 @@ fun NavGraph(
                 navArgument("serverId") { type = NavType.StringType },
                 navArgument("sessionId") { type = NavType.StringType },
                 navArgument("openTerminal") { type = NavType.BoolType; defaultValue = false },
-                navArgument("directory") { type = NavType.StringType; defaultValue = "" }
+                navArgument("directory") { type = NavType.StringType; defaultValue = "" },
+                navArgument("serverType") { type = NavType.StringType; defaultValue = ServerType.OPENCODE.name }
             )
         ) { backStackEntry ->
             val serverUrl = decodeRouteArg(backStackEntry.arguments?.getString("serverUrl"))

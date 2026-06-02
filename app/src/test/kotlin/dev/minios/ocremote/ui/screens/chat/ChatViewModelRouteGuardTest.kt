@@ -4,6 +4,7 @@ import android.content.ContextWrapper
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.lifecycle.SavedStateHandle
 import dev.minios.ocremote.data.api.OpenCodeApi
+import dev.minios.ocremote.data.api.PiApi
 import dev.minios.ocremote.data.preferences.SessionListPreferencesRepository
 import dev.minios.ocremote.data.repository.DraftRepository
 import dev.minios.ocremote.data.repository.EventReducer
@@ -135,6 +136,20 @@ class ChatViewModelRouteGuardTest {
         return OpenCodeApi(client, json)
     }
 
+    private fun mockPiApi(): PiApi {
+        val engine = MockEngine {
+            respond(
+                content = ByteReadChannel("{}"),
+                status = HttpStatusCode.OK,
+                headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
+            )
+        }
+        val client = HttpClient(engine) {
+            install(ContentNegotiation) { json(json) }
+        }
+        return PiApi(client, json)
+    }
+
     private fun draftRepository(): DraftRepository {
         val filesDir = tmpFolder.newFolder("drafts-${System.nanoTime()}")
         val context = object : ContextWrapper(null) {
@@ -172,6 +187,8 @@ class ChatViewModelRouteGuardTest {
             savedStateHandle = savedStateHandle,
             eventReducer = eventReducer,
             api = api,
+            piApi = mockPiApi(),
+            json = json,
             draftRepository = draftRepository,
             sessionListPreferencesRepository = sessionListPreferencesRepository,
             settingsRepository = settingsRepository,

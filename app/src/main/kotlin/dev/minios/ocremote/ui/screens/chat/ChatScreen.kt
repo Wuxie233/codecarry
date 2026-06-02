@@ -129,6 +129,7 @@ import dev.minios.ocremote.data.api.PromptPart
 import dev.minios.ocremote.data.api.ProviderInfo
 import dev.minios.ocremote.data.api.ProviderModel
 import dev.minios.ocremote.MainActivity
+import dev.minios.ocremote.domain.transport.PiTransportEvent
 import dev.minios.ocremote.ui.theme.CodeTypography
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
@@ -1725,6 +1726,9 @@ fun ChatScreen(
     // Auto-scroll to bottom when new content arrives (only if auto-scroll is enabled)
     // Track message count, part count, and content length of the last part to catch streaming updates
     val messageCount = uiState.messages.size
+    var collapsedRoundNumbers by remember { mutableStateOf<Set<Int>>(emptySet()) }
+    val roundMarkers = remember(uiState.roundtableEvents) { buildRoundMarkers(uiState.roundtableEvents) }
+    val messageRoundNumbers = remember(uiState.messages, roundMarkers) { mapMessageRounds(uiState.messages, roundMarkers) }
     val lastPartCount = uiState.messages.lastOrNull()?.parts?.size ?: 0
     val lastContentLength = uiState.messages.lastOrNull()?.parts?.lastOrNull()?.let { part ->
         when (part) {
@@ -2022,13 +2026,41 @@ fun ChatScreen(
                     // composer so users do not need to scroll to the top of the message
                     // list to see it. Historical Part.Retry parts continue to render
                     // inline in the message timeline (see ChatMessageBubble).
-                    if (uiState.sessionStatus is SessionStatus.Retry) {
-                        RetryStatusBanner(
-                            retry = uiState.sessionStatus as SessionStatus.Retry,
-                            onStop = { viewModel.abortSession() },
-                            modifier = Modifier.padding(horizontal = 12.dp),
-                        )
-                    }
+                        if (uiState.sessionStatus is SessionStatus.Retry) {
+                            RetryStatusBanner(
+                                retry = uiState.sessionStatus as SessionStatus.Retry,
+                                onStop = { viewModel.abortSession() },
+                                modifier = Modifier.padding(horizontal = 12.dp),
+                            )
+                        }
+
+                        if (uiState.isPiRoundtable) {
+                            RoundtableSteeringPanel(
+                                uiState = uiState,
+                                roundMarkers = roundMarkers,
+                                onSwitchCadence = viewModel::switchRoundtableCadence,
+                                onContinue = viewModel::continueRoundtable,
+                                onStop = viewModel::stopRoundtable,
+                                onDeepen = viewModel::deepenRoundtableSection,
+                                onMention = viewModel::mentionRoundtableRole,
+                                onInject = viewModel::injectAsParticipant,
+                                onIntroduce = viewModel::introducePersona,
+                                onSkip = viewModel::skipAwaitingPersona,
+                                onJumpToRound = { roundNumber ->
+                                    coroutineScope.launch {
+                                        val itemIndex = timelineIndexForRound(
+                                            roundNumber = roundNumber,
+                                            hasOlderMessages = uiState.hasOlderMessages,
+                                            roundMarkers = roundMarkers,
+                                            messages = uiState.messages,
+                                        )
+                                        listState.animateScrollToItem(itemIndex.coerceAtLeast(0))
+                                        autoScrollEnabled = false
+                                    }
+                                },
+                                modifier = Modifier.padding(horizontal = 12.dp),
+                            )
+                        }
 
             ChatInputBar(
                 textFieldValue = inputText,
@@ -2731,6 +2763,24 @@ fun ChatScreen(
                             uiState.messages,
                             key = { _, item -> item.message.id }
                         ) { index, chatMessage ->
+                            val roundNumber = messageRoundNumbers[chatMessage.message.id]
+                            val previousRoundNumber = uiState.messages.getOrNull(index - 1)?.message?.id?.let { messageRoundNumbers[it] }
+                            if (uiState.isPiRoundtable && roundNumber != null && roundNumber != previousRoundNumber) {
+                                RoundDivider(
+                                    roundNumber = roundNumber,
+                                    isCollapsed = roundNumber in collapsedRoundNumbers,
+                                    onToggle = {
+                                        collapsedRoundNumbers = if (roundNumber in collapsedRoundNumbers) {
+                                            collapsedRoundNumbers - roundNumber
+                                        } else {
+                                            collapsedRoundNumbers + roundNumber
+                                        }
+                                    },
+                                )
+                            }
+                            if (roundNumber != null && roundNumber in collapsedRoundNumbers) {
+                                return@itemsIndexed
+                            }
                             // Detect compaction trigger messages (user messages with Part.Compaction)
                             val isCompactionTrigger = chatMessage.isUser &&
                                 chatMessage.parts.any { it is Part.Compaction }
@@ -7976,6 +8026,300 @@ private fun ChatInputBar(
                 )
             }
         }
+    }
+}
+
+private data class RoundMarker(
+    val roundNumber: Int,
+    val sequence: Long,
+)
+
+private fun buildRoundMarkers(events: List<PiTransportEvent>): List<RoundMarker> {
+    return events.filterIsInstance<PiTransportEvent.RoundStart>()
+        .sortedBy { it.envelope.sequence }
+        .mapIndexed { index, event -> RoundMarker(roundNumber = index + 1, sequence = event.envelope.sequence) }
+}
+
+private fun mapMessageRounds(
+    messages: List<ChatMessage>,
+    markers: List<RoundMarker>,
+): Map<String, Int> {
+    if (markers.isEmpty()) return emptyMap()
+    return messages.associate { message ->
+        val created = message.message.time.created
+        val round = markers.lastOrNull { marker -> marker.sequence <= created }?.roundNumber ?: markers.first().roundNumber
+        message.message.id to round
+    }
+}
+
+private fun timelineIndexForRound(
+    roundNumber: Int,
+    hasOlderMessages: Boolean,
+    roundMarkers: List<RoundMarker>,
+    messages: List<ChatMessage>,
+): Int {
+    val marker = roundMarkers.firstOrNull { it.roundNumber == roundNumber } ?: return if (hasOlderMessages) 1 else 0
+    val messageIndex = messages.indexOfFirst { it.message.time.created >= marker.sequence }.coerceAtLeast(0)
+    return (if (hasOlderMessages) 1 else 0) + messageIndex
+}
+
+@Composable
+private fun RoundtableSteeringPanel(
+    uiState: ChatUiState,
+    roundMarkers: List<RoundMarker>,
+    onSwitchCadence: (RoundtableCadenceMode, (Boolean) -> Unit) -> Unit,
+    onContinue: ((Boolean) -> Unit) -> Unit,
+    onStop: ((Boolean) -> Unit) -> Unit,
+    onDeepen: ((Boolean) -> Unit) -> Unit,
+    onMention: (String, String, (Boolean) -> Unit) -> Unit,
+    onInject: (String, (Boolean) -> Unit) -> Unit,
+    onIntroduce: (String, (Boolean) -> Unit) -> Unit,
+    onSkip: ((Boolean) -> Unit) -> Unit,
+    onJumpToRound: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val isAmoled = isAmoledTheme()
+    val hapticView = LocalView.current
+    val hapticOn = LocalHapticFeedbackEnabled.current
+    var cadenceExpanded by remember { mutableStateOf(false) }
+    var mentionText by remember { mutableStateOf("") }
+    var mentionTarget by remember(uiState.activeRoster) { mutableStateOf(uiState.activeRoster.firstOrNull()?.id.orEmpty()) }
+    var mentionExpanded by remember { mutableStateOf(false) }
+    var injectText by remember { mutableStateOf("") }
+    var introduceExpanded by remember { mutableStateOf(false) }
+    var pendingCommand by remember { mutableStateOf<String?>(null) }
+
+    fun submitCommand(key: String, block: ((Boolean) -> Unit) -> Unit) {
+        pendingCommand = key
+        block { pendingCommand = null }
+    }
+
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = if (isAmoled) Color.Black else MaterialTheme.colorScheme.surfaceContainerHigh,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isAmoled) 0.72f else 0.35f)),
+        tonalElevation = if (isAmoled) 0.dp else 2.dp,
+    ) {
+        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("现场调度", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
+                    Text(
+                        text = uiState.roundtable?.status?.name ?: "run state",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Box {
+                    AssistChip(
+                        onClick = { cadenceExpanded = true },
+                        label = { Text(uiState.runState.cadence.label) },
+                        leadingIcon = { Icon(Icons.Default.SyncAlt, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                    )
+                    DropdownMenu(expanded = cadenceExpanded, onDismissRequest = { cadenceExpanded = false }) {
+                        RoundtableCadenceMode.entries.forEach { cadence ->
+                            DropdownMenuItem(
+                                text = { Text(cadence.label) },
+                                onClick = {
+                                    cadenceExpanded = false
+                                    submitCommand("cadence") { onDone -> onSwitchCadence(cadence, onDone) }
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+
+            Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                AssistChip(
+                    onClick = { performHaptic(hapticView, hapticOn); submitCommand("continue") { onDone -> onContinue(onDone) } },
+                    enabled = pendingCommand == null,
+                    label = { Text("继续(可)") },
+                )
+                AssistChip(
+                    onClick = { performHaptic(hapticView, hapticOn); submitCommand("stop") { onDone -> onStop(onDone) } },
+                    enabled = pendingCommand == null,
+                    label = { Text("止") },
+                )
+                AssistChip(
+                    onClick = { performHaptic(hapticView, hapticOn); submitCommand("deepen") { onDone -> onDeepen(onDone) } },
+                    enabled = pendingCommand == null,
+                    label = { Text("深入此节") },
+                )
+                Box {
+                    AssistChip(
+                        onClick = { introduceExpanded = true },
+                        enabled = uiState.personaLibrary.isNotEmpty() && pendingCommand == null,
+                        label = { Text("引入新人物") },
+                    )
+                    DropdownMenu(expanded = introduceExpanded, onDismissRequest = { introduceExpanded = false }) {
+                        uiState.personaLibrary.forEach { persona ->
+                            val personaId = persona.id ?: return@forEach
+                            DropdownMenuItem(
+                                text = { Text(persona.name) },
+                                onClick = {
+                                    introduceExpanded = false
+                                    submitCommand("introduce") { onDone -> onIntroduce(personaId, onDone) }
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+
+            if (uiState.runState.roleStates.isNotEmpty()) {
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(uiState.runState.roleStates, key = { it.personaId }) { role ->
+                        RoleRunStateChip(role)
+                    }
+                }
+            }
+
+            val awaitingSkip = uiState.runState.awaitingSkip
+            if (awaitingSkip != null) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.errorContainer.copy(alpha = if (isAmoled) 0.35f else 1f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.4f)),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Icon(Icons.Default.ReportProblem, contentDescription = null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp))
+                        Text(
+                            text = "${awaitingSkip.personaId} 等待跳过：${awaitingSkip.reason}",
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                        )
+                        TextButton(
+                            onClick = { submitCommand("skip") { onDone -> onSkip(onDone) } },
+                            enabled = pendingCommand == null,
+                        ) { Text("跳过该角色本次发言") }
+                    }
+                }
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(modifier = Modifier.weight(0.42f)) {
+                    OutlinedTextField(
+                        value = uiState.activeRoster.firstOrNull { it.id == mentionTarget }?.name ?: mentionTarget.ifBlank { "选择角色" },
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("@mention") },
+                        trailingIcon = { Icon(Icons.Default.KeyboardArrowDown, contentDescription = null) },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Box(modifier = Modifier.matchParentSize().clickable { mentionExpanded = true })
+                    DropdownMenu(expanded = mentionExpanded, onDismissRequest = { mentionExpanded = false }) {
+                        uiState.activeRoster.forEach { role ->
+                            DropdownMenuItem(text = { Text("${role.name} · ${role.role}") }, onClick = { mentionTarget = role.id; mentionExpanded = false })
+                        }
+                    }
+                }
+                OutlinedTextField(
+                    value = mentionText,
+                    onValueChange = { mentionText = it },
+                    label = { Text("点名内容") },
+                    singleLine = true,
+                    modifier = Modifier.weight(0.58f),
+                    trailingIcon = {
+                        IconButton(
+                            onClick = {
+                                val target = mentionTarget
+                                val content = mentionText
+                                if (target.isNotBlank() && content.isNotBlank()) {
+                                    mentionText = ""
+                                    submitCommand("mention") { onDone -> onMention(target, content, onDone) }
+                                }
+                            },
+                            enabled = mentionTarget.isNotBlank() && mentionText.isNotBlank() && pendingCommand == null,
+                        ) { Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send mention") }
+                    },
+                )
+            }
+
+            OutlinedTextField(
+                value = injectText,
+                onValueChange = { injectText = it },
+                label = { Text("注入用户内容（非控制命令）") },
+                minLines = 1,
+                modifier = Modifier.fillMaxWidth(),
+                trailingIcon = {
+                    IconButton(
+                        onClick = {
+                            val content = injectText
+                            if (content.isNotBlank()) {
+                                injectText = ""
+                                submitCommand("inject") { onDone -> onInject(content, onDone) }
+                            }
+                        },
+                        enabled = injectText.isNotBlank() && pendingCommand == null,
+                    ) { Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Inject") }
+                },
+            )
+
+            if (roundMarkers.isNotEmpty()) {
+                Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    roundMarkers.forEach { marker ->
+                        FilterChip(
+                            selected = false,
+                            onClick = { onJumpToRound(marker.roundNumber) },
+                            label = { Text("Round ${marker.roundNumber}") },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RoleRunStateChip(role: PiRoleRunState) {
+    val accent = piSenderAccentColor(PiSenderIdentity(role.personaId, role.name, null, role.role, role.colorSeed))
+    val label = when {
+        role.awaitingSkip != null -> "awaiting skip"
+        role.error != null -> "error"
+        role.fallback != null -> "fallback"
+        role.retry != null -> "retry ${role.retry.attempt}/${role.retry.maxAttempts ?: "?"}"
+        else -> role.role
+    }
+    AssistChip(
+        onClick = {},
+        label = { Text("${role.name} · $label") },
+        leadingIcon = {
+            Box(modifier = Modifier.size(10.dp).background(accent, CircleShape))
+        },
+    )
+}
+
+@Composable
+private fun RoundDivider(
+    roundNumber: Int,
+    isCollapsed: Boolean,
+    onToggle: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onToggle).padding(vertical = 4.dp, horizontal = 20.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        HorizontalDivider(modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
+        AssistChip(
+            onClick = onToggle,
+            label = { Text("Round $roundNumber") },
+            leadingIcon = {
+                Icon(
+                    imageVector = if (isCollapsed) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowUp,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                )
+            },
+        )
+        HorizontalDivider(modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
     }
 }
 
