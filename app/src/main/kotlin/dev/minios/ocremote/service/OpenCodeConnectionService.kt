@@ -203,13 +203,17 @@ class OpenCodeConnectionService : Service() {
             val serverUrl = i.getStringExtra("server_url")
             val serverUsername = i.getStringExtra("server_username") ?: "opencode"
             val serverPassword = i.getStringExtra("server_password")
+            val serverType = runCatching { ServerType.valueOf(i.getStringExtra("server_type") ?: ServerType.OPENCODE.name) }.getOrDefault(ServerType.OPENCODE)
+            val serverToken = i.getStringExtra("server_token")
 
             if (serverId != null && serverUrl != null) {
                 val serverConfig = ServerConfig(
                     id = serverId,
                     url = serverUrl,
+                    type = serverType,
                     username = serverUsername,
                     password = serverPassword,
+                    token = serverToken,
                     name = serverName
                 )
                 connect(serverConfig)

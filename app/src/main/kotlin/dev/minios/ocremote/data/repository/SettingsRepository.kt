@@ -57,6 +57,8 @@ class SettingsRepository @Inject constructor(
         private val LOCAL_SERVER_STARTUP_TIMEOUT_SEC_KEY = intPreferencesKey("local_server_startup_timeout_sec")
         private val DIAGNOSTICS_UPLOAD_URL_KEY = stringPreferencesKey("diagnostics_upload_url")
         private val DIAGNOSTICS_UPLOAD_TOKEN_KEY = stringPreferencesKey("diagnostics_upload_token")
+        private val ROUNDTABLE_SORT_PREFIX = "roundtable_sort_"
+        private val ROUNDTABLE_FILTER_PREFIX = "roundtable_filter_"
 
         /** SharedPreferences name used for synchronous locale reads in attachBaseContext. */
         private const val LOCALE_PREFS = "locale_prefs"
@@ -75,6 +77,12 @@ class SettingsRepository @Inject constructor(
 
     private fun serverModelHiddenKey(serverId: String) =
         stringSetPreferencesKey(SERVER_MODEL_HIDDEN_PREFIX + serverId)
+
+    private fun roundtableSortKey(serverId: String) =
+        stringPreferencesKey(ROUNDTABLE_SORT_PREFIX + serverId)
+
+    private fun roundtableFilterKey(serverId: String) =
+        stringPreferencesKey(ROUNDTABLE_FILTER_PREFIX + serverId)
 
     /**
      * Selected language code (e.g. "en", "ru", "de") or empty string for system default.
@@ -557,6 +565,26 @@ class SettingsRepository @Inject constructor(
             } else {
                 current + key
             }
+        }
+    }
+
+    fun roundtableSort(serverId: String): Flow<String> = dataStore.data.map { preferences ->
+        preferences[roundtableSortKey(serverId)] ?: "last_activity"
+    }
+
+    suspend fun setRoundtableSort(serverId: String, sort: String) {
+        dataStore.edit { preferences ->
+            preferences[roundtableSortKey(serverId)] = sort
+        }
+    }
+
+    fun roundtableFilter(serverId: String): Flow<String> = dataStore.data.map { preferences ->
+        preferences[roundtableFilterKey(serverId)] ?: "active"
+    }
+
+    suspend fun setRoundtableFilter(serverId: String, filter: String) {
+        dataStore.edit { preferences ->
+            preferences[roundtableFilterKey(serverId)] = filter
         }
     }
 }

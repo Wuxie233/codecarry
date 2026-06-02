@@ -36,6 +36,7 @@ import dev.minios.ocremote.domain.model.Session
 import dev.minios.ocremote.ui.screens.chat.ChatScreen
 import dev.minios.ocremote.ui.screens.diagnostics.DiagnosticsScreen
 import dev.minios.ocremote.ui.screens.home.HomeScreen
+import dev.minios.ocremote.ui.screens.roundtable.RoundtableCenterScreen
 import dev.minios.ocremote.ui.screens.about.AboutScreen
 import dev.minios.ocremote.ui.screens.sessions.SessionListScreen
 import dev.minios.ocremote.ui.screens.settings.SettingsScreen
@@ -263,6 +264,11 @@ fun NavGraph(
                         Screen.SessionList.createRoute(serverUrl, username, password, serverName, serverId)
                     )
                 },
+                onNavigateToRoundtables = { serverUrl, token, serverName, serverId ->
+                    navController.navigate(
+                        Screen.RoundtableCenter.createRoute(serverUrl, token, serverName, serverId)
+                    )
+                },
                 onNavigateToServerSettings = { serverUrl, username, password, serverName, serverId ->
                     navController.navigate(
                         Screen.ServerSettings.createRoute(serverUrl, username, password, serverName, serverId)
@@ -460,7 +466,21 @@ fun NavGraph(
                 }
             )
         }
-        
+
+        composable(
+            route = "roundtable_center?serverUrl={serverUrl}&token={token}&serverName={serverName}&serverId={serverId}",
+            arguments = listOf(
+                navArgument("serverUrl") { type = NavType.StringType },
+                navArgument("token") { type = NavType.StringType },
+                navArgument("serverName") { type = NavType.StringType },
+                navArgument("serverId") { type = NavType.StringType },
+            )
+        ) {
+            RoundtableCenterScreen(
+                onNavigateBack = { navController.popBackStack() }
+            )
+        }
+
         // ============ Chat Screen (native) ============
         composable(
             route = "chat?serverUrl={serverUrl}&username={username}&password={password}&serverName={serverName}&serverId={serverId}&sessionId={sessionId}&openTerminal={openTerminal}&directory={directory}",

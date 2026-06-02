@@ -154,7 +154,7 @@ class EventReducer @Inject constructor() {
             is PiTransportEvent.AgentFallback -> updateRoundtable(event, Roundtable.Status.Running)
             is PiTransportEvent.AgentError -> updateRoundtable(event, Roundtable.Status.Error)
             is PiTransportEvent.AwaitingSkip -> updateRoundtable(event, Roundtable.Status.AwaitingSkip)
-            is PiTransportEvent.AwaitingCommand -> updateRoundtable(event, Roundtable.Status.AwaitingCommand)
+            is PiTransportEvent.AwaitingCommand -> updateRoundtable(event, Roundtable.Status.Paused)
             is PiTransportEvent.RoundEnd -> updateRoundtable(
                 event = event,
                 status = Roundtable.Status.Completed,

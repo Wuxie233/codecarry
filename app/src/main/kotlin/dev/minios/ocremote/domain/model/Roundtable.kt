@@ -9,6 +9,7 @@ data class Roundtable(
     val status: Status = Status.Unknown,
     val roundCount: Int = 0,
     val rosterSummary: String? = null,
+    val roster: List<RoleSummary> = emptyList(),
     val time: Time = Time(),
 ) {
     @Serializable
@@ -17,9 +18,19 @@ data class Roundtable(
         Running,
         AwaitingCommand,
         AwaitingSkip,
+        Paused,
         Completed,
+        Archived,
         Error,
     }
+
+    @Serializable
+    data class RoleSummary(
+        val id: String,
+        val name: String,
+        val role: String,
+        val colorSeed: String,
+    )
 
     @Serializable
     data class Time(

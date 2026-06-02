@@ -45,6 +45,7 @@ import androidx.core.content.ContextCompat
 import dev.minios.ocremote.R
 import dev.minios.ocremote.data.repository.LocalServerManager
 import dev.minios.ocremote.domain.model.ServerConfig
+import dev.minios.ocremote.domain.model.ServerType
 import dev.minios.ocremote.ui.theme.StatusConnected
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
@@ -116,6 +117,7 @@ private fun PulsingDotsIndicator(
 @Composable
 fun HomeScreen(
     onNavigateToSessions: (serverUrl: String, username: String, password: String, serverName: String, serverId: String) -> Unit = { _, _, _, _, _ -> },
+    onNavigateToRoundtables: (serverUrl: String, token: String, serverName: String, serverId: String) -> Unit = { _, _, _, _ -> },
     onNavigateToServerSettings: (serverUrl: String, username: String, password: String, serverName: String, serverId: String) -> Unit = { _, _, _, _, _ -> },
     onNavigateToSettings: () -> Unit = {},
     onNavigateToAbout: () -> Unit = {},
@@ -344,13 +346,21 @@ fun HomeScreen(
                                 onConnect = { requestNotificationPermissionAndConnect(server.id) },
                                 onDisconnect = { viewModel.disconnectFromServer(server.id) },
                                 onOpenSessions = {
-                                    onNavigateToSessions(
-                                        server.url,
-                                        server.username,
-                                        server.password ?: "",
-                                        server.displayName,
-                                        server.id
-                                    )
+                                    when (server.type) {
+                                        ServerType.OPENCODE -> onNavigateToSessions(
+                                            server.url,
+                                            server.username,
+                                            server.password ?: "",
+                                            server.displayName,
+                                            server.id
+                                        )
+                                        ServerType.PI_ROUNDTABLE -> onNavigateToRoundtables(
+                                            server.url,
+                                            server.token.orEmpty(),
+                                            server.displayName,
+                                            server.id,
+                                        )
+                                    }
                                 },
                                 onServerSettings = {
                                     onNavigateToServerSettings(
@@ -1388,7 +1398,7 @@ private fun ServerCard(
                     ) {
                         Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text(stringResource(R.string.sessions_title), maxLines = 1)
+                        Text(if (server.type == ServerType.PI_ROUNDTABLE) "Roundtables" else stringResource(R.string.sessions_title), maxLines = 1)
                     }
                 }
             }

@@ -1,11 +1,19 @@
 package dev.minios.ocremote.domain.transport
 
+import dev.minios.ocremote.domain.model.Roundtable
+
 data class PiRoundtableRoom(
     val id: String,
     val title: String? = null,
     val topic: String? = null,
     val status: String? = null,
     val directory: String? = null,
+    val roundCount: Int = 0,
+    val roster: List<Roundtable.RoleSummary> = emptyList(),
+    val createdAt: String? = null,
+    val updatedAt: String? = null,
+    val archivedAt: String? = null,
+    val templateOf: String? = null,
 )
 
 data class PiAuthor(

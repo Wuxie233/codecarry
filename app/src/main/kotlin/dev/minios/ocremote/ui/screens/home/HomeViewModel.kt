@@ -406,6 +406,8 @@ class HomeViewModel @Inject constructor(
                     putExtra("server_url", server.url)
                     putExtra("server_username", server.username)
                     putExtra("server_password", server.password)
+                    putExtra("server_type", server.type.name)
+                    putExtra("server_token", server.token)
                 }
 
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

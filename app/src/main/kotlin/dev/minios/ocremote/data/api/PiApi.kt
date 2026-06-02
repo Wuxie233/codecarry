@@ -5,6 +5,7 @@ import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.timeout
 import io.ktor.client.request.header
 import io.ktor.client.request.prepareGet
+import io.ktor.client.request.delete
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.request.url
@@ -89,6 +90,29 @@ class PiApi(
             contentType(ContentType.Application.Json)
             setBody(request)
         }.bodyFromSuccessfulResponse("POST /roundtables")
+    }
+
+    suspend fun getRoundtable(conn: PiConnection, roundId: String): PiRoundtableDto {
+        return httpClient.prepareGet("${conn.baseUrl}/roundtables/$roundId") {
+            applyPiHeaders(conn)
+        }.execute { response ->
+            if (!response.status.isSuccess()) throw PiApiException("GET /roundtables/:id failed with HTTP ${response.status.value}")
+            json.decodeFromString(PiRoundtableDto.serializer(), response.bodyAsText())
+        }
+    }
+
+    suspend fun archiveRoundtable(conn: PiConnection, roundId: String): PiRoundtableDto {
+        return httpClient.post("${conn.baseUrl}/roundtables/$roundId/archive") {
+            applyPiHeaders(conn)
+            contentType(ContentType.Application.Json)
+        }.bodyFromSuccessfulResponse("POST /roundtables/:id/archive")
+    }
+
+    suspend fun deleteRoundtable(conn: PiConnection, roundId: String): Boolean {
+        val response = httpClient.delete("${conn.baseUrl}/roundtables/$roundId") {
+            applyPiHeaders(conn)
+        }
+        return response.status.isSuccess()
     }
 
     suspend fun sendCommand(conn: PiConnection, roundId: String, command: PiCommandRequest): Boolean {
@@ -219,6 +243,20 @@ data class PiRoundtableDto(
     val topic: String? = null,
     val status: String? = null,
     val directory: String? = null,
+    val roundCount: Int = 0,
+    val roster: List<PiRosterSummaryDto> = emptyList(),
+    val createdAt: String? = null,
+    val updatedAt: String? = null,
+    val archivedAt: String? = null,
+    val templateOf: String? = null,
+)
+
+@Serializable
+data class PiRosterSummaryDto(
+    val id: String,
+    val name: String,
+    val role: String,
+    val colorSeed: String,
 )
 
 @Serializable
@@ -227,6 +265,7 @@ data class PiCreateRoundtableRequest(
     val topic: String,
     val roundTitle: String? = null,
     val initialMessage: String? = null,
+    val templateOf: String? = null,
 )
 
 @Serializable

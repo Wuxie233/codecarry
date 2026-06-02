@@ -19,11 +19,13 @@ import dev.minios.ocremote.data.api.PiModelRefDto
 import dev.minios.ocremote.data.api.PiRoundLimitsDto
 import dev.minios.ocremote.data.api.PiRoundtableDto
 import dev.minios.ocremote.data.api.PiSpeakerPolicyDto
+import dev.minios.ocremote.data.api.PiRosterSummaryDto
 import dev.minios.ocremote.data.api.RoundEndPayloadDto
 import dev.minios.ocremote.data.api.RoundStartPayloadDto
 import dev.minios.ocremote.data.api.RoundtableSseEvent
 import dev.minios.ocremote.data.api.resolvedId
 import dev.minios.ocremote.domain.model.ServerConfig
+import dev.minios.ocremote.domain.model.Roundtable
 import dev.minios.ocremote.domain.transport.AgentTransport
 import dev.minios.ocremote.domain.transport.PiAcceptedDelta
 import dev.minios.ocremote.domain.transport.PiAuthor
@@ -195,8 +197,21 @@ class PiRoundtableTransport(
             topic = topic,
             status = status,
             directory = directory,
+            roundCount = roundCount,
+            roster = roster.map { item -> item.toDomain() },
+            createdAt = createdAt,
+            updatedAt = updatedAt,
+            archivedAt = archivedAt,
+            templateOf = templateOf,
         )
     }
+
+    private fun PiRosterSummaryDto.toDomain(): Roundtable.RoleSummary = Roundtable.RoleSummary(
+        id = id,
+        name = name,
+        role = role,
+        colorSeed = colorSeed,
+    )
 
     private fun String.toPiCommandRequest(roundId: String, arguments: String): PiCommandRequest {
         val trimmedArguments = arguments.trim().ifBlank { null }
