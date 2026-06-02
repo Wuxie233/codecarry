@@ -40,6 +40,9 @@ import kotlinx.coroutines.test.setMain
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -105,6 +108,35 @@ class PersonaLibraryViewModelTest {
         assertFalse(requests.any { it.url.encodedPath.startsWith("/session") })
     }
 
+
+    @Test
+    fun `AI generate shows draft and does not save until confirmation`() = runTest(dispatcher) {
+        val requests = Collections.synchronizedList(mutableListOf<HttpRequestData>())
+        val service = FakePersonaService()
+        val vm = PersonaLibraryViewModel(savedStateHandle(), piApi(requests, service)).also { viewModels.add(it) }
+        collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
+        advanceUntilIdle()
+
+        val initialCount = vm.uiState.first { !it.isLoading }.personas.size
+        vm.openGenerateDialog()
+        vm.setGenerateRequirement("一个爱抬杠的INTP安全专家")
+        vm.generateDraft()
+        advanceUntilIdle()
+
+        val draftState = vm.uiState.first { it.editor?.id == "generated-intp-security-expert" }
+        assertEquals(initialCount, draftState.personas.size)
+        assertEquals("INTP Security Contrarian", draftState.editor?.name)
+        assertTrue(requests.any { it.method == HttpMethod.Post && it.url.encodedPath == "/personas/generate" })
+        assertFalse(requests.any { it.method == HttpMethod.Post && it.url.encodedPath == "/personas" })
+
+        vm.saveEditor()
+        advanceUntilIdle()
+
+        val saved = vm.uiState.first { state -> state.personas.any { it.id == "generated-intp-security-expert" } }
+        assertEquals(initialCount + 1, saved.personas.size)
+        assertTrue(requests.any { it.method == HttpMethod.Post && it.url.encodedPath == "/personas" })
+    }
+
     @Test
     fun `export edit and import round trip remains persona schema shaped`() = runTest(dispatcher) {
         val requests = Collections.synchronizedList(mutableListOf<HttpRequestData>())
@@ -135,6 +167,7 @@ class PersonaLibraryViewModelTest {
             requests += request
             when {
                 request.url.encodedPath == "/personas" && request.method == HttpMethod.Get -> respondJson(service.list())
+                request.url.encodedPath == "/personas/generate" && request.method == HttpMethod.Post -> respondJson(service.generate(request.body.bodyAsText()))
                 request.url.encodedPath == "/personas" && request.method == HttpMethod.Post -> respondJson(service.create(request.body.bodyAsText()))
                 request.url.encodedPath.startsWith("/personas/") && request.method == HttpMethod.Get -> respondJson(service.get(request.url.encodedPath.substringAfterLast('/')))
                 request.url.encodedPath.startsWith("/personas/") && request.method == HttpMethod.Put -> respondJson(service.update(request.url.encodedPath.substringAfterLast('/'), request.body.bodyAsText()))
@@ -211,6 +244,24 @@ class PersonaLibraryViewModelTest {
             val created = persona.copy(id = id)
             items[id] = created
             return "{\"item\":${json.encodeToString(PiPersonaDto.serializer(), created)}}"
+        }
+
+        fun generate(raw: String): String {
+            val request = json.parseToJsonElement(raw).jsonObject
+            assertEquals("一个爱抬杠的INTP安全专家", request.getValue("requirement").jsonPrimitive.contentOrNull)
+            val draft = PiPersonaDto(
+                id = "generated-intp-security-expert",
+                name = "INTP Security Contrarian",
+                mbti = "INTP",
+                stancePrompt = "把安全方案当作可被攻击的假设，持续寻找权限、数据和供应链风险。",
+                style = "Sharp, skeptical, concise, and evidence-demanding.",
+                actionTagPrefs = listOf("质疑", "反驳"),
+                provider = "fake-provider",
+                model = "fake-model",
+                fallback = emptyList(),
+                enabled = true,
+            )
+            return json.encodeToString(PiPersonaDto.serializer(), draft)
         }
 
         fun update(id: String, raw: String): String {

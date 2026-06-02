@@ -100,6 +100,9 @@ fun PersonaLibraryScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = viewModel::openGenerateDialog) {
+                        Icon(Icons.Default.Tune, contentDescription = "AI generate persona")
+                    }
                     IconButton(onClick = viewModel::refresh) {
                         Icon(Icons.Default.Refresh, contentDescription = "Refresh personas")
                     }
@@ -125,6 +128,7 @@ fun PersonaLibraryScreen(
                 uiState.personas.isEmpty() -> PersonaEmptyState(
                     modifier = Modifier.align(Alignment.Center),
                     onCreate = viewModel::newPersona,
+                    onGenerate = viewModel::openGenerateDialog,
                 )
                 else -> LazyColumn(
                     modifier = Modifier.fillMaxSize(),
@@ -156,7 +160,7 @@ fun PersonaLibraryScreen(
                 )
             }
 
-            if (uiState.isMutating) {
+            if (uiState.isMutating || uiState.isGenerating) {
                 CircularProgressIndicator(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
@@ -164,6 +168,16 @@ fun PersonaLibraryScreen(
                 )
             }
         }
+    }
+
+    if (uiState.showGenerateDialog) {
+        GeneratePersonaDialog(
+            value = uiState.generateRequirement,
+            isGenerating = uiState.isGenerating,
+            onChange = viewModel::setGenerateRequirement,
+            onGenerate = viewModel::generateDraft,
+            onDismiss = viewModel::dismissGenerateDialog,
+        )
     }
 
     uiState.editor?.let { editor ->
@@ -371,6 +385,49 @@ private fun ChunkedChipRows(options: List<String>, selected: Set<String>, onSele
     }
 }
 
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun GeneratePersonaDialog(
+    value: String,
+    isGenerating: Boolean,
+    onChange: (String) -> Unit,
+    onGenerate: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    BasicAlertDialog(onDismissRequest = { if (!isGenerating) onDismiss() }) {
+        Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surface, tonalElevation = 6.dp) {
+            Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("AI generate persona", style = MaterialTheme.typography.titleLarge)
+                Text(
+                    text = "Describe the persona you want. Generation creates an editable draft only; it is saved after you confirm with Save.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedTextField(
+                    value = value,
+                    onValueChange = onChange,
+                    label = { Text("Requirement") },
+                    placeholder = { Text("一个爱抬杠的INTP安全专家") },
+                    minLines = 4,
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !isGenerating,
+                )
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = onDismiss, enabled = !isGenerating) { Text("Cancel") }
+                    Button(onClick = onGenerate, enabled = value.isNotBlank() && !isGenerating) {
+                        if (isGenerating) {
+                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                            Spacer(Modifier.width(8.dp))
+                        }
+                        Text("Generate draft")
+                    }
+                }
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ImportPersonaDialog(value: String, onChange: (String) -> Unit, onImport: () -> Unit, onDismiss: () -> Unit) {
@@ -406,7 +463,7 @@ private fun ExportPersonaDialog(value: String, onDismiss: () -> Unit) {
 }
 
 @Composable
-private fun PersonaEmptyState(modifier: Modifier, onCreate: () -> Unit) {
+private fun PersonaEmptyState(modifier: Modifier, onCreate: () -> Unit, onGenerate: () -> Unit) {
     Column(
         modifier = modifier.padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -419,10 +476,17 @@ private fun PersonaEmptyState(modifier: Modifier, onCreate: () -> Unit) {
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Button(onClick = onCreate, modifier = Modifier.heightIn(min = 48.dp)) {
-            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(6.dp))
-            Text("New persona")
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Button(onClick = onGenerate, modifier = Modifier.heightIn(min = 48.dp)) {
+                Icon(Icons.Default.Tune, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("AI generate")
+            }
+            TextButton(onClick = onCreate, modifier = Modifier.heightIn(min = 48.dp)) {
+                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("New persona")
+            }
         }
     }
 }

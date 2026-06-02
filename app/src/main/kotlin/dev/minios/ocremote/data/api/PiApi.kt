@@ -186,6 +186,14 @@ class PiApi(
         return response.status.isSuccess()
     }
 
+    suspend fun generatePersona(conn: PiConnection, request: PiGeneratePersonaRequest): PiPersonaDto {
+        return httpClient.post("${conn.baseUrl}/personas/generate") {
+            applyPiHeaders(conn)
+            contentType(ContentType.Application.Json)
+            setBody(request)
+        }.bodyFromPersonaEnvelope("POST /personas/generate")
+    }
+
     fun connectEvents(
         conn: PiConnection,
         roundId: String,
@@ -372,6 +380,14 @@ data class PiCommandParticipantDto(
     val id: String,
     val name: String,
     val role: String = "user",
+)
+
+@Serializable
+data class PiGeneratePersonaRequest(
+    val protocolVersion: Int = PI_PROTOCOL_VERSION,
+    val requirement: String,
+    val model: String? = null,
+    val provider: String? = null,
 )
 
 @Serializable

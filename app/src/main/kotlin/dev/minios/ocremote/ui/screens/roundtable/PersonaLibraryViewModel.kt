@@ -7,6 +7,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.minios.ocremote.data.api.PI_PROTOCOL_VERSION
 import dev.minios.ocremote.data.api.PiApi
 import dev.minios.ocremote.data.api.PiConnection
+import dev.minios.ocremote.data.api.PiGeneratePersonaRequest
 import dev.minios.ocremote.data.api.PiModelRefDto
 import dev.minios.ocremote.data.api.PiPersonaDto
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -32,9 +33,12 @@ data class PersonaLibraryUiState(
     val serverName: String = "Roundtable",
     val isLoading: Boolean = true,
     val isMutating: Boolean = false,
+    val isGenerating: Boolean = false,
     val error: String? = null,
     val personas: List<PiPersonaDto> = emptyList(),
     val editor: PersonaEditorState? = null,
+    val showGenerateDialog: Boolean = false,
+    val generateRequirement: String = "",
     val importText: String = "",
     val exportText: String? = null,
 ) {
@@ -96,6 +100,39 @@ class PersonaLibraryViewModel @Inject constructor(
 
     fun newPersona() {
         _uiState.update { it.copy(editor = PersonaEditorState(id = "custom-persona", name = "Custom Persona", stancePrompt = "Contribute a distinct, bounded point of view.", style = "Clear, concise, and concrete.")) }
+    }
+
+    fun openGenerateDialog() {
+        _uiState.update { it.copy(showGenerateDialog = true, error = null) }
+    }
+
+    fun dismissGenerateDialog() {
+        _uiState.update { it.copy(showGenerateDialog = false, generateRequirement = "") }
+    }
+
+    fun setGenerateRequirement(value: String) {
+        _uiState.update { it.copy(generateRequirement = value) }
+    }
+
+    fun generateDraft() {
+        val requirement = _uiState.value.generateRequirement.trim()
+        if (requirement.isBlank()) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isGenerating = true, error = null) }
+            try {
+                val draft = api.generatePersona(conn, PiGeneratePersonaRequest(requirement = requirement))
+                _uiState.update {
+                    it.copy(
+                        isGenerating = false,
+                        showGenerateDialog = false,
+                        generateRequirement = "",
+                        editor = draft.toEditorState(originalId = null),
+                    )
+                }
+            } catch (error: Exception) {
+                _uiState.update { it.copy(isGenerating = false, error = error.message ?: "Persona generation failed") }
+            }
+        }
     }
 
     fun editPersona(persona: PiPersonaDto) {
