@@ -270,6 +270,24 @@ class RoundtableCenterViewModelTest {
         assertEquals(0, requests.count { it.method == HttpMethod.Post && it.url.encodedPath == "/roundtables" })
     }
 
+    @Test
+    fun `roundtable summary loads knowledge network and open questions`() = runTest(dispatcher) {
+        val requests = Collections.synchronizedList(mutableListOf<HttpRequestData>())
+        val service = FakeRoundtableService()
+        val vm = RoundtableSummaryViewModel(summarySavedStateHandle(), piApi(requests, service), json).also { summary ->
+            collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { summary.uiState.collect {} }
+        }
+        advanceUntilIdle()
+
+        val state = vm.uiState.first { !it.isLoading && it.knowledgeNetworkMermaid != null }
+        assertEquals("round-summary-1", state.roundtableId)
+        assertTrue(state.knowledgeNetworkMermaid.orEmpty().contains("graph TD"))
+        assertEquals(listOf("Which operational failure should stay visible?"), state.openQuestions)
+        assertTrue(state.markdown.contains("## Commands"))
+        assertTrue(requests.any { it.method == HttpMethod.Get && it.url.encodedPath == "/roundtables/round-summary-1/transcript" && it.url.parameters["format"] == "md" })
+        assertTrue(requests.any { it.method == HttpMethod.Get && it.url.encodedPath == "/roundtables/round-summary-1/transcript" && it.url.parameters["format"] == null })
+    }
+
     private fun piApi(requests: MutableList<HttpRequestData>, service: FakeRoundtableService): PiApi {
         val engine = MockEngine { request ->
             requests += request
@@ -277,6 +295,8 @@ class RoundtableCenterViewModelTest {
                 request.url.encodedPath == "/roundtables" && request.method == HttpMethod.Get -> respondJson(service.list())
                 request.url.encodedPath == "/roundtables/lineup-proposal" && request.method == HttpMethod.Post -> respondJson(service.proposal())
                 request.url.encodedPath == "/roundtables" && request.method == HttpMethod.Post -> respondJson(service.create(request.body.bodyAsText()))
+                request.url.encodedPath == "/roundtables/round-summary-1/transcript" && request.method == HttpMethod.Get && request.url.parameters["format"] == "md" -> respond(service.transcriptMarkdown(), HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "text/markdown"))
+                request.url.encodedPath == "/roundtables/round-summary-1/transcript" && request.method == HttpMethod.Get -> respondJson(service.transcriptJson())
                 request.url.encodedPath == "/personas" && request.method == HttpMethod.Get -> respondJson(service.personas())
                 request.url.encodedPath == "/catalog" && request.method == HttpMethod.Get -> respondJson(service.catalog())
                 request.url.encodedPath.endsWith("/archive") && request.method == HttpMethod.Post -> respondJson(service.archive(request.url.encodedPath.substringAfter("/roundtables/").substringBefore("/archive")))
@@ -296,6 +316,16 @@ class RoundtableCenterViewModelTest {
             "token" to encode("pi-token"),
             "serverName" to encode("Pi Test"),
             "serverId" to encode("srv-pi"),
+        )
+    )
+
+    private fun summarySavedStateHandle(): SavedStateHandle = SavedStateHandle(
+        mapOf(
+            "serverUrl" to encode("https://pi.example.test"),
+            "token" to encode("pi-token"),
+            "serverName" to encode("Pi Test"),
+            "serverId" to encode("srv-pi"),
+            "roundtableId" to encode("round-summary-1"),
         )
     )
 
@@ -354,6 +384,36 @@ class RoundtableCenterViewModelTest {
             CatalogMode.BadBaseUrl -> catalogEntry("not a url", enabled = true, status = "valid")
             CatalogMode.DisabledProvider -> catalogEntry("http://127.0.0.1:8780/persona-mbti-intj/v1", enabled = false, status = "disabled")
         }
+
+        fun transcriptMarkdown(): String = """
+            # Roundtable Transcript: round-summary-1
+            
+            ## Timeline
+            
+            ### Ada [persona]
+            - startedAt: 2026-06-02T00:00:00Z
+            - endedAt: 2026-06-02T00:00:01Z
+            
+            Ada message.
+            
+            ## Commands
+            - 2026-06-02T00:00:02Z command 1: 止 accepted=true
+            
+            ## Final Knowledge Network and Open Questions
+            
+            ## 知识网络
+            ```mermaid
+            graph TD
+              Topic[Topic] --> Q1[Open]
+            ```
+            
+            ## 开放问题
+            - Which operational failure should stay visible?
+        """.trimIndent()
+
+        fun transcriptJson(): String = """
+            {"protocolVersion":1,"roundId":"round-summary-1","events":[{"protocolVersion":1,"eventId":9,"roundId":"round-summary-1","turnId":null,"sequence":9,"type":"round_end","author":{"id":"system","name":"System","mbti":"SYSTEM","role":"system","colorSeed":"system"},"payload":{"reason":"stopped","turnCount":1,"summaryKind":"global_knowledge_network","finalSummaryMarkdown":"## 知识网络\n```mermaid\ngraph TD\n  Topic[Topic] --> Q1[Open]\n```\n\n## 开放问题\n- Which operational failure should stay visible?","openQuestions":["Which operational failure should stay visible?"]},"ts":"2026-06-02T00:00:02Z"}],"commands":[],"assembled":{} }
+        """.trimIndent()
 
         fun archive(id: String): String {
             items[id] = "archived"

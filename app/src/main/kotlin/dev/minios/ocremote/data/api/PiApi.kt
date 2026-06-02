@@ -145,6 +145,17 @@ class PiApi(
         }
     }
 
+    suspend fun getTranscriptMarkdown(conn: PiConnection, roundId: String): String {
+        return httpClient.prepareGet("${conn.baseUrl}/roundtables/$roundId/transcript?format=md") {
+            applyPiHeaders(conn)
+        }.execute { response ->
+            if (!response.status.isSuccess()) {
+                throw PiApiException("GET /roundtables/:id/transcript?format=md failed with HTTP ${response.status.value}")
+            }
+            response.bodyAsText()
+        }
+    }
+
     suspend fun cancelRoundtable(conn: PiConnection, roundId: String): Boolean {
         val response = httpClient.post("${conn.baseUrl}/roundtables/$roundId/cancel") {
             applyPiHeaders(conn)
@@ -618,8 +629,10 @@ data class AwaitingSkipPayloadDto(
 data class RoundEndPayloadDto(
     val reason: String,
     val finalSummaryMarkdown: String? = null,
+    val openQuestions: List<String> = emptyList(),
     val endedByCommandId: String? = null,
     val turnCount: Int? = null,
+    val summaryKind: String? = null,
 )
 
 @Serializable

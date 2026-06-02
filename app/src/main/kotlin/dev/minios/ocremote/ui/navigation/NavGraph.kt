@@ -39,6 +39,7 @@ import dev.minios.ocremote.ui.screens.diagnostics.DiagnosticsScreen
 import dev.minios.ocremote.ui.screens.home.HomeScreen
 import dev.minios.ocremote.ui.screens.roundtable.RoundtableCenterScreen
 import dev.minios.ocremote.ui.screens.roundtable.PersonaLibraryScreen
+import dev.minios.ocremote.ui.screens.roundtable.RoundtableSummaryScreen
 import dev.minios.ocremote.ui.screens.about.AboutScreen
 import dev.minios.ocremote.ui.screens.sessions.SessionListScreen
 import dev.minios.ocremote.ui.screens.settings.SettingsScreen
@@ -485,18 +486,7 @@ fun NavGraph(
             RoundtableCenterScreen(
                 onNavigateBack = { navController.popBackStack() },
                 onOpenRoundtable = { roundtableId ->
-                    navController.navigate(
-                        Screen.Chat.createRoute(
-                            serverUrl = serverUrl,
-                            username = "",
-                            password = token,
-                            serverName = serverName,
-                            serverId = serverId,
-                            sessionId = roundtableId,
-                            directory = roundtableId,
-                            serverType = ServerType.PI_ROUNDTABLE.name,
-                        )
-                    )
+                    navController.navigate(Screen.RoundtableSummary.createRoute(serverUrl, token, serverName, serverId, roundtableId))
                 },
                 onOpenPersonaLibrary = {
                     navController.navigate(Screen.PersonaLibrary.createRoute(serverUrl, token, serverName, serverId))
@@ -517,6 +507,20 @@ fun NavGraph(
             PersonaLibraryScreen(
                 onNavigateBack = { navController.popBackStack() }
             )
+        }
+
+
+        composable(
+            route = "roundtable_summary?serverUrl={serverUrl}&token={token}&serverName={serverName}&serverId={serverId}&roundtableId={roundtableId}",
+            arguments = listOf(
+                navArgument("serverUrl") { type = NavType.StringType },
+                navArgument("token") { type = NavType.StringType },
+                navArgument("serverName") { type = NavType.StringType },
+                navArgument("serverId") { type = NavType.StringType },
+                navArgument("roundtableId") { type = NavType.StringType },
+            )
+        ) {
+            RoundtableSummaryScreen(onNavigateBack = { navController.popBackStack() })
         }
 
         // ============ Chat Screen (native) ============
