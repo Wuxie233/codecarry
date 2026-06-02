@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
@@ -179,8 +180,15 @@ fun RoundtableCenterScreen(
         RoundtableConfigDialog(
             editor = editor,
             onTopicChange = viewModel::updateConfigTopic,
+            onPropose = viewModel::proposeLineup,
+            onUseDirectly = viewModel::useSuggestionDirectly,
+            onApplyTemplate = viewModel::applyTemplate,
+            onSaveTemplate = viewModel::saveLineupTemplate,
+            onSwapRole = viewModel::swapRole,
             onProviderChange = viewModel::updateRoleProvider,
             onModelChange = viewModel::updateRoleModel,
+            onCadenceChange = viewModel::updateCadence,
+            onMaxTurnsChange = viewModel::updateMaxTurnsPerRound,
             onAddFallback = viewModel::addRoleFallback,
             onRemoveFallback = viewModel::removeRoleFallback,
             onMoveFallback = viewModel::moveRoleFallback,
@@ -195,8 +203,15 @@ fun RoundtableCenterScreen(
 private fun RoundtableConfigDialog(
     editor: RoundtableConfigEditorState,
     onTopicChange: (String) -> Unit,
+    onPropose: () -> Unit,
+    onUseDirectly: () -> Unit,
+    onApplyTemplate: (String) -> Unit,
+    onSaveTemplate: () -> Unit,
+    onSwapRole: (String, String) -> Unit,
     onProviderChange: (String, String) -> Unit,
     onModelChange: (String, String) -> Unit,
+    onCadenceChange: (RoundtableCadence) -> Unit,
+    onMaxTurnsChange: (Int) -> Unit,
     onAddFallback: (String, String, String) -> Unit,
     onRemoveFallback: (String, Int) -> Unit,
     onMoveFallback: (String, Int, Int) -> Unit,
@@ -214,9 +229,13 @@ private fun RoundtableConfigDialog(
             tonalElevation = 6.dp,
         ) {
             Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("Configure roundtable models", style = MaterialTheme.typography.titleLarge)
+                Text("New Roundtable", style = MaterialTheme.typography.titleLarge)
                 Text(
-                    text = "Each role starts from the persona library default. Change provider, model, or ordered fallbacks for this roundtable only.",
+                    text = if (editor.step == NewRoundtableStep.Topic) {
+                        "Start with a topic. The moderator proposes 3-5 personas before anything launches."
+                    } else {
+                        "Review the moderator lineup, swap personas, tune models, and choose the cadence before Start."
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -224,12 +243,38 @@ private fun RoundtableConfigDialog(
                     value = editor.topic,
                     onValueChange = onTopicChange,
                     label = { Text("Topic") },
+                    minLines = 2,
                     modifier = Modifier.fillMaxWidth(),
                     isError = editor.topic.isBlank(),
                 )
-                if (editor.isLoadingCatalog) {
-                    CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
+                if (editor.templates.isNotEmpty()) {
+                    TemplateDropdown(
+                        templates = editor.templates,
+                        selectedTemplateId = editor.selectedTemplateId,
+                        onSelect = onApplyTemplate,
+                    )
+                }
+                if (editor.step == NewRoundtableStep.Topic) {
+                    if (editor.isLoadingCatalog || editor.isProposing) {
+                        CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
+                    }
                 } else {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        CatalogDropdown(
+                            label = "Default cadence",
+                            value = editor.cadence.label,
+                            options = RoundtableCadence.entries.map { it.wireName to it.label },
+                            onSelect = { mode -> onCadenceChange(RoundtableCadence.entries.firstOrNull { it.wireName == mode } ?: RoundtableCadence.ModeratorRouted) },
+                            modifier = Modifier.weight(1f),
+                        )
+                        CatalogDropdown(
+                            label = "Turns",
+                            value = editor.maxTurnsPerRound.toString(),
+                            options = (3..12).map { it.toString() to it.toString() },
+                            onSelect = { value -> onMaxTurnsChange(value.toIntOrNull() ?: editor.maxTurnsPerRound) },
+                            modifier = Modifier.weight(0.45f),
+                        )
+                    }
                     LazyColumn(
                         modifier = Modifier.weight(1f, fill = false),
                         verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -237,7 +282,9 @@ private fun RoundtableConfigDialog(
                         items(editor.roles, key = { it.roleId }) { role ->
                             RoleConfigCard(
                                 role = role,
+                                personas = editor.personas,
                                 catalog = editor.catalog,
+                                onSwapRole = { personaId -> onSwapRole(role.roleId, personaId) },
                                 onProviderChange = { provider -> onProviderChange(role.roleId, provider) },
                                 onModelChange = { model -> onModelChange(role.roleId, model) },
                                 onAddFallback = { provider, model -> onAddFallback(role.roleId, provider, model) },
@@ -252,8 +299,21 @@ private fun RoundtableConfigDialog(
                 }
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     TextButton(onClick = onDismiss) { Text("Cancel") }
-                    Button(onClick = onSave, enabled = !editor.isLoadingCatalog && editor.topic.isNotBlank() && errors.isEmpty()) {
-                        Text("Create roundtable")
+                    if (editor.step == NewRoundtableStep.Review) {
+                        TextButton(onClick = onSaveTemplate, enabled = !editor.isLoadingCatalog && errors.isEmpty() && editor.roles.size in 3..5) {
+                            Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Save as Template")
+                        }
+                        TextButton(onClick = onUseDirectly, enabled = !editor.isLoadingCatalog && errors.isEmpty() && editor.roles.size in 3..5) {
+                            Text("Use suggestion directly")
+                        }
+                    }
+                    Button(
+                        onClick = if (editor.step == NewRoundtableStep.Topic) onPropose else onSave,
+                        enabled = !editor.isLoadingCatalog && !editor.isProposing && editor.topic.isNotBlank() && (editor.step == NewRoundtableStep.Topic || (errors.isEmpty() && editor.roles.size in 3..5)),
+                    ) {
+                        Text(if (editor.step == NewRoundtableStep.Topic) "Propose lineup" else "Start")
                     }
                 }
             }
@@ -264,7 +324,9 @@ private fun RoundtableConfigDialog(
 @Composable
 private fun RoleConfigCard(
     role: RoleConfigEditorState,
+    personas: List<dev.minios.ocremote.data.api.PiPersonaDto>,
     catalog: List<PiCatalogEntryDto>,
+    onSwapRole: (String) -> Unit,
     onProviderChange: (String) -> Unit,
     onModelChange: (String) -> Unit,
     onAddFallback: (String, String) -> Unit,
@@ -281,10 +343,16 @@ private fun RoleConfigCard(
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(role.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                    Text("Persona library default · override for this roundtable", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(role.reason ?: "Persona library default · override for this roundtable", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 AssistChip(onClick = {}, label = { Text(provider?.displayName ?: role.provider) })
             }
+            CatalogDropdown(
+                label = "Swap persona",
+                value = role.name,
+                options = personas.mapNotNull { persona -> persona.id?.let { id -> id to persona.name } },
+                onSelect = onSwapRole,
+            )
             CatalogDropdown(
                 label = "Gateway",
                 value = provider?.displayName ?: role.provider,
@@ -322,7 +390,7 @@ private fun RoleConfigCard(
 }
 
 @Composable
-private fun CatalogDropdown(label: String, value: String, options: List<Pair<String, String>>, onSelect: (String) -> Unit) {
+private fun CatalogDropdown(label: String, value: String, options: List<Pair<String, String>>, onSelect: (String) -> Unit, modifier: Modifier = Modifier) {
     var expanded by remember { mutableStateOf(false) }
     Box {
         OutlinedTextField(
@@ -331,7 +399,7 @@ private fun CatalogDropdown(label: String, value: String, options: List<Pair<Str
             readOnly = true,
             label = { Text(label) },
             trailingIcon = { Icon(Icons.Default.KeyboardArrowDown, contentDescription = null) },
-            modifier = Modifier.fillMaxWidth(),
+            modifier = modifier.fillMaxWidth(),
         )
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             options.forEach { (id, displayName) ->
@@ -340,6 +408,21 @@ private fun CatalogDropdown(label: String, value: String, options: List<Pair<Str
         }
         Box(modifier = Modifier.matchParentSize().clickable { expanded = true })
     }
+}
+
+@Composable
+private fun TemplateDropdown(
+    templates: List<LineupTemplateState>,
+    selectedTemplateId: String?,
+    onSelect: (String) -> Unit,
+) {
+    val selected = templates.firstOrNull { it.id == selectedTemplateId }
+    CatalogDropdown(
+        label = "Reuse saved template",
+        value = selected?.name ?: "Choose a template",
+        options = templates.map { it.id to "${it.name} · ${it.roles.size} personas · ${it.cadence.label}" },
+        onSelect = onSelect,
+    )
 }
 
 @Composable

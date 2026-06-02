@@ -94,6 +94,14 @@ class PiApi(
         }.bodyFromSuccessfulResponse("POST /roundtables")
     }
 
+    suspend fun proposeLineup(conn: PiConnection, request: PiLineupProposalRequest): PiLineupProposalDto {
+        return httpClient.post("${conn.baseUrl}/roundtables/lineup-proposal") {
+            applyPiHeaders(conn)
+            contentType(ContentType.Application.Json)
+            setBody(request)
+        }.bodyFromSuccessfulResponse("POST /roundtables/lineup-proposal")
+    }
+
     suspend fun getRoundtable(conn: PiConnection, roundId: String): PiRoundtableDto {
         return httpClient.prepareGet("${conn.baseUrl}/roundtables/$roundId") {
             applyPiHeaders(conn)
@@ -364,6 +372,30 @@ data class PiCreateRoundtableRequest(
     val templateOf: String? = null,
     val roster: List<PiPersonaDto>? = null,
     val moderator: PiPersonaDto? = null,
+    val limits: PiRoundLimitsDto? = null,
+    val speakerPolicy: PiSpeakerPolicyDto? = null,
+)
+
+@Serializable
+data class PiLineupProposalRequest(
+    val protocolVersion: Int = PI_PROTOCOL_VERSION,
+    val topic: String,
+    val size: Int? = null,
+    val speakerPolicy: PiSpeakerPolicyDto? = null,
+)
+
+@Serializable
+data class PiLineupProposalDto(
+    val protocolVersion: Int = PI_PROTOCOL_VERSION,
+    val topic: String,
+    val speakerPolicy: PiSpeakerPolicyDto = PiSpeakerPolicyDto(mode = "moderator_routed"),
+    val items: List<PiLineupProposalItemDto> = emptyList(),
+)
+
+@Serializable
+data class PiLineupProposalItemDto(
+    val persona: PiPersonaDto,
+    val reason: String,
 )
 
 @Serializable

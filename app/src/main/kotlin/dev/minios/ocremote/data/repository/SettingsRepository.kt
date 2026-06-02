@@ -59,6 +59,7 @@ class SettingsRepository @Inject constructor(
         private val DIAGNOSTICS_UPLOAD_TOKEN_KEY = stringPreferencesKey("diagnostics_upload_token")
         private val ROUNDTABLE_SORT_PREFIX = "roundtable_sort_"
         private val ROUNDTABLE_FILTER_PREFIX = "roundtable_filter_"
+        private val ROUNDTABLE_LINEUP_TEMPLATES_PREFIX = "roundtable_lineup_templates_"
 
         /** SharedPreferences name used for synchronous locale reads in attachBaseContext. */
         private const val LOCALE_PREFS = "locale_prefs"
@@ -83,6 +84,9 @@ class SettingsRepository @Inject constructor(
 
     private fun roundtableFilterKey(serverId: String) =
         stringPreferencesKey(ROUNDTABLE_FILTER_PREFIX + serverId)
+
+    private fun roundtableLineupTemplatesKey(serverId: String) =
+        stringPreferencesKey(ROUNDTABLE_LINEUP_TEMPLATES_PREFIX + serverId)
 
     /**
      * Selected language code (e.g. "en", "ru", "de") or empty string for system default.
@@ -585,6 +589,16 @@ class SettingsRepository @Inject constructor(
     suspend fun setRoundtableFilter(serverId: String, filter: String) {
         dataStore.edit { preferences ->
             preferences[roundtableFilterKey(serverId)] = filter
+        }
+    }
+
+    fun roundtableLineupTemplates(serverId: String): Flow<String> = dataStore.data.map { preferences ->
+        preferences[roundtableLineupTemplatesKey(serverId)] ?: "[]"
+    }
+
+    suspend fun setRoundtableLineupTemplates(serverId: String, templatesJson: String) {
+        dataStore.edit { preferences ->
+            preferences[roundtableLineupTemplatesKey(serverId)] = templatesJson
         }
     }
 }

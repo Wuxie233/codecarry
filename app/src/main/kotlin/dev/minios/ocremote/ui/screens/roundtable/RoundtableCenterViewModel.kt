@@ -9,9 +9,12 @@ import dev.minios.ocremote.data.api.PiCatalogEntryDto
 import dev.minios.ocremote.data.api.PiCommandRequest
 import dev.minios.ocremote.data.api.PiConnection
 import dev.minios.ocremote.data.api.PiCreateRoundtableRequest
+import dev.minios.ocremote.data.api.PiLineupProposalRequest
 import dev.minios.ocremote.data.api.PiModelRefDto
 import dev.minios.ocremote.data.api.PiPersonaDto
+import dev.minios.ocremote.data.api.PiRoundLimitsDto
 import dev.minios.ocremote.data.api.PiRoundtableDto
+import dev.minios.ocremote.data.api.PiSpeakerPolicyDto
 import dev.minios.ocremote.data.repository.SettingsRepository
 import dev.minios.ocremote.domain.model.Roundtable
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -21,10 +24,16 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import java.net.URLDecoder
 import java.net.URI
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
+import java.util.UUID
 import javax.inject.Inject
 
 enum class RoundtableSort(val wireName: String) {
@@ -38,6 +47,18 @@ enum class RoundtableFilter(val wireName: String) {
     Running("running"),
     Archived("archived"),
     All("all"),
+}
+
+enum class NewRoundtableStep {
+    Topic,
+    Review,
+}
+
+enum class RoundtableCadence(val wireName: String, val label: String) {
+    ModeratorRouted("moderator_routed", "Moderator picks turns"),
+    RoundRobin("round_robin", "Round robin"),
+    FreeRoundtable("free_roundtable", "Open floor"),
+    MentionReactive("mention_reactive", "Mention reactive"),
 }
 
 data class RoundtableCenterUiState(
@@ -54,11 +75,18 @@ data class RoundtableCenterUiState(
 }
 
 data class RoundtableConfigEditorState(
-    val topic: String = "Roundtable topic 1",
+    val topic: String = "",
+    val step: NewRoundtableStep = NewRoundtableStep.Topic,
     val roles: List<RoleConfigEditorState> = emptyList(),
+    val personas: List<PiPersonaDto> = emptyList(),
     val catalog: List<PiCatalogEntryDto> = emptyList(),
+    val templates: List<LineupTemplateState> = emptyList(),
+    val selectedTemplateId: String? = null,
+    val cadence: RoundtableCadence = RoundtableCadence.ModeratorRouted,
+    val maxTurnsPerRound: Int = 6,
     val error: String? = null,
     val isLoadingCatalog: Boolean = false,
+    val isProposing: Boolean = false,
 ) {
     val validationErrors: List<String>
         get() = roles.flatMap { role -> role.validationErrors(catalog) }
@@ -75,6 +103,7 @@ data class RoleConfigEditorState(
     val model: String,
     val fallback: List<PiModelRefDto> = emptyList(),
     val enabled: Boolean = true,
+    val reason: String? = null,
 ) {
     fun toPersonaDto(): PiPersonaDto = PiPersonaDto(
         id = roleId,
@@ -90,6 +119,38 @@ data class RoleConfigEditorState(
     )
 }
 
+data class LineupTemplateState(
+    val id: String,
+    val name: String,
+    val roles: List<RoleConfigEditorState>,
+    val cadence: RoundtableCadence,
+    val maxTurnsPerRound: Int,
+)
+
+@Serializable
+private data class StoredLineupTemplate(
+    val id: String,
+    val name: String,
+    val roles: List<StoredRoleConfig>,
+    val cadence: String,
+    val maxTurnsPerRound: Int,
+)
+
+@Serializable
+private data class StoredRoleConfig(
+    val roleId: String,
+    val name: String,
+    val mbti: String,
+    val stancePrompt: String,
+    val style: String,
+    val actionTagPrefs: List<String>,
+    val provider: String,
+    val model: String,
+    val fallback: List<PiModelRefDto> = emptyList(),
+    val enabled: Boolean = true,
+    val reason: String? = null,
+)
+
 @HiltViewModel
 class RoundtableCenterViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
@@ -102,12 +163,14 @@ class RoundtableCenterViewModel @Inject constructor(
     private val serverId: String = decodeRouteArg(savedStateHandle.get<String>("serverId"))
     private val token: String = decodeRouteArg(savedStateHandle.get<String>("token"))
     private val conn = PiConnection.from(serverUrl, token.ifBlank { null })
+    private val templateJson = Json { ignoreUnknownKeys = true; encodeDefaults = true; explicitNulls = false }
 
     private val _roundtables = MutableStateFlow<List<Roundtable>>(emptyList())
     private val _isLoading = MutableStateFlow(true)
     private val _isMutating = MutableStateFlow(false)
     private val _error = MutableStateFlow<String?>(null)
     private val _configEditor = MutableStateFlow<RoundtableConfigEditorState?>(null)
+    private val _lineupTemplates = MutableStateFlow<List<LineupTemplateState>>(emptyList())
 
     private val sort = settingsRepository.roundtableSort(serverId).stateIn(
         viewModelScope,
@@ -119,12 +182,17 @@ class RoundtableCenterViewModel @Inject constructor(
         SharingStarted.Eagerly,
         RoundtableFilter.Active.wireName,
     )
+    private val storedTemplates = settingsRepository.roundtableLineupTemplates(serverId).stateIn(
+        viewModelScope,
+        SharingStarted.Eagerly,
+        "[]",
+    )
 
     private val secondaryState = combine(_isLoading, _isMutating, _error, sort, filter) { loading, mutating, error, sortWire, filterWire ->
         RoundtableCenterSecondaryState(loading, mutating, error, sortWire, filterWire)
     }
 
-    val uiState: StateFlow<RoundtableCenterUiState> = combine(_roundtables, secondaryState, _configEditor) { roundtables, secondary, configEditor ->
+    val uiState: StateFlow<RoundtableCenterUiState> = combine(_roundtables, secondaryState, _configEditor, _lineupTemplates) { roundtables, secondary, configEditor, templates ->
         val selectedSort = secondary.sortWire.toRoundtableSort()
         val selectedFilter = secondary.filterWire.toRoundtableFilter()
         RoundtableCenterUiState(
@@ -137,7 +205,7 @@ class RoundtableCenterViewModel @Inject constructor(
             items = roundtables
                 .filter { it.matches(selectedFilter) }
                 .sortedWith(selectedSort.comparator()),
-            configEditor = configEditor,
+            configEditor = configEditor?.copy(templates = templates),
         )
     }.stateIn(
         viewModelScope,
@@ -146,6 +214,9 @@ class RoundtableCenterViewModel @Inject constructor(
     )
 
     init {
+        viewModelScope.launch {
+            storedTemplates.collect { templatesWire -> _lineupTemplates.value = decodeTemplates(templatesWire) }
+        }
         refresh()
     }
 
@@ -164,24 +235,25 @@ class RoundtableCenterViewModel @Inject constructor(
     }
 
     fun createRoundtable() {
-        val nextIndex = _roundtables.value.size + 1
         _configEditor.value = RoundtableConfigEditorState(
-            topic = "Roundtable topic $nextIndex",
+            topic = "",
+            step = NewRoundtableStep.Topic,
+            templates = _lineupTemplates.value,
             isLoadingCatalog = true,
         )
         viewModelScope.launch {
             try {
-                val personas = api.listPersonas(conn).filter { it.enabled }.take(3)
+                val personas = api.listPersonas(conn).filter { it.enabled }
                 val catalog = api.listCatalog(conn)
-                _configEditor.value = RoundtableConfigEditorState(
-                    topic = "Roundtable topic $nextIndex",
-                    roles = personas.map { it.toRoleConfigEditor() },
+                _configEditor.value = _configEditor.value?.copy(
+                    personas = personas,
                     catalog = catalog,
+                    isLoadingCatalog = false,
                 )
             } catch (error: Exception) {
                 _configEditor.value = _configEditor.value?.copy(
                     isLoadingCatalog = false,
-                    error = error.message ?: "Failed to load provider catalog",
+                    error = error.message ?: "Failed to load persona library and provider catalog",
                 )
             }
         }
@@ -193,6 +265,53 @@ class RoundtableCenterViewModel @Inject constructor(
 
     fun updateConfigTopic(value: String) {
         _configEditor.update { editor -> editor?.copy(topic = value, error = null) }
+    }
+
+    fun proposeLineup() {
+        val editor = _configEditor.value ?: return
+        if (editor.topic.isBlank()) {
+            _configEditor.value = editor.copy(error = "Topic is required")
+            return
+        }
+        _configEditor.value = editor.copy(isProposing = true, error = null)
+        viewModelScope.launch {
+            try {
+                val proposal = api.proposeLineup(conn, PiLineupProposalRequest(topic = editor.topic.trim()))
+                val roles = proposal.items.map { item -> item.persona.toRoleConfigEditor(item.reason) }
+                _configEditor.value = _configEditor.value?.copy(
+                    topic = proposal.topic,
+                    step = NewRoundtableStep.Review,
+                    roles = roles,
+                    cadence = proposal.speakerPolicy.mode.toRoundtableCadence(),
+                    isProposing = false,
+                    error = null,
+                )
+            } catch (error: Exception) {
+                _configEditor.value = _configEditor.value?.copy(
+                    isProposing = false,
+                    error = error.message ?: "Failed to propose lineup",
+                )
+            }
+        }
+    }
+
+    fun useSuggestionDirectly() {
+        val editor = _configEditor.value ?: return
+        if (editor.roles.isEmpty() || editor.step != NewRoundtableStep.Review) {
+            _configEditor.value = editor.copy(error = "Review a proposed lineup before starting")
+            return
+        }
+        saveConfigEditor()
+    }
+
+    fun swapRole(roleId: String, personaId: String) {
+        _configEditor.update { editor ->
+            val persona = editor?.personas?.firstOrNull { it.id == personaId } ?: return@update editor
+            editor.copy(
+                error = null,
+                roles = editor.roles.map { role -> if (role.roleId == roleId) persona.toRoleConfigEditor("Swapped in from the persona library for this topic.") else role },
+            )
+        }
     }
 
     fun updateRoleProvider(roleId: String, providerId: String) {
@@ -213,6 +332,14 @@ class RoundtableCenterViewModel @Inject constructor(
         _configEditor.update { editor ->
             editor?.copy(error = null, roles = editor.roles.map { role -> if (role.roleId == roleId) role.copy(model = model) else role })
         }
+    }
+
+    fun updateCadence(cadence: RoundtableCadence) {
+        _configEditor.update { editor -> editor?.copy(cadence = cadence, error = null) }
+    }
+
+    fun updateMaxTurnsPerRound(value: Int) {
+        _configEditor.update { editor -> editor?.copy(maxTurnsPerRound = value.coerceIn(3, 12), error = null) }
     }
 
     fun addRoleFallback(roleId: String, providerId: String, model: String) {
@@ -253,11 +380,57 @@ class RoundtableCenterViewModel @Inject constructor(
         }
     }
 
+    fun saveLineupTemplate() {
+        val editor = _configEditor.value ?: return
+        if (editor.roles.size !in 3..5 || editor.validationErrors.isNotEmpty()) {
+            _configEditor.value = editor.copy(error = "A template needs a valid 3-5 persona lineup")
+            return
+        }
+        viewModelScope.launch {
+            val current = _lineupTemplates.value
+            val template = LineupTemplateState(
+                id = UUID.randomUUID().toString(),
+                name = editor.topic.trim().ifBlank { "Roundtable template ${current.size + 1}" },
+                roles = editor.roles,
+                cadence = editor.cadence,
+                maxTurnsPerRound = editor.maxTurnsPerRound,
+            )
+            val updated = (current + template).takeLast(20)
+            _lineupTemplates.value = updated
+            settingsRepository.setRoundtableLineupTemplates(serverId, encodeTemplates(updated))
+            _configEditor.update { it?.copy(selectedTemplateId = template.id, error = null) }
+        }
+    }
+
+    fun applyTemplate(templateId: String) {
+        val template = _lineupTemplates.value.firstOrNull { it.id == templateId } ?: return
+        _configEditor.update { editor ->
+            val reconciledRoles = editor?.let { activeEditor ->
+                template.roles.map { savedRole ->
+                    val activePersona = activeEditor.personas.firstOrNull { it.id == savedRole.roleId }
+                    activePersona?.toRoleConfigEditor(savedRole.reason)?.copy(
+                        model = savedRole.model,
+                        enabled = savedRole.enabled,
+                    ) ?: savedRole
+                }
+            } ?: template.roles
+            editor?.copy(
+                selectedTemplateId = template.id,
+                step = NewRoundtableStep.Review,
+                roles = reconciledRoles,
+                cadence = template.cadence,
+                maxTurnsPerRound = template.maxTurnsPerRound,
+                error = null,
+            )
+        }
+    }
+
     fun saveConfigEditor() {
         val editor = _configEditor.value ?: return
         val errors = editor.validationErrors
-        if (editor.topic.isBlank() || errors.isNotEmpty()) {
-            _configEditor.value = editor.copy(error = (listOfNotNull("Topic is required".takeIf { editor.topic.isBlank() }) + errors).first())
+        val sizeError = "Choose 3-5 personas".takeIf { editor.roles.size !in 3..5 }
+        if (editor.topic.isBlank() || sizeError != null || errors.isNotEmpty()) {
+            _configEditor.value = editor.copy(error = (listOfNotNull("Topic is required".takeIf { editor.topic.isBlank() }, sizeError) + errors).first())
             return
         }
         mutate {
@@ -266,6 +439,8 @@ class RoundtableCenterViewModel @Inject constructor(
                 PiCreateRoundtableRequest(
                     topic = editor.topic.trim(),
                     roster = editor.roles.map { it.toPersonaDto() },
+                    limits = PiRoundLimitsDto(maxTurnsPerRound = editor.maxTurnsPerRound),
+                    speakerPolicy = PiSpeakerPolicyDto(mode = editor.cadence.wireName),
                 ),
             )
         }
@@ -326,6 +501,23 @@ class RoundtableCenterViewModel @Inject constructor(
             }
         }
     }
+
+    private fun decodeTemplates(raw: String): List<LineupTemplateState> = runCatching {
+        templateJson.decodeFromString(ListSerializer(StoredLineupTemplate.serializer()), raw).map { stored ->
+            LineupTemplateState(
+                id = stored.id,
+                name = stored.name,
+                roles = stored.roles.map { it.toState() },
+                cadence = stored.cadence.toRoundtableCadence(),
+                maxTurnsPerRound = stored.maxTurnsPerRound.coerceIn(3, 12),
+            )
+        }
+    }.getOrDefault(emptyList())
+
+    private fun encodeTemplates(templates: List<LineupTemplateState>): String = templateJson.encodeToString(
+        ListSerializer(StoredLineupTemplate.serializer()),
+        templates.map { it.toStored() },
+    )
 }
 
 private data class RoundtableCenterSecondaryState(
@@ -367,7 +559,7 @@ private fun String.isHttpUrl(): Boolean = runCatching {
     uri.scheme == "http" || uri.scheme == "https"
 }.getOrDefault(false)
 
-private fun PiPersonaDto.toRoleConfigEditor(): RoleConfigEditorState = RoleConfigEditorState(
+private fun PiPersonaDto.toRoleConfigEditor(reason: String? = null): RoleConfigEditorState = RoleConfigEditorState(
     roleId = id.orEmpty().ifBlank { name.lowercase().replace(Regex("[^a-z0-9._-]+"), "-").trim('-') },
     name = name,
     mbti = mbti,
@@ -378,6 +570,43 @@ private fun PiPersonaDto.toRoleConfigEditor(): RoleConfigEditorState = RoleConfi
     model = model,
     fallback = fallback,
     enabled = enabled,
+    reason = reason,
+)
+
+private fun StoredRoleConfig.toState(): RoleConfigEditorState = RoleConfigEditorState(
+    roleId = roleId,
+    name = name,
+    mbti = mbti,
+    stancePrompt = stancePrompt,
+    style = style,
+    actionTagPrefs = actionTagPrefs,
+    provider = provider,
+    model = model,
+    fallback = fallback,
+    enabled = enabled,
+    reason = reason,
+)
+
+private fun LineupTemplateState.toStored(): StoredLineupTemplate = StoredLineupTemplate(
+    id = id,
+    name = name,
+    roles = roles.map { role ->
+        StoredRoleConfig(
+            roleId = role.roleId,
+            name = role.name,
+            mbti = role.mbti,
+            stancePrompt = role.stancePrompt,
+            style = role.style,
+            actionTagPrefs = role.actionTagPrefs,
+            provider = role.provider,
+            model = role.model,
+            fallback = role.fallback,
+            enabled = role.enabled,
+            reason = role.reason,
+        )
+    },
+    cadence = cadence.wireName,
+    maxTurnsPerRound = maxTurnsPerRound,
 )
 
 private fun PiRoundtableDto.toDomain(): Roundtable? {
@@ -430,6 +659,8 @@ private fun RoundtableSort.comparator(): Comparator<Roundtable> = when (this) {
 private fun String.toRoundtableSort(): RoundtableSort = RoundtableSort.entries.firstOrNull { it.wireName == this } ?: RoundtableSort.LastActivity
 
 private fun String.toRoundtableFilter(): RoundtableFilter = RoundtableFilter.entries.firstOrNull { it.wireName == this } ?: RoundtableFilter.Active
+
+private fun String.toRoundtableCadence(): RoundtableCadence = RoundtableCadence.entries.firstOrNull { it.wireName == this } ?: RoundtableCadence.ModeratorRouted
 
 private fun decodeRouteArg(value: String?): String {
     val raw = value.orEmpty()
