@@ -57,7 +57,10 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.snapshots.SnapshotStateList
+import androidx.compose.runtime.toMutableStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
@@ -8343,10 +8346,15 @@ private fun QuestionCard(
     val hapticOn = LocalHapticFeedbackEnabled.current
 
     // Prevent multiple submissions
-    var submitted by remember { mutableStateOf(false) }
+    var submitted by rememberSaveable { mutableStateOf(false) }
 
     // Track answers per question
-    val answersPerQuestion = remember {
+    val answersPerQuestion = rememberSaveable(
+        saver = listSaver<SnapshotStateList<List<String>>, ArrayList<String>>(
+            save = { stateList -> stateList.map { ArrayList(it) } },
+            restore = { saved -> saved.map { it.toList() }.toMutableStateList() },
+        )
+    ) {
         mutableStateListOf<List<String>>().apply {
             repeat(question.questions.size) { add(emptyList()) }
         }
@@ -8404,10 +8412,8 @@ private fun QuestionCard(
 
                 if (q.multiple) {
                     // ── Multi-select: checkboxes ──
-                    val selectedLabels = remember { mutableStateListOf<String>() }
-
                     q.options.forEach { option ->
-                        val checked = option.label in selectedLabels
+                        val checked = index < answersPerQuestion.size && option.label in answersPerQuestion[index]
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -8420,10 +8426,15 @@ private fun QuestionCard(
                                     value = checked,
                                     enabled = !submitted,
                                     role = Role.Checkbox,
-                                    onValueChange = {
-                                        if (it) selectedLabels.add(option.label) else selectedLabels.remove(option.label)
+                                    onValueChange = { isChecked ->
                                         if (index < answersPerQuestion.size) {
-                                            answersPerQuestion[index] = selectedLabels.toList()
+                                            val current = answersPerQuestion[index].toMutableList()
+                                            if (isChecked) {
+                                                if (option.label !in current) current.add(option.label)
+                                            } else {
+                                                current.remove(option.label)
+                                            }
+                                            answersPerQuestion[index] = current.toList()
                                         }
                                     }
                                 )
@@ -8557,8 +8568,8 @@ private fun QuestionCard(
                             }
                         }
                     } else {
-                        var isEditingCustom by remember { mutableStateOf(false) }
-                        var customText by remember { mutableStateOf("") }
+                        var isEditingCustom by rememberSaveable(key = "qc_editing_$index") { mutableStateOf(false) }
+                        var customText by rememberSaveable(key = "qc_customtext_$index") { mutableStateOf("") }
 
                         if (!isEditingCustom) {
                             Surface(
