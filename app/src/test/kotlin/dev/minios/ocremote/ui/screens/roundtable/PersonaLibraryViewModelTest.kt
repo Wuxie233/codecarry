@@ -1,8 +1,10 @@
 package dev.minios.ocremote.ui.screens.roundtable
 
+import android.content.Context
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import androidx.test.core.app.ApplicationProvider
 import dev.minios.ocremote.data.api.OpenCodeApi
 import dev.minios.ocremote.data.api.PiApi
 import dev.minios.ocremote.data.api.PiModelRefDto
@@ -55,14 +57,21 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 import java.io.File
 import java.net.URLEncoder
 import java.util.Collections
 
 @OptIn(ExperimentalCoroutinesApi::class)
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
 class PersonaLibraryViewModelTest {
     @get:Rule
     val tmpFolder = TemporaryFolder()
+
+    private val appContext: Context = ApplicationProvider.getApplicationContext()
 
     private val scheduler = TestCoroutineScheduler()
     private val dispatcher = StandardTestDispatcher(scheduler)
@@ -94,7 +103,7 @@ class PersonaLibraryViewModelTest {
         val requests = Collections.synchronizedList(mutableListOf<HttpRequestData>())
         val service = FakePersonaService()
         val serverFixture = serverFixture(backgroundScope)
-        val vm = PersonaLibraryViewModel(savedStateHandle(serverFixture.serverId), piApi(requests, service), serverFixture.repository).also { viewModels.add(it) }
+        val vm = PersonaLibraryViewModel(savedStateHandle(serverFixture.serverId), appContext, piApi(requests, service), serverFixture.repository).also { viewModels.add(it) }
         collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
         advanceUntilIdle()
 
@@ -125,7 +134,7 @@ class PersonaLibraryViewModelTest {
         val requests = Collections.synchronizedList(mutableListOf<HttpRequestData>())
         val service = FakePersonaService()
         val serverFixture = serverFixture(backgroundScope)
-        val vm = PersonaLibraryViewModel(savedStateHandle(serverFixture.serverId), piApi(requests, service), serverFixture.repository).also { viewModels.add(it) }
+        val vm = PersonaLibraryViewModel(savedStateHandle(serverFixture.serverId), appContext, piApi(requests, service), serverFixture.repository).also { viewModels.add(it) }
         collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
         advanceUntilIdle()
 
@@ -154,7 +163,7 @@ class PersonaLibraryViewModelTest {
         val requests = Collections.synchronizedList(mutableListOf<HttpRequestData>())
         val service = FakePersonaService()
         val serverFixture = serverFixture(backgroundScope)
-        val vm = PersonaLibraryViewModel(savedStateHandle(serverFixture.serverId), piApi(requests, service), serverFixture.repository).also { viewModels.add(it) }
+        val vm = PersonaLibraryViewModel(savedStateHandle(serverFixture.serverId), appContext, piApi(requests, service), serverFixture.repository).also { viewModels.add(it) }
         collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
         advanceUntilIdle()
 
@@ -180,7 +189,7 @@ class PersonaLibraryViewModelTest {
         val requests = Collections.synchronizedList(mutableListOf<HttpRequestData>())
         val service = FakePersonaService()
         val serverFixture = serverFixture(backgroundScope, token = "repository-token")
-        val vm = PersonaLibraryViewModel(savedStateHandle(serverFixture.serverId), piApi(requests, service), serverFixture.repository).also { viewModels.add(it) }
+        val vm = PersonaLibraryViewModel(savedStateHandle(serverFixture.serverId), appContext, piApi(requests, service), serverFixture.repository).also { viewModels.add(it) }
         collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
         advanceUntilIdle()
 

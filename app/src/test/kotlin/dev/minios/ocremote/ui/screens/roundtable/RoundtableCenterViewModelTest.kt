@@ -1,7 +1,9 @@
 package dev.minios.ocremote.ui.screens.roundtable
 
+import android.content.Context
 import android.content.ContextWrapper
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import androidx.test.core.app.ApplicationProvider
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import dev.minios.ocremote.data.api.OpenCodeApi
@@ -63,14 +65,21 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 import java.io.File
 import java.net.URLEncoder
 import java.util.Collections
 
 @OptIn(ExperimentalCoroutinesApi::class)
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
 class RoundtableCenterViewModelTest {
     @get:Rule
     val tmpFolder = TemporaryFolder()
+
+    private val appContext: Context = ApplicationProvider.getApplicationContext()
 
     private val scheduler = TestCoroutineScheduler()
     private val dispatcher = StandardTestDispatcher(scheduler)
@@ -104,6 +113,7 @@ class RoundtableCenterViewModelTest {
         val serverFixture = serverFixture(backgroundScope)
         val vm = RoundtableCenterViewModel(
             savedStateHandle = savedStateHandle(serverFixture.serverId),
+            context = appContext,
             api = piApi(requests, service),
             settingsRepository = settingsRepository(backgroundScope),
             serverRepository = serverFixture.repository,
@@ -146,7 +156,7 @@ class RoundtableCenterViewModelTest {
         val requests = Collections.synchronizedList(mutableListOf<HttpRequestData>())
         val service = FakeRoundtableService()
         val serverFixture = serverFixture(backgroundScope)
-        val vm = RoundtableCenterViewModel(savedStateHandle(serverFixture.serverId), piApi(requests, service), settingsRepository(backgroundScope), serverFixture.repository).also { viewModels.add(it) }
+        val vm = RoundtableCenterViewModel(savedStateHandle(serverFixture.serverId), appContext, piApi(requests, service), settingsRepository(backgroundScope), serverFixture.repository).also { viewModels.add(it) }
         backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
         advanceUntilIdle()
 
@@ -183,7 +193,7 @@ class RoundtableCenterViewModelTest {
         val requests = Collections.synchronizedList(mutableListOf<HttpRequestData>())
         val service = FakeRoundtableService()
         val serverFixture = serverFixture(backgroundScope)
-        val vm = RoundtableCenterViewModel(savedStateHandle(serverFixture.serverId), piApi(requests, service), settingsRepository(backgroundScope), serverFixture.repository).also { viewModels.add(it) }
+        val vm = RoundtableCenterViewModel(savedStateHandle(serverFixture.serverId), appContext, piApi(requests, service), settingsRepository(backgroundScope), serverFixture.repository).also { viewModels.add(it) }
         backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
         advanceUntilIdle()
 
@@ -238,7 +248,7 @@ class RoundtableCenterViewModelTest {
         val service = FakeRoundtableService()
         service.catalogMode = CatalogMode.BadBaseUrl
         val serverFixture = serverFixture(backgroundScope)
-        val vm = RoundtableCenterViewModel(savedStateHandle(serverFixture.serverId), piApi(requests, service), settingsRepository(backgroundScope), serverFixture.repository).also { viewModels.add(it) }
+        val vm = RoundtableCenterViewModel(savedStateHandle(serverFixture.serverId), appContext, piApi(requests, service), settingsRepository(backgroundScope), serverFixture.repository).also { viewModels.add(it) }
         backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
         advanceUntilIdle()
 
@@ -283,7 +293,7 @@ class RoundtableCenterViewModelTest {
         val requests = Collections.synchronizedList(mutableListOf<HttpRequestData>())
         val service = FakeRoundtableService()
         val serverFixture = serverFixture(backgroundScope)
-        val vm = RoundtableSummaryViewModel(summarySavedStateHandle(serverFixture.serverId), piApi(requests, service), json, serverFixture.repository).also { summary ->
+        val vm = RoundtableSummaryViewModel(summarySavedStateHandle(serverFixture.serverId), appContext, piApi(requests, service), json, serverFixture.repository).also { summary ->
             collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { summary.uiState.collect {} }
         }
         advanceUntilIdle()
@@ -304,6 +314,7 @@ class RoundtableCenterViewModelTest {
         val serverFixture = serverFixture(backgroundScope, token = "repository-token")
         val vm = RoundtableCenterViewModel(
             savedStateHandle = savedStateHandle(serverFixture.serverId),
+            context = appContext,
             api = piApi(requests, service),
             settingsRepository = settingsRepository(backgroundScope),
             serverRepository = serverFixture.repository,

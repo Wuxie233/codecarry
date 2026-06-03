@@ -2,6 +2,7 @@ package dev.minios.ocremote.ui.screens.roundtable
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -18,7 +19,10 @@ class RoundtableSummaryRenderingTest {
         assertTrue(renderedChunks.all { it.text.length <= 256 })
         assertEquals(markdown.take(256 * 3), renderedChunks.joinToString(separator = "") { it.text })
         assertTrue(chunks.last().isOmissionNotice)
-        assertTrue(chunks.last().text.contains("Export or Share"))
+        val notice = chunks.last().omissionNotice
+        assertNotNull(notice)
+        assertEquals(256 * 3, notice!!.renderedChars)
+        assertEquals(markdown.length - 256 * 3, notice.omittedChars)
     }
 
     @Test

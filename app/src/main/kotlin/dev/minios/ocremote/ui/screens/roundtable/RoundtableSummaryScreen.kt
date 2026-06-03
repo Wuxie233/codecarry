@@ -19,21 +19,22 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -45,17 +46,22 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import dev.minios.ocremote.R
 import dev.minios.ocremote.ui.screens.chat.MermaidMarkdownDiagram
 import kotlinx.coroutines.launch
 
@@ -72,7 +78,7 @@ fun RoundtableSummaryScreen(
     val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/markdown")) { uri: Uri? ->
         if (uri == null) return@rememberLauncherForActivityResult
         viewModel.exportToUri(context, uri) { success ->
-            coroutineScope.launch { snackbarHostState.showSnackbar(if (success) "Roundtable summary exported" else "Export failed") }
+            coroutineScope.launch { snackbarHostState.showSnackbar(if (success) context.getString(R.string.roundtable_summary_exported) else context.getString(R.string.roundtable_summary_export_failed)) }
         }
     }
 
@@ -87,7 +93,7 @@ fun RoundtableSummaryScreen(
             TopAppBar(
                 title = {
                     Column {
-                        Text("Roundtable Summary", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(stringResource(R.string.roundtable_summary_title), maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(
                             text = "${uiState.serverName} · ${uiState.roundtableId}",
                             style = MaterialTheme.typography.labelSmall,
@@ -99,12 +105,12 @@ fun RoundtableSummaryScreen(
                 },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.back))
                     }
                 },
                 actions = {
                     IconButton(onClick = viewModel::refresh) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Refresh summary")
+                        Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.roundtable_refresh_summary))
                     }
                 },
             )
@@ -121,8 +127,8 @@ fun RoundtableSummaryScreen(
                 uiState.error != null -> SummaryErrorState(error = uiState.error ?: "", onRetry = viewModel::refresh, modifier = Modifier.align(Alignment.Center))
                 else -> RoundtableSummaryContent(
                     uiState = uiState,
-                    onExport = { exportLauncher.launch("roundtable-${uiState.roundtableId}-summary.md") },
-                    onShare = { viewModel.prepareShare(context) { success -> if (!success) coroutineScope.launch { snackbarHostState.showSnackbar("Share failed") } } },
+                    onExport = { exportLauncher.launch(context.getString(R.string.roundtable_summary_export_filename, uiState.roundtableId)) },
+                    onShare = { viewModel.prepareShare(context) { success -> if (!success) coroutineScope.launch { snackbarHostState.showSnackbar(context.getString(R.string.roundtable_summary_share_failed)) } } },
                 )
             }
         }
@@ -152,27 +158,30 @@ private fun RoundtableSummaryContent(
             )
         }
         item {
-            SummarySectionCard(title = "Knowledge network", isAmoled = isAmoled) {
+            SummarySectionCard(title = stringResource(R.string.roundtable_summary_knowledge_network), isAmoled = isAmoled) {
                 val mermaid = uiState.knowledgeNetworkMermaid
                 if (mermaid == null) {
-                    Text("No knowledge-network mermaid graph was included in this transcript.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(stringResource(R.string.roundtable_summary_no_knowledge_network), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 } else {
-                    MermaidMarkdownDiagram(
-                        source = mermaid,
-                        fallbackContent = { MonospaceBlock(mermaid) },
-                    )
+                    Box(modifier = Modifier.horizontalScroll(rememberScrollState())) {
+                        MermaidMarkdownDiagram(
+                            source = mermaid,
+                            modifier = Modifier.fillMaxWidth(),
+                            fallbackContent = { MonospaceBlock(mermaid) },
+                        )
+                    }
                 }
             }
         }
         item {
-            SummarySectionCard(title = "Open questions", isAmoled = isAmoled) {
+            SummarySectionCard(title = stringResource(R.string.roundtable_summary_open_questions), isAmoled = isAmoled) {
                 if (uiState.openQuestions.isEmpty()) {
-                    Text("No open questions were exported.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(stringResource(R.string.roundtable_summary_no_open_questions), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 } else {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         uiState.openQuestions.forEachIndexed { index, question ->
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
-                                AssistChip(onClick = {}, label = { Text("Q${index + 1}") })
+                                RoundtableBadge(stringResource(R.string.roundtable_question_index, index + 1))
                                 Text(question, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
                             }
                         }
@@ -181,24 +190,48 @@ private fun RoundtableSummaryContent(
             }
         }
         item {
-            SummarySectionCard(title = "Verbatim minutes", isAmoled = isAmoled) {
-                val visibleChunks = transcriptChunks.count { !it.isOmissionNotice }
-                Text(
-                    text = "Transcript is rendered lazily in $visibleChunks chunk${if (visibleChunks == 1) "" else "s"}; Export and Share keep the full Markdown.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-        itemsIndexed(
-            items = transcriptChunks,
-            key = { _, chunk -> "transcript-${chunk.index}-${chunk.isOmissionNotice}" },
-        ) { index, chunk ->
-            SummarySectionCard(
-                title = if (chunk.isOmissionNotice) "Transcript render limit" else "Transcript chunk ${index + 1}",
-                isAmoled = isAmoled,
-            ) {
-                MonospaceBlock(chunk.text)
+            var showRawTranscript by remember(uiState.markdown) { mutableStateOf(false) }
+            SummarySectionCard(title = stringResource(R.string.roundtable_summary_verbatim_minutes), isAmoled = isAmoled) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = stringResource(R.string.roundtable_summary_verbatim_desc),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Button(onClick = { showRawTranscript = !showRawTranscript }, modifier = Modifier.heightIn(min = 48.dp)) {
+                        Icon(
+                            imageVector = if (showRawTranscript) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(stringResource(if (showRawTranscript) R.string.roundtable_summary_hide_raw else R.string.roundtable_summary_show_raw))
+                    }
+                    if (showRawTranscript) {
+                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            transcriptChunks.forEachIndexed { index, chunk ->
+                                Text(
+                                    text = if (chunk.isOmissionNotice) {
+                                        stringResource(R.string.roundtable_summary_render_limit_title)
+                                    } else {
+                                        stringResource(R.string.roundtable_summary_chunk_title, index + 1)
+                                    },
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                MonospaceBlock(
+                                    chunk.omissionNotice?.let { notice ->
+                                        stringResource(
+                                            R.string.roundtable_summary_omitted_notice,
+                                            notice.renderedChars,
+                                            notice.omittedChars,
+                                        )
+                                    } ?: chunk.text,
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -212,24 +245,24 @@ private fun SummaryHeroCard(
     onShare: () -> Unit,
     isAmoled: Boolean,
 ) {
-    SummarySectionCard(title = "Export-ready transcript", isAmoled = isAmoled) {
+    SummarySectionCard(title = stringResource(R.string.roundtable_summary_hero_title), isAmoled = isAmoled) {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(
-                text = "Final minutes for $roundtableId include author-tagged turns, operational events, commands, the knowledge network, and open questions.",
+                text = stringResource(R.string.roundtable_summary_hero_body, roundtableId),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            AssistChip(onClick = {}, label = { Text("$questionCount open question${if (questionCount == 1) "" else "s"}") })
+            RoundtableBadge(text = pluralStringResource(R.plurals.roundtable_open_questions_count, questionCount, questionCount))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Button(onClick = onExport, modifier = Modifier.heightIn(min = 48.dp)) {
                     Icon(Icons.Default.FileDownload, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
-                    Text("Export")
+                    Text(stringResource(R.string.roundtable_summary_export))
                 }
-                Button(onClick = onShare, modifier = Modifier.heightIn(min = 48.dp)) {
+                FilledTonalButton(onClick = onShare, modifier = Modifier.heightIn(min = 48.dp)) {
                     Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
-                    Text("Share")
+                    Text(stringResource(R.string.roundtable_summary_share))
                 }
             }
         }
@@ -258,7 +291,7 @@ private fun SummarySectionCard(
 private fun SummaryErrorState(error: String, onRetry: () -> Unit, modifier: Modifier = Modifier) {
     Column(modifier = modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
-        Button(onClick = onRetry, modifier = Modifier.heightIn(min = 48.dp)) { Text("Retry") }
+        Button(onClick = onRetry, modifier = Modifier.heightIn(min = 48.dp)) { Text(stringResource(R.string.retry)) }
     }
 }
 

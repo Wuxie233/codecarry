@@ -1,9 +1,12 @@
 package dev.minios.ocremote.ui.screens.roundtable
 
+import android.content.Context
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
+import dev.minios.ocremote.R
 import dev.minios.ocremote.data.api.PiApi
 import dev.minios.ocremote.data.api.PiCatalogEntryDto
 import dev.minios.ocremote.data.api.PiCommandRequest
@@ -55,15 +58,15 @@ enum class NewRoundtableStep {
     Review,
 }
 
-enum class RoundtableCadence(val wireName: String, val label: String) {
-    ModeratorRouted("moderator_routed", "Moderator picks turns"),
-    RoundRobin("round_robin", "Round robin"),
-    FreeRoundtable("free_roundtable", "Open floor"),
-    MentionReactive("mention_reactive", "Mention reactive"),
+enum class RoundtableCadence(val wireName: String) {
+    ModeratorRouted("moderator_routed"),
+    RoundRobin("round_robin"),
+    FreeRoundtable("free_roundtable"),
+    MentionReactive("mention_reactive"),
 }
 
 data class RoundtableCenterUiState(
-    val serverName: String = "Roundtable",
+    val serverName: String = "",
     val isLoading: Boolean = true,
     val isMutating: Boolean = false,
     val error: String? = null,
@@ -89,8 +92,7 @@ data class RoundtableConfigEditorState(
     val isLoadingCatalog: Boolean = false,
     val isProposing: Boolean = false,
 ) {
-    val validationErrors: List<String>
-        get() = roles.flatMap { role -> role.validationErrors(catalog) }
+    fun validationErrors(context: Context): List<String> = roles.flatMap { role -> role.validationErrors(context, catalog) }
 }
 
 data class RoleConfigEditorState(
@@ -155,13 +157,14 @@ private data class StoredRoleConfig(
 @HiltViewModel
 class RoundtableCenterViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
+    @ApplicationContext private val context: Context,
     private val api: PiApi,
     private val settingsRepository: SettingsRepository,
     private val serverRepository: ServerRepository,
 ) : ViewModel() {
 
     private val serverId: String = decodeRouteArg(savedStateHandle.get<String>("serverId"))
-    private val _serverName = MutableStateFlow("Roundtable")
+    private val _serverName = MutableStateFlow(context.getString(R.string.roundtable_default_name))
     private val templateJson = Json { ignoreUnknownKeys = true; encodeDefaults = true; explicitNulls = false }
 
     private val _roundtables = MutableStateFlow<List<Roundtable>>(emptyList())
@@ -212,7 +215,7 @@ class RoundtableCenterViewModel @Inject constructor(
     }.stateIn(
         viewModelScope,
         SharingStarted.Eagerly,
-        RoundtableCenterUiState(),
+        RoundtableCenterUiState(serverName = context.getString(R.string.roundtable_default_name)),
     )
 
     init {
@@ -230,7 +233,7 @@ class RoundtableCenterViewModel @Inject constructor(
                 val conn = resolveConnection()
                 _roundtables.value = api.listRoundtables(conn).mapNotNull { dto -> dto.toDomain() }
             } catch (error: Exception) {
-                _error.value = error.message ?: "Failed to load roundtables"
+                _error.value = error.message ?: context.getString(R.string.roundtable_error_load_roundtables)
             } finally {
                 _isLoading.value = false
             }
@@ -257,7 +260,7 @@ class RoundtableCenterViewModel @Inject constructor(
             } catch (error: Exception) {
                 _configEditor.value = _configEditor.value?.copy(
                     isLoadingCatalog = false,
-                    error = error.message ?: "Failed to load persona library and provider catalog",
+                    error = error.message ?: context.getString(R.string.roundtable_error_load_setup),
                 )
             }
         }
@@ -274,7 +277,7 @@ class RoundtableCenterViewModel @Inject constructor(
     fun proposeLineup() {
         val editor = _configEditor.value ?: return
         if (editor.topic.isBlank()) {
-            _configEditor.value = editor.copy(error = "Topic is required")
+            _configEditor.value = editor.copy(error = context.getString(R.string.roundtable_error_topic_required))
             return
         }
         _configEditor.value = editor.copy(isProposing = true, error = null)
@@ -294,7 +297,7 @@ class RoundtableCenterViewModel @Inject constructor(
             } catch (error: Exception) {
                 _configEditor.value = _configEditor.value?.copy(
                     isProposing = false,
-                    error = error.message ?: "Failed to propose lineup",
+                    error = error.message ?: context.getString(R.string.roundtable_error_propose_lineup),
                 )
             }
         }
@@ -303,7 +306,7 @@ class RoundtableCenterViewModel @Inject constructor(
     fun useSuggestionDirectly() {
         val editor = _configEditor.value ?: return
         if (editor.roles.isEmpty() || editor.step != NewRoundtableStep.Review) {
-            _configEditor.value = editor.copy(error = "Review a proposed lineup before starting")
+            _configEditor.value = editor.copy(error = context.getString(R.string.roundtable_error_review_lineup_first))
             return
         }
         saveConfigEditor()
@@ -314,7 +317,7 @@ class RoundtableCenterViewModel @Inject constructor(
             val persona = editor?.personas?.firstOrNull { it.id == personaId } ?: return@update editor
             editor.copy(
                 error = null,
-                roles = editor.roles.map { role -> if (role.roleId == roleId) persona.toRoleConfigEditor("Swapped in from the persona library for this topic.") else role },
+                roles = editor.roles.map { role -> if (role.roleId == roleId) persona.toRoleConfigEditor(context.getString(R.string.roundtable_swapped_from_library)) else role },
             )
         }
     }
@@ -387,15 +390,15 @@ class RoundtableCenterViewModel @Inject constructor(
 
     fun saveLineupTemplate() {
         val editor = _configEditor.value ?: return
-        if (editor.roles.size !in 3..5 || editor.validationErrors.isNotEmpty()) {
-            _configEditor.value = editor.copy(error = "A template needs a valid 3-5 persona lineup")
+        if (editor.roles.size !in 3..5 || editor.validationErrors(context).isNotEmpty()) {
+            _configEditor.value = editor.copy(error = context.getString(R.string.roundtable_error_template_needs_lineup))
             return
         }
         viewModelScope.launch {
             val current = _lineupTemplates.value
             val template = LineupTemplateState(
                 id = UUID.randomUUID().toString(),
-                name = editor.topic.trim().ifBlank { "Roundtable template ${current.size + 1}" },
+                name = editor.topic.trim().ifBlank { context.getString(R.string.roundtable_template_default_name, current.size + 1) },
                 roles = editor.roles,
                 cadence = editor.cadence,
                 maxTurnsPerRound = editor.maxTurnsPerRound,
@@ -432,10 +435,10 @@ class RoundtableCenterViewModel @Inject constructor(
 
     fun saveConfigEditor() {
         val editor = _configEditor.value ?: return
-        val errors = editor.validationErrors
-        val sizeError = "Choose 3-5 personas".takeIf { editor.roles.size !in 3..5 }
+        val errors = editor.validationErrors(context)
+        val sizeError = context.getString(R.string.roundtable_error_choose_personas).takeIf { editor.roles.size !in 3..5 }
         if (editor.topic.isBlank() || sizeError != null || errors.isNotEmpty()) {
-            _configEditor.value = editor.copy(error = (listOfNotNull("Topic is required".takeIf { editor.topic.isBlank() }, sizeError) + errors).first())
+            _configEditor.value = editor.copy(error = (listOfNotNull(context.getString(R.string.roundtable_error_topic_required).takeIf { editor.topic.isBlank() }, sizeError) + errors).first())
             return
         }
         mutate { conn ->
@@ -456,7 +459,7 @@ class RoundtableCenterViewModel @Inject constructor(
             api.sendCommand(
                 conn = conn,
                 roundId = roundtableId,
-                command = PiCommandRequest(roundId = roundtableId, command = "可", note = "resume from Roundtable Center"),
+                command = PiCommandRequest(roundId = roundtableId, command = "可", note = context.getString(R.string.roundtable_resume_note)),
             )
         }
     }
@@ -471,11 +474,11 @@ class RoundtableCenterViewModel @Inject constructor(
 
     fun duplicateAsTemplate(roundtable: Roundtable) {
         mutate { conn ->
-            val baseTopic = roundtable.topic?.takeIf { it.isNotBlank() } ?: "Roundtable topic"
+            val baseTopic = roundtable.topic?.takeIf { it.isNotBlank() } ?: context.getString(R.string.roundtable_default_topic)
             api.createRoundtable(
                 conn,
                 PiCreateRoundtableRequest(
-                    topic = "$baseTopic (copy)",
+                    topic = context.getString(R.string.roundtable_copy_suffix, baseTopic),
                     templateOf = roundtable.id,
                 ),
             )
@@ -500,7 +503,7 @@ class RoundtableCenterViewModel @Inject constructor(
                 _roundtables.value = api.listRoundtables(conn).mapNotNull { dto -> dto.toDomain() }
                 _configEditor.value = null
             } catch (error: Exception) {
-                _error.value = error.message ?: "Roundtable action failed"
+                _error.value = error.message ?: context.getString(R.string.roundtable_error_action_failed)
             } finally {
                 _isMutating.value = false
                 _isLoading.value = false
@@ -509,8 +512,8 @@ class RoundtableCenterViewModel @Inject constructor(
     }
 
     private suspend fun resolveConnection(): PiConnection {
-        val server = serverRepository.getServer(serverId) ?: error("Saved Pi server not found")
-        _serverName.value = server.displayName.ifBlank { "Roundtable" }
+        val server = serverRepository.getServer(serverId) ?: error(context.getString(R.string.roundtable_error_saved_server_missing))
+        _serverName.value = server.displayName.ifBlank { context.getString(R.string.roundtable_default_name) }
         return PiConnection.from(server.url, server.token)
     }
 
@@ -548,27 +551,27 @@ private data class RoundtableCenterSecondaryState(
     val filterWire: String,
 )
 
-internal fun RoleConfigEditorState.validationErrors(catalog: List<PiCatalogEntryDto>): List<String> {
+internal fun RoleConfigEditorState.validationErrors(context: Context, catalog: List<PiCatalogEntryDto>): List<String> {
     val providerEntry = catalog.firstOrNull { it.providerId == provider }
     val errors = mutableListOf<String>()
     if (providerEntry == null) {
-        errors += "$name uses unknown provider $provider"
+        errors += context.getString(R.string.roundtable_error_unknown_provider, name, provider)
     } else {
-        if (!providerEntry.baseUrl.isHttpUrl()) errors += "$name provider ${providerEntry.displayName} has a bad baseUrl"
-        if (!providerEntry.enabled || providerEntry.validation.status == "disabled") errors += "$name provider ${providerEntry.displayName} is disabled"
-        if (providerEntry.validation.status == "invalid") errors += "$name provider ${providerEntry.displayName}: ${providerEntry.validation.message ?: "validation failed"}"
+        if (!providerEntry.baseUrl.isHttpUrl()) errors += context.getString(R.string.roundtable_error_bad_base_url, name, providerEntry.displayName)
+        if (!providerEntry.enabled || providerEntry.validation.status == "disabled") errors += context.getString(R.string.roundtable_error_provider_disabled, name, providerEntry.displayName)
+        if (providerEntry.validation.status == "invalid") errors += context.getString(R.string.roundtable_error_provider_invalid, name, providerEntry.displayName, providerEntry.validation.message ?: context.getString(R.string.roundtable_error_validation_failed))
         val modelEntry = providerEntry.models.firstOrNull { it.id == model }
-        if (modelEntry == null) errors += "$name uses unknown model $model"
-        else if (!modelEntry.enabled) errors += "$name model ${modelEntry.displayName} is disabled"
+        if (modelEntry == null) errors += context.getString(R.string.roundtable_error_unknown_model, name, model)
+        else if (!modelEntry.enabled) errors += context.getString(R.string.roundtable_error_model_disabled, name, modelEntry.displayName)
     }
     fallback.forEachIndexed { index, ref ->
         val fallbackProvider = catalog.firstOrNull { it.providerId == ref.providerId }
         if (fallbackProvider == null) {
-            errors += "$name fallback ${index + 1} uses unknown provider ${ref.providerId}"
+            errors += context.getString(R.string.roundtable_error_fallback_unknown_provider, name, index + 1, ref.providerId)
         } else if (!fallbackProvider.enabled || fallbackProvider.validation.status == "disabled") {
-            errors += "$name fallback ${index + 1} provider ${fallbackProvider.displayName} is disabled"
+            errors += context.getString(R.string.roundtable_error_fallback_provider_disabled, name, index + 1, fallbackProvider.displayName)
         } else if (fallbackProvider.models.none { it.id == ref.model && it.enabled }) {
-            errors += "$name fallback ${index + 1} uses unknown model ${ref.model}"
+            errors += context.getString(R.string.roundtable_error_fallback_unknown_model, name, index + 1, ref.model)
         }
     }
     return errors
@@ -687,9 +690,9 @@ private fun decodeRouteArg(value: String?): String {
     return runCatching { URLDecoder.decode(raw, "UTF-8") }.getOrDefault(raw)
 }
 
-internal fun formatRoundtableActivity(value: String?): String {
-    if (value.isNullOrBlank()) return "No activity yet"
+internal fun formatRoundtableActivity(context: Context, value: String?): String {
+    if (value.isNullOrBlank()) return context.getString(R.string.roundtable_activity_none)
     return runCatching {
-        OffsetDateTime.parse(value).format(DateTimeFormatter.ofPattern("MMM d, HH:mm"))
+        OffsetDateTime.parse(value).format(DateTimeFormatter.ofPattern(context.getString(R.string.roundtable_activity_time_pattern)))
     }.getOrDefault(value)
 }

@@ -1,9 +1,12 @@
 package dev.minios.ocremote.ui.screens.roundtable
 
+import android.content.Context
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
+import dev.minios.ocremote.R
 import dev.minios.ocremote.data.api.PI_PROTOCOL_VERSION
 import dev.minios.ocremote.data.api.PiApi
 import dev.minios.ocremote.data.api.PiConnection
@@ -31,7 +34,7 @@ val personaMbtiOptions: List<String> = MBTI_OPTIONS
 val personaActionTagOptions: List<String> = ACTION_TAG_OPTIONS
 
 data class PersonaLibraryUiState(
-    val serverName: String = "Roundtable",
+    val serverName: String = "",
     val isLoading: Boolean = true,
     val isMutating: Boolean = false,
     val isGenerating: Boolean = false,
@@ -60,26 +63,26 @@ data class PersonaEditorState(
     val enabled: Boolean = true,
     val advancedExpanded: Boolean = false,
 ) {
-    val rawSystemPrompt: String
-        get() = listOf(
-            "$name ($mbti)",
-            "Role: persona",
-            "Stance: $stancePrompt",
-            "Style: $style",
-            "Preferred action tags: ${actionTagPrefs.joinToString(", ")}",
-        ).joinToString("\n")
+    fun rawSystemPrompt(context: Context): String = listOf(
+        "$name ($mbti)",
+        context.getString(R.string.persona_raw_prompt_role),
+        context.getString(R.string.persona_raw_prompt_stance, stancePrompt),
+        context.getString(R.string.persona_raw_prompt_style, style),
+        context.getString(R.string.persona_raw_prompt_tags, actionTagPrefs.joinToString(", ")),
+    ).joinToString("\n")
 }
 
 @HiltViewModel
 class PersonaLibraryViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
+    @ApplicationContext private val context: Context,
     private val api: PiApi,
     private val serverRepository: ServerRepository,
 ) : ViewModel() {
     private val serverId: String = decodeRouteArg(savedStateHandle.get<String>("serverId"))
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true; explicitNulls = false; isLenient = true; coerceInputValues = true; prettyPrint = true }
 
-    private val _uiState = MutableStateFlow(PersonaLibraryUiState(serverName = "Roundtable"))
+    private val _uiState = MutableStateFlow(PersonaLibraryUiState(serverName = context.getString(R.string.roundtable_default_name)))
     val uiState: StateFlow<PersonaLibraryUiState> = _uiState
 
     init {
@@ -94,13 +97,13 @@ class PersonaLibraryViewModel @Inject constructor(
                 val personas = api.listPersonas(conn).sortedWith(compareBy<PiPersonaDto> { !it.enabled }.thenBy { it.name.lowercase() })
                 _uiState.update { it.copy(isLoading = false, personas = personas) }
             } catch (error: Exception) {
-                _uiState.update { it.copy(isLoading = false, error = error.message ?: "Failed to load personas") }
+                _uiState.update { it.copy(isLoading = false, error = error.message ?: context.getString(R.string.persona_error_load)) }
             }
         }
     }
 
     fun newPersona() {
-        _uiState.update { it.copy(editor = PersonaEditorState(id = "custom-persona", name = "Custom Persona", stancePrompt = "Contribute a distinct, bounded point of view.", style = "Clear, concise, and concrete.")) }
+        _uiState.update { it.copy(editor = PersonaEditorState(id = context.getString(R.string.persona_default_id), name = context.getString(R.string.persona_default_name), stancePrompt = context.getString(R.string.persona_default_stance), style = context.getString(R.string.persona_default_style))) }
     }
 
     fun openGenerateDialog() {
@@ -132,7 +135,7 @@ class PersonaLibraryViewModel @Inject constructor(
                     )
                 }
             } catch (error: Exception) {
-                _uiState.update { it.copy(isGenerating = false, error = error.message ?: "Persona generation failed") }
+                _uiState.update { it.copy(isGenerating = false, error = error.message ?: context.getString(R.string.persona_error_generation_failed)) }
             }
         }
     }
@@ -143,7 +146,7 @@ class PersonaLibraryViewModel @Inject constructor(
 
     fun clonePersona(persona: PiPersonaDto) {
         val sourceId = persona.id?.takeIf { it.isNotBlank() } ?: persona.name.lowercase().replace(" ", "-")
-        _uiState.update { it.copy(editor = persona.copy(id = "$sourceId-copy", name = "${persona.name} Copy").toEditorState(originalId = null)) }
+        _uiState.update { it.copy(editor = persona.copy(id = "$sourceId-copy", name = context.getString(R.string.persona_copy_suffix, persona.name)).toEditorState(originalId = null)) }
     }
 
     fun dismissEditor() {
@@ -157,7 +160,7 @@ class PersonaLibraryViewModel @Inject constructor(
     fun saveEditor() {
         val editor = _uiState.value.editor ?: return
         mutate { conn ->
-            val persona = editor.toPersona()
+            val persona = editor.toPersona(context)
             val originalId = editor.originalId
             if (originalId == null) api.createPersona(conn, persona) else api.updatePersona(conn, originalId, persona)
         }
@@ -209,14 +212,14 @@ class PersonaLibraryViewModel @Inject constructor(
                 val personas = api.listPersonas(conn).sortedWith(compareBy<PiPersonaDto> { !it.enabled }.thenBy { it.name.lowercase() })
                 _uiState.update { it.copy(isMutating = false, isLoading = false, personas = personas, editor = null, importText = "") }
             } catch (error: Exception) {
-                _uiState.update { it.copy(isMutating = false, isLoading = false, error = error.message ?: "Persona action failed") }
+                _uiState.update { it.copy(isMutating = false, isLoading = false, error = error.message ?: context.getString(R.string.persona_error_action_failed)) }
             }
         }
     }
 
     private suspend fun resolveConnection(): PiConnection {
-        val server = serverRepository.getServer(serverId) ?: error("Saved Pi server not found")
-        _uiState.update { it.copy(serverName = server.displayName.ifBlank { "Roundtable" }) }
+        val server = serverRepository.getServer(serverId) ?: error(context.getString(R.string.roundtable_error_saved_server_missing))
+        _uiState.update { it.copy(serverName = server.displayName.ifBlank { context.getString(R.string.roundtable_default_name) }) }
         return PiConnection.from(server.url, server.token)
     }
 
@@ -250,12 +253,12 @@ private fun PiPersonaDto.toEditorState(originalId: String?): PersonaEditorState 
     enabled = enabled,
 )
 
-private fun PersonaEditorState.toPersona(): PiPersonaDto = PiPersonaDto(
+private fun PersonaEditorState.toPersona(context: Context): PiPersonaDto = PiPersonaDto(
     id = id.trim().takeIf { it.isNotBlank() },
-    name = name.trim().ifBlank { "Custom Persona" },
+    name = name.trim().ifBlank { context.getString(R.string.persona_default_name) },
     mbti = mbti.takeIf { it in MBTI_OPTIONS } ?: "INTJ",
-    stancePrompt = stancePrompt.trim().ifBlank { "Contribute a distinct, bounded point of view." },
-    style = style.trim().ifBlank { "Clear, concise, and concrete." },
+    stancePrompt = stancePrompt.trim().ifBlank { context.getString(R.string.persona_default_stance) },
+    style = style.trim().ifBlank { context.getString(R.string.persona_default_style) },
     actionTagPrefs = actionTagPrefs.filter { it in ACTION_TAG_OPTIONS }.ifEmpty { listOf("陈述") },
     provider = provider.trim().ifBlank { "fake-provider" },
     model = model.trim().ifBlank { "fake-model" },

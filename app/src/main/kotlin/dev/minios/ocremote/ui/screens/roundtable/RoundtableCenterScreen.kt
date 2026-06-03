@@ -4,6 +4,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -34,7 +35,6 @@ import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.BasicAlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -63,10 +63,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import dev.minios.ocremote.R
 import dev.minios.ocremote.domain.model.Roundtable
 import dev.minios.ocremote.ui.screens.chat.PiSenderIdentity
 import dev.minios.ocremote.ui.screens.chat.piSenderAccentColor
@@ -85,10 +89,11 @@ fun RoundtableCenterScreen(
 
     Scaffold(
         topBar = {
+            var showTopMenu by remember { mutableStateOf(false) }
             TopAppBar(
                 title = {
                     Column {
-                        Text("Roundtable Center", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(stringResource(R.string.roundtable_center_title), maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(
                             text = uiState.serverName,
                             style = MaterialTheme.typography.labelSmall,
@@ -100,22 +105,31 @@ fun RoundtableCenterScreen(
                 },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.back))
                     }
                 },
                 actions = {
-                    IconButton(onClick = onOpenPersonaLibrary) {
-                        Icon(Icons.Default.Tune, contentDescription = "Open persona library")
-                    }
                     IconButton(onClick = viewModel::refresh) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Refresh roundtables")
+                        Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.roundtable_refresh_roundtables))
+                    }
+                    Box {
+                        IconButton(onClick = { showTopMenu = true }) {
+                            Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.more_options))
+                        }
+                        DropdownMenu(expanded = showTopMenu, onDismissRequest = { showTopMenu = false }) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.roundtable_open_persona_library)) },
+                                onClick = { showTopMenu = false; onOpenPersonaLibrary() },
+                                leadingIcon = { Icon(Icons.Default.Tune, contentDescription = null) },
+                            )
+                        }
                     }
                 },
             )
         },
         floatingActionButton = {
             FloatingActionButton(onClick = viewModel::createRoundtable) {
-                Icon(Icons.Default.Add, contentDescription = "New roundtable")
+                Icon(Icons.Default.Add, contentDescription = stringResource(R.string.roundtable_new_roundtable))
             }
         },
     ) { padding ->
@@ -220,7 +234,8 @@ private fun RoundtableConfigDialog(
     onSave: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val errors = editor.validationErrors
+    val context = LocalContext.current
+    val errors = editor.validationErrors(context)
     BasicAlertDialog(onDismissRequest = onDismiss) {
         Surface(
             modifier = Modifier
@@ -231,20 +246,22 @@ private fun RoundtableConfigDialog(
             tonalElevation = 6.dp,
         ) {
             Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("New Roundtable", style = MaterialTheme.typography.titleLarge)
+                Text(stringResource(R.string.roundtable_new_dialog_title), style = MaterialTheme.typography.titleLarge)
                 Text(
-                    text = if (editor.step == NewRoundtableStep.Topic) {
-                        "Start with a topic. The moderator proposes 3-5 personas before anything launches."
-                    } else {
-                        "Review the moderator lineup, swap personas, tune models, and choose the cadence before Start."
-                    },
+                    text = stringResource(
+                        if (editor.step == NewRoundtableStep.Topic) {
+                            R.string.roundtable_topic_step_desc
+                        } else {
+                            R.string.roundtable_review_step_desc
+                        },
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 OutlinedTextField(
                     value = editor.topic,
                     onValueChange = onTopicChange,
-                    label = { Text("Topic") },
+                    label = { Text(stringResource(R.string.roundtable_topic_label)) },
                     minLines = 2,
                     modifier = Modifier.fillMaxWidth(),
                     isError = editor.topic.isBlank(),
@@ -263,14 +280,14 @@ private fun RoundtableConfigDialog(
                 } else {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                         CatalogDropdown(
-                            label = "Default cadence",
-                            value = editor.cadence.label,
-                            options = RoundtableCadence.entries.map { it.wireName to it.label },
+                            label = stringResource(R.string.roundtable_default_cadence),
+                            value = stringResource(roundtableCadenceLabelRes(editor.cadence)),
+                            options = RoundtableCadence.entries.map { it.wireName to stringResource(roundtableCadenceLabelRes(it)) },
                             onSelect = { mode -> onCadenceChange(RoundtableCadence.entries.firstOrNull { it.wireName == mode } ?: RoundtableCadence.ModeratorRouted) },
                             modifier = Modifier.weight(1f),
                         )
                         CatalogDropdown(
-                            label = "Turns",
+                            label = stringResource(R.string.roundtable_turns),
                             value = editor.maxTurnsPerRound.toString(),
                             options = (3..12).map { it.toString() to it.toString() },
                             onSelect = { value -> onMaxTurnsChange(value.toIntOrNull() ?: editor.maxTurnsPerRound) },
@@ -300,22 +317,22 @@ private fun RoundtableConfigDialog(
                     Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 }
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    TextButton(onClick = onDismiss) { Text("Cancel") }
+                    TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
                     if (editor.step == NewRoundtableStep.Review) {
                         TextButton(onClick = onSaveTemplate, enabled = !editor.isLoadingCatalog && errors.isEmpty() && editor.roles.size in 3..5) {
                             Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(6.dp))
-                            Text("Save as Template")
+                            Text(stringResource(R.string.roundtable_save_as_template))
                         }
                         TextButton(onClick = onUseDirectly, enabled = !editor.isLoadingCatalog && errors.isEmpty() && editor.roles.size in 3..5) {
-                            Text("Use suggestion directly")
+                            Text(stringResource(R.string.roundtable_use_suggestion_directly))
                         }
                     }
                     Button(
                         onClick = if (editor.step == NewRoundtableStep.Topic) onPropose else onSave,
                         enabled = !editor.isLoadingCatalog && !editor.isProposing && editor.topic.isNotBlank() && (editor.step == NewRoundtableStep.Topic || (errors.isEmpty() && editor.roles.size in 3..5)),
                     ) {
-                        Text(if (editor.step == NewRoundtableStep.Topic) "Propose lineup" else "Start")
+                        Text(stringResource(if (editor.step == NewRoundtableStep.Topic) R.string.roundtable_propose_lineup else R.string.roundtable_start))
                     }
                 }
             }
@@ -335,8 +352,9 @@ private fun RoleConfigCard(
     onRemoveFallback: (Int) -> Unit,
     onMoveFallback: (Int, Int) -> Unit,
 ) {
+    val context = LocalContext.current
     val provider = catalog.firstOrNull { it.providerId == role.provider }
-    val roleErrors = role.validationErrors(catalog)
+    val roleErrors = role.validationErrors(context, catalog)
     Card(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHighest),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
@@ -345,29 +363,29 @@ private fun RoleConfigCard(
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(role.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                    Text(role.reason ?: "Persona library default · override for this roundtable", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(role.reason ?: stringResource(R.string.roundtable_persona_default_override), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                AssistChip(onClick = {}, label = { Text(provider?.displayName ?: role.provider) })
+                RoundtableBadge(provider?.displayName ?: role.provider)
             }
             CatalogDropdown(
-                label = "Swap persona",
+                label = stringResource(R.string.roundtable_swap_persona),
                 value = role.name,
                 options = personas.mapNotNull { persona -> persona.id?.let { id -> id to persona.name } },
                 onSelect = onSwapRole,
             )
             CatalogDropdown(
-                label = "Gateway",
+                label = stringResource(R.string.roundtable_gateway),
                 value = provider?.displayName ?: role.provider,
                 options = catalog.map { it.providerId to it.displayName },
                 onSelect = onProviderChange,
             )
             CatalogDropdown(
-                label = "Model",
+                label = stringResource(R.string.roundtable_model),
                 value = provider?.models?.firstOrNull { it.id == role.model }?.displayName ?: role.model,
                 options = (provider?.models ?: emptyList()).map { it.id to it.displayName },
                 onSelect = onModelChange,
             )
-            Text("Ordered fallback list", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(stringResource(R.string.roundtable_ordered_fallback_list), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             role.fallback.forEachIndexed { index, fallback ->
                 FallbackRow(
                     index = index,
@@ -382,7 +400,7 @@ private fun RoleConfigCard(
             val addProvider = catalog.firstOrNull { it.enabled && it.models.any { model -> model.enabled } }
             val addModel = addProvider?.models?.firstOrNull { it.enabled }
             TextButton(onClick = { if (addProvider != null && addModel != null) onAddFallback(addProvider.providerId, addModel.id) }, enabled = addProvider != null && addModel != null) {
-                Text("Add fallback")
+                Text(stringResource(R.string.roundtable_add_fallback))
             }
             roleErrors.firstOrNull()?.let { error ->
                 Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
@@ -420,9 +438,16 @@ private fun TemplateDropdown(
 ) {
     val selected = templates.firstOrNull { it.id == selectedTemplateId }
     CatalogDropdown(
-        label = "Reuse saved template",
-        value = selected?.name ?: "Choose a template",
-        options = templates.map { it.id to "${it.name} · ${it.roles.size} personas · ${it.cadence.label}" },
+        label = stringResource(R.string.roundtable_reuse_saved_template),
+        value = selected?.name ?: stringResource(R.string.roundtable_choose_template),
+        options = templates.map { template ->
+            template.id to stringResource(
+                R.string.roundtable_template_option,
+                template.name,
+                pluralStringResource(R.plurals.persona_template_personas_count, template.roles.size, template.roles.size),
+                stringResource(roundtableCadenceLabelRes(template.cadence)),
+            )
+        },
         onSelect = onSelect,
     )
 }
@@ -438,10 +463,10 @@ private fun FallbackRow(
     onRemove: () -> Unit,
 ) {
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        AssistChip(onClick = {}, label = { Text("${index + 1}. ${ref.providerId} · ${ref.model}") }, modifier = Modifier.weight(1f))
-        IconButton(onClick = onMoveUp, enabled = canMoveUp) { Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Move fallback up") }
-        IconButton(onClick = onMoveDown, enabled = canMoveDown) { Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Move fallback down") }
-        IconButton(onClick = onRemove) { Icon(Icons.Default.Delete, contentDescription = "Remove fallback") }
+        RoundtableBadge(text = stringResource(R.string.roundtable_fallback_label, index + 1, ref.providerId, ref.model), modifier = Modifier.weight(1f))
+        IconButton(onClick = onMoveUp, enabled = canMoveUp) { Icon(Icons.Default.KeyboardArrowUp, contentDescription = stringResource(R.string.roundtable_move_fallback_up)) }
+        IconButton(onClick = onMoveDown, enabled = canMoveDown) { Icon(Icons.Default.KeyboardArrowDown, contentDescription = stringResource(R.string.roundtable_move_fallback_down)) }
+        IconButton(onClick = onRemove) { Icon(Icons.Default.Delete, contentDescription = stringResource(R.string.roundtable_remove_fallback)) }
     }
 }
 
@@ -459,26 +484,34 @@ private fun RoundtableCenterControls(
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        RoundtableBadge(
+            text = pluralStringResource(R.plurals.roundtable_running_count, runningCount, runningCount),
+        )
         Text(
-            text = "$runningCount running roundtable${if (runningCount == 1) "" else "s"}",
+            text = stringResource(R.string.roundtable_filter_label),
             style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.primary,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             RoundtableFilter.entries.forEach { option ->
                 FilterChip(
                     selected = filter == option,
                     onClick = { onFilter(option) },
-                    label = { Text(option.label()) },
+                    label = { Text(stringResource(roundtableFilterLabelRes(option))) },
                 )
             }
         }
+        Text(
+            text = stringResource(R.string.roundtable_sort_label),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             RoundtableSort.entries.forEach { option ->
                 FilterChip(
                     selected = sort == option,
                     onClick = { onSort(option) },
-                    label = { Text(option.label()) },
+                    label = { Text(stringResource(roundtableSortLabelRes(option))) },
                 )
             }
         }
@@ -517,7 +550,7 @@ private fun RoundtableCard(
             ) {
                 Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        text = roundtable.topic?.takeIf { it.isNotBlank() } ?: "Untitled roundtable topic",
+                        text = roundtable.topic?.takeIf { it.isNotBlank() } ?: stringResource(R.string.roundtable_untitled_topic),
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 2,
@@ -530,21 +563,21 @@ private fun RoundtableCard(
                 }
                 Box {
                     IconButton(onClick = { showMenu = true }) {
-                        Icon(Icons.Default.MoreVert, contentDescription = "Roundtable actions")
+                        Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.roundtable_actions))
                     }
                     DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
                         DropdownMenuItem(
-                            text = { Text("Duplicate as template") },
+                            text = { Text(stringResource(R.string.roundtable_duplicate_as_template)) },
                             onClick = { showMenu = false; onDuplicate() },
                             leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
                         )
                         DropdownMenuItem(
-                            text = { Text("Archive") },
+                            text = { Text(stringResource(R.string.roundtable_archive)) },
                             onClick = { showMenu = false; onArchive() },
                             leadingIcon = { Icon(Icons.Default.Archive, contentDescription = null) },
                         )
                         DropdownMenuItem(
-                            text = { Text("Delete") },
+                            text = { Text(stringResource(R.string.delete)) },
                             onClick = { showMenu = false; onDelete() },
                             leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) },
                         )
@@ -558,14 +591,18 @@ private fun RoundtableCard(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = "${roundtable.roundCount} rounds · ${formatRoundtableActivity(roundtable.time.updated)}",
+                    text = stringResource(
+                        R.string.roundtable_card_meta,
+                        pluralStringResource(R.plurals.roundtable_rounds_count, roundtable.roundCount, roundtable.roundCount),
+                        formatRoundtableActivity(LocalContext.current, roundtable.time.updated),
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Button(onClick = onResume, enabled = roundtable.status != Roundtable.Status.Archived) {
                     Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
-                    Text("Resume")
+                    Text(stringResource(R.string.roundtable_resume))
                 }
             }
         }
@@ -597,15 +634,7 @@ private fun RoundtableRosterDots(roster: List<Roundtable.RoleSummary>) {
 
 @Composable
 private fun StatusChip(status: Roundtable.Status) {
-    val label = when (status) {
-        Roundtable.Status.Running -> "running"
-        Roundtable.Status.Paused, Roundtable.Status.AwaitingCommand, Roundtable.Status.AwaitingSkip -> "paused"
-        Roundtable.Status.Archived -> "archived"
-        Roundtable.Status.Completed -> "ended"
-        Roundtable.Status.Error -> "error"
-        Roundtable.Status.Unknown -> "unknown"
-    }
-    AssistChip(onClick = {}, label = { Text(label) })
+    RoundtableBadge(text = stringResource(roundtableStatusLabelRes(status)))
 }
 
 @Composable
@@ -624,29 +653,51 @@ private fun RoundtableEmptyState(
             modifier = Modifier.size(44.dp),
             tint = MaterialTheme.colorScheme.primary,
         )
-        Text("No roundtables yet", style = MaterialTheme.typography.titleMedium)
+        Text(stringResource(R.string.roundtable_empty_title), style = MaterialTheme.typography.titleMedium)
         Text(
-            text = "Create a topic-led roundtable without adding anything to OpenCode sessions.",
+            text = stringResource(R.string.roundtable_empty_message),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Button(onClick = onCreate, modifier = Modifier.heightIn(min = 48.dp)) {
             Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(6.dp))
-            Text("New roundtable")
+            Text(stringResource(R.string.roundtable_new_roundtable))
         }
     }
 }
 
-private fun RoundtableFilter.label(): String = when (this) {
-    RoundtableFilter.Active -> "Active"
-    RoundtableFilter.Running -> "Running"
-    RoundtableFilter.Archived -> "Archived"
-    RoundtableFilter.All -> "All"
+@StringRes
+private fun roundtableFilterLabelRes(filter: RoundtableFilter): Int = when (filter) {
+    RoundtableFilter.Active -> R.string.roundtable_filter_active
+    RoundtableFilter.Running -> R.string.roundtable_filter_running
+    RoundtableFilter.Archived -> R.string.roundtable_filter_archived
+    RoundtableFilter.All -> R.string.roundtable_filter_all
 }
 
-private fun RoundtableSort.label(): String = when (this) {
-    RoundtableSort.LastActivity -> "Activity"
-    RoundtableSort.Created -> "Created"
-    RoundtableSort.Topic -> "Topic"
+@StringRes
+private fun roundtableSortLabelRes(sort: RoundtableSort): Int = when (sort) {
+    RoundtableSort.LastActivity -> R.string.roundtable_sort_activity
+    RoundtableSort.Created -> R.string.roundtable_sort_created
+    RoundtableSort.Topic -> R.string.roundtable_sort_topic
+}
+
+@StringRes
+private fun roundtableStatusLabelRes(status: Roundtable.Status): Int = when (status) {
+    Roundtable.Status.Running -> R.string.roundtable_status_running
+    Roundtable.Status.Paused,
+    Roundtable.Status.AwaitingCommand,
+    Roundtable.Status.AwaitingSkip -> R.string.roundtable_status_paused
+    Roundtable.Status.Archived -> R.string.roundtable_status_archived
+    Roundtable.Status.Completed -> R.string.roundtable_status_ended
+    Roundtable.Status.Error -> R.string.roundtable_status_error
+    Roundtable.Status.Unknown -> R.string.roundtable_status_unknown
+}
+
+@StringRes
+private fun roundtableCadenceLabelRes(cadence: RoundtableCadence): Int = when (cadence) {
+    RoundtableCadence.ModeratorRouted -> R.string.roundtable_cadence_moderator_routed
+    RoundtableCadence.RoundRobin -> R.string.roundtable_cadence_round_robin
+    RoundtableCadence.FreeRoundtable -> R.string.roundtable_cadence_free_roundtable
+    RoundtableCadence.MentionReactive -> R.string.roundtable_cadence_mention_reactive
 }

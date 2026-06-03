@@ -4,10 +4,12 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import androidx.core.content.FileProvider
+import dev.minios.ocremote.R
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import dev.minios.ocremote.data.api.PiApi
 import dev.minios.ocremote.data.api.PiConnection
 import dev.minios.ocremote.data.api.RoundEndPayloadDto
@@ -28,7 +30,7 @@ private const val DEFAULT_TRANSCRIPT_RENDER_CHUNK_CHARS = 4_000
 private const val DEFAULT_TRANSCRIPT_RENDER_MAX_CHUNKS = 120
 
 data class RoundtableSummaryUiState(
-    val serverName: String = "Roundtable",
+    val serverName: String = "",
     val roundtableId: String = "",
     val isLoading: Boolean = true,
     val isExporting: Boolean = false,
@@ -43,12 +45,20 @@ data class RoundtableSummaryUiState(
 data class TranscriptRenderChunk(
     val index: Int,
     val text: String,
-    val isOmissionNotice: Boolean = false,
-)
+    val omissionNotice: OmissionNotice? = null,
+) {
+    val isOmissionNotice: Boolean get() = omissionNotice != null
+
+    data class OmissionNotice(
+        val renderedChars: Int,
+        val omittedChars: Int,
+    )
+}
 
 @HiltViewModel
 class RoundtableSummaryViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
+    @ApplicationContext private val context: Context,
     private val api: PiApi,
     private val json: Json,
     private val serverRepository: ServerRepository,
@@ -57,7 +67,7 @@ class RoundtableSummaryViewModel @Inject constructor(
     private val roundtableId: String = decodeRouteArg(savedStateHandle.get<String>("roundtableId"))
     private val _uiState = MutableStateFlow(
         RoundtableSummaryUiState(
-            serverName = "Roundtable",
+            serverName = context.getString(R.string.roundtable_default_name),
             roundtableId = roundtableId,
         ),
     )
@@ -89,14 +99,14 @@ class RoundtableSummaryViewModel @Inject constructor(
                     error = null,
                 )
             } catch (error: Exception) {
-                _uiState.update { it.copy(isLoading = false, error = error.message ?: "Failed to load roundtable summary") }
+                _uiState.update { it.copy(isLoading = false, error = error.message ?: context.getString(R.string.roundtable_summary_error_load)) }
             }
         }
     }
 
     private suspend fun resolveConnection(): PiConnection {
-        val server = serverRepository.getServer(serverId) ?: error("Saved Pi server not found")
-        _uiState.update { it.copy(serverName = server.displayName.ifBlank { "Roundtable" }) }
+        val server = serverRepository.getServer(serverId) ?: error(context.getString(R.string.roundtable_error_saved_server_missing))
+        _uiState.update { it.copy(serverName = server.displayName.ifBlank { context.getString(R.string.roundtable_default_name) }) }
         return PiConnection.from(server.url, server.token)
     }
 
@@ -105,7 +115,7 @@ class RoundtableSummaryViewModel @Inject constructor(
         viewModelScope.launch(Dispatchers.IO) {
             val success = runCatching {
                 context.contentResolver.openOutputStream(uri)?.use { output -> output.write(content.toByteArray(Charsets.UTF_8)) }
-                    ?: error("Unable to open output stream")
+                    ?: error(context.getString(R.string.roundtable_summary_error_output_stream))
             }.isSuccess
             withContext(Dispatchers.Main) { onResult(success) }
         }
@@ -170,9 +180,8 @@ internal fun splitTranscriptForRendering(
     val omittedChars = markdown.length - rendered.length
     if (omittedChars <= 0) return chunks
 
-    val notice = "Transcript rendering is capped after ${rendered.length} characters; " +
-        "$omittedChars more characters remain available through Export or Share."
-    return chunks + TranscriptRenderChunk(index = chunks.size, text = notice, isOmissionNotice = true)
+    val notice = TranscriptRenderChunk.OmissionNotice(rendered.length, omittedChars)
+    return chunks + TranscriptRenderChunk(index = chunks.size, text = "", omissionNotice = notice)
 }
 
 private fun safeFilePart(value: String): String = value.lowercase().replace(Regex("[^a-z0-9._-]+"), "-").trim('-').ifBlank { "roundtable" }

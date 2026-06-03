@@ -32,7 +32,6 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Tune
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.BasicAlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -63,11 +62,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import dev.minios.ocremote.R
 import dev.minios.ocremote.data.api.PiPersonaDto
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -81,12 +84,17 @@ fun PersonaLibraryScreen(
 
     Scaffold(
         topBar = {
+            var showTopMenu by remember { mutableStateOf(false) }
             TopAppBar(
                 title = {
                     Column {
-                        Text("Persona Library", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(stringResource(R.string.persona_library_title), maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(
-                            text = "${uiState.enabledCount} enabled · ${uiState.serverName}",
+                            text = stringResource(
+                                R.string.persona_enabled_subtitle,
+                                pluralStringResource(R.plurals.persona_enabled_count, uiState.enabledCount, uiState.enabledCount),
+                                uiState.serverName,
+                            ),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
@@ -96,25 +104,36 @@ fun PersonaLibraryScreen(
                 },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.back))
                     }
                 },
                 actions = {
-                    IconButton(onClick = viewModel::openGenerateDialog) {
-                        Icon(Icons.Default.Tune, contentDescription = "AI generate persona")
-                    }
                     IconButton(onClick = viewModel::refresh) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Refresh personas")
+                        Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.persona_refresh))
                     }
-                    IconButton(onClick = { viewModel.setImportText("{}") }) {
-                        Icon(Icons.Default.FileUpload, contentDescription = "Import persona JSON")
+                    Box {
+                        IconButton(onClick = { showTopMenu = true }) {
+                            Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.more_options))
+                        }
+                        DropdownMenu(expanded = showTopMenu, onDismissRequest = { showTopMenu = false }) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.persona_ai_generate)) },
+                                onClick = { showTopMenu = false; viewModel.openGenerateDialog() },
+                                leadingIcon = { Icon(Icons.Default.Tune, contentDescription = null) },
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.persona_import_json)) },
+                                onClick = { showTopMenu = false; viewModel.setImportText("{}") },
+                                leadingIcon = { Icon(Icons.Default.FileUpload, contentDescription = null) },
+                            )
+                        }
                     }
                 },
             )
         },
         floatingActionButton = {
             FloatingActionButton(onClick = viewModel::newPersona) {
-                Icon(Icons.Default.Add, contentDescription = "New persona")
+                Icon(Icons.Default.Add, contentDescription = stringResource(R.string.persona_new))
             }
         },
     ) { padding ->
@@ -243,7 +262,7 @@ private fun PersonaCard(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
-                        AssistChip(onClick = {}, label = { Text(persona.mbti) })
+                        RoundtableBadge(persona.mbti)
                     }
                     Text(
                         text = persona.stancePrompt,
@@ -256,26 +275,20 @@ private fun PersonaCard(
                 Switch(checked = persona.enabled, onCheckedChange = { onToggle() })
                 Box {
                     IconButton(onClick = { showMenu = true }) {
-                        Icon(Icons.Default.MoreVert, contentDescription = "Persona actions")
+                        Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.persona_actions))
                     }
                     DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
-                        DropdownMenuItem(text = { Text("Edit") }, onClick = { showMenu = false; onEdit() }, leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) })
-                        DropdownMenuItem(text = { Text("Clone") }, onClick = { showMenu = false; onClone() }, leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) })
-                        DropdownMenuItem(text = { Text("Export JSON") }, onClick = { showMenu = false; onExport() }, leadingIcon = { Icon(Icons.Default.FileDownload, contentDescription = null) })
-                        DropdownMenuItem(text = { Text("Delete") }, onClick = { showMenu = false; onDelete() }, leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) })
+                        DropdownMenuItem(text = { Text(stringResource(R.string.persona_edit)) }, onClick = { showMenu = false; onEdit() }, leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) })
+                        DropdownMenuItem(text = { Text(stringResource(R.string.persona_clone)) }, onClick = { showMenu = false; onClone() }, leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) })
+                        DropdownMenuItem(text = { Text(stringResource(R.string.persona_export_json)) }, onClick = { showMenu = false; onExport() }, leadingIcon = { Icon(Icons.Default.FileDownload, contentDescription = null) })
+                        DropdownMenuItem(text = { Text(stringResource(R.string.delete)) }, onClick = { showMenu = false; onDelete() }, leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) })
                     }
                 }
             }
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                persona.actionTagPrefs.take(3).forEach { tag -> AssistChip(onClick = {}, label = { Text(tag) }) }
-                Text(
-                    text = "${persona.provider} · ${persona.model}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                persona.actionTagPrefs.take(3).forEach { tag -> RoundtableBadge(tag) }
+                RoundtableBadge(text = "${persona.provider} · ${persona.model}")
             }
         }
     }
@@ -299,20 +312,20 @@ private fun PersonaEditorDialog(
             tonalElevation = 6.dp,
         ) {
             Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(if (editor.originalId == null) "New persona" else "Edit persona", style = MaterialTheme.typography.titleLarge)
+                Text(stringResource(if (editor.originalId == null) R.string.persona_dialog_new_title else R.string.persona_dialog_edit_title), style = MaterialTheme.typography.titleLarge)
                 Column(
                     modifier = Modifier
                         .weight(1f, fill = false)
                         .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    PersonaField("ID", editor.id) { value -> onChange { it.copy(id = value) } }
-                    PersonaField("Name", editor.name) { value -> onChange { it.copy(name = value) } }
-                    Text("MBTI", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    PersonaField(stringResource(R.string.persona_id_label), editor.id) { value -> onChange { it.copy(id = value) } }
+                    PersonaField(stringResource(R.string.persona_name_label), editor.name) { value -> onChange { it.copy(name = value) } }
+                    Text(stringResource(R.string.persona_mbti_label), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     ChunkedChipRows(personaMbtiOptions, selected = setOf(editor.mbti)) { value -> onChange { it.copy(mbti = value) } }
-                    PersonaField("Stance prompt", editor.stancePrompt, minLines = 3) { value -> onChange { it.copy(stancePrompt = value) } }
-                    PersonaField("Style", editor.style, minLines = 2) { value -> onChange { it.copy(style = value) } }
-                    Text("Action tags", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    PersonaField(stringResource(R.string.persona_stance_prompt_label), editor.stancePrompt, minLines = 3) { value -> onChange { it.copy(stancePrompt = value) } }
+                    PersonaField(stringResource(R.string.persona_style_label), editor.style, minLines = 2) { value -> onChange { it.copy(style = value) } }
+                    Text(stringResource(R.string.persona_action_tags_label), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     ChunkedChipRows(personaActionTagOptions, selected = editor.actionTagPrefs) { value ->
                         onChange { current ->
                             val next = if (value in current.actionTagPrefs) current.actionTagPrefs - value else current.actionTagPrefs + value
@@ -321,19 +334,19 @@ private fun PersonaEditorDialog(
                     }
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         Switch(checked = editor.enabled, onCheckedChange = { enabled -> onChange { it.copy(enabled = enabled) } })
-                        Text("Enabled", style = MaterialTheme.typography.bodyMedium)
+                        Text(stringResource(R.string.persona_enabled_label), style = MaterialTheme.typography.bodyMedium)
                     }
-                    PersonaField("Provider", editor.provider) { value -> onChange { it.copy(provider = value) } }
-                    PersonaField("Model", editor.model) { value -> onChange { it.copy(model = value) } }
-                    PersonaField("Fallback list (provider:model, one per line)", editor.fallbackText, minLines = 3) { value -> onChange { it.copy(fallbackText = value) } }
+                    PersonaField(stringResource(R.string.persona_provider_label), editor.provider) { value -> onChange { it.copy(provider = value) } }
+                    PersonaField(stringResource(R.string.persona_model_label), editor.model) { value -> onChange { it.copy(model = value) } }
+                    PersonaField(stringResource(R.string.persona_fallback_list_label), editor.fallbackText, minLines = 3) { value -> onChange { it.copy(fallbackText = value) } }
                     TextButton(onClick = { onChange { it.copy(advancedExpanded = !it.advancedExpanded) } }) {
                         Icon(Icons.Default.Tune, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text(if (editor.advancedExpanded) "Hide advanced raw prompt" else "Show advanced raw prompt")
+                        Text(stringResource(if (editor.advancedExpanded) R.string.persona_hide_advanced_prompt else R.string.persona_show_advanced_prompt))
                     }
                     if (editor.advancedExpanded) {
                         Text(
-                            text = editor.rawSystemPrompt,
+                            text = editor.rawSystemPrompt(LocalContext.current),
                             style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier
@@ -344,11 +357,11 @@ private fun PersonaEditorDialog(
                     }
                 }
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    TextButton(onClick = onDismiss) { Text("Cancel") }
+                    TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
                     Button(onClick = onSave, enabled = editor.name.isNotBlank() && editor.stancePrompt.isNotBlank() && editor.provider.isNotBlank() && editor.model.isNotBlank()) {
                         Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text("Save")
+                        Text(stringResource(R.string.persona_save))
                     }
                 }
             }
@@ -398,29 +411,29 @@ private fun GeneratePersonaDialog(
     BasicAlertDialog(onDismissRequest = { if (!isGenerating) onDismiss() }) {
         Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surface, tonalElevation = 6.dp) {
             Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("AI generate persona", style = MaterialTheme.typography.titleLarge)
+                Text(stringResource(R.string.persona_generate_dialog_title), style = MaterialTheme.typography.titleLarge)
                 Text(
-                    text = "Describe the persona you want. Generation creates an editable draft only; it is saved after you confirm with Save.",
+                    text = stringResource(R.string.persona_generate_dialog_body),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 OutlinedTextField(
                     value = value,
                     onValueChange = onChange,
-                    label = { Text("Requirement") },
-                    placeholder = { Text("一个爱抬杠的INTP安全专家") },
+                    label = { Text(stringResource(R.string.persona_requirement_label)) },
+                    placeholder = { Text(stringResource(R.string.persona_requirement_placeholder)) },
                     minLines = 4,
                     modifier = Modifier.fillMaxWidth(),
                     enabled = !isGenerating,
                 )
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onClick = onDismiss, enabled = !isGenerating) { Text("Cancel") }
+                    TextButton(onClick = onDismiss, enabled = !isGenerating) { Text(stringResource(R.string.cancel)) }
                     Button(onClick = onGenerate, enabled = value.isNotBlank() && !isGenerating) {
                         if (isGenerating) {
                             CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                             Spacer(Modifier.width(8.dp))
                         }
-                        Text("Generate draft")
+                        Text(stringResource(R.string.persona_generate_draft))
                     }
                 }
             }
@@ -434,12 +447,12 @@ private fun ImportPersonaDialog(value: String, onChange: (String) -> Unit, onImp
     BasicAlertDialog(onDismissRequest = onDismiss) {
         Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surface, tonalElevation = 6.dp) {
             Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("Import persona JSON", style = MaterialTheme.typography.titleLarge)
-                Text("Paste a persona object, { item }, or { items } export. Credential-like fields are ignored by the service.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(stringResource(R.string.persona_import_json), style = MaterialTheme.typography.titleLarge)
+                Text(stringResource(R.string.persona_import_dialog_body), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 OutlinedTextField(value = value, onValueChange = onChange, minLines = 8, modifier = Modifier.fillMaxWidth())
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    TextButton(onClick = onDismiss) { Text("Cancel") }
-                    Button(onClick = onImport, enabled = value.isNotBlank()) { Text("Import") }
+                    TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
+                    Button(onClick = onImport, enabled = value.isNotBlank()) { Text(stringResource(R.string.persona_import)) }
                 }
             }
         }
@@ -452,10 +465,10 @@ private fun ExportPersonaDialog(value: String, onDismiss: () -> Unit) {
     BasicAlertDialog(onDismissRequest = onDismiss) {
         Surface(shape = RoundedCornerShape(20.dp), color = MaterialTheme.colorScheme.surface, tonalElevation = 6.dp) {
             Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("Export persona JSON", style = MaterialTheme.typography.titleLarge)
+                Text(stringResource(R.string.persona_export_dialog_title), style = MaterialTheme.typography.titleLarge)
                 OutlinedTextField(value = value, onValueChange = {}, readOnly = true, minLines = 8, modifier = Modifier.fillMaxWidth())
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    Button(onClick = onDismiss) { Text("Done") }
+                    Button(onClick = onDismiss) { Text(stringResource(R.string.persona_done)) }
                 }
             }
         }
@@ -470,9 +483,9 @@ private fun PersonaEmptyState(modifier: Modifier, onCreate: () -> Unit, onGenera
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Icon(Icons.Default.Tune, contentDescription = null, modifier = Modifier.size(44.dp), tint = MaterialTheme.colorScheme.primary)
-        Text("No personas yet", style = MaterialTheme.typography.titleMedium)
+        Text(stringResource(R.string.persona_empty_title), style = MaterialTheme.typography.titleMedium)
         Text(
-            text = "Personas live on the Pi service; this client edits the server copy only.",
+            text = stringResource(R.string.persona_empty_message),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -480,12 +493,12 @@ private fun PersonaEmptyState(modifier: Modifier, onCreate: () -> Unit, onGenera
             Button(onClick = onGenerate, modifier = Modifier.heightIn(min = 48.dp)) {
                 Icon(Icons.Default.Tune, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
-                Text("AI generate")
+                Text(stringResource(R.string.persona_ai_generate_short))
             }
             TextButton(onClick = onCreate, modifier = Modifier.heightIn(min = 48.dp)) {
                 Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
-                Text("New persona")
+                Text(stringResource(R.string.persona_new))
             }
         }
     }
