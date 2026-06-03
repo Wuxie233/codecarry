@@ -163,13 +163,10 @@ private fun RoundtableSummaryContent(
                 if (mermaid == null) {
                     Text(stringResource(R.string.roundtable_summary_no_knowledge_network), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 } else {
-                    Box(modifier = Modifier.horizontalScroll(rememberScrollState())) {
-                        MermaidMarkdownDiagram(
-                            source = mermaid,
-                            modifier = Modifier.fillMaxWidth(),
-                            fallbackContent = { MonospaceBlock(mermaid) },
-                        )
-                    }
+                    MermaidMarkdownDiagram(
+                        source = mermaid,
+                        fallbackContent = { MonospaceBlock(mermaid) },
+                    )
                 }
             }
         }
