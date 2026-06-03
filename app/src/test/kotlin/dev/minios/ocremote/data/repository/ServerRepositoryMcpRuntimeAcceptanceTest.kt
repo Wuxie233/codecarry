@@ -3,6 +3,7 @@ package dev.minios.ocremote.data.repository
 import android.net.Uri
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import dev.minios.ocremote.data.api.OpenCodeApi
+import dev.minios.ocremote.data.api.PiApi
 import dev.minios.ocremote.data.api.ServerConnection
 import dev.minios.ocremote.domain.model.McpRuntimeSnapshot
 import dev.minios.ocremote.domain.model.McpRuntimeState
@@ -278,8 +279,16 @@ class ServerRepositoryMcpRuntimeAcceptanceTest {
         return ServerRepository(
             dataStore = dataStore,
             api = api,
+            piApi = unusedPiApi(),
             json = json,
         )
+    }
+
+    private fun unusedPiApi(): PiApi {
+        val client = HttpClient(MockEngine { error("Unexpected Pi API request") }) {
+            install(ContentNegotiation) { json(json) }
+        }
+        return PiApi(client, json)
     }
 
     private fun newApi(

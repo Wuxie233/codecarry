@@ -63,6 +63,12 @@ class PiApi(
     @Inject
     constructor(httpClient: HttpClient, json: Json) : this(httpClient, json, PI_HEARTBEAT_TIMEOUT_MS)
 
+    suspend fun checkHealth(conn: PiConnection): Boolean {
+        val response = httpClient.get("${conn.baseUrl}/health")
+        if (!response.status.isSuccess()) throw PiApiException("GET /health failed with HTTP ${response.status.value}")
+        return true
+    }
+
     suspend fun listRoundtables(conn: PiConnection): List<PiRoundtableDto> {
         val body = httpClient.prepareGet("${conn.baseUrl}/roundtables") {
             applyPiHeaders(conn)

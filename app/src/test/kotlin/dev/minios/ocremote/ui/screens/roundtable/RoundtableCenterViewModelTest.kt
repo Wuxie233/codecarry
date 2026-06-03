@@ -360,7 +360,7 @@ class RoundtableCenterViewModelTest {
         val client = HttpClient(MockEngine { respond("{}", HttpStatusCode.NotFound) }) {
             install(ContentNegotiation) { json(json) }
         }
-        val repository = ServerRepository(dataStore, OpenCodeApi(client, json), json)
+        val repository = ServerRepository(dataStore, OpenCodeApi(client, json), PiApi(client, json), json)
         val server = repository.addServer(
             url = "https://pi.example.test",
             type = ServerType.PI_ROUNDTABLE,

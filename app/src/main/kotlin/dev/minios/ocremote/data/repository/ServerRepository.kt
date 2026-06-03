@@ -7,6 +7,8 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import dev.minios.ocremote.data.api.OpenCodeApi
 import dev.minios.ocremote.data.api.OpenCodeFileNotFoundException
+import dev.minios.ocremote.data.api.PiApi
+import dev.minios.ocremote.data.api.PiConnection
 import dev.minios.ocremote.data.api.McpRuntimeStatusResult
 import dev.minios.ocremote.data.api.ServerConnection
 import dev.minios.ocremote.domain.model.McpConfig
@@ -41,6 +43,7 @@ private const val RUNTIME_SOURCE_SENTINEL = "<runtime>"
 class ServerRepository @Inject constructor(
     private val dataStore: DataStore<Preferences>,
     private val api: OpenCodeApi,
+    private val piApi: PiApi,
     private val json: Json,
 ) {
 
@@ -129,8 +132,18 @@ class ServerRepository @Inject constructor(
      */
     suspend fun checkHealth(server: ServerConfig): Result<ServerHealth> {
         return try {
-            val conn = ServerConnection.from(server.url, server.username, server.password)
-            val health = api.getHealth(conn)
+            val health = when (server.type) {
+                ServerType.OPENCODE -> {
+                    val conn = ServerConnection.from(server.url, server.username, server.password)
+                    api.getHealth(conn)
+                }
+
+                ServerType.PI_ROUNDTABLE -> {
+                    val conn = PiConnection.from(server.url, server.token)
+                    piApi.listRoundtables(conn)
+                    ServerHealth(healthy = true)
+                }
+            }
 
             // Update server health status
             val updatedServer = server.copy(
@@ -141,7 +154,7 @@ class ServerRepository @Inject constructor(
 
             Result.success(health)
         } catch (e: Exception) {
-            Log.e(TAG, "Health check failed for ${server.url}", e)
+            runCatching { Log.e(TAG, "Health check failed for ${server.url}", e) }
 
             // Mark as unhealthy
             val updatedServer = server.copy(isHealthy = false)
