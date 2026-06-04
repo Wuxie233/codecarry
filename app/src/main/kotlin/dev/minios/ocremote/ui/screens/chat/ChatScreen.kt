@@ -1277,6 +1277,16 @@ fun ChatScreen(
     var pendingSendAction by remember { mutableStateOf<(() -> Unit)?>(null) }
     var inputMode by rememberSaveable { mutableStateOf(ChatInputMode.NORMAL.name) }
     val isShellMode = inputMode == ChatInputMode.SHELL.name
+    var showRoundtableSteeringSheet by remember { mutableStateOf(false) }
+    val roundtableSteeringSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var roundtablePendingCommand by remember { mutableStateOf<String?>(null) }
+
+    fun submitRoundtableCommand(key: String, block: ((Boolean) -> Unit) -> Unit) {
+        if (roundtablePendingCommand != null) return
+        roundtablePendingCommand = key
+        block { roundtablePendingCommand = null }
+    }
+
 
     BackHandler(enabled = isTerminalMode) {
         if (terminalDrawerState.isOpen) {
@@ -1732,6 +1742,19 @@ fun ChatScreen(
     var collapsedRoundNumbers by remember { mutableStateOf<Set<Int>>(emptySet()) }
     val roundMarkers = remember(uiState.roundtableEvents) { buildRoundMarkers(uiState.roundtableEvents) }
     val messageRoundNumbers = remember(uiState.messages, roundMarkers) { mapMessageRounds(uiState.messages, roundMarkers) }
+
+    fun jumpToRoundtableRound(roundNumber: Int) {
+        coroutineScope.launch {
+            val itemIndex = timelineIndexForRound(
+                roundNumber = roundNumber,
+                hasOlderMessages = uiState.hasOlderMessages,
+                roundMarkers = roundMarkers,
+                messages = uiState.messages,
+            )
+            listState.animateScrollToItem(itemIndex.coerceAtLeast(0))
+            autoScrollEnabled = false
+        }
+    }
     val lastPartCount = uiState.messages.lastOrNull()?.parts?.size ?: 0
     val lastContentLength = uiState.messages.lastOrNull()?.parts?.lastOrNull()?.let { part ->
         when (part) {
@@ -2038,29 +2061,12 @@ fun ChatScreen(
                         }
 
                         if (uiState.isPiRoundtable) {
-                            RoundtableSteeringPanel(
-                                uiState = uiState,
-                                roundMarkers = roundMarkers,
-                                onSwitchCadence = viewModel::switchRoundtableCadence,
-                                onContinue = viewModel::continueRoundtable,
-                                onStop = viewModel::stopRoundtable,
-                                onDeepen = viewModel::deepenRoundtableSection,
-                                onMention = viewModel::mentionRoundtableRole,
-                                onInject = viewModel::injectAsParticipant,
-                                onIntroduce = viewModel::introducePersona,
-                                onSkip = viewModel::skipAwaitingPersona,
-                                onJumpToRound = { roundNumber ->
-                                    coroutineScope.launch {
-                                        val itemIndex = timelineIndexForRound(
-                                            roundNumber = roundNumber,
-                                            hasOlderMessages = uiState.hasOlderMessages,
-                                            roundMarkers = roundMarkers,
-                                            messages = uiState.messages,
-                                        )
-                                        listState.animateScrollToItem(itemIndex.coerceAtLeast(0))
-                                        autoScrollEnabled = false
-                                    }
-                                },
+                            RoundtableContextControls(
+                                status = uiState.roundtable?.status,
+                                awaitingSkip = uiState.runState.awaitingSkip,
+                                pendingCommand = roundtablePendingCommand,
+                                onContinue = { submitRoundtableCommand("continue") { onDone -> viewModel.continueRoundtable(onDone) } },
+                                onSkip = { submitRoundtableCommand("skip") { onDone -> viewModel.skipAwaitingPersona(onDone) } },
                                 modifier = Modifier.padding(horizontal = 12.dp),
                             )
                         }
@@ -2326,6 +2332,8 @@ fun ChatScreen(
                         }
                     }
                 },
+                isPiRoundtable = uiState.isPiRoundtable,
+                onSteeringClick = { showRoundtableSteeringSheet = true },
                 contextWindow = uiState.contextWindow,
                 lastContextTokens = uiState.lastContextTokens
             )
@@ -2759,6 +2767,17 @@ fun ChatScreen(
                                         }
                                     }
                                 }
+                            }
+                        }
+
+                        if (uiState.isPiRoundtable) {
+                            item(key = "roundtable_roster_strip") {
+                                RoundtableCompactRosterStrip(
+                                    roster = uiState.activeRoster,
+                                    roleStates = uiState.runState.roleStates,
+                                    status = uiState.roundtable?.status,
+                                    modifier = Modifier,
+                                )
                             }
                         }
 
@@ -3198,6 +3217,29 @@ fun ChatScreen(
                 }
             }
         )
+    }
+
+    if (showRoundtableSteeringSheet && uiState.isPiRoundtable) {
+        ModalBottomSheet(
+            onDismissRequest = { showRoundtableSteeringSheet = false },
+            sheetState = roundtableSteeringSheetState,
+            containerColor = if (isAmoled) Color.Black else MaterialTheme.colorScheme.surface,
+            tonalElevation = if (isAmoled) 0.dp else 2.dp,
+        ) {
+            RoundtableSteeringSheetContent(
+                uiState = uiState,
+                roundMarkers = roundMarkers,
+                pendingCommand = roundtablePendingCommand,
+                onSwitchCadence = { cadence -> submitRoundtableCommand("cadence") { onDone -> viewModel.switchRoundtableCadence(cadence, onDone) } },
+                onContinue = { submitRoundtableCommand("continue") { onDone -> viewModel.continueRoundtable(onDone) } },
+                onStop = { submitRoundtableCommand("stop") { onDone -> viewModel.stopRoundtable(onDone) } },
+                onDeepen = { submitRoundtableCommand("deepen") { onDone -> viewModel.deepenRoundtableSection(onDone) } },
+                onMention = { targetId, content -> submitRoundtableCommand("mention") { onDone -> viewModel.mentionRoundtableRole(targetId, content, onDone) } },
+                onInject = { content -> submitRoundtableCommand("inject") { onDone -> viewModel.injectAsParticipant(content, onDone) } },
+                onIntroduce = { personaId -> submitRoundtableCommand("introduce") { onDone -> viewModel.introducePersona(personaId, onDone) } },
+                onJumpToRound = ::jumpToRoundtableRound,
+            )
+        }
     }
 
     // Send confirmation dialog
@@ -7346,6 +7388,8 @@ private fun ChatInputBar(
     onSlashCommand: (SlashCommand) -> Unit = {},
     inputMode: ChatInputMode = ChatInputMode.NORMAL,
     onInputModeChange: (ChatInputMode) -> Unit = {},
+    isPiRoundtable: Boolean = false,
+    onSteeringClick: () -> Unit = {},
     contextWindow: Int = 0,
     lastContextTokens: Int = 0
 ) {
@@ -7359,10 +7403,10 @@ private fun ChatInputBar(
             hintIndex.intValue = (hintIndex.intValue + 1) % placeholderHintResIds.size
         }
     }
-    val placeholder = if (isShellMode) {
-        stringResource(R.string.chat_shell_placeholder)
-    } else {
-        stringResource(placeholderHintResIds[hintIndex.intValue])
+    val placeholder = when {
+        isShellMode -> stringResource(R.string.chat_shell_placeholder)
+        isPiRoundtable -> stringResource(R.string.chat_pi_speak_hint)
+        else -> stringResource(placeholderHintResIds[hintIndex.intValue])
     }
 
     val text = textFieldValue.text
@@ -7642,7 +7686,7 @@ private fun ChatInputBar(
             verticalArrangement = Arrangement.spacedBy(2.dp)
         ) {
             // Agent + Model + Variant + Attach selector row — small, subtle
-            if ((modelLabel.isNotEmpty() || agents.size > 1)) {
+            if (!isPiRoundtable && (modelLabel.isNotEmpty() || agents.size > 1)) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -7877,6 +7921,27 @@ private fun ChatInputBar(
                 verticalAlignment = Alignment.Bottom,
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
+                if (isPiRoundtable) {
+                    IconButton(
+                        onClick = onSteeringClick,
+                        modifier = Modifier.size(48.dp),
+                        colors = IconButtonDefaults.iconButtonColors(
+                            containerColor = if (isAmoled) {
+                                Color.Black
+                            } else {
+                                MaterialTheme.colorScheme.surfaceContainerHigh
+                            },
+                            contentColor = MaterialTheme.colorScheme.primary,
+                        )
+                    ) {
+                        Icon(
+                            Icons.Default.Tune,
+                            contentDescription = stringResource(R.string.chat_pi_steering_open),
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                }
+
                 // Text field — minimal style, no heavy outline
                 val mentionHighlightColor = MaterialTheme.colorScheme.primary
                 val mentionBgColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
@@ -8067,19 +8132,209 @@ private fun timelineIndexForRound(
 }
 
 @Composable
-private fun RoundtableSteeringPanel(
+private fun RoundtableContextControls(
+    status: Roundtable.Status?,
+    awaitingSkip: PiTransportEvent.AwaitingSkip?,
+    pendingCommand: String?,
+    onContinue: () -> Unit,
+    onSkip: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val isAwaitingAdvance = status == Roundtable.Status.Paused || status == Roundtable.Status.AwaitingCommand
+    if (awaitingSkip == null && !isAwaitingAdvance) return
+
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        awaitingSkip?.let { skip ->
+            RoundtableSkipBanner(
+                awaitingSkip = skip,
+                pendingCommand = pendingCommand,
+                onSkip = onSkip,
+            )
+        }
+        if (isAwaitingAdvance) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+            ) {
+                FilledTonalButton(
+                    onClick = onContinue,
+                    enabled = pendingCommand == null,
+                    modifier = Modifier.heightIn(min = 48.dp),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                ) {
+                    Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(stringResource(R.string.chat_pi_continue_short))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RoundtableSkipBanner(
+    awaitingSkip: PiTransportEvent.AwaitingSkip,
+    pendingCommand: String?,
+    onSkip: () -> Unit,
+) {
+    val isAmoled = isAmoledTheme()
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        color = if (isAmoled) Color.Black else MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.72f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = if (isAmoled) 0.62f else 0.32f)),
+        tonalElevation = if (isAmoled) 0.dp else 1.dp,
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Icon(
+                Icons.Default.ReportProblem,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.error,
+                modifier = Modifier.size(18.dp),
+            )
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = stringResource(R.string.chat_pi_skip_waiting_title, awaitingSkip.personaId),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (isAmoled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onErrorContainer,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = awaitingSkip.reason,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (isAmoled) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.82f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            TextButton(
+                onClick = onSkip,
+                enabled = pendingCommand == null,
+                modifier = Modifier.heightIn(min = 48.dp),
+            ) { Text(stringResource(R.string.chat_pi_skip_action)) }
+        }
+    }
+}
+
+@Composable
+private fun RoundtableCompactRosterStrip(
+    roster: List<Roundtable.RoleSummary>,
+    roleStates: List<PiRoleRunState>,
+    status: Roundtable.Status?,
+    modifier: Modifier = Modifier,
+) {
+    val isAmoled = isAmoledTheme()
+    val statusLabel = stringResource(roundtableChatStatusLabelRes(status ?: Roundtable.Status.Unknown))
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = if (isAmoled) Color.Black else MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.72f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isAmoled) 0.65f else 0.28f)),
+        tonalElevation = if (isAmoled) 0.dp else 1.dp,
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            LazyRow(
+                modifier = Modifier.weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                items(roster, key = { it.id }) { role ->
+                    RoundtableRosterAvatar(
+                        role = role,
+                        runState = roleStates.firstOrNull { it.personaId == role.id },
+                    )
+                }
+            }
+            Surface(
+                shape = RoundedCornerShape(999.dp),
+                color = roundtableStatusContainerColor(status, isAmoled),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isAmoled) 0.58f else 0.22f)),
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(7.dp)
+                            .background(roundtableStatusColor(status), CircleShape),
+                    )
+                    Text(
+                        text = statusLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RoundtableRosterAvatar(
+    role: Roundtable.RoleSummary,
+    runState: PiRoleRunState?,
+) {
+    val accent = piSenderAccentColor(PiSenderIdentity(role.id, role.name, null, role.role, role.colorSeed))
+    val hasState = runState != null && roundtableRoleHasIndicator(runState)
+    Box(
+        modifier = Modifier.size(36.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            shape = CircleShape,
+            color = accent.copy(alpha = 0.18f),
+            border = BorderStroke(1.dp, accent.copy(alpha = 0.6f)),
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Text(
+                    text = role.name.firstOrNull()?.uppercaseChar()?.toString() ?: "?",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = accent,
+                    maxLines = 1,
+                )
+            }
+        }
+        if (runState != null && hasState) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .size(11.dp)
+                    .background(roundtableRoleStateColor(runState), CircleShape)
+                    .border(1.5.dp, MaterialTheme.colorScheme.surface, CircleShape),
+            )
+        }
+    }
+}
+
+@Composable
+private fun RoundtableSteeringSheetContent(
     uiState: ChatUiState,
     roundMarkers: List<RoundMarker>,
-    onSwitchCadence: (RoundtableCadenceMode, (Boolean) -> Unit) -> Unit,
-    onContinue: ((Boolean) -> Unit) -> Unit,
-    onStop: ((Boolean) -> Unit) -> Unit,
-    onDeepen: ((Boolean) -> Unit) -> Unit,
-    onMention: (String, String, (Boolean) -> Unit) -> Unit,
-    onInject: (String, (Boolean) -> Unit) -> Unit,
-    onIntroduce: (String, (Boolean) -> Unit) -> Unit,
-    onSkip: ((Boolean) -> Unit) -> Unit,
+    pendingCommand: String?,
+    onSwitchCadence: (RoundtableCadenceMode) -> Unit,
+    onContinue: () -> Unit,
+    onStop: () -> Unit,
+    onDeepen: () -> Unit,
+    onMention: (String, String) -> Unit,
+    onInject: (String) -> Unit,
+    onIntroduce: (String) -> Unit,
     onJumpToRound: (Int) -> Unit,
-    modifier: Modifier = Modifier,
 ) {
     val isAmoled = isAmoledTheme()
     val hapticView = LocalView.current
@@ -8090,188 +8345,203 @@ private fun RoundtableSteeringPanel(
     var mentionExpanded by remember { mutableStateOf(false) }
     var injectText by remember { mutableStateOf("") }
     var introduceExpanded by remember { mutableStateOf(false) }
-    var pendingCommand by remember { mutableStateOf<String?>(null) }
+    val canCommand = pendingCommand == null
 
-    fun submitCommand(key: String, block: ((Boolean) -> Unit) -> Unit) {
-        pendingCommand = key
-        block { pendingCommand = null }
-    }
-
-    Surface(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        color = if (isAmoled) Color.Black else MaterialTheme.colorScheme.surfaceContainerHigh,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isAmoled) 0.72f else 0.35f)),
-        tonalElevation = if (isAmoled) 0.dp else 2.dp,
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .navigationBarsPadding()
+            .padding(horizontal = 18.dp)
+            .padding(bottom = 18.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("现场调度", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
-                    Text(
-                        text = uiState.roundtable?.status?.name ?: "run state",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = stringResource(R.string.chat_pi_steering_title),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    text = stringResource(R.string.chat_pi_steering_subtitle),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Surface(
+                shape = RoundedCornerShape(999.dp),
+                color = roundtableStatusContainerColor(uiState.roundtable?.status, isAmoled),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isAmoled) 0.58f else 0.22f)),
+            ) {
+                Text(
+                    text = stringResource(roundtableChatStatusLabelRes(uiState.roundtable?.status ?: Roundtable.Status.Unknown)),
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
+        SteeringSection(title = stringResource(R.string.chat_pi_round_controls)) {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                item {
+                    AssistChip(
+                        onClick = { performHaptic(hapticView, hapticOn); onContinue() },
+                        enabled = canCommand,
+                        label = { Text(stringResource(R.string.chat_pi_continue)) },
+                        leadingIcon = { Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp)) },
                     )
                 }
-                Box {
+                item {
                     AssistChip(
-                        onClick = { cadenceExpanded = true },
-                        label = { Text(uiState.runState.cadence.label) },
-                        leadingIcon = { Icon(Icons.Default.SyncAlt, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                        onClick = { performHaptic(hapticView, hapticOn); onStop() },
+                        enabled = canCommand,
+                        label = { Text(stringResource(R.string.chat_pi_stop)) },
+                        leadingIcon = { Icon(Icons.Default.Stop, contentDescription = null, modifier = Modifier.size(16.dp)) },
                     )
-                    DropdownMenu(expanded = cadenceExpanded, onDismissRequest = { cadenceExpanded = false }) {
-                        RoundtableCadenceMode.entries.forEach { cadence ->
-                            DropdownMenuItem(
-                                text = { Text(cadence.label) },
-                                onClick = {
-                                    cadenceExpanded = false
-                                    submitCommand("cadence") { onDone -> onSwitchCadence(cadence, onDone) }
-                                },
-                            )
+                }
+                item {
+                    AssistChip(
+                        onClick = { performHaptic(hapticView, hapticOn); onDeepen() },
+                        enabled = canCommand,
+                        label = { Text(stringResource(R.string.chat_pi_deepen)) },
+                        leadingIcon = { Icon(Icons.Default.SouthEast, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                    )
+                }
+                item {
+                    Box {
+                        AssistChip(
+                            onClick = { introduceExpanded = true },
+                            enabled = uiState.personaLibrary.isNotEmpty() && canCommand,
+                            label = { Text(stringResource(R.string.chat_pi_introduce)) },
+                            leadingIcon = { Icon(Icons.Default.PersonAdd, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                        )
+                        DropdownMenu(expanded = introduceExpanded, onDismissRequest = { introduceExpanded = false }) {
+                            uiState.personaLibrary.forEach { persona ->
+                                val personaId = persona.id ?: return@forEach
+                                DropdownMenuItem(
+                                    text = { Text(persona.name) },
+                                    onClick = {
+                                        introduceExpanded = false
+                                        onIntroduce(personaId)
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
+                item {
+                    Box {
+                        AssistChip(
+                            onClick = { cadenceExpanded = true },
+                            enabled = canCommand,
+                            label = { Text(uiState.runState.cadence.label) },
+                            leadingIcon = { Icon(Icons.Default.SyncAlt, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                        )
+                        DropdownMenu(expanded = cadenceExpanded, onDismissRequest = { cadenceExpanded = false }) {
+                            RoundtableCadenceMode.entries.forEach { cadence ->
+                                DropdownMenuItem(
+                                    text = { Text(cadence.label) },
+                                    onClick = {
+                                        cadenceExpanded = false
+                                        onSwitchCadence(cadence)
+                                    },
+                                )
+                            }
                         }
                     }
                 }
             }
+        }
 
-            Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                AssistChip(
-                    onClick = { performHaptic(hapticView, hapticOn); submitCommand("continue") { onDone -> onContinue(onDone) } },
-                    enabled = pendingCommand == null,
-                    label = { Text("继续(可)") },
-                )
-                AssistChip(
-                    onClick = { performHaptic(hapticView, hapticOn); submitCommand("stop") { onDone -> onStop(onDone) } },
-                    enabled = pendingCommand == null,
-                    label = { Text("止") },
-                )
-                AssistChip(
-                    onClick = { performHaptic(hapticView, hapticOn); submitCommand("deepen") { onDone -> onDeepen(onDone) } },
-                    enabled = pendingCommand == null,
-                    label = { Text("深入此节") },
-                )
-                Box {
-                    AssistChip(
-                        onClick = { introduceExpanded = true },
-                        enabled = uiState.personaLibrary.isNotEmpty() && pendingCommand == null,
-                        label = { Text("引入新人物") },
-                    )
-                    DropdownMenu(expanded = introduceExpanded, onDismissRequest = { introduceExpanded = false }) {
-                        uiState.personaLibrary.forEach { persona ->
-                            val personaId = persona.id ?: return@forEach
-                            DropdownMenuItem(
-                                text = { Text(persona.name) },
-                                onClick = {
-                                    introduceExpanded = false
-                                    submitCommand("introduce") { onDone -> onIntroduce(personaId, onDone) }
-                                },
-                            )
-                        }
-                    }
-                }
-            }
-
-            if (uiState.runState.roleStates.isNotEmpty()) {
+        if (uiState.runState.roleStates.isNotEmpty()) {
+            SteeringSection(title = stringResource(R.string.chat_pi_role_states)) {
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(uiState.runState.roleStates, key = { it.personaId }) { role ->
-                        RoleRunStateChip(role)
+                        RoundtableRoleStatePill(role)
                     }
                 }
             }
+        }
 
-            val awaitingSkip = uiState.runState.awaitingSkip
-            if (awaitingSkip != null) {
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = MaterialTheme.colorScheme.errorContainer.copy(alpha = if (isAmoled) 0.35f else 1f),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.4f)),
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        Icon(Icons.Default.ReportProblem, contentDescription = null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp))
-                        Text(
-                            text = "${awaitingSkip.personaId} 等待跳过：${awaitingSkip.reason}",
-                            modifier = Modifier.weight(1f),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onErrorContainer,
-                        )
-                        TextButton(
-                            onClick = { submitCommand("skip") { onDone -> onSkip(onDone) } },
-                            enabled = pendingCommand == null,
-                        ) { Text("跳过该角色本次发言") }
-                    }
-                }
-            }
-
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Box(modifier = Modifier.weight(0.42f)) {
+        SteeringSection(title = stringResource(R.string.chat_pi_mention_section)) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Box {
                     OutlinedTextField(
-                        value = uiState.activeRoster.firstOrNull { it.id == mentionTarget }?.name ?: mentionTarget.ifBlank { "选择角色" },
+                        value = uiState.activeRoster.firstOrNull { it.id == mentionTarget }?.name ?: mentionTarget.ifBlank { stringResource(R.string.chat_pi_choose_role) },
                         onValueChange = {},
                         readOnly = true,
-                        label = { Text("@mention") },
+                        label = { Text(stringResource(R.string.chat_pi_mention_target)) },
                         trailingIcon = { Icon(Icons.Default.KeyboardArrowDown, contentDescription = null) },
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    Box(modifier = Modifier.matchParentSize().clickable { mentionExpanded = true })
+                    Box(modifier = Modifier.matchParentSize().clickable(enabled = canCommand) { mentionExpanded = true })
                     DropdownMenu(expanded = mentionExpanded, onDismissRequest = { mentionExpanded = false }) {
                         uiState.activeRoster.forEach { role ->
-                            DropdownMenuItem(text = { Text("${role.name} · ${role.role}") }, onClick = { mentionTarget = role.id; mentionExpanded = false })
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.chat_pi_role_option, role.name, role.role)) },
+                                onClick = { mentionTarget = role.id; mentionExpanded = false },
+                            )
                         }
                     }
                 }
                 OutlinedTextField(
                     value = mentionText,
                     onValueChange = { mentionText = it },
-                    label = { Text("点名内容") },
+                    label = { Text(stringResource(R.string.chat_pi_mention_content)) },
                     singleLine = true,
-                    modifier = Modifier.weight(0.58f),
+                    modifier = Modifier.fillMaxWidth(),
                     trailingIcon = {
                         IconButton(
                             onClick = {
                                 val target = mentionTarget
-                                val content = mentionText
+                                val content = mentionText.trim()
                                 if (target.isNotBlank() && content.isNotBlank()) {
                                     mentionText = ""
-                                    submitCommand("mention") { onDone -> onMention(target, content, onDone) }
+                                    onMention(target, content)
                                 }
                             },
-                            enabled = mentionTarget.isNotBlank() && mentionText.isNotBlank() && pendingCommand == null,
-                        ) { Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send mention") }
+                            enabled = mentionTarget.isNotBlank() && mentionText.isNotBlank() && canCommand,
+                        ) { Icon(Icons.AutoMirrored.Filled.Send, contentDescription = stringResource(R.string.chat_pi_send_mention)) }
                     },
                 )
             }
+        }
 
+        SteeringSection(title = stringResource(R.string.chat_pi_inject_section)) {
             OutlinedTextField(
                 value = injectText,
                 onValueChange = { injectText = it },
-                label = { Text("注入用户内容（非控制命令）") },
+                label = { Text(stringResource(R.string.chat_pi_inject_label)) },
                 minLines = 1,
                 modifier = Modifier.fillMaxWidth(),
                 trailingIcon = {
                     IconButton(
                         onClick = {
-                            val content = injectText
+                            val content = injectText.trim()
                             if (content.isNotBlank()) {
                                 injectText = ""
-                                submitCommand("inject") { onDone -> onInject(content, onDone) }
+                                onInject(content)
                             }
                         },
-                        enabled = injectText.isNotBlank() && pendingCommand == null,
-                    ) { Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Inject") }
+                        enabled = injectText.isNotBlank() && canCommand,
+                    ) { Icon(Icons.AutoMirrored.Filled.Send, contentDescription = stringResource(R.string.chat_pi_send_inject)) }
                 },
             )
+        }
 
-            if (roundMarkers.isNotEmpty()) {
-                Row(modifier = Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    roundMarkers.forEach { marker ->
+        if (roundMarkers.isNotEmpty()) {
+            SteeringSection(title = stringResource(R.string.chat_pi_round_jump)) {
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(roundMarkers, key = { it.roundNumber }) { marker ->
                         FilterChip(
                             selected = false,
                             onClick = { onJumpToRound(marker.roundNumber) },
-                            label = { Text("Round ${marker.roundNumber}") },
+                            label = { Text(stringResource(R.string.chat_pi_round_chip, marker.roundNumber)) },
                         )
                     }
                 }
@@ -8281,22 +8551,90 @@ private fun RoundtableSteeringPanel(
 }
 
 @Composable
-private fun RoleRunStateChip(role: PiRoleRunState) {
-    val accent = piSenderAccentColor(PiSenderIdentity(role.personaId, role.name, null, role.role, role.colorSeed))
-    val label = when {
-        role.awaitingSkip != null -> "awaiting skip"
-        role.error != null -> "error"
-        role.fallback != null -> "fallback"
-        role.retry != null -> "retry ${role.retry.attempt}/${role.retry.maxAttempts ?: "?"}"
-        else -> role.role
+private fun SteeringSection(
+    title: String,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        content()
     }
+}
+
+@Composable
+private fun RoundtableRoleStatePill(role: PiRoleRunState) {
+    val accent = piSenderAccentColor(PiSenderIdentity(role.personaId, role.name, null, role.role, role.colorSeed))
+    val label = roundtableRoleStateLabelText(role) ?: role.role
     AssistChip(
         onClick = {},
-        label = { Text("${role.name} · $label") },
+        label = { Text(stringResource(R.string.chat_pi_role_state, role.name, label)) },
         leadingIcon = {
-            Box(modifier = Modifier.size(10.dp).background(accent, CircleShape))
+            Box(modifier = Modifier.size(9.dp).background(roundtableRoleStateColor(role), CircleShape))
         },
+        colors = AssistChipDefaults.assistChipColors(
+            labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            leadingIconContentColor = accent,
+        ),
     )
+}
+
+@Composable
+private fun roundtableRoleStateLabelText(role: PiRoleRunState): String? = when {
+    role.awaitingSkip != null -> stringResource(R.string.chat_pi_role_awaiting_skip)
+    role.error != null -> stringResource(R.string.chat_pi_role_error)
+    role.fallback != null -> stringResource(R.string.chat_pi_role_fallback)
+    role.retry != null -> stringResource(
+        R.string.chat_pi_role_retry,
+        role.retry.attempt,
+        role.retry.maxAttempts?.toString() ?: "?",
+    )
+    else -> null
+}
+
+private fun roundtableRoleHasIndicator(role: PiRoleRunState): Boolean =
+    role.awaitingSkip != null || role.error != null || role.fallback != null || role.retry != null
+
+private fun roundtableRoleStateColor(role: PiRoleRunState): Color = when {
+    role.awaitingSkip != null -> Color(0xFFF5A742)
+    role.error != null -> Color(0xFFE06C75)
+    role.fallback != null -> Color(0xFF56B6C2)
+    role.retry != null -> Color(0xFF9D7CD8)
+    else -> Color(0xFF7FD88F)
+}
+
+@Composable
+private fun roundtableStatusContainerColor(status: Roundtable.Status?, isAmoled: Boolean): Color = when (status) {
+    Roundtable.Status.Running -> MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = if (isAmoled) 0.22f else 0.62f)
+    Roundtable.Status.AwaitingCommand,
+    Roundtable.Status.AwaitingSkip,
+    Roundtable.Status.Paused -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = if (isAmoled) 0.24f else 0.7f)
+    Roundtable.Status.Error -> MaterialTheme.colorScheme.errorContainer.copy(alpha = if (isAmoled) 0.28f else 0.72f)
+    else -> if (isAmoled) Color.Black else MaterialTheme.colorScheme.surfaceContainerHigh
+}
+
+@Composable
+private fun roundtableStatusColor(status: Roundtable.Status?): Color = when (status) {
+    Roundtable.Status.Running -> MaterialTheme.colorScheme.tertiary
+    Roundtable.Status.AwaitingCommand,
+    Roundtable.Status.AwaitingSkip,
+    Roundtable.Status.Paused -> MaterialTheme.colorScheme.primary
+    Roundtable.Status.Error -> MaterialTheme.colorScheme.error
+    else -> MaterialTheme.colorScheme.outline
+}
+
+private fun roundtableChatStatusLabelRes(status: Roundtable.Status): Int = when (status) {
+    Roundtable.Status.Running -> R.string.roundtable_status_running
+    Roundtable.Status.Paused,
+    Roundtable.Status.AwaitingCommand,
+    Roundtable.Status.AwaitingSkip -> R.string.roundtable_status_paused
+    Roundtable.Status.Archived -> R.string.roundtable_status_archived
+    Roundtable.Status.Completed -> R.string.roundtable_status_ended
+    Roundtable.Status.Error -> R.string.roundtable_status_error
+    Roundtable.Status.Unknown -> R.string.roundtable_status_unknown
 }
 
 @Composable

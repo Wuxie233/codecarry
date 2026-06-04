@@ -567,6 +567,35 @@
 
     <!-- Pi Roundtable -->
     <string name="server_type_pi_roundtable">Pi 圆桌</string>
+    <string name="chat_pi_speak_hint">对全桌发言…</string>
+    <string name="chat_pi_steering_open">打开圆桌调度</string>
+    <string name="chat_pi_continue_short">继续</string>
+    <string name="chat_pi_skip_waiting_title">%1$s 正在等待</string>
+    <string name="chat_pi_skip_action">跳过本次发言</string>
+    <string name="chat_pi_steering_title">圆桌调度</string>
+    <string name="chat_pi_steering_subtitle">次要控制都收在这里，让讨论保持清爽。</string>
+    <string name="chat_pi_round_controls">轮次控制</string>
+    <string name="chat_pi_continue">继续（可）</string>
+    <string name="chat_pi_stop">止</string>
+    <string name="chat_pi_deepen">深入此节</string>
+    <string name="chat_pi_introduce">引入新人物</string>
+    <string name="chat_pi_role_states">角色状态</string>
+    <string name="chat_pi_role_state">%1$s · %2$s</string>
+    <string name="chat_pi_role_awaiting_skip">等待跳过</string>
+    <string name="chat_pi_role_error">错误</string>
+    <string name="chat_pi_role_fallback">备用模型</string>
+    <string name="chat_pi_role_retry">重试 %1$d/%2$s</string>
+    <string name="chat_pi_mention_section">点名角色</string>
+    <string name="chat_pi_choose_role">选择角色</string>
+    <string name="chat_pi_mention_target">@点名</string>
+    <string name="chat_pi_role_option">%1$s · %2$s</string>
+    <string name="chat_pi_mention_content">点名内容</string>
+    <string name="chat_pi_send_mention">发送点名</string>
+    <string name="chat_pi_inject_section">补充圆桌上下文</string>
+    <string name="chat_pi_inject_label">补充用户内容</string>
+    <string name="chat_pi_send_inject">注入内容</string>
+    <string name="chat_pi_round_jump">跳转轮次</string>
+    <string name="chat_pi_round_chip">Round %1$d</string>
     <string name="roundtable_default_name">圆桌</string>
     <string name="roundtable_center_title">圆桌中心</string>
     <string name="roundtable_open_persona_library">打开角色库</string>
