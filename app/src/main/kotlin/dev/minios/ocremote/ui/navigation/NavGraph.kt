@@ -37,6 +37,7 @@ import dev.minios.ocremote.domain.model.Session
 import dev.minios.ocremote.ui.screens.chat.ChatScreen
 import dev.minios.ocremote.ui.screens.diagnostics.DiagnosticsScreen
 import dev.minios.ocremote.ui.screens.home.HomeScreen
+import dev.minios.ocremote.ui.screens.roundtable.RoundtableCastingScreen
 import dev.minios.ocremote.ui.screens.roundtable.RoundtableCenterScreen
 import dev.minios.ocremote.ui.screens.roundtable.PersonaLibraryScreen
 import dev.minios.ocremote.ui.screens.roundtable.RoundtableSummaryScreen
@@ -477,6 +478,9 @@ fun NavGraph(
             )
         ) { backStackEntry ->
             val serverId = decodeRouteArg(backStackEntry.arguments?.getString("serverId"))
+            val manualSetupRequested by backStackEntry.savedStateHandle
+                .getStateFlow("openManualSetup", false)
+                .collectAsState()
             RoundtableCenterScreen(
                 onNavigateBack = { navController.popBackStack() },
                 onOpenRoundtable = { target ->
@@ -497,7 +501,42 @@ fun NavGraph(
                 },
                 onOpenPersonaLibrary = {
                     navController.navigate(Screen.PersonaLibrary.createRoute(serverId))
-                }
+                },
+                onCreateRoundtable = {
+                    navController.navigate(Screen.RoundtableCasting.createRoute(serverId))
+                },
+                openManualSetup = manualSetupRequested,
+                onManualSetupConsumed = {
+                    backStackEntry.savedStateHandle["openManualSetup"] = false
+                },
+            )
+        }
+
+        composable(
+            route = "roundtable_casting?serverId={serverId}",
+            arguments = listOf(
+                navArgument("serverId") { type = NavType.StringType },
+            )
+        ) {
+            RoundtableCastingScreen(
+                onNavigateBack = { navController.popBackStack() },
+                onConfirmedRoundtable = { target ->
+                    val route = Screen.Chat.createRoute(
+                        serverUrl = target.serverUrl,
+                        username = "pi",
+                        password = target.token,
+                        serverName = target.serverName,
+                        serverId = target.serverId,
+                        sessionId = target.roundtableId,
+                        serverType = ServerType.PI_ROUNDTABLE.name,
+                    )
+                    navController.popBackStack()
+                    navController.navigate(route)
+                },
+                onManualSetup = {
+                    navController.previousBackStackEntry?.savedStateHandle?.set("openManualSetup", true)
+                    navController.popBackStack()
+                },
             )
         }
 

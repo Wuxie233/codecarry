@@ -56,6 +56,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -84,10 +85,20 @@ fun RoundtableCenterScreen(
     onOpenRoundtable: (RoundtableChatTarget) -> Unit,
     onOpenSummary: (String) -> Unit,
     onOpenPersonaLibrary: () -> Unit,
+    onCreateRoundtable: () -> Unit,
+    openManualSetup: Boolean = false,
+    onManualSetupConsumed: () -> Unit = {},
     viewModel: RoundtableCenterViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val isAmoled = MaterialTheme.colorScheme.background == Color.Black && MaterialTheme.colorScheme.surface == Color.Black
+
+    LaunchedEffect(openManualSetup) {
+        if (openManualSetup) {
+            viewModel.createRoundtable()
+            onManualSetupConsumed()
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -124,13 +135,18 @@ fun RoundtableCenterScreen(
                                 onClick = { showTopMenu = false; onOpenPersonaLibrary() },
                                 leadingIcon = { Icon(Icons.Default.Tune, contentDescription = null) },
                             )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.roundtable_manual_setup)) },
+                                onClick = { showTopMenu = false; viewModel.createRoundtable() },
+                                leadingIcon = { Icon(Icons.Default.Add, contentDescription = null) },
+                            )
                         }
                     }
                 },
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = viewModel::createRoundtable) {
+            FloatingActionButton(onClick = onCreateRoundtable) {
                 Icon(Icons.Default.Add, contentDescription = stringResource(R.string.roundtable_new_roundtable))
             }
         },
@@ -162,7 +178,7 @@ fun RoundtableCenterScreen(
                     uiState.isLoading -> CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
                     uiState.items.isEmpty() -> RoundtableEmptyState(
                         modifier = Modifier.align(Alignment.Center),
-                        onCreate = viewModel::createRoundtable,
+                        onCreate = onCreateRoundtable,
                     )
                     else -> LazyColumn(
                         modifier = Modifier.fillMaxSize(),

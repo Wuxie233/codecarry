@@ -49,6 +49,14 @@ sealed class Screen(val route: String) {
         }
     }
 
+
+    data object RoundtableCasting : Screen("roundtable_casting") {
+        fun createRoute(serverId: String): String {
+            val encodedServerId = URLEncoder.encode(serverId, "UTF-8")
+            return "roundtable_casting?serverId=$encodedServerId"
+        }
+    }
+
     data object RoundtableSummary : Screen("roundtable_summary") {
         fun createRoute(
             serverId: String,

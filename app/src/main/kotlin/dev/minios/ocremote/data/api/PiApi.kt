@@ -108,6 +108,45 @@ class PiApi(
         }.bodyFromSuccessfulResponse("POST /roundtables/lineup-proposal")
     }
 
+    suspend fun createCasting(conn: PiConnection, topic: String): PiCastingTurnDto {
+        return httpClient.post("${conn.baseUrl}/casting") {
+            applyPiHeaders(conn)
+            contentType(ContentType.Application.Json)
+            setBody(PiCastingCreateRequest(topic = topic))
+        }.bodyFromSuccessfulResponse("POST /casting")
+    }
+
+    suspend fun sendCastingMessage(conn: PiConnection, castingId: String, content: String): PiCastingTurnDto {
+        return httpClient.post("${conn.baseUrl}/casting/$castingId/message") {
+            applyPiHeaders(conn)
+            contentType(ContentType.Application.Json)
+            setBody(PiCastingMessageRequest(content = content))
+        }.bodyFromSuccessfulResponse("POST /casting/:id/message")
+    }
+
+    suspend fun getCasting(conn: PiConnection, castingId: String): PiCastingDto {
+        return httpClient.prepareGet("${conn.baseUrl}/casting/$castingId") {
+            applyPiHeaders(conn)
+        }.execute { response ->
+            if (!response.status.isSuccess()) throw PiApiException("GET /casting/:id failed with HTTP ${response.status.value}")
+            json.decodeFromString(PiCastingDto.serializer(), response.bodyAsText())
+        }
+    }
+
+    suspend fun confirmCasting(conn: PiConnection, castingId: String): PiRoundtableDto {
+        return httpClient.post("${conn.baseUrl}/casting/$castingId/confirm") {
+            applyPiHeaders(conn)
+            contentType(ContentType.Application.Json)
+        }.bodyFromSuccessfulResponse("POST /casting/:id/confirm")
+    }
+
+    suspend fun cancelCasting(conn: PiConnection, castingId: String): PiCastingStatusDto {
+        return httpClient.post("${conn.baseUrl}/casting/$castingId/cancel") {
+            applyPiHeaders(conn)
+            contentType(ContentType.Application.Json)
+        }.bodyFromSuccessfulResponse("POST /casting/:id/cancel")
+    }
+
     suspend fun getRoundtable(conn: PiConnection, roundId: String): PiRoundtableDto {
         return httpClient.prepareGet("${conn.baseUrl}/roundtables/$roundId") {
             applyPiHeaders(conn)
@@ -404,7 +443,7 @@ data class PiLineupProposalRequest(
 @Serializable
 data class PiLineupProposalDto(
     val protocolVersion: Int = PI_PROTOCOL_VERSION,
-    val topic: String,
+    val topic: String = "",
     val speakerPolicy: PiSpeakerPolicyDto = PiSpeakerPolicyDto(mode = "moderator_routed"),
     val items: List<PiLineupProposalItemDto> = emptyList(),
 )
@@ -413,6 +452,47 @@ data class PiLineupProposalDto(
 data class PiLineupProposalItemDto(
     val persona: PiPersonaDto,
     val reason: String,
+)
+
+@Serializable
+data class PiCastingCreateRequest(
+    val topic: String,
+)
+
+@Serializable
+data class PiCastingMessageRequest(
+    val content: String,
+)
+
+@Serializable
+data class PiCastingTurnDto(
+    val protocolVersion: Int = PI_PROTOCOL_VERSION,
+    val castingId: String? = null,
+    val status: String? = null,
+    val message: String,
+    val proposal: PiLineupProposalDto,
+)
+
+@Serializable
+data class PiCastingDto(
+    val protocolVersion: Int = PI_PROTOCOL_VERSION,
+    val id: String,
+    val topic: String,
+    val status: String,
+    val messages: List<PiCastingMessageDto> = emptyList(),
+    val proposal: PiLineupProposalDto,
+)
+
+@Serializable
+data class PiCastingMessageDto(
+    val role: String,
+    val content: String,
+)
+
+@Serializable
+data class PiCastingStatusDto(
+    val protocolVersion: Int = PI_PROTOCOL_VERSION,
+    val status: String,
 )
 
 @Serializable

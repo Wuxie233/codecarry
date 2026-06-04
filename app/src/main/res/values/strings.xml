@@ -733,6 +733,24 @@ Tokens: ~%4$d -&gt; ~%5$d</string>
     <string name="roundtable_default_topic">Roundtable topic</string>
     <string name="roundtable_copy_suffix">%1$s (copy)</string>
     <string name="roundtable_error_action_failed">Roundtable action failed</string>
+    <string name="roundtable_manual_setup">Manual setup</string>
+    <string name="roundtable_casting_title">New Roundtable</string>
+    <string name="roundtable_casting_opener_title">Cast the table in conversation</string>
+    <string name="roundtable_casting_opener_body">Tell the moderator what you want to discuss. It will propose a compact lineup, explain why each role belongs, and refine the cast as you chat.</string>
+    <string name="roundtable_casting_you">You</string>
+    <string name="roundtable_casting_moderator">Moderator</string>
+    <string name="roundtable_casting_lineup_title">Current lineup</string>
+    <string name="roundtable_casting_lineup_count">%1$d roles</string>
+    <string name="roundtable_casting_lineup_hint">Ask for missing perspectives, stronger opposition, or a different speaking style before starting.</string>
+    <string name="roundtable_casting_input_label">Chat with the moderator</string>
+    <string name="roundtable_casting_input_placeholder">Describe the topic or the roles you want…</string>
+    <string name="roundtable_casting_thinking">Moderator is thinking…</string>
+    <string name="roundtable_casting_launching">Launching the roundtable…</string>
+    <string name="roundtable_casting_confirm_start">Start</string>
+    <string name="roundtable_casting_error_create">Failed to start casting</string>
+    <string name="roundtable_casting_error_message">Failed to send refinement</string>
+    <string name="roundtable_casting_error_confirm">Failed to start roundtable</string>
+    <string name="roundtable_casting_error_missing_roundtable">The server did not return a roundtable id</string>
 
     <string name="roundtable_resume_note">resume from Roundtable Center</string>
     <string name="roundtable_error_saved_server_missing">Saved Pi server not found</string>
