@@ -8631,6 +8631,7 @@ private fun roundtableChatStatusLabelRes(status: Roundtable.Status): Int = when 
     Roundtable.Status.Paused,
     Roundtable.Status.AwaitingCommand,
     Roundtable.Status.AwaitingSkip -> R.string.roundtable_status_paused
+    Roundtable.Status.Casting -> R.string.roundtable_status_casting
     Roundtable.Status.Archived -> R.string.roundtable_status_archived
     Roundtable.Status.Completed -> R.string.roundtable_status_ended
     Roundtable.Status.Error -> R.string.roundtable_status_error

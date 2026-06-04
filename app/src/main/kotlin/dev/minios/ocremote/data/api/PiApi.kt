@@ -133,6 +133,28 @@ class PiApi(
         }
     }
 
+    suspend fun listCastings(conn: PiConnection): List<PiCastingDto> {
+        val body = httpClient.prepareGet("${conn.baseUrl}/casting") {
+            applyPiHeaders(conn)
+        }.execute { response ->
+            if (!response.status.isSuccess()) throw PiApiException("GET /casting failed with HTTP ${response.status.value}")
+            response.bodyAsText()
+        }
+        val root = json.parseToJsonElement(body)
+        val serializer = ListSerializer(PiCastingDto.serializer())
+        return when (root) {
+            is JsonArray -> json.decodeFromJsonElement(serializer, root)
+            is JsonObject -> {
+                val items = root["items"] ?: root["castings"] ?: root["data"]
+                when (items) {
+                    is JsonArray -> json.decodeFromJsonElement(serializer, items)
+                    else -> root["item"]?.let { listOf(json.decodeFromJsonElement(PiCastingDto.serializer(), it)) } ?: emptyList()
+                }
+            }
+            else -> emptyList()
+        }
+    }
+
     suspend fun confirmCasting(conn: PiConnection, castingId: String): PiRoundtableDto {
         return httpClient.post("${conn.baseUrl}/casting/$castingId/confirm") {
             applyPiHeaders(conn)
@@ -481,6 +503,8 @@ data class PiCastingDto(
     val status: String,
     val messages: List<PiCastingMessageDto> = emptyList(),
     val proposal: PiLineupProposalDto,
+    val createdAt: String? = null,
+    val updatedAt: String? = null,
 )
 
 @Serializable

@@ -496,6 +496,9 @@ fun NavGraph(
                         )
                     )
                 },
+                onOpenCasting = { castingId ->
+                    navController.navigate(Screen.RoundtableCasting.createRoute(serverId, castingId))
+                },
                 onOpenSummary = { roundtableId ->
                     navController.navigate(Screen.RoundtableSummary.createRoute(serverId, roundtableId))
                 },
@@ -513,9 +516,10 @@ fun NavGraph(
         }
 
         composable(
-            route = "roundtable_casting?serverId={serverId}",
+            route = "roundtable_casting?serverId={serverId}&castingId={castingId}",
             arguments = listOf(
                 navArgument("serverId") { type = NavType.StringType },
+                navArgument("castingId") { type = NavType.StringType; defaultValue = "" },
             )
         ) {
             RoundtableCastingScreen(

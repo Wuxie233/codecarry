@@ -8,6 +8,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dev.minios.ocremote.R
 import dev.minios.ocremote.data.api.PiApi
+import dev.minios.ocremote.data.api.PiCastingDto
 import dev.minios.ocremote.data.api.PiCatalogEntryDto
 import dev.minios.ocremote.data.api.PiCommandRequest
 import dev.minios.ocremote.data.api.PiConnection
@@ -244,7 +245,7 @@ class RoundtableCenterViewModel @Inject constructor(
             _error.value = null
             try {
                 val conn = resolveConnection()
-                _roundtables.value = api.listRoundtables(conn).mapNotNull { dto -> dto.toDomain() }
+                _roundtables.value = loadRoundtableRegistry(conn)
             } catch (error: Exception) {
                 _error.value = error.message ?: context.getString(R.string.roundtable_error_load_roundtables)
             } finally {
@@ -488,6 +489,10 @@ class RoundtableCenterViewModel @Inject constructor(
         )
     }
 
+    fun castingId(roundtableId: String): String? = _roundtables.value.firstOrNull { roundtable ->
+        roundtable.id == roundtableId && roundtable.kind == Roundtable.Kind.Casting
+    }?.sourceId
+
     fun archiveRoundtable(roundtableId: String) {
         mutate { conn -> api.archiveRoundtable(conn, roundtableId) }
     }
@@ -524,7 +529,7 @@ class RoundtableCenterViewModel @Inject constructor(
             try {
                 val conn = resolveConnection()
                 block(conn)
-                _roundtables.value = api.listRoundtables(conn).mapNotNull { dto -> dto.toDomain() }
+                _roundtables.value = loadRoundtableRegistry(conn)
                 _configEditor.value = null
             } catch (error: Exception) {
                 _error.value = error.message ?: context.getString(R.string.roundtable_error_action_failed)
@@ -541,6 +546,12 @@ class RoundtableCenterViewModel @Inject constructor(
         _serverName.value = server.displayName.ifBlank { context.getString(R.string.roundtable_default_name) }
         _serverUrl.value = server.url
         return PiConnection.from(server.url, server.token)
+    }
+
+    private suspend fun loadRoundtableRegistry(conn: PiConnection): List<Roundtable> {
+        val castings = runCatching { api.listCastings(conn).map { dto -> dto.toDomain() } }.getOrDefault(emptyList())
+        val roundtables = api.listRoundtables(conn).mapNotNull { dto -> dto.toDomain() }
+        return castings + roundtables
     }
 
     private fun decodeTemplates(raw: String): List<LineupTemplateState> = runCatching {
@@ -664,6 +675,8 @@ private fun PiRoundtableDto.toDomain(): Roundtable? {
     val roundtableId = id ?: roundId ?: return null
     return Roundtable(
         id = roundtableId,
+        sourceId = roundtableId,
+        kind = Roundtable.Kind.Roundtable,
         topic = topic ?: title ?: roundTitle,
         status = status.toDomainStatus(),
         roundCount = roundCount,
@@ -684,6 +697,28 @@ private fun PiRoundtableDto.toDomain(): Roundtable? {
     )
 }
 
+private fun PiCastingDto.toDomain(): Roundtable = Roundtable(
+    id = "casting:$id",
+    sourceId = id,
+    kind = Roundtable.Kind.Casting,
+    topic = topic,
+    status = Roundtable.Status.Casting,
+    roundCount = 0,
+    rosterSummary = proposal.items.joinToString(", ") { item -> item.persona.name },
+    roster = proposal.items.map { item ->
+        Roundtable.RoleSummary(
+            id = item.persona.id.orEmpty().ifBlank { item.persona.name },
+            name = item.persona.name,
+            role = "persona",
+            colorSeed = item.persona.provider,
+        )
+    },
+    time = Roundtable.Time(
+        created = createdAt,
+        updated = updatedAt,
+    ),
+)
+
 private fun String?.toDomainStatus(): Roundtable.Status = when (this?.lowercase()) {
     "running" -> Roundtable.Status.Running
     "paused", "awaiting", "awaiting_command" -> Roundtable.Status.Paused
@@ -696,7 +731,7 @@ private fun String?.toDomainStatus(): Roundtable.Status = when (this?.lowercase(
 
 private fun Roundtable.matches(filter: RoundtableFilter): Boolean = when (filter) {
     RoundtableFilter.Active -> status != Roundtable.Status.Archived
-    RoundtableFilter.Running -> status == Roundtable.Status.Running
+    RoundtableFilter.Running -> status == Roundtable.Status.Running || status == Roundtable.Status.Casting
     RoundtableFilter.Archived -> status == Roundtable.Status.Archived
     RoundtableFilter.All -> true
 }

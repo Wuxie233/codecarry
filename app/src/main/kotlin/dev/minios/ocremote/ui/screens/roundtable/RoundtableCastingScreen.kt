@@ -97,10 +97,7 @@ fun RoundtableCastingScreen(
                     }
                 },
                 navigationIcon = {
-                    IconButton(onClick = {
-                        viewModel.cancelCasting()
-                        onNavigateBack()
-                    }) {
+                    IconButton(onClick = onNavigateBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.back))
                     }
                 },

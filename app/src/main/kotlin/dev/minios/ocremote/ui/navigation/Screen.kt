@@ -51,9 +51,10 @@ sealed class Screen(val route: String) {
 
 
     data object RoundtableCasting : Screen("roundtable_casting") {
-        fun createRoute(serverId: String): String {
+        fun createRoute(serverId: String, castingId: String = ""): String {
             val encodedServerId = URLEncoder.encode(serverId, "UTF-8")
-            return "roundtable_casting?serverId=$encodedServerId"
+            val encodedCastingId = URLEncoder.encode(castingId, "UTF-8")
+            return "roundtable_casting?serverId=$encodedServerId&castingId=$encodedCastingId"
         }
     }
 

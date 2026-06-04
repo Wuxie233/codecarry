@@ -706,6 +706,7 @@ Tokens: ~%4$d -&gt; ~%5$d</string>
     <string name="roundtable_archive">Archive</string>
     <string name="roundtable_view_summary">View summary</string>
     <string name="roundtable_resume">Resume</string>
+    <string name="roundtable_continue_casting">Continue casting</string>
     <string name="roundtable_empty_title">No roundtables yet</string>
     <string name="roundtable_empty_message">Create a topic-led roundtable without adding anything to OpenCode sessions.</string>
     <string name="roundtable_status_running">running</string>
@@ -714,6 +715,7 @@ Tokens: ~%4$d -&gt; ~%5$d</string>
     <string name="roundtable_status_ended">ended</string>
     <string name="roundtable_status_error">error</string>
     <string name="roundtable_status_unknown">unknown</string>
+    <string name="roundtable_status_casting">casting</string>
     <string name="roundtable_cadence_moderator_routed">Moderator picks turns</string>
     <string name="roundtable_cadence_round_robin">Round robin</string>
     <string name="roundtable_cadence_free_roundtable">Open floor</string>
@@ -721,6 +723,7 @@ Tokens: ~%4$d -&gt; ~%5$d</string>
     <string name="roundtable_activity_none">No activity yet</string>
     <string name="roundtable_activity_time_pattern">MMM d, HH:mm</string>
     <string name="roundtable_card_meta">%1$s · %2$s</string>
+    <string name="roundtable_casting_draft_meta">casting draft</string>
     <string name="roundtable_error_load_roundtables">Failed to load roundtables</string>
     <string name="roundtable_error_load_setup">Failed to load persona library and provider catalog</string>
     <string name="roundtable_error_topic_required">Topic is required</string>

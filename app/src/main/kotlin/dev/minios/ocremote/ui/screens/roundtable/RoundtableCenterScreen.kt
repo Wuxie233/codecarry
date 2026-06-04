@@ -83,6 +83,7 @@ import dev.minios.ocremote.data.api.PiCatalogEntryDto
 fun RoundtableCenterScreen(
     onNavigateBack: () -> Unit,
     onOpenRoundtable: (RoundtableChatTarget) -> Unit,
+    onOpenCasting: (String) -> Unit,
     onOpenSummary: (String) -> Unit,
     onOpenPersonaLibrary: () -> Unit,
     onCreateRoundtable: () -> Unit,
@@ -190,11 +191,14 @@ fun RoundtableCenterScreen(
                                 roundtable = roundtable,
                                 isAmoled = isAmoled,
                                 onOpen = {
-                                    viewModel.liveChatTarget(roundtable.id)?.let(onOpenRoundtable)
+                                    viewModel.castingId(roundtable.id)?.let(onOpenCasting)
+                                        ?: viewModel.liveChatTarget(roundtable.id)?.let(onOpenRoundtable)
                                 },
                                 onResume = {
-                                    viewModel.resumeRoundtable(roundtable.id)
-                                    viewModel.liveChatTarget(roundtable.id)?.let(onOpenRoundtable)
+                                    viewModel.castingId(roundtable.id)?.let(onOpenCasting) ?: run {
+                                        viewModel.resumeRoundtable(roundtable.id)
+                                        viewModel.liveChatTarget(roundtable.id)?.let(onOpenRoundtable)
+                                    }
                                 },
                                 onOpenSummary = { onOpenSummary(roundtable.id) },
                                 onArchive = { viewModel.archiveRoundtable(roundtable.id) },
@@ -554,6 +558,7 @@ private fun RoundtableCard(
     onDuplicate: () -> Unit,
 ) {
     var showMenu by remember { mutableStateOf(false) }
+    val isCasting = roundtable.kind == Roundtable.Kind.Casting
     val containerColor = if (isAmoled) Color.Black else MaterialTheme.colorScheme.surfaceContainerHighest
     val outline = MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isAmoled) 0.72f else 0.35f)
 
@@ -586,31 +591,33 @@ private fun RoundtableCard(
                         StatusChip(roundtable.status)
                     }
                 }
-                Box {
-                    IconButton(onClick = { showMenu = true }) {
-                        Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.roundtable_actions))
-                    }
-                    DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.roundtable_view_summary)) },
-                            onClick = { showMenu = false; onOpenSummary() },
-                            leadingIcon = { Icon(Icons.Default.Description, contentDescription = null) },
-                        )
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.roundtable_duplicate_as_template)) },
-                            onClick = { showMenu = false; onDuplicate() },
-                            leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
-                        )
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.roundtable_archive)) },
-                            onClick = { showMenu = false; onArchive() },
-                            leadingIcon = { Icon(Icons.Default.Archive, contentDescription = null) },
-                        )
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.delete)) },
-                            onClick = { showMenu = false; onDelete() },
-                            leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) },
-                        )
+                if (!isCasting) {
+                    Box {
+                        IconButton(onClick = { showMenu = true }) {
+                            Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.roundtable_actions))
+                        }
+                        DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.roundtable_view_summary)) },
+                                onClick = { showMenu = false; onOpenSummary() },
+                                leadingIcon = { Icon(Icons.Default.Description, contentDescription = null) },
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.roundtable_duplicate_as_template)) },
+                                onClick = { showMenu = false; onDuplicate() },
+                                leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.roundtable_archive)) },
+                                onClick = { showMenu = false; onArchive() },
+                                leadingIcon = { Icon(Icons.Default.Archive, contentDescription = null) },
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.delete)) },
+                                onClick = { showMenu = false; onDelete() },
+                                leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) },
+                            )
+                        }
                     }
                 }
             }
@@ -623,7 +630,7 @@ private fun RoundtableCard(
                 Text(
                     text = stringResource(
                         R.string.roundtable_card_meta,
-                        pluralStringResource(R.plurals.roundtable_rounds_count, roundtable.roundCount, roundtable.roundCount),
+                        if (isCasting) stringResource(R.string.roundtable_casting_draft_meta) else pluralStringResource(R.plurals.roundtable_rounds_count, roundtable.roundCount, roundtable.roundCount),
                         formatRoundtableActivity(LocalContext.current, roundtable.time.updated),
                     ),
                     style = MaterialTheme.typography.bodySmall,
@@ -632,7 +639,7 @@ private fun RoundtableCard(
                 Button(onClick = onResume, enabled = roundtable.status != Roundtable.Status.Archived) {
                     Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
-                    Text(stringResource(R.string.roundtable_resume))
+                    Text(stringResource(if (isCasting) R.string.roundtable_continue_casting else R.string.roundtable_resume))
                 }
             }
         }
@@ -718,6 +725,7 @@ private fun roundtableStatusLabelRes(status: Roundtable.Status): Int = when (sta
     Roundtable.Status.Paused,
     Roundtable.Status.AwaitingCommand,
     Roundtable.Status.AwaitingSkip -> R.string.roundtable_status_paused
+    Roundtable.Status.Casting -> R.string.roundtable_status_casting
     Roundtable.Status.Archived -> R.string.roundtable_status_archived
     Roundtable.Status.Completed -> R.string.roundtable_status_ended
     Roundtable.Status.Error -> R.string.roundtable_status_error

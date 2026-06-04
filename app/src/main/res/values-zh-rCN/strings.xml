@@ -639,6 +639,7 @@
     <string name="roundtable_archive">归档</string>
     <string name="roundtable_view_summary">查看纪要</string>
     <string name="roundtable_resume">继续</string>
+    <string name="roundtable_continue_casting">继续组建</string>
     <string name="roundtable_empty_title">还没有圆桌</string>
     <string name="roundtable_empty_message">创建一个按主题推进的圆桌，不会写入 OpenCode 会话。</string>
     <string name="roundtable_status_running">进行中</string>
@@ -647,6 +648,7 @@
     <string name="roundtable_status_ended">已结束</string>
     <string name="roundtable_status_error">错误</string>
     <string name="roundtable_status_unknown">未知</string>
+    <string name="roundtable_status_casting">选角中</string>
     <string name="roundtable_cadence_moderator_routed">主持人分配发言</string>
     <string name="roundtable_cadence_round_robin">轮流发言</string>
     <string name="roundtable_cadence_free_roundtable">自由发言</string>
@@ -654,6 +656,7 @@
     <string name="roundtable_activity_none">暂无活动</string>
     <string name="roundtable_activity_time_pattern">M月d日 HH:mm</string>
     <string name="roundtable_card_meta">%1$s · %2$s</string>
+    <string name="roundtable_casting_draft_meta">选角草稿</string>
     <string name="roundtable_error_load_roundtables">加载圆桌失败</string>
     <string name="roundtable_error_load_setup">加载角色库和提供方目录失败</string>
     <string name="roundtable_error_topic_required">主题不能为空</string>

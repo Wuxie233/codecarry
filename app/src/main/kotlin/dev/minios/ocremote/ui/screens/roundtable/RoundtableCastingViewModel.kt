@@ -62,6 +62,7 @@ class RoundtableCastingViewModel @Inject constructor(
     private val serverRepository: ServerRepository,
 ) : ViewModel() {
     private val serverId: String = decodeRouteArg(savedStateHandle.get<String>("serverId"))
+    private val initialCastingId: String = decodeRouteArg(savedStateHandle.get<String>("castingId"))
     private val initialTopic: String = decodeRouteArg(savedStateHandle.get<String>("topic")).trim()
     private var resolvedServer: ServerConfig? = null
     private var pendingRetry: PendingCastingRequest? = null
@@ -79,7 +80,9 @@ class RoundtableCastingViewModel @Inject constructor(
             try {
                 resolveConnection()
                 _uiState.update { state -> state.copy(isLoadingServer = false) }
-                if (initialTopic.isNotBlank()) {
+                if (initialCastingId.isNotBlank()) {
+                    loadCasting(initialCastingId)
+                } else if (initialTopic.isNotBlank()) {
                     createCasting(initialTopic, appendUserMessage = false)
                 }
             } catch (error: Exception) {
@@ -165,6 +168,29 @@ class RoundtableCastingViewModel @Inject constructor(
         val castingId = _uiState.value.castingId ?: return
         viewModelScope.launch {
             runCatching { api.cancelCasting(resolveConnection(), castingId) }
+        }
+    }
+
+    private suspend fun loadCasting(castingId: String) {
+        val casting = api.getCasting(resolveConnection(), castingId)
+        val messages = casting.messages.mapNotNull { message ->
+            val role = when (message.role.lowercase()) {
+                "user" -> CastingMessageRole.User
+                "moderator" -> CastingMessageRole.Moderator
+                else -> return@mapNotNull null
+            }
+            CastingChatMessage(role, message.content)
+        }
+        _uiState.update { state ->
+            state.copy(
+                topic = casting.topic,
+                castingId = casting.id,
+                status = casting.status,
+                messages = messages,
+                proposal = casting.proposal.copy(topic = casting.proposal.topic.ifBlank { casting.topic }),
+                error = null,
+                canRetry = false,
+            )
         }
     }
 
