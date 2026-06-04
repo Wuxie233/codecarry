@@ -21,6 +21,7 @@ import dev.minios.ocremote.data.api.PiSpeakerPolicyDto
 import dev.minios.ocremote.data.repository.ServerRepository
 import dev.minios.ocremote.data.repository.SettingsRepository
 import dev.minios.ocremote.domain.model.Roundtable
+import dev.minios.ocremote.domain.model.ServerConfig
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -67,6 +68,7 @@ enum class RoundtableCadence(val wireName: String) {
 
 data class RoundtableCenterUiState(
     val serverName: String = "",
+    val serverUrl: String = "",
     val isLoading: Boolean = true,
     val isMutating: Boolean = false,
     val error: String? = null,
@@ -77,6 +79,14 @@ data class RoundtableCenterUiState(
 ) {
     val runningCount: Int = items.count { it.status == Roundtable.Status.Running }
 }
+
+data class RoundtableChatTarget(
+    val serverUrl: String,
+    val token: String,
+    val serverName: String,
+    val serverId: String,
+    val roundtableId: String,
+)
 
 data class RoundtableConfigEditorState(
     val topic: String = "",
@@ -165,6 +175,8 @@ class RoundtableCenterViewModel @Inject constructor(
 
     private val serverId: String = decodeRouteArg(savedStateHandle.get<String>("serverId"))
     private val _serverName = MutableStateFlow(context.getString(R.string.roundtable_default_name))
+    private val _serverUrl = MutableStateFlow("")
+    private var resolvedServer: ServerConfig? = null
     private val templateJson = Json { ignoreUnknownKeys = true; encodeDefaults = true; explicitNulls = false }
 
     private val _roundtables = MutableStateFlow<List<Roundtable>>(emptyList())
@@ -190,11 +202,11 @@ class RoundtableCenterViewModel @Inject constructor(
         "[]",
     )
 
-    private val loadingState = combine(_serverName, _isLoading, _isMutating, _error) { serverName, loading, mutating, error ->
-        RoundtableCenterLoadingState(serverName, loading, mutating, error)
+    private val loadingState = combine(_serverName, _serverUrl, _isLoading, _isMutating, _error) { serverName, serverUrl, loading, mutating, error ->
+        RoundtableCenterLoadingState(serverName, serverUrl, loading, mutating, error)
     }
     private val secondaryState = combine(loadingState, sort, filter) { loading, sortWire, filterWire ->
-        RoundtableCenterSecondaryState(loading.serverName, loading.loading, loading.mutating, loading.error, sortWire, filterWire)
+        RoundtableCenterSecondaryState(loading.serverName, loading.serverUrl, loading.loading, loading.mutating, loading.error, sortWire, filterWire)
     }
 
     val uiState: StateFlow<RoundtableCenterUiState> = combine(_roundtables, secondaryState, _configEditor, _lineupTemplates) { roundtables, secondary, configEditor, templates ->
@@ -202,6 +214,7 @@ class RoundtableCenterViewModel @Inject constructor(
         val selectedFilter = secondary.filterWire.toRoundtableFilter()
         RoundtableCenterUiState(
             serverName = secondary.serverName,
+            serverUrl = secondary.serverUrl,
             isLoading = secondary.loading,
             isMutating = secondary.mutating,
             error = secondary.error,
@@ -464,6 +477,17 @@ class RoundtableCenterViewModel @Inject constructor(
         }
     }
 
+    fun liveChatTarget(roundtableId: String): RoundtableChatTarget? {
+        val server = resolvedServer ?: return null
+        return RoundtableChatTarget(
+            serverUrl = server.url,
+            token = server.token.orEmpty(),
+            serverName = server.displayName.ifBlank { context.getString(R.string.roundtable_default_name) },
+            serverId = server.id,
+            roundtableId = roundtableId,
+        )
+    }
+
     fun archiveRoundtable(roundtableId: String) {
         mutate { conn -> api.archiveRoundtable(conn, roundtableId) }
     }
@@ -513,7 +537,9 @@ class RoundtableCenterViewModel @Inject constructor(
 
     private suspend fun resolveConnection(): PiConnection {
         val server = serverRepository.getServer(serverId) ?: error(context.getString(R.string.roundtable_error_saved_server_missing))
+        resolvedServer = server
         _serverName.value = server.displayName.ifBlank { context.getString(R.string.roundtable_default_name) }
+        _serverUrl.value = server.url
         return PiConnection.from(server.url, server.token)
     }
 
@@ -537,6 +563,7 @@ class RoundtableCenterViewModel @Inject constructor(
 
 private data class RoundtableCenterLoadingState(
     val serverName: String,
+    val serverUrl: String,
     val loading: Boolean,
     val mutating: Boolean,
     val error: String?,
@@ -544,6 +571,7 @@ private data class RoundtableCenterLoadingState(
 
 private data class RoundtableCenterSecondaryState(
     val serverName: String,
+    val serverUrl: String,
     val loading: Boolean,
     val mutating: Boolean,
     val error: String?,

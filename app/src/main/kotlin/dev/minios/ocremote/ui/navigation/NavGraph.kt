@@ -479,7 +479,20 @@ fun NavGraph(
             val serverId = decodeRouteArg(backStackEntry.arguments?.getString("serverId"))
             RoundtableCenterScreen(
                 onNavigateBack = { navController.popBackStack() },
-                onOpenRoundtable = { roundtableId ->
+                onOpenRoundtable = { target ->
+                    navController.navigate(
+                        Screen.Chat.createRoute(
+                            serverUrl = target.serverUrl,
+                            username = "pi",
+                            password = target.token,
+                            serverName = target.serverName,
+                            serverId = target.serverId,
+                            sessionId = target.roundtableId,
+                            serverType = ServerType.PI_ROUNDTABLE.name,
+                        )
+                    )
+                },
+                onOpenSummary = { roundtableId ->
                     navController.navigate(Screen.RoundtableSummary.createRoute(serverId, roundtableId))
                 },
                 onOpenPersonaLibrary = {

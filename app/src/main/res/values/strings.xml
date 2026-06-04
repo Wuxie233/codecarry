@@ -675,6 +675,7 @@ Tokens: ~%4$d -&gt; ~%5$d</string>
     <string name="roundtable_actions">Roundtable actions</string>
     <string name="roundtable_duplicate_as_template">Duplicate as template</string>
     <string name="roundtable_archive">Archive</string>
+    <string name="roundtable_view_summary">View summary</string>
     <string name="roundtable_resume">Resume</string>
     <string name="roundtable_empty_title">No roundtables yet</string>
     <string name="roundtable_empty_message">Create a topic-led roundtable without adding anything to OpenCode sessions.</string>

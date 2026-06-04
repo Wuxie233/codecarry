@@ -608,6 +608,7 @@
     <string name="roundtable_actions">圆桌操作</string>
     <string name="roundtable_duplicate_as_template">复制为模板</string>
     <string name="roundtable_archive">归档</string>
+    <string name="roundtable_view_summary">查看纪要</string>
     <string name="roundtable_resume">继续</string>
     <string name="roundtable_empty_title">还没有圆桌</string>
     <string name="roundtable_empty_message">创建一个按主题推进的圆桌，不会写入 OpenCode 会话。</string>

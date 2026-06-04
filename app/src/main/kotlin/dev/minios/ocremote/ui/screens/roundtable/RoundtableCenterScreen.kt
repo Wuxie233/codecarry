@@ -26,6 +26,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -80,7 +81,8 @@ import dev.minios.ocremote.data.api.PiCatalogEntryDto
 @Composable
 fun RoundtableCenterScreen(
     onNavigateBack: () -> Unit,
-    onOpenRoundtable: (String) -> Unit,
+    onOpenRoundtable: (RoundtableChatTarget) -> Unit,
+    onOpenSummary: (String) -> Unit,
     onOpenPersonaLibrary: () -> Unit,
     viewModel: RoundtableCenterViewModel = hiltViewModel(),
 ) {
@@ -171,8 +173,14 @@ fun RoundtableCenterScreen(
                             RoundtableCard(
                                 roundtable = roundtable,
                                 isAmoled = isAmoled,
-                                onOpen = { onOpenRoundtable(roundtable.id) },
-                                onResume = { viewModel.resumeRoundtable(roundtable.id) },
+                                onOpen = {
+                                    viewModel.liveChatTarget(roundtable.id)?.let(onOpenRoundtable)
+                                },
+                                onResume = {
+                                    viewModel.resumeRoundtable(roundtable.id)
+                                    viewModel.liveChatTarget(roundtable.id)?.let(onOpenRoundtable)
+                                },
+                                onOpenSummary = { onOpenSummary(roundtable.id) },
                                 onArchive = { viewModel.archiveRoundtable(roundtable.id) },
                                 onDelete = { viewModel.deleteRoundtable(roundtable.id) },
                                 onDuplicate = { viewModel.duplicateAsTemplate(roundtable) },
@@ -524,6 +532,7 @@ private fun RoundtableCard(
     isAmoled: Boolean,
     onOpen: () -> Unit,
     onResume: () -> Unit,
+    onOpenSummary: () -> Unit,
     onArchive: () -> Unit,
     onDelete: () -> Unit,
     onDuplicate: () -> Unit,
@@ -566,6 +575,11 @@ private fun RoundtableCard(
                         Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.roundtable_actions))
                     }
                     DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.roundtable_view_summary)) },
+                            onClick = { showMenu = false; onOpenSummary() },
+                            leadingIcon = { Icon(Icons.Default.Description, contentDescription = null) },
+                        )
                         DropdownMenuItem(
                             text = { Text(stringResource(R.string.roundtable_duplicate_as_template)) },
                             onClick = { showMenu = false; onDuplicate() },
