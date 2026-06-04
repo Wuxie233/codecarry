@@ -1,5 +1,6 @@
 package dev.minios.ocremote.ui.screens.roundtable
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -70,6 +71,8 @@ fun RoundtableCastingScreen(
     val uiState by viewModel.uiState.collectAsState()
     val listState = rememberLazyListState()
     val isAmoled = MaterialTheme.colorScheme.background == Color.Black && MaterialTheme.colorScheme.surface == Color.Black
+
+    BackHandler(onBack = onNavigateBack)
 
     LaunchedEffect(Unit) {
         viewModel.confirmedTarget.collect { target -> onConfirmedRoundtable(target) }

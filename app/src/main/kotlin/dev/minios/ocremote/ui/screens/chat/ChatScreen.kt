@@ -1280,6 +1280,7 @@ fun ChatScreen(
     var showRoundtableSteeringSheet by remember { mutableStateOf(false) }
     val roundtableSteeringSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var roundtablePendingCommand by remember { mutableStateOf<String?>(null) }
+    var roundtableSupplementMode by remember { mutableStateOf(false) }
 
     fun submitRoundtableCommand(key: String, block: ((Boolean) -> Unit) -> Unit) {
         if (roundtablePendingCommand != null) return
@@ -2065,8 +2066,10 @@ fun ChatScreen(
                                 status = uiState.roundtable?.status,
                                 awaitingSkip = uiState.runState.awaitingSkip,
                                 pendingCommand = roundtablePendingCommand,
+                                supplementActive = roundtableSupplementMode,
                                 onContinue = { submitRoundtableCommand("continue") { onDone -> viewModel.continueRoundtable(onDone) } },
                                 onSkip = { submitRoundtableCommand("skip") { onDone -> viewModel.skipAwaitingPersona(onDone) } },
+                                onSupplement = { roundtableSupplementMode = !roundtableSupplementMode },
                                 modifier = Modifier.padding(horizontal = 12.dp),
                             )
                         }
@@ -2149,6 +2152,36 @@ fun ChatScreen(
                             if (isShellMode) {
                                 inputMode = ChatInputMode.NORMAL.name
                             }
+                            viewModel.clearConfirmedPaths()
+                            viewModel.clearFileSearch()
+                            viewModel.clearDraft()
+                            return@doSend
+                        }
+                        if (uiState.isPiRoundtable && roundtableSupplementMode) {
+                            val supplementText = rawText.trim()
+                            if (supplementText.isBlank()) {
+                                coroutineScope.launch {
+                                    snackbarHostState.showSnackbar(context.getString(R.string.chat_pi_supplement_empty))
+                                }
+                                return@doSend
+                            }
+                            if (attachments.isNotEmpty()) {
+                                coroutineScope.launch {
+                                    snackbarHostState.showSnackbar(context.getString(R.string.chat_pi_supplement_attachments_unsupported))
+                                }
+                                return@doSend
+                            }
+                            if (roundtablePendingCommand != null) {
+                                coroutineScope.launch {
+                                    snackbarHostState.showSnackbar(context.getString(R.string.chat_pi_supplement_pending))
+                                }
+                                return@doSend
+                            }
+                            submitRoundtableCommand("supplement") { onDone ->
+                                viewModel.supplementRoundtableGuidance(supplementText, onDone)
+                            }
+                            inputText = TextFieldValue("")
+                            roundtableSupplementMode = false
                             viewModel.clearConfirmedPaths()
                             viewModel.clearFileSearch()
                             viewModel.clearDraft()
@@ -2333,6 +2366,7 @@ fun ChatScreen(
                     }
                 },
                 isPiRoundtable = uiState.isPiRoundtable,
+                roundtableSupplementMode = roundtableSupplementMode,
                 onSteeringClick = { showRoundtableSteeringSheet = true },
                 contextWindow = uiState.contextWindow,
                 lastContextTokens = uiState.lastContextTokens
@@ -7389,6 +7423,7 @@ private fun ChatInputBar(
     inputMode: ChatInputMode = ChatInputMode.NORMAL,
     onInputModeChange: (ChatInputMode) -> Unit = {},
     isPiRoundtable: Boolean = false,
+    roundtableSupplementMode: Boolean = false,
     onSteeringClick: () -> Unit = {},
     contextWindow: Int = 0,
     lastContextTokens: Int = 0
@@ -7405,6 +7440,7 @@ private fun ChatInputBar(
     }
     val placeholder = when {
         isShellMode -> stringResource(R.string.chat_shell_placeholder)
+        isPiRoundtable && roundtableSupplementMode -> stringResource(R.string.chat_pi_supplement_hint)
         isPiRoundtable -> stringResource(R.string.chat_pi_speak_hint)
         else -> stringResource(placeholderHintResIds[hintIndex.intValue])
     }
@@ -7916,6 +7952,52 @@ private fun ChatInputBar(
                 }
             }
 
+            AnimatedVisibility(
+                visible = isPiRoundtable && roundtableSupplementMode,
+                enter = fadeIn(),
+                exit = fadeOut(),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 4.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(
+                            if (isAmoled) {
+                                Color.Black
+                            } else {
+                                MaterialTheme.colorScheme.surfaceContainerHigh
+                            }
+                        )
+                        .then(
+                            if (isAmoled) {
+                                Modifier.border(
+                                    width = 1.dp,
+                                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
+                                    shape = RoundedCornerShape(10.dp),
+                                )
+                            } else {
+                                Modifier
+                            }
+                        )
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.EditNote,
+                        contentDescription = null,
+                        modifier = Modifier.size(14.dp),
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                    Text(
+                        text = stringResource(R.string.chat_pi_supplement_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
             // Input row
             Row(
                 verticalAlignment = Alignment.Bottom,
@@ -8136,8 +8218,10 @@ private fun RoundtableContextControls(
     status: Roundtable.Status?,
     awaitingSkip: PiTransportEvent.AwaitingSkip?,
     pendingCommand: String?,
+    supplementActive: Boolean,
     onContinue: () -> Unit,
     onSkip: () -> Unit,
+    onSupplement: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val isAwaitingAdvance = status == Roundtable.Status.Paused || status == Roundtable.Status.AwaitingCommand
@@ -8157,8 +8241,28 @@ private fun RoundtableContextControls(
         if (isAwaitingAdvance) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End,
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
+                val supplementColors = if (supplementActive) {
+                    ButtonDefaults.filledTonalButtonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                    )
+                } else {
+                    ButtonDefaults.filledTonalButtonColors()
+                }
+                FilledTonalButton(
+                    onClick = onSupplement,
+                    enabled = pendingCommand == null,
+                    colors = supplementColors,
+                    modifier = Modifier.heightIn(min = 48.dp),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                ) {
+                    Icon(Icons.Default.EditNote, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(stringResource(R.string.chat_pi_supplement))
+                }
                 FilledTonalButton(
                     onClick = onContinue,
                     enabled = pendingCommand == null,

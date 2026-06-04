@@ -89,6 +89,8 @@ fun RoundtableCenterScreen(
     onCreateRoundtable: () -> Unit,
     openManualSetup: Boolean = false,
     onManualSetupConsumed: () -> Unit = {},
+    refreshRequested: Boolean = false,
+    onRefreshConsumed: () -> Unit = {},
     viewModel: RoundtableCenterViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -98,6 +100,13 @@ fun RoundtableCenterScreen(
         if (openManualSetup) {
             viewModel.createRoundtable()
             onManualSetupConsumed()
+        }
+    }
+
+    LaunchedEffect(refreshRequested) {
+        if (refreshRequested) {
+            viewModel.refresh()
+            onRefreshConsumed()
         }
     }
 

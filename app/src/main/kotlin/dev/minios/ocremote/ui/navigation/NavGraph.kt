@@ -481,6 +481,9 @@ fun NavGraph(
             val manualSetupRequested by backStackEntry.savedStateHandle
                 .getStateFlow("openManualSetup", false)
                 .collectAsState()
+            val refreshRequested by backStackEntry.savedStateHandle
+                .getStateFlow("refreshRoundtables", false)
+                .collectAsState()
             RoundtableCenterScreen(
                 onNavigateBack = { navController.popBackStack() },
                 onOpenRoundtable = { target ->
@@ -512,6 +515,10 @@ fun NavGraph(
                 onManualSetupConsumed = {
                     backStackEntry.savedStateHandle["openManualSetup"] = false
                 },
+                refreshRequested = refreshRequested,
+                onRefreshConsumed = {
+                    backStackEntry.savedStateHandle["refreshRoundtables"] = false
+                },
             )
         }
 
@@ -523,7 +530,10 @@ fun NavGraph(
             )
         ) {
             RoundtableCastingScreen(
-                onNavigateBack = { navController.popBackStack() },
+                onNavigateBack = {
+                    navController.previousBackStackEntry?.savedStateHandle?.set("refreshRoundtables", true)
+                    navController.popBackStack()
+                },
                 onConfirmedRoundtable = { target ->
                     val route = Screen.Chat.createRoute(
                         serverUrl = target.serverUrl,
@@ -534,6 +544,7 @@ fun NavGraph(
                         sessionId = target.roundtableId,
                         serverType = ServerType.PI_ROUNDTABLE.name,
                     )
+                    navController.previousBackStackEntry?.savedStateHandle?.set("refreshRoundtables", true)
                     navController.popBackStack()
                     navController.navigate(route)
                 },

@@ -1047,6 +1047,15 @@ class ChatViewModel @Inject constructor(
         sendRoundtableCommand("inject", content.trim(), onResult)
     }
 
+    /**
+     * Add a user-authored supplement (explanation or guidance) for the whole table.
+     * Product-facing wrapper that reuses the existing inject command path so the
+     * roundtable receives the note as supplemental user content.
+     */
+    fun supplementRoundtableGuidance(content: String, onResult: (Boolean) -> Unit = {}) {
+        injectAsParticipant(content, onResult)
+    }
+
     fun introducePersona(personaId: String, onResult: (Boolean) -> Unit = {}) {
         sendRoundtableCommand("引入新人物", personaId.trim(), onResult)
     }

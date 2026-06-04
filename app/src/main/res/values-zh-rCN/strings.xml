@@ -570,6 +570,11 @@
     <string name="chat_pi_speak_hint">对全桌发言…</string>
     <string name="chat_pi_steering_open">打开圆桌调度</string>
     <string name="chat_pi_continue_short">继续</string>
+    <string name="chat_pi_supplement">补充说明</string>
+    <string name="chat_pi_supplement_hint">为全桌补充说明或引导…</string>
+    <string name="chat_pi_supplement_empty">发送前请先输入要补充给全桌的说明。</string>
+    <string name="chat_pi_supplement_attachments_unsupported">补充说明暂不支持附件。</string>
+    <string name="chat_pi_supplement_pending">圆桌指令正在执行，请稍候再试。</string>
     <string name="chat_pi_skip_waiting_title">%1$s 正在等待</string>
     <string name="chat_pi_skip_action">跳过本次发言</string>
     <string name="chat_pi_steering_title">圆桌调度</string>

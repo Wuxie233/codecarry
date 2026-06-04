@@ -128,6 +128,21 @@ class ChatViewModelRoundtableSteeringTest {
     }
 
     @Test
+    fun `supplement guidance reuses inject command and trims content`() = runTest(dispatcher) {
+        val sentCommands = Collections.synchronizedList(mutableListOf<PiCommandRequest>())
+        val vm = newViewModel(sentCommands)
+        collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
+        advanceUntilIdle()
+
+        sendAndAwait { onDone -> vm.supplementRoundtableGuidance("  please clarify the budget cap  ", onDone) }
+
+        val command = sentCommands.single()
+        assertEquals("inject", command.command)
+        assertEquals("please clarify the budget cap", command.content)
+        assertEquals(ROUND_ID, command.roundId)
+    }
+
+    @Test
     fun `awaiting skip run state sends skip command`() = runTest(dispatcher) {
         val eventReducer = EventReducer()
         val sentCommands = Collections.synchronizedList(mutableListOf<PiCommandRequest>())
