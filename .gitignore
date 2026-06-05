@@ -74,3 +74,8 @@ fastlane/readme.md
 
 # Local OMO workflow state
 .omo/
+
+# Local OpenCode / OmO LSP runtime caches
+.kotlin/
+.opencode/lsp.json
+.opencode/kotlin-lsp-system*/
