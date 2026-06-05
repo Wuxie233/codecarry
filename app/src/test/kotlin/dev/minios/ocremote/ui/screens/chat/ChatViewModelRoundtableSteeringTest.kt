@@ -42,6 +42,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.yield
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestCoroutineScheduler
@@ -143,6 +144,50 @@ class ChatViewModelRoundtableSteeringTest {
     }
 
     @Test
+    fun `roundtable send message injects content and shows local user message`() = runTest(dispatcher) {
+        val eventReducer = EventReducer()
+        val sentCommands = Collections.synchronizedList(mutableListOf<PiCommandRequest>())
+        val vm = newViewModel(sentCommands, eventReducer)
+        collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
+        advanceUntilIdle()
+
+        vm.sendMessage("hello table")
+        awaitSentCommand(sentCommands)
+
+        val command = sentCommands.single()
+        assertEquals("inject", command.command)
+        assertEquals("hello table", command.content)
+        awaitUserMessage(vm)
+        val userMessage = vm.uiState.value.messages.single { it.isUser }
+        assertEquals("hello table", userMessage.parts.filterIsInstance<dev.minios.ocremote.domain.model.Part.Text>().single().text)
+    }
+
+    @Test
+    fun `roundtable live state moves from thinking to speaking to idle`() = runTest(dispatcher) {
+        val eventReducer = EventReducer()
+        val sentCommands = Collections.synchronizedList(mutableListOf<PiCommandRequest>())
+        val vm = newViewModel(sentCommands, eventReducer)
+        collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
+        advanceUntilIdle()
+
+        val processor = PiRoundtableEventProcessor(json)
+        val events = fixtureEvents("happy-one-round.json")
+        processWireEvent(processor, eventReducer, events[0])
+        processWireEvent(processor, eventReducer, events[1])
+        advanceUntilIdle()
+        assertEquals(PiRoleLiveState.Thinking, vm.uiState.value.runState.roleStates.single { it.personaId == "persona-ada" }.liveState)
+
+        processWireEvent(processor, eventReducer, events[2])
+        advanceUntilIdle()
+        assertEquals(PiRoleLiveState.Speaking, vm.uiState.value.runState.roleStates.single { it.personaId == "persona-ada" }.liveState)
+
+        processWireEvent(processor, eventReducer, events[3])
+        processWireEvent(processor, eventReducer, events[4])
+        advanceUntilIdle()
+        assertEquals(PiRoleLiveState.Idle, vm.uiState.value.runState.roleStates.single { it.personaId == "persona-ada" }.liveState)
+    }
+
+    @Test
     fun `awaiting skip run state sends skip command`() = runTest(dispatcher) {
         val eventReducer = EventReducer()
         val sentCommands = Collections.synchronizedList(mutableListOf<PiCommandRequest>())
@@ -174,6 +219,24 @@ class ChatViewModelRoundtableSteeringTest {
         send { ok -> result.complete(ok) }
         scheduler.advanceUntilIdle()
         assertEquals(true, result.await())
+    }
+
+    private suspend fun awaitSentCommand(sentCommands: List<PiCommandRequest>) {
+        repeat(20) {
+            scheduler.advanceUntilIdle()
+            if (sentCommands.isNotEmpty()) return
+            yield()
+        }
+        assertTrue("Expected a Pi command to be sent", sentCommands.isNotEmpty())
+    }
+
+    private suspend fun awaitUserMessage(vm: ChatViewModel) {
+        repeat(20) {
+            scheduler.advanceUntilIdle()
+            if (vm.uiState.value.messages.any { it.isUser }) return
+            yield()
+        }
+        assertTrue("Expected a local user message", vm.uiState.value.messages.any { it.isUser })
     }
 
     private fun newViewModel(
@@ -259,6 +322,12 @@ class ChatViewModelRoundtableSteeringTest {
             .processSnapshot(fixtureEvents("fallback-then-skip.json"))
             .filterIsInstance<PiTransportEvent.AwaitingSkip>()
             .single()
+    }
+
+    private fun processWireEvent(processor: PiRoundtableEventProcessor, reducer: EventReducer, event: RoundtableSseEvent) {
+        processor.accept(event).forEach { transportEvent ->
+            reducer.processEvent(TransportEvent.Pi(transportEvent), SERVER_ID)
+        }
     }
 
     private fun fixtureEvents(name: String): List<RoundtableSseEvent> = json.decodeFromString(

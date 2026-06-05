@@ -4438,6 +4438,7 @@ private fun ChatMessageBubble(
                                 textColor = textColor,
                                 showSenderHeader = showSenderHeader,
                                 actionTag = assistantMsg?.actionTag,
+                                isLive = assistantMsg?.finish == null,
                                 onCopyText = onCopyText?.let { copy ->
                                     { performHaptic(hapticView, hapticOn); copy() }
                                 },
@@ -4734,6 +4735,7 @@ private fun PiSenderHeader(
     textColor: Color,
     showSenderHeader: Boolean,
     actionTag: String?,
+    isLive: Boolean,
     onCopyText: (() -> Unit)?,
 ) {
     if (!showSenderHeader) {
@@ -4833,6 +4835,40 @@ private fun PiSenderHeader(
                     textColor = textColor,
                 )
             }
+            if (isLive && !isModerator) {
+                PiLiveSenderChip(
+                    label = stringResource(R.string.chat_pi_role_speaking),
+                    accentColor = accentColor,
+                    textColor = textColor,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PiLiveSenderChip(
+    label: String,
+    accentColor: Color,
+    textColor: Color,
+) {
+    Surface(
+        shape = CircleShape,
+        color = accentColor.copy(alpha = 0.12f),
+        border = BorderStroke(1.dp, accentColor.copy(alpha = 0.42f)),
+        tonalElevation = 0.dp,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            PulsingDotsIndicator(dotSize = 3.dp, dotSpacing = 2.dp, color = accentColor)
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium),
+                color = textColor.copy(alpha = 0.82f),
+            )
         }
     }
 }
@@ -8337,6 +8373,7 @@ private fun RoundtableCompactRosterStrip(
 ) {
     val isAmoled = isAmoledTheme()
     val statusLabel = stringResource(roundtableChatStatusLabelRes(status ?: Roundtable.Status.Unknown))
+    val activeRole = roleStates.firstOrNull { role -> role.liveState != PiRoleLiveState.Idle }
     Surface(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
@@ -8344,43 +8381,66 @@ private fun RoundtableCompactRosterStrip(
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isAmoled) 0.65f else 0.28f)),
         tonalElevation = if (isAmoled) 0.dp else 1.dp,
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            LazyRow(
-                modifier = Modifier.weight(1f),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                items(roster, key = { it.id }) { role ->
-                    RoundtableRosterAvatar(
-                        role = role,
-                        runState = roleStates.firstOrNull { it.personaId == role.id },
-                    )
+                LazyRow(
+                    modifier = Modifier.weight(1f),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    items(roster, key = { it.id }) { role ->
+                        RoundtableRosterAvatar(
+                            role = role,
+                            runState = roleStates.firstOrNull { it.personaId == role.id },
+                        )
+                    }
+                }
+                Surface(
+                    shape = RoundedCornerShape(999.dp),
+                    color = roundtableStatusContainerColor(status, isAmoled),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isAmoled) 0.58f else 0.22f)),
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(7.dp)
+                                .background(roundtableStatusColor(status), CircleShape),
+                        )
+                        Text(
+                            text = statusLabel,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
-            Surface(
-                shape = RoundedCornerShape(999.dp),
-                color = roundtableStatusContainerColor(status, isAmoled),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isAmoled) 0.58f else 0.22f)),
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    Box(
+            activeRole?.let { role ->
+                val label = roundtableRoleStateLabelText(role)
+                if (label != null) {
+                    Row(
                         modifier = Modifier
-                            .size(7.dp)
-                            .background(roundtableStatusColor(status), CircleShape),
-                    )
-                    Text(
-                        text = statusLabel,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                            .fillMaxWidth()
+                            .padding(start = 12.dp, end = 12.dp, bottom = 9.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        PulsingDotsIndicator(dotSize = 4.dp, dotSpacing = 3.dp, color = roundtableRoleStateColor(role))
+                        Text(
+                            text = stringResource(R.string.chat_pi_role_state, role.name, label),
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
             }
         }
@@ -8394,6 +8454,8 @@ private fun RoundtableRosterAvatar(
 ) {
     val accent = piSenderAccentColor(PiSenderIdentity(role.id, role.name, null, role.role, role.colorSeed))
     val hasState = runState != null && roundtableRoleHasIndicator(runState)
+    val liveState = runState?.liveState ?: PiRoleLiveState.Idle
+    val isLive = liveState != PiRoleLiveState.Idle
     Box(
         modifier = Modifier.size(36.dp),
         contentAlignment = Alignment.Center,
@@ -8401,8 +8463,8 @@ private fun RoundtableRosterAvatar(
         Surface(
             modifier = Modifier.fillMaxSize(),
             shape = CircleShape,
-            color = accent.copy(alpha = 0.18f),
-            border = BorderStroke(1.dp, accent.copy(alpha = 0.6f)),
+            color = accent.copy(alpha = if (isLive) 0.28f else 0.18f),
+            border = BorderStroke(if (isLive) 2.dp else 1.dp, accent.copy(alpha = if (isLive) 0.95f else 0.6f)),
         ) {
             Box(contentAlignment = Alignment.Center) {
                 Text(
@@ -8415,13 +8477,24 @@ private fun RoundtableRosterAvatar(
             }
         }
         if (runState != null && hasState) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .size(11.dp)
-                    .background(roundtableRoleStateColor(runState), CircleShape)
-                    .border(1.5.dp, MaterialTheme.colorScheme.surface, CircleShape),
-            )
+            val stateColor = roundtableRoleStateColor(runState)
+            if (isLive) {
+                BreathingCircleIndicator(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .border(1.5.dp, MaterialTheme.colorScheme.surface, CircleShape),
+                    size = 12.dp,
+                    color = stateColor,
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .size(11.dp)
+                        .background(stateColor, CircleShape)
+                        .border(1.5.dp, MaterialTheme.colorScheme.surface, CircleShape),
+                )
+            }
         }
     }
 }
@@ -8673,11 +8746,16 @@ private fun SteeringSection(
 private fun RoundtableRoleStatePill(role: PiRoleRunState) {
     val accent = piSenderAccentColor(PiSenderIdentity(role.personaId, role.name, null, role.role, role.colorSeed))
     val label = roundtableRoleStateLabelText(role) ?: role.role
+    val isLive = role.liveState != PiRoleLiveState.Idle
     AssistChip(
         onClick = {},
         label = { Text(stringResource(R.string.chat_pi_role_state, role.name, label)) },
         leadingIcon = {
-            Box(modifier = Modifier.size(9.dp).background(roundtableRoleStateColor(role), CircleShape))
+            if (isLive) {
+                BreathingCircleIndicator(size = 9.dp, color = roundtableRoleStateColor(role))
+            } else {
+                Box(modifier = Modifier.size(9.dp).background(roundtableRoleStateColor(role), CircleShape))
+            }
         },
         colors = AssistChipDefaults.assistChipColors(
             labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -8696,17 +8774,21 @@ private fun roundtableRoleStateLabelText(role: PiRoleRunState): String? = when {
         role.retry.attempt,
         role.retry.maxAttempts?.toString() ?: "?",
     )
+    role.liveState == PiRoleLiveState.Speaking -> stringResource(R.string.chat_pi_role_speaking)
+    role.liveState == PiRoleLiveState.Thinking -> stringResource(R.string.chat_pi_role_thinking)
     else -> null
 }
 
 private fun roundtableRoleHasIndicator(role: PiRoleRunState): Boolean =
-    role.awaitingSkip != null || role.error != null || role.fallback != null || role.retry != null
+    role.awaitingSkip != null || role.error != null || role.fallback != null || role.retry != null || role.liveState != PiRoleLiveState.Idle
 
 private fun roundtableRoleStateColor(role: PiRoleRunState): Color = when {
     role.awaitingSkip != null -> Color(0xFFF5A742)
     role.error != null -> Color(0xFFE06C75)
     role.fallback != null -> Color(0xFF56B6C2)
     role.retry != null -> Color(0xFF9D7CD8)
+    role.liveState == PiRoleLiveState.Speaking -> Color(0xFF7FD88F)
+    role.liveState == PiRoleLiveState.Thinking -> Color(0xFF56B6C2)
     else -> Color(0xFF7FD88F)
 }
 

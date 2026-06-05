@@ -120,7 +120,7 @@ class PiRoundtableTransport(
 
         val roundId = roomId.ifBlank { activeRoundId ?: createRoundtable(text).id }
         activeRoundId = roundId
-        api.sendCommand(
+        val accepted = api.sendCommand(
             conn = conn,
             roundId = roundId,
             command = PiCommandRequest(
@@ -130,6 +130,7 @@ class PiRoundtableTransport(
                 content = text,
             ),
         )
+        if (!accepted) error("Pi roundtable inject command was rejected")
     }
 
     override suspend fun sendCommand(

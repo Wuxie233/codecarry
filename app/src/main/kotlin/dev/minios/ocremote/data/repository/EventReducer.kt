@@ -641,6 +641,34 @@ class EventReducer @Inject constructor() {
         }
     }
 
+    fun appendRoundtableUserMessage(roundtableId: String, text: String, createdAt: Long = System.currentTimeMillis()) {
+        val trimmed = text.trim()
+        if (trimmed.isBlank()) return
+        val messageId = "local-user-$createdAt-${trimmed.hashCode()}"
+        _roundtableMessages.update { current ->
+            upsertMessage(
+                current,
+                roundtableId,
+                Message.User(
+                    id = messageId,
+                    sessionId = roundtableId,
+                    time = TimeInfo(created = createdAt, completed = createdAt),
+                ),
+            )
+        }
+        _roundtableParts.update { current ->
+            upsertPart(
+                current,
+                Part.Text(
+                    id = "$messageId-text",
+                    sessionId = roundtableId,
+                    messageId = messageId,
+                    text = trimmed,
+                ),
+            )
+        }
+    }
+
     fun setActiveSessionId(sessionId: String?) {
         _activeSessionId.value = sessionId
     }

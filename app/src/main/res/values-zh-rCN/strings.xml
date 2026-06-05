@@ -590,6 +590,8 @@
     <string name="chat_pi_role_error">错误</string>
     <string name="chat_pi_role_fallback">备用模型</string>
     <string name="chat_pi_role_retry">重试 %1$d/%2$s</string>
+    <string name="chat_pi_role_thinking">思考中</string>
+    <string name="chat_pi_role_speaking">发言中</string>
     <string name="chat_pi_mention_section">点名角色</string>
     <string name="chat_pi_choose_role">选择角色</string>
     <string name="chat_pi_mention_target">@点名</string>

@@ -27,8 +27,11 @@ import dev.minios.ocremote.domain.transport.PiTransportEvent
 import dev.minios.ocremote.domain.transport.PiTransportEvent.AgentError
 import dev.minios.ocremote.domain.transport.PiTransportEvent.AgentFallback
 import dev.minios.ocremote.domain.transport.PiTransportEvent.AgentRetry
+import dev.minios.ocremote.domain.transport.PiTransportEvent.AgentTurnStart
 import dev.minios.ocremote.domain.transport.PiTransportEvent.AwaitingCommand
 import dev.minios.ocremote.domain.transport.PiTransportEvent.AwaitingSkip
+import dev.minios.ocremote.domain.transport.PiTransportEvent.MessageDelta
+import dev.minios.ocremote.domain.transport.PiTransportEvent.MessageEnd
 import dev.minios.ocremote.domain.transport.PiTransportEvent.RoundStart
 import dev.minios.ocremote.domain.transport.TransportMessagePart
 import dev.minios.ocremote.domain.transport.TransportRoom
@@ -120,11 +123,19 @@ data class PiRoleRunState(
     val name: String,
     val role: String,
     val colorSeed: String,
+    val liveState: PiRoleLiveState = PiRoleLiveState.Idle,
+    val activeTurnId: String? = null,
     val retry: PiTransportEvent.AgentRetry? = null,
     val fallback: PiTransportEvent.AgentFallback? = null,
     val error: PiTransportEvent.AgentError? = null,
     val awaitingSkip: PiTransportEvent.AwaitingSkip? = null,
 )
+
+enum class PiRoleLiveState {
+    Idle,
+    Thinking,
+    Speaking,
+}
 
 private data class PiRoundtableCatalogState(
     val commands: List<CommandInfo> = emptyList(),
@@ -957,7 +968,11 @@ class ChatViewModel @Inject constructor(
             _isSending.value = true
             try {
                 if (isPiRoundtable) {
-                    piTransport?.sendMessage(
+                    val roundtableText = parts.joinToString(separator = "\n") { part ->
+                        part.text ?: part.url ?: part.path ?: part.filename ?: ""
+                    }.trim()
+                    val transport = piTransport ?: error("Pi roundtable transport is unavailable")
+                    transport.sendMessage(
                         roomId = sessionId,
                         parts = parts.map { part ->
                             TransportMessagePart(
@@ -971,6 +986,7 @@ class ChatViewModel @Inject constructor(
                         },
                         directory = sessionDirectory,
                     )
+                    eventReducer.appendRoundtableUserMessage(sessionId, roundtableText)
                     return@launch
                 }
                 val model = if (_selectedProviderId.value != null && _selectedModelId.value != null) {
@@ -1687,17 +1703,39 @@ private fun buildRoundtableRunState(
     val fallbackByPersona = events.filterIsInstance<AgentFallback>().latestByPersona { it.personaId }
     val errorByPersona = events.filterIsInstance<AgentError>().latestByPersona { it.personaId }
     val skipByPersona = events.filterIsInstance<AwaitingSkip>().latestByPersona { it.personaId }
-    val personaIds = (activeRoster.map { it.id } + retryByPersona.keys + fallbackByPersona.keys + errorByPersona.keys + skipByPersona.keys)
+    val closedTurnIds = events.mapNotNull { event ->
+        when (event) {
+            is MessageEnd,
+            is AgentError,
+            is AwaitingSkip -> event.envelope.turnId
+            else -> null
+        }
+    }.toSet()
+    val speakingTurnIds = events.filterIsInstance<MessageDelta>()
+        .mapNotNull { event -> event.envelope.turnId }
+        .toSet()
+    val activeTurnByPersona = events.filterIsInstance<AgentTurnStart>()
+        .filter { event -> event.envelope.turnId != null && event.envelope.turnId !in closedTurnIds }
+        .latestByPersona { event -> event.personaId.ifBlank { event.envelope.author.id } }
+    val personaIds = (activeRoster.map { it.id } + retryByPersona.keys + fallbackByPersona.keys + errorByPersona.keys + skipByPersona.keys + activeTurnByPersona.keys)
         .distinct()
 
     val rolesById = activeRoster.associateBy { it.id }
     val roleStates = personaIds.map { personaId ->
         val role = rolesById[personaId]
+        val activeTurn = activeTurnByPersona[personaId]
+        val activeTurnId = activeTurn?.envelope?.turnId
         PiRoleRunState(
             personaId = personaId,
             name = role?.name ?: personaId,
             role = role?.role ?: "persona",
             colorSeed = role?.colorSeed ?: personaId,
+            liveState = when {
+                activeTurnId == null -> PiRoleLiveState.Idle
+                activeTurnId in speakingTurnIds -> PiRoleLiveState.Speaking
+                else -> PiRoleLiveState.Thinking
+            },
+            activeTurnId = activeTurnId,
             retry = retryByPersona[personaId],
             fallback = fallbackByPersona[personaId],
             error = errorByPersona[personaId],
