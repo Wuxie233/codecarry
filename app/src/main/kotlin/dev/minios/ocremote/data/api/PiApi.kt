@@ -198,7 +198,11 @@ class PiApi(
             contentType(ContentType.Application.Json)
             setBody(command)
         }
-        return response.status.isSuccess()
+        val body = response.bodyAsText()
+        if (!response.status.isSuccess()) {
+            throw PiApiException(commandFailureMessage("POST /roundtables/:id/command", response.status.value, body))
+        }
+        return true
     }
 
     suspend fun getTranscript(conn: PiConnection, roundId: String): PiTranscriptDto {
@@ -387,6 +391,19 @@ class PiApi(
     private suspend inline fun <reified T> io.ktor.client.statement.HttpResponse.bodyFromSuccessfulResponse(path: String): T {
         if (!status.isSuccess()) throw PiApiException("$path failed with HTTP ${status.value}")
         return bodyAsText().let { body -> json.decodeFromString(body) }
+    }
+
+    private fun commandFailureMessage(path: String, statusCode: Int, body: String): String {
+        val detail = runCatching {
+            val root = json.parseToJsonElement(body)
+            val obj = root as? JsonObject
+            listOfNotNull(
+                obj?.stringOrNull("effect"),
+                obj?.stringOrNull("message"),
+                (obj?.get("payload") as? JsonObject)?.stringOrNull("message"),
+            ).firstOrNull { it.isNotBlank() }
+        }.getOrNull()
+        return listOfNotNull("$path failed with HTTP $statusCode", detail).joinToString(": ")
     }
 }
 

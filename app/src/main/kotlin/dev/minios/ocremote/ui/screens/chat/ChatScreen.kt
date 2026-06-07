@@ -1773,7 +1773,7 @@ fun ChatScreen(
     val pendingCount = uiState.pendingPermissions.size + uiState.pendingQuestions.size
     val isBusy = uiState.sessionStatus is SessionStatus.Busy
     val sessionBusyForMessageActions = uiState.sessionStatus !is SessionStatus.Idle || uiState.isSending || forkFromMessageInFlight
-    val sessionReadyForMessageActions = !uiState.isLoading && uiState.error == null && viewModel.sessionId.isNotBlank()
+    val sessionReadyForMessageActions = !uiState.isLoading && (uiState.isPiRoundtable || uiState.error == null) && viewModel.sessionId.isNotBlank()
     LaunchedEffect(messageCount, lastPartCount, lastContentLength, pendingCount, isBusy) {
         if (messageCount > 0 && autoScrollEnabled) {
             val lastIndex = listState.layoutInfo.totalItemsCount.coerceAtLeast(1) - 1
@@ -2043,7 +2043,7 @@ fun ChatScreen(
                 val sendDisabledReasonResId = when {
                     uiState.isSending -> R.string.chat_send_disabled_sending
                     pendingCount > 0 -> R.string.chat_send_disabled_pending
-                    uiState.isLoading || uiState.error != null ||
+                    uiState.isLoading || (!uiState.isPiRoundtable && uiState.error != null) ||
                         viewModel.sessionId.isBlank() || (isShellMode && isBusy) -> R.string.chat_send_disabled_not_ready
                     else -> null
                 }
@@ -2692,7 +2692,7 @@ fun ChatScreen(
                         )
                     }
                 }
-                uiState.error != null && uiState.messages.isEmpty() -> {
+                !uiState.isPiRoundtable && uiState.error != null && uiState.messages.isEmpty() -> {
                     Column(
                         modifier = Modifier
                             .align(Alignment.Center)

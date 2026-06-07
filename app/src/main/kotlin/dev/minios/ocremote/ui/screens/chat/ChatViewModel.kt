@@ -987,6 +987,7 @@ class ChatViewModel @Inject constructor(
                         directory = sessionDirectory,
                     )
                     eventReducer.appendRoundtableUserMessage(sessionId, roundtableText)
+                    _error.value = null
                     return@launch
                 }
                 val model = if (_selectedProviderId.value != null && _selectedModelId.value != null) {
@@ -1028,7 +1029,9 @@ class ChatViewModel @Inject constructor(
                     command = command,
                     arguments = arguments,
                     directory = sessionDirectory,
-                )
+                ).also { accepted ->
+                    if (accepted) _error.value = null
+                }
             } catch (error: Exception) {
                 Log.e(TAG, "Failed to send roundtable command $command", error)
                 _error.value = error.message ?: "Failed to send roundtable command"

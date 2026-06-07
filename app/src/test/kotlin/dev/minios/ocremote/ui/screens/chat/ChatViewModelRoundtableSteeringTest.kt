@@ -214,11 +214,43 @@ class ChatViewModelRoundtableSteeringTest {
         assertFalse(requestBody.contains("targetPersonaId"))
     }
 
+    @Test
+    fun `roundtable command rejection error clears after next successful command`() = runTest(dispatcher) {
+        val sentCommands = Collections.synchronizedList(mutableListOf<PiCommandRequest>())
+        var rejectCommand = true
+        val vm = newViewModel(
+            sentCommands = sentCommands,
+            commandStatus = { if (rejectCommand) HttpStatusCode.UnprocessableEntity else HttpStatusCode.OK },
+            commandBody = {
+                if (rejectCommand) {
+                    """{"accepted":false,"effect":"rejected because injected content would exceed maxTranscriptBytes"}"""
+                } else {
+                    """{"accepted":true}"""
+                }
+            },
+        )
+        collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
+        advanceUntilIdle()
+
+        val rejected = sendAndAwaitResult { onDone -> vm.injectAsParticipant("too much transcript", onDone) }
+        assertEquals(false, rejected)
+        awaitError(vm)
+
+        rejectCommand = false
+        val accepted = sendAndAwaitResult { onDone -> vm.continueRoundtable(onDone) }
+        assertEquals(true, accepted)
+        awaitNoError(vm)
+    }
+
     private suspend fun sendAndAwait(send: ((Boolean) -> Unit) -> Unit) {
+        assertEquals(true, sendAndAwaitResult(send))
+    }
+
+    private suspend fun sendAndAwaitResult(send: ((Boolean) -> Unit) -> Unit): Boolean {
         val result = CompletableDeferred<Boolean>()
         send { ok -> result.complete(ok) }
         scheduler.advanceUntilIdle()
-        assertEquals(true, result.await())
+        return result.await()
     }
 
     private suspend fun awaitSentCommand(sentCommands: List<PiCommandRequest>) {
@@ -239,16 +271,36 @@ class ChatViewModelRoundtableSteeringTest {
         assertTrue("Expected a local user message", vm.uiState.value.messages.any { it.isUser })
     }
 
+    private suspend fun awaitError(vm: ChatViewModel) {
+        repeat(20) {
+            scheduler.advanceUntilIdle()
+            if (vm.uiState.value.error != null) return
+            yield()
+        }
+        assertNotNull(vm.uiState.value.error)
+    }
+
+    private suspend fun awaitNoError(vm: ChatViewModel) {
+        repeat(20) {
+            scheduler.advanceUntilIdle()
+            if (vm.uiState.value.error == null) return
+            yield()
+        }
+        assertEquals(null, vm.uiState.value.error)
+    }
+
     private fun newViewModel(
         sentCommands: MutableList<PiCommandRequest>,
         eventReducer: EventReducer = EventReducer(),
         sentBodies: MutableList<String>? = null,
+        commandStatus: (PiCommandRequest) -> HttpStatusCode = { HttpStatusCode.OK },
+        commandBody: (PiCommandRequest) -> String = { """{"accepted":true}""" },
     ): ChatViewModel {
         return ChatViewModel(
             savedStateHandle = savedStateHandle(),
             eventReducer = eventReducer,
             api = openCodeApi(),
-            piApi = piApi(sentCommands, sentBodies),
+            piApi = piApi(sentCommands, sentBodies, commandStatus, commandBody),
             json = json,
             draftRepository = draftRepository(),
             sessionListPreferencesRepository = sessionListPreferencesRepository(),
@@ -268,7 +320,12 @@ class ChatViewModelRoundtableSteeringTest {
         )
     )
 
-    private fun piApi(sentCommands: MutableList<PiCommandRequest>, sentBodies: MutableList<String>? = null): PiApi {
+    private fun piApi(
+        sentCommands: MutableList<PiCommandRequest>,
+        sentBodies: MutableList<String>? = null,
+        commandStatus: (PiCommandRequest) -> HttpStatusCode = { HttpStatusCode.OK },
+        commandBody: (PiCommandRequest) -> String = { """{"accepted":true}""" },
+    ): PiApi {
         val engine = MockEngine { request ->
             when {
                 request.url.encodedPath == "/roundtables" && request.method == HttpMethod.Get -> respondJson(roundtablesJson())
@@ -276,8 +333,9 @@ class ChatViewModelRoundtableSteeringTest {
                 request.url.encodedPath == "/roundtables/$ROUND_ID/command" && request.method == HttpMethod.Post -> {
                     val body = request.body.bodyAsText()
                     sentBodies?.add(body)
-                    sentCommands += json.decodeFromString(PiCommandRequest.serializer(), body)
-                    respondJson("""{"accepted":true}""")
+                    val command = json.decodeFromString(PiCommandRequest.serializer(), body)
+                    sentCommands += command
+                    respondJson(commandBody(command), commandStatus(command))
                 }
                 else -> respond("{}", HttpStatusCode.NotFound)
             }
@@ -368,9 +426,12 @@ class ChatViewModelRoundtableSteeringTest {
         return SettingsRepository(dataStore, context)
     }
 
-    private fun MockRequestHandleScope.respondJson(content: String) = respond(
+    private fun MockRequestHandleScope.respondJson(
+        content: String,
+        status: HttpStatusCode = HttpStatusCode.OK,
+    ) = respond(
         content = ByteReadChannel(content),
-        status = HttpStatusCode.OK,
+        status = status,
         headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
     )
 

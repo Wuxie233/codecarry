@@ -219,6 +219,27 @@ class PiTransportTest {
         assertEquals(HttpMethod.Get, ownRequests[4].method)
     }
 
+    @Test
+    fun `sendMessage surfaces Pi command rejection effect`() = runTest {
+        val captured = mutableListOf<HttpRequestData>()
+        val transport = newTransport(captured) { request ->
+            captured += request
+            when (request.url.encodedPath) {
+                "/roundtables/round-fixture-001/command" -> respondJson(
+                    content = """{"accepted":false,"effect":"rejected because injected content would exceed maxTranscriptBytes"}""",
+                    status = HttpStatusCode.UnprocessableEntity,
+                )
+                else -> respond(status = HttpStatusCode.NotFound, content = ByteReadChannel(""))
+            }
+        }
+
+        val error = runCatching {
+            transport.sendMessage("round-fixture-001", listOf(TransportMessagePart(type = "text", text = "hello")))
+        }.exceptionOrNull()
+
+        assertTrue(error?.message.orEmpty().contains("rejected because injected content would exceed maxTranscriptBytes"))
+    }
+
     private fun parseFixtureOutcome(name: String): FixtureOutcome = assembleWireEvents(fixtureEvents(name))
 
     private fun fixtureEvents(name: String): List<RoundtableSseEvent> = json.decodeFromString(
@@ -310,9 +331,12 @@ class PiTransportTest {
         "id: ${event.eventId}\ndata: $data\n\n"
     }
 
-    private fun MockRequestHandleScope.respondJson(content: String): HttpResponseData = respond(
+    private fun MockRequestHandleScope.respondJson(
+        content: String,
+        status: HttpStatusCode = HttpStatusCode.OK,
+    ): HttpResponseData = respond(
         content = ByteReadChannel(content),
-        status = HttpStatusCode.OK,
+        status = status,
         headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
     )
 
