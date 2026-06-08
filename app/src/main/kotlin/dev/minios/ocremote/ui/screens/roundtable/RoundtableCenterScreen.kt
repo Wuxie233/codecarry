@@ -200,13 +200,22 @@ fun RoundtableCenterScreen(
                                 roundtable = roundtable,
                                 isAmoled = isAmoled,
                                 onOpen = {
-                                    viewModel.castingId(roundtable.id)?.let(onOpenCasting)
-                                        ?: viewModel.liveChatTarget(roundtable.id)?.let(onOpenRoundtable)
+                                    if (roundtable.status == Roundtable.Status.Completed) {
+                                        onOpenSummary(roundtable.id)
+                                    } else {
+                                        viewModel.castingId(roundtable.id)?.let(onOpenCasting)
+                                            ?: viewModel.liveChatTarget(roundtable.id)?.let(onOpenRoundtable)
+                                    }
                                 },
                                 onResume = {
-                                    viewModel.castingId(roundtable.id)?.let(onOpenCasting) ?: run {
-                                        viewModel.resumeRoundtable(roundtable.id)
-                                        viewModel.liveChatTarget(roundtable.id)?.let(onOpenRoundtable)
+                                    when {
+                                        roundtable.kind == Roundtable.Kind.Casting -> viewModel.castingId(roundtable.id)?.let(onOpenCasting)
+                                        roundtable.status == Roundtable.Status.AwaitingCommand -> {
+                                            viewModel.resumeRoundtable(roundtable.id)
+                                            viewModel.liveChatTarget(roundtable.id)?.let(onOpenRoundtable)
+                                        }
+                                        roundtable.status == Roundtable.Status.Completed -> onOpenSummary(roundtable.id)
+                                        else -> viewModel.liveChatTarget(roundtable.id)?.let(onOpenRoundtable)
                                     }
                                 },
                                 onOpenSummary = { onOpenSummary(roundtable.id) },
@@ -568,6 +577,7 @@ private fun RoundtableCard(
 ) {
     var showMenu by remember { mutableStateOf(false) }
     val isCasting = roundtable.kind == Roundtable.Kind.Casting
+    val primaryAction = roundtable.primaryAction()
     val containerColor = if (isAmoled) Color.Black else MaterialTheme.colorScheme.surfaceContainerHighest
     val outline = MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isAmoled) 0.72f else 0.35f)
 
@@ -645,14 +655,27 @@ private fun RoundtableCard(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Button(onClick = onResume, enabled = roundtable.status != Roundtable.Status.Archived) {
+                Button(onClick = onResume, enabled = primaryAction.enabled) {
                     Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
-                    Text(stringResource(if (isCasting) R.string.roundtable_continue_casting else R.string.roundtable_resume))
+                    Text(stringResource(primaryAction.labelRes))
                 }
             }
         }
     }
+}
+
+private data class RoundtablePrimaryAction(
+    @StringRes val labelRes: Int,
+    val enabled: Boolean = true,
+)
+
+private fun Roundtable.primaryAction(): RoundtablePrimaryAction = when {
+    kind == Roundtable.Kind.Casting -> RoundtablePrimaryAction(R.string.roundtable_continue_casting)
+    status == Roundtable.Status.AwaitingCommand -> RoundtablePrimaryAction(R.string.roundtable_resume)
+    status == Roundtable.Status.Completed -> RoundtablePrimaryAction(R.string.roundtable_view_summary)
+    status == Roundtable.Status.Archived -> RoundtablePrimaryAction(R.string.roundtable_view_summary, enabled = false)
+    else -> RoundtablePrimaryAction(R.string.open)
 }
 
 @Composable

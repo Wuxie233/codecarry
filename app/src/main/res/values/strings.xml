@@ -642,6 +642,7 @@ Tokens: ~%4$d -&gt; ~%5$d</string>
     <string name="chat_pi_supplement_empty">Type a supplement for the table before sending.</string>
     <string name="chat_pi_supplement_attachments_unsupported">Supplement notes do not support attachments yet.</string>
     <string name="chat_pi_supplement_pending">A roundtable command is already in progress. Try again in a moment.</string>
+    <string name="chat_pi_transcript_full">This roundtable is full. Start a new roundtable or open the summary instead.</string>
     <string name="chat_pi_skip_waiting_title">%1$s is waiting</string>
     <string name="chat_pi_skip_action">Skip this turn</string>
     <string name="chat_pi_steering_title">Roundtable steering</string>
@@ -743,6 +744,7 @@ Tokens: ~%4$d -&gt; ~%5$d</string>
     <string name="roundtable_default_topic">Roundtable topic</string>
     <string name="roundtable_copy_suffix">%1$s (copy)</string>
     <string name="roundtable_error_action_failed">Roundtable action failed</string>
+    <string name="roundtable_error_resume_unavailable">This roundtable is not waiting for Continue. Open it from chat, or view the summary if it has ended.</string>
     <string name="roundtable_manual_setup">Manual setup</string>
     <string name="roundtable_casting_title">New Roundtable</string>
     <string name="roundtable_casting_opener_title">Cast the table in conversation</string>

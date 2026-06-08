@@ -3,6 +3,8 @@ package dev.minios.ocremote.ui.screens.chat
 import android.content.ContextWrapper
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.lifecycle.SavedStateHandle
+import androidx.test.core.app.ApplicationProvider
+import dev.minios.ocremote.R
 import androidx.lifecycle.viewModelScope
 import dev.minios.ocremote.data.api.OpenCodeApi
 import dev.minios.ocremote.data.api.PiApi
@@ -66,10 +68,15 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 import java.io.File
 import java.util.Collections
 
 @OptIn(ExperimentalCoroutinesApi::class)
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
 class ChatViewModelRoundtableSteeringTest {
     @get:Rule
     val tmpFolder = TemporaryFolder()
@@ -242,6 +249,24 @@ class ChatViewModelRoundtableSteeringTest {
         awaitNoError(vm)
     }
 
+    @Test
+    fun `roundtable transcript full rejection shows product guidance`() = runTest(dispatcher) {
+        val sentCommands = Collections.synchronizedList(mutableListOf<PiCommandRequest>())
+        val vm = newViewModel(
+            sentCommands = sentCommands,
+            commandStatus = { HttpStatusCode.UnprocessableEntity },
+            commandBody = { """{"accepted":false,"effect":"rejected because injected content would exceed maxTranscriptBytes"}""" },
+        )
+        collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
+        advanceUntilIdle()
+
+        val rejected = sendAndAwaitResult { onDone -> vm.injectAsParticipant("too much transcript", onDone) }
+
+        assertEquals(false, rejected)
+        awaitError(vm)
+        assertEquals(appContext().getString(R.string.chat_pi_transcript_full), vm.uiState.value.error)
+    }
+
     private suspend fun sendAndAwait(send: ((Boolean) -> Unit) -> Unit) {
         assertEquals(true, sendAndAwaitResult(send))
     }
@@ -297,6 +322,7 @@ class ChatViewModelRoundtableSteeringTest {
         commandBody: (PiCommandRequest) -> String = { """{"accepted":true}""" },
     ): ChatViewModel {
         return ChatViewModel(
+            appContext = appContext(),
             savedStateHandle = savedStateHandle(),
             eventReducer = eventReducer,
             api = openCodeApi(),
@@ -425,6 +451,8 @@ class ChatViewModelRoundtableSteeringTest {
         val context = object : ContextWrapper(null) {}
         return SettingsRepository(dataStore, context)
     }
+
+    private fun appContext(): android.content.Context = ApplicationProvider.getApplicationContext()
 
     private fun MockRequestHandleScope.respondJson(
         content: String,

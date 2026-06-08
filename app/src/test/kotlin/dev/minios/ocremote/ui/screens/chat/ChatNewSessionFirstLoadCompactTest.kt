@@ -287,6 +287,7 @@ class ChatNewSessionFirstLoadCompactTest {
         settingsRepository: SettingsRepository,
     ): ChatViewModel {
         return ChatViewModel(
+            appContext = object : ContextWrapper(null) {},
             savedStateHandle = savedStateHandle,
             eventReducer = eventReducer,
             api = api,

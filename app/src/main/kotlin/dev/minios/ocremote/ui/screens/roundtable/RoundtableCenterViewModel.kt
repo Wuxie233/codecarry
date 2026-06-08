@@ -469,6 +469,11 @@ class RoundtableCenterViewModel @Inject constructor(
     }
 
     fun resumeRoundtable(roundtableId: String) {
+        val roundtable = _roundtables.value.firstOrNull { it.id == roundtableId }
+        if (roundtable?.status != Roundtable.Status.AwaitingCommand) {
+            _error.value = context.getString(R.string.roundtable_error_resume_unavailable)
+            return
+        }
         mutate { conn ->
             api.sendCommand(
                 conn = conn,
@@ -721,7 +726,8 @@ private fun PiCastingDto.toDomain(): Roundtable = Roundtable(
 
 private fun String?.toDomainStatus(): Roundtable.Status = when (this?.lowercase()) {
     "running" -> Roundtable.Status.Running
-    "paused", "awaiting", "awaiting_command" -> Roundtable.Status.Paused
+    "paused", "awaiting" -> Roundtable.Status.Paused
+    "awaiting_command" -> Roundtable.Status.AwaitingCommand
     "awaiting_skip" -> Roundtable.Status.AwaitingSkip
     "ended", "completed", "cancelled" -> Roundtable.Status.Completed
     "archived" -> Roundtable.Status.Archived
@@ -730,10 +736,22 @@ private fun String?.toDomainStatus(): Roundtable.Status = when (this?.lowercase(
 }
 
 private fun Roundtable.matches(filter: RoundtableFilter): Boolean = when (filter) {
-    RoundtableFilter.Active -> status != Roundtable.Status.Archived
-    RoundtableFilter.Running -> status == Roundtable.Status.Running || status == Roundtable.Status.Casting
+    RoundtableFilter.Active -> status.isActiveRoundtableStatus()
+    RoundtableFilter.Running -> status == Roundtable.Status.Running || status == Roundtable.Status.AwaitingCommand || status == Roundtable.Status.AwaitingSkip || status == Roundtable.Status.Casting
     RoundtableFilter.Archived -> status == Roundtable.Status.Archived
     RoundtableFilter.All -> true
+}
+
+internal fun Roundtable.Status.isActiveRoundtableStatus(): Boolean = when (this) {
+    Roundtable.Status.Running,
+    Roundtable.Status.AwaitingCommand,
+    Roundtable.Status.AwaitingSkip,
+    Roundtable.Status.Paused,
+    Roundtable.Status.Casting -> true
+    Roundtable.Status.Unknown,
+    Roundtable.Status.Completed,
+    Roundtable.Status.Archived,
+    Roundtable.Status.Error -> false
 }
 
 private fun RoundtableSort.comparator(): Comparator<Roundtable> = when (this) {

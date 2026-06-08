@@ -1,5 +1,6 @@
 package dev.minios.ocremote.ui.screens.chat
 
+import android.content.Context
 import android.util.Log
 import dev.minios.ocremote.BuildConfig
 import dev.minios.ocremote.R
@@ -7,6 +8,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import dev.minios.ocremote.data.api.AgentInfo
 import dev.minios.ocremote.data.api.CommandInfo
 import dev.minios.ocremote.data.api.ModelSelection
@@ -168,6 +170,7 @@ data class ChatMessage(
 
 @HiltViewModel
 class ChatViewModel @Inject constructor(
+    @ApplicationContext private val appContext: Context,
     savedStateHandle: SavedStateHandle,
     private val eventReducer: EventReducer,
     private val api: OpenCodeApi,
@@ -1009,7 +1012,7 @@ class ChatViewModel @Inject constructor(
                 if (BuildConfig.DEBUG) Log.d(TAG, "Sent prompt to session $sessionId (${parts.size} parts)")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to send message", e)
-                _error.value = e.message ?: "Failed to send message"
+                _error.value = roundtableErrorMessage(e, "Failed to send message")
             } finally {
                 _isSending.value = false
             }
@@ -1034,7 +1037,7 @@ class ChatViewModel @Inject constructor(
                 }
             } catch (error: Exception) {
                 Log.e(TAG, "Failed to send roundtable command $command", error)
-                _error.value = error.message ?: "Failed to send roundtable command"
+                _error.value = roundtableErrorMessage(error, "Failed to send roundtable command")
                 false
             }
             onResult(ok)
@@ -1092,6 +1095,15 @@ class ChatViewModel @Inject constructor(
         return uiState.value.roundtableEvents
             .filterIsInstance<RoundStart>()
             .mapIndexed { index, _ -> index + 1 }
+    }
+
+    private fun roundtableErrorMessage(error: Exception, fallback: String): String {
+        val message = error.message
+        return if (isPiRoundtable && message?.isRoundtableTranscriptFullError() == true) {
+            appContext.getString(R.string.chat_pi_transcript_full)
+        } else {
+            message ?: fallback
+        }
     }
 
     /**
@@ -1651,6 +1663,12 @@ private fun String?.toRoundtableStatus(): Roundtable.Status = when (this?.lowerc
     "archived" -> Roundtable.Status.Archived
     "error" -> Roundtable.Status.Error
     else -> Roundtable.Status.Unknown
+}
+
+private fun String.isRoundtableTranscriptFullError(): Boolean {
+    val normalized = lowercase()
+    return normalized.contains("maxtranscriptbytes") ||
+        normalized.contains("injected content would exceed")
 }
 
 private fun resolveActiveRoster(

@@ -328,7 +328,76 @@ class RoundtableCenterViewModelTest {
         assertEquals("Bearer repository-token", listRequest.headers[HttpHeaders.Authorization])
     }
 
-    private fun piApi(requests: MutableList<HttpRequestData>, service: FakeRoundtableService): PiApi {
+    @Test
+    fun `active filter excludes ended archived error and unknown roundtables`() = runTest(dispatcher) {
+        val requests = Collections.synchronizedList(mutableListOf<HttpRequestData>())
+        val service = FakeRoundtableService().apply {
+            put("round-running", "running")
+            put("round-awaiting", "awaiting_command")
+            put("round-skip", "awaiting_skip")
+            put("round-paused", "paused")
+            put("round-ended", "completed")
+            put("round-archived", "archived")
+            put("round-error", "error")
+            put("round-unknown", "unknown_state")
+        }
+        val serverFixture = serverFixture(backgroundScope)
+        val vm = RoundtableCenterViewModel(
+            savedStateHandle = savedStateHandle(serverFixture.serverId),
+            context = appContext,
+            api = piApi(requests, service),
+            settingsRepository = settingsRepository(backgroundScope),
+            serverRepository = serverFixture.repository,
+        ).also { viewModels.add(it) }
+        collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
+        advanceUntilIdle()
+
+        val loaded = vm.uiState.first { state -> state.items.size == 4 }
+        val activeIds = loaded.items.map { it.id }
+
+        assertEquals(setOf("round-running", "round-awaiting", "round-skip", "round-paused"), activeIds.toSet())
+        assertEquals(4, activeIds.size)
+        assertEquals(dev.minios.ocremote.domain.model.Roundtable.Status.AwaitingCommand, loaded.items.single { it.id == "round-awaiting" }.status)
+    }
+
+    @Test
+    fun `resume only sends continue for awaiting command roundtables`() = runTest(dispatcher) {
+        val requests = Collections.synchronizedList(mutableListOf<HttpRequestData>())
+        val commandBodies = Collections.synchronizedList(mutableListOf<String>())
+        val service = FakeRoundtableService().apply {
+            put("round-awaiting", "awaiting_command")
+            put("round-ended", "completed")
+        }
+        val serverFixture = serverFixture(backgroundScope)
+        val vm = RoundtableCenterViewModel(
+            savedStateHandle = savedStateHandle(serverFixture.serverId),
+            context = appContext,
+            api = piApi(requests, service, commandBodies),
+            settingsRepository = settingsRepository(backgroundScope),
+            serverRepository = serverFixture.repository,
+        ).also { viewModels.add(it) }
+        collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
+        advanceUntilIdle()
+        vm.uiState.first { state -> state.items.any { it.id == "round-awaiting" } }
+
+        vm.resumeRoundtable("round-ended")
+        advanceUntilIdle()
+        assertEquals(appContext.getString(dev.minios.ocremote.R.string.roundtable_error_resume_unavailable), vm.uiState.value.error)
+        assertEquals(0, requests.count { it.url.encodedPath.endsWith("/command") })
+
+        vm.resumeRoundtable("round-awaiting")
+        advanceUntilIdle()
+        vm.uiState.first { state -> !state.isMutating && commandBodies.isNotEmpty() }
+
+        assertTrue(requests.any { it.method == HttpMethod.Post && it.url.encodedPath == "/roundtables/round-awaiting/command" })
+        assertTrue(commandBodies.single().contains("\"command\":\"可\""))
+    }
+
+    private fun piApi(
+        requests: MutableList<HttpRequestData>,
+        service: FakeRoundtableService,
+        commandBodies: MutableList<String>? = null,
+    ): PiApi {
         val engine = MockEngine { request ->
             requests += request
             when {
@@ -339,6 +408,10 @@ class RoundtableCenterViewModelTest {
                 request.url.encodedPath == "/roundtables/round-summary-1/transcript" && request.method == HttpMethod.Get -> respondJson(service.transcriptJson())
                 request.url.encodedPath == "/personas" && request.method == HttpMethod.Get -> respondJson(service.personas())
                 request.url.encodedPath == "/catalog" && request.method == HttpMethod.Get -> respondJson(service.catalog())
+                request.url.encodedPath.startsWith("/roundtables/") && request.url.encodedPath.endsWith("/command") && request.method == HttpMethod.Post -> {
+                    commandBodies?.add(request.body.bodyAsText())
+                    respondJson("""{"accepted":true}""")
+                }
                 request.url.encodedPath.endsWith("/archive") && request.method == HttpMethod.Post -> respondJson(service.archive(request.url.encodedPath.substringAfter("/roundtables/").substringBefore("/archive")))
                 request.url.encodedPath.startsWith("/roundtables/") && request.method == HttpMethod.Delete -> respondJson(service.delete(request.url.encodedPath.substringAfterLast('/')))
                 else -> respond("{}", HttpStatusCode.NotFound)
@@ -411,6 +484,10 @@ class RoundtableCenterViewModelTest {
         var catalogMode: CatalogMode = CatalogMode.Valid
 
         fun list(): String = items.entries.joinToString(prefix = "{\"items\":[", postfix = "]}") { (id, status) -> item(id, status) }
+
+        fun put(id: String, status: String) {
+            items[id] = status
+        }
 
         fun create(raw: String = "{}"): String {
             next += 1
