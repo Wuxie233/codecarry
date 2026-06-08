@@ -136,6 +136,19 @@ class ChatViewModelRoundtableSteeringTest {
     }
 
     @Test
+    fun `awaiting skip roundtable continue does not send command`() = runTest(dispatcher) {
+        val sentCommands = Collections.synchronizedList(mutableListOf<PiCommandRequest>())
+        val vm = newViewModel(sentCommands, roundtableStatus = "awaiting")
+        collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
+        advanceUntilIdle()
+
+        val accepted = sendAndAwaitResult { onDone -> vm.continueRoundtable(onDone) }
+
+        assertEquals(false, accepted)
+        assertTrue(sentCommands.isEmpty())
+    }
+
+    @Test
     fun `supplement guidance reuses inject command and trims content`() = runTest(dispatcher) {
         val sentCommands = Collections.synchronizedList(mutableListOf<PiCommandRequest>())
         val vm = newViewModel(sentCommands)
@@ -320,13 +333,14 @@ class ChatViewModelRoundtableSteeringTest {
         sentBodies: MutableList<String>? = null,
         commandStatus: (PiCommandRequest) -> HttpStatusCode = { HttpStatusCode.OK },
         commandBody: (PiCommandRequest) -> String = { """{"accepted":true}""" },
+        roundtableStatus: String = "awaiting_command",
     ): ChatViewModel {
         return ChatViewModel(
             appContext = appContext(),
             savedStateHandle = savedStateHandle(),
             eventReducer = eventReducer,
             api = openCodeApi(),
-            piApi = piApi(sentCommands, sentBodies, commandStatus, commandBody),
+            piApi = piApi(sentCommands, sentBodies, commandStatus, commandBody, roundtableStatus),
             json = json,
             draftRepository = draftRepository(),
             sessionListPreferencesRepository = sessionListPreferencesRepository(),
@@ -351,10 +365,11 @@ class ChatViewModelRoundtableSteeringTest {
         sentBodies: MutableList<String>? = null,
         commandStatus: (PiCommandRequest) -> HttpStatusCode = { HttpStatusCode.OK },
         commandBody: (PiCommandRequest) -> String = { """{"accepted":true}""" },
+        roundtableStatus: String = "awaiting_command",
     ): PiApi {
         val engine = MockEngine { request ->
             when {
-                request.url.encodedPath == "/roundtables" && request.method == HttpMethod.Get -> respondJson(roundtablesJson())
+                request.url.encodedPath == "/roundtables" && request.method == HttpMethod.Get -> respondJson(roundtablesJson(roundtableStatus))
                 request.url.encodedPath == "/personas" && request.method == HttpMethod.Get -> respondJson(personasJson())
                 request.url.encodedPath == "/roundtables/$ROUND_ID/command" && request.method == HttpMethod.Post -> {
                     val body = request.body.bodyAsText()
@@ -376,11 +391,11 @@ class ChatViewModelRoundtableSteeringTest {
         return OpenCodeApi(client, json)
     }
 
-    private fun roundtablesJson(): String = """
+    private fun roundtablesJson(status: String): String = """
         [{
           "id":"$ROUND_ID",
           "topic":"Steering",
-          "status":"awaiting_command",
+          "status":"$status",
           "roster":[{"id":"ada","name":"Ada","role":"analyst","colorSeed":"ada"}]
         }]
     """.trimIndent()

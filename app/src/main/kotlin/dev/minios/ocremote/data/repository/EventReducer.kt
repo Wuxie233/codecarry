@@ -214,6 +214,8 @@ class EventReducer @Inject constructor() {
             actionTag = event.actionTag,
             startedSequence = event.envelope.sequence,
         )
+        ensurePiMessage(event.envelope.roundId, turnId, event.envelope.sequence, event.envelope.author)
+        ensurePiTextPart(event.envelope.roundId, turnId)
     }
 
     private fun handlePiMessageDelta(event: PiTransportEvent.MessageDelta) {

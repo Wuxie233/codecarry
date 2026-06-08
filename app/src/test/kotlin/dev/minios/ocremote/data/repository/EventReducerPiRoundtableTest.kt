@@ -5,6 +5,7 @@ import dev.minios.ocremote.data.transport.PiRoundtableEventProcessor
 import dev.minios.ocremote.domain.model.Message
 import dev.minios.ocremote.domain.model.Part
 import dev.minios.ocremote.domain.model.Roundtable
+import dev.minios.ocremote.domain.transport.PiTransportEvent
 import dev.minios.ocremote.domain.transport.TransportEvent
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.decodeFromString
@@ -61,6 +62,23 @@ class EventReducerPiRoundtableTest {
         assertEquals("42", ada.colorSeed)
         assertEquals("local-gateway", ada.providerId)
         assertEquals("pi-agent-alpha", ada.modelId)
+    }
+
+    @Test
+    fun `agent turn start creates live chat placeholder before first delta`() {
+        val reducer = EventReducer()
+        val events = PiRoundtableEventProcessor(json).processSnapshot(fixtureEvents("happy-one-round.json"))
+        val firstTurnIndex = events.indexOfFirst { event -> event is PiTransportEvent.AgentTurnStart }
+
+        events.take(firstTurnIndex + 1).forEach { event -> reducer.processEvent(TransportEvent.Pi(event), serverId = "server-pi") }
+
+        val message = reducer.roundtableMessages.value["round-fixture-001"].orEmpty().single() as Message.Assistant
+        val textPart = reducer.roundtableParts.value[message.id].orEmpty().single() as Part.Text
+
+        assertEquals("turn-ada-001", message.id)
+        assertEquals(null, message.finish)
+        assertEquals("Ada", message.senderName)
+        assertEquals("", textPart.text)
     }
 
     private fun fixtureEvents(name: String): List<RoundtableSseEvent> = json.decodeFromString(

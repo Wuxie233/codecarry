@@ -336,6 +336,7 @@ class RoundtableCenterViewModelTest {
             put("round-awaiting", "awaiting_command")
             put("round-skip", "awaiting_skip")
             put("round-paused", "paused")
+            put("round-awaiting-registry", "awaiting")
             put("round-ended", "completed")
             put("round-archived", "archived")
             put("round-error", "error")
@@ -352,12 +353,14 @@ class RoundtableCenterViewModelTest {
         collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
         advanceUntilIdle()
 
-        val loaded = vm.uiState.first { state -> state.items.size == 4 }
+        val loaded = vm.uiState.first { state -> state.items.size == 5 }
         val activeIds = loaded.items.map { it.id }
 
-        assertEquals(setOf("round-running", "round-awaiting", "round-skip", "round-paused"), activeIds.toSet())
-        assertEquals(4, activeIds.size)
+        assertEquals(setOf("round-running", "round-awaiting", "round-skip", "round-paused", "round-awaiting-registry"), activeIds.toSet())
+        assertEquals(5, activeIds.size)
         assertEquals(dev.minios.ocremote.domain.model.Roundtable.Status.AwaitingCommand, loaded.items.single { it.id == "round-awaiting" }.status)
+        assertEquals(dev.minios.ocremote.domain.model.Roundtable.Status.AwaitingCommand, loaded.items.single { it.id == "round-paused" }.status)
+        assertEquals(dev.minios.ocremote.domain.model.Roundtable.Status.AwaitingSkip, loaded.items.single { it.id == "round-awaiting-registry" }.status)
     }
 
     @Test
@@ -366,6 +369,8 @@ class RoundtableCenterViewModelTest {
         val commandBodies = Collections.synchronizedList(mutableListOf<String>())
         val service = FakeRoundtableService().apply {
             put("round-awaiting", "awaiting_command")
+            put("round-paused", "paused")
+            put("round-skip", "awaiting")
             put("round-ended", "completed")
         }
         val serverFixture = serverFixture(backgroundScope)
@@ -385,11 +390,23 @@ class RoundtableCenterViewModelTest {
         assertEquals(appContext.getString(dev.minios.ocremote.R.string.roundtable_error_resume_unavailable), vm.uiState.value.error)
         assertEquals(0, requests.count { it.url.encodedPath.endsWith("/command") })
 
+        vm.resumeRoundtable("round-skip")
+        advanceUntilIdle()
+        assertEquals(0, requests.count { it.url.encodedPath.endsWith("/command") })
+
         vm.resumeRoundtable("round-awaiting")
         advanceUntilIdle()
         vm.uiState.first { state -> !state.isMutating && commandBodies.isNotEmpty() }
 
         assertTrue(requests.any { it.method == HttpMethod.Post && it.url.encodedPath == "/roundtables/round-awaiting/command" })
+        assertTrue(commandBodies.single().contains("\"command\":\"可\""))
+
+        commandBodies.clear()
+        vm.resumeRoundtable("round-paused")
+        advanceUntilIdle()
+        vm.uiState.first { state -> !state.isMutating && commandBodies.isNotEmpty() }
+
+        assertTrue(requests.any { it.method == HttpMethod.Post && it.url.encodedPath == "/roundtables/round-paused/command" })
         assertTrue(commandBodies.single().contains("\"command\":\"可\""))
     }
 

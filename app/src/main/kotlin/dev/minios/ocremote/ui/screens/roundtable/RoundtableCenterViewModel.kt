@@ -726,9 +726,8 @@ private fun PiCastingDto.toDomain(): Roundtable = Roundtable(
 
 private fun String?.toDomainStatus(): Roundtable.Status = when (this?.lowercase()) {
     "running" -> Roundtable.Status.Running
-    "paused", "awaiting" -> Roundtable.Status.Paused
-    "awaiting_command" -> Roundtable.Status.AwaitingCommand
-    "awaiting_skip" -> Roundtable.Status.AwaitingSkip
+    "paused", "awaiting_command" -> Roundtable.Status.AwaitingCommand
+    "awaiting", "awaiting_skip" -> Roundtable.Status.AwaitingSkip
     "ended", "completed", "cancelled" -> Roundtable.Status.Completed
     "archived" -> Roundtable.Status.Archived
     "error" -> Roundtable.Status.Error

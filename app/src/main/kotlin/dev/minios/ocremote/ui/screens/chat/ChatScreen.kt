@@ -258,6 +258,44 @@ internal data class PiInShortContent(
     val markdown: String,
 )
 
+private data class RoundtableComposerSuggestion(
+    val id: String,
+    val title: String,
+    val subtitle: String,
+    val insertText: String,
+)
+
+private fun buildRoundtableComposerSuggestions(
+    query: String,
+    roster: List<Roundtable.RoleSummary>,
+): List<RoundtableComposerSuggestion> {
+    val normalizedQuery = query.trim().lowercase()
+    val roleSuggestions = roster.map { role ->
+        val roleLabel = listOf(role.name, role.role)
+            .filter { it.isNotBlank() }
+            .joinToString(" · ")
+        RoundtableComposerSuggestion(
+            id = "role:${role.id}",
+            title = "@${role.name}",
+            subtitle = role.role.ifBlank { roleLabel },
+            insertText = "@${role.name} ",
+        )
+    }
+    val actionSuggestions = listOf(
+        RoundtableComposerSuggestion("action:continue", "Continue", "Ask the moderator to advance", "Please continue the roundtable discussion."),
+        RoundtableComposerSuggestion("action:deepen", "Deepen", "Ask for more detail", "Please go deeper on the current disagreement."),
+        RoundtableComposerSuggestion("action:stop", "Stop", "Ask the moderator to close", "Please stop the roundtable and summarize."),
+        RoundtableComposerSuggestion("action:summarize", "Summarize", "Ask for consensus and disagreements", "Please summarize the current consensus, disagreements, and next step."),
+    )
+    return (roleSuggestions + actionSuggestions)
+        .filter { suggestion ->
+            normalizedQuery.isEmpty() ||
+                suggestion.title.lowercase().contains(normalizedQuery) ||
+                suggestion.subtitle.lowercase().contains(normalizedQuery)
+        }
+        .take(10)
+}
+
 internal fun piSenderIdentity(message: Message.Assistant?): PiSenderIdentity? {
     if (message == null) return null
     val hasSenderFields = listOf(
@@ -1277,8 +1315,6 @@ fun ChatScreen(
     var pendingSendAction by remember { mutableStateOf<(() -> Unit)?>(null) }
     var inputMode by rememberSaveable { mutableStateOf(ChatInputMode.NORMAL.name) }
     val isShellMode = inputMode == ChatInputMode.SHELL.name
-    var showRoundtableSteeringSheet by remember { mutableStateOf(false) }
-    val roundtableSteeringSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var roundtablePendingCommand by remember { mutableStateOf<String?>(null) }
     var roundtableSupplementMode by remember { mutableStateOf(false) }
 
@@ -2099,11 +2135,10 @@ fun ChatScreen(
                         viewModel.clearFileSearch()
                         return@ChatInputBar
                     }
-                    // Detect @query before cursor for file mention
                     val cursorPos = normalizedValue.selection.start
                     val textBefore = normalizedValue.text.substring(0, cursorPos)
                     val atMatch = Regex("@(\\S*)$").find(textBefore)
-                    if (atMatch != null) {
+                    if (atMatch != null && !uiState.isPiRoundtable) {
                         val query = atMatch.groupValues[1]
                         viewModel.searchFilesForMention(query)
                     } else {
@@ -2366,8 +2401,8 @@ fun ChatScreen(
                     }
                 },
                 isPiRoundtable = uiState.isPiRoundtable,
+                activeRoster = uiState.activeRoster,
                 roundtableSupplementMode = roundtableSupplementMode,
-                onSteeringClick = { showRoundtableSteeringSheet = true },
                 contextWindow = uiState.contextWindow,
                 lastContextTokens = uiState.lastContextTokens
             )
@@ -3251,29 +3286,6 @@ fun ChatScreen(
                 }
             }
         )
-    }
-
-    if (showRoundtableSteeringSheet && uiState.isPiRoundtable) {
-        ModalBottomSheet(
-            onDismissRequest = { showRoundtableSteeringSheet = false },
-            sheetState = roundtableSteeringSheetState,
-            containerColor = if (isAmoled) Color.Black else MaterialTheme.colorScheme.surface,
-            tonalElevation = if (isAmoled) 0.dp else 2.dp,
-        ) {
-            RoundtableSteeringSheetContent(
-                uiState = uiState,
-                roundMarkers = roundMarkers,
-                pendingCommand = roundtablePendingCommand,
-                onSwitchCadence = { cadence -> submitRoundtableCommand("cadence") { onDone -> viewModel.switchRoundtableCadence(cadence, onDone) } },
-                onContinue = { submitRoundtableCommand("continue") { onDone -> viewModel.continueRoundtable(onDone) } },
-                onStop = { submitRoundtableCommand("stop") { onDone -> viewModel.stopRoundtable(onDone) } },
-                onDeepen = { submitRoundtableCommand("deepen") { onDone -> viewModel.deepenRoundtableSection(onDone) } },
-                onMention = { targetId, content -> submitRoundtableCommand("mention") { onDone -> viewModel.mentionRoundtableRole(targetId, content, onDone) } },
-                onInject = { content -> submitRoundtableCommand("inject") { onDone -> viewModel.injectAsParticipant(content, onDone) } },
-                onIntroduce = { personaId -> submitRoundtableCommand("introduce") { onDone -> viewModel.introducePersona(personaId, onDone) } },
-                onJumpToRound = ::jumpToRoundtableRound,
-            )
-        }
     }
 
     // Send confirmation dialog
@@ -4399,6 +4411,10 @@ private fun ChatMessageBubble(
 
     // Check if any tool is currently running (show spinner)
     val hasRunningTool = stepParts.any { it is Part.Tool && it.state is ToolState.Running }
+    val hasAssistantText = contentParts
+        .filterIsInstance<Part.Text>()
+        .any { part -> part.text.isNotBlank() && part.synthetic != true && part.ignored != true }
+    val isLivePiSender = senderIdentity != null && assistantMessage?.finish == null
     val requestMessageActions = {
         performHaptic(hapticView, hapticOn)
         onMessageActionsRequested(chatMessage)
@@ -4438,7 +4454,11 @@ private fun ChatMessageBubble(
                                 textColor = textColor,
                                 showSenderHeader = showSenderHeader,
                                 actionTag = assistantMsg?.actionTag,
-                                isLive = assistantMsg?.finish == null,
+                                liveLabel = if (hasAssistantText) {
+                                    stringResource(R.string.chat_pi_role_speaking)
+                                } else {
+                                    stringResource(R.string.chat_tool_thinking)
+                                },
                                 onCopyText = onCopyText?.let { copy ->
                                     { performHaptic(hapticView, hapticOn); copy() }
                                 },
@@ -4544,6 +4564,13 @@ private fun ChatMessageBubble(
                     // Render image thumbnails as a horizontal row
                     if (imageFiles.isNotEmpty()) {
                         ImageThumbnailRow(imageFiles = imageFiles)
+                    }
+
+                    if (!isUser && isLivePiSender && renderableOtherParts.isEmpty() && imageFiles.isEmpty() && assistantErrorText == null) {
+                        PiSenderThinkingPlaceholder(
+                            textColor = textColor,
+                            accentColor = senderAccentColor ?: textColor,
+                        )
                     }
 
                     // Render remaining parts
@@ -4735,7 +4762,7 @@ private fun PiSenderHeader(
     textColor: Color,
     showSenderHeader: Boolean,
     actionTag: String?,
-    isLive: Boolean,
+    liveLabel: String?,
     onCopyText: (() -> Unit)?,
 ) {
     if (!showSenderHeader) {
@@ -4835,14 +4862,32 @@ private fun PiSenderHeader(
                     textColor = textColor,
                 )
             }
-            if (isLive && !isModerator) {
+            liveLabel?.takeIf { !isModerator }?.let { label ->
                 PiLiveSenderChip(
-                    label = stringResource(R.string.chat_pi_role_speaking),
+                    label = label,
                     accentColor = accentColor,
                     textColor = textColor,
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun PiSenderThinkingPlaceholder(
+    textColor: Color,
+    accentColor: Color,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        PulsingDotsIndicator(dotSize = 5.dp, dotSpacing = 3.dp, color = accentColor)
+        Text(
+            text = stringResource(R.string.chat_tool_thinking),
+            style = MaterialTheme.typography.bodyMedium,
+            color = textColor.copy(alpha = 0.72f),
+        )
     }
 }
 
@@ -7460,7 +7505,7 @@ private fun ChatInputBar(
     onInputModeChange: (ChatInputMode) -> Unit = {},
     isPiRoundtable: Boolean = false,
     roundtableSupplementMode: Boolean = false,
-    onSteeringClick: () -> Unit = {},
+    activeRoster: List<Roundtable.RoleSummary> = emptyList(),
     contextWindow: Int = 0,
     lastContextTokens: Int = 0
 ) {
@@ -7504,6 +7549,16 @@ private fun ChatInputBar(
             slashQuery.isEmpty() || cmd.name.lowercase().contains(slashQuery)
         }
     } else emptyList()
+    val cursorPos = textFieldValue.selection.start.coerceIn(0, text.length)
+    val textBeforeCursor = text.substring(0, cursorPos)
+    val roundtableAtMatch = if (!isShellMode && isPiRoundtable) {
+        Regex("@(\\S*)$").find(textBeforeCursor)
+    } else {
+        null
+    }
+    val roundtableComposerSuggestions = roundtableAtMatch
+        ?.let { match -> buildRoundtableComposerSuggestions(match.groupValues[1], activeRoster) }
+        ?: emptyList()
 
     Column(
         modifier = Modifier
@@ -7595,6 +7650,63 @@ private fun ChatInputBar(
                                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                                 )
                             }
+                        }
+                    }
+                }
+            }
+        }
+
+        AnimatedVisibility(
+            visible = roundtableComposerSuggestions.isNotEmpty(),
+            enter = fadeIn(),
+            exit = fadeOut()
+        ) {
+            val configuration = LocalConfiguration.current
+            val maxHeight = (configuration.screenHeightDp * 0.4f).dp
+
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = maxHeight)
+                    .background(if (isAmoled) Color.Black else MaterialTheme.colorScheme.surfaceContainerHigh)
+                    .padding(vertical = 4.dp)
+            ) {
+                items(roundtableComposerSuggestions, key = { it.id }) { suggestion ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                val matchStart = roundtableAtMatch?.range?.first ?: cursorPos
+                                val replacement = suggestion.insertText
+                                val newText = text.substring(0, matchStart) + replacement + text.substring(cursorPos)
+                                val newCursor = matchStart + replacement.length
+                                onTextFieldValueChange(TextFieldValue(newText, TextRange(newCursor)))
+                            }
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Groups,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
+                        )
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                text = suggestion.title,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = suggestion.subtitle,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
                     }
                 }
@@ -8039,27 +8151,6 @@ private fun ChatInputBar(
                 verticalAlignment = Alignment.Bottom,
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                if (isPiRoundtable) {
-                    IconButton(
-                        onClick = onSteeringClick,
-                        modifier = Modifier.size(48.dp),
-                        colors = IconButtonDefaults.iconButtonColors(
-                            containerColor = if (isAmoled) {
-                                Color.Black
-                            } else {
-                                MaterialTheme.colorScheme.surfaceContainerHigh
-                            },
-                            contentColor = MaterialTheme.colorScheme.primary,
-                        )
-                    ) {
-                        Icon(
-                            Icons.Default.Tune,
-                            contentDescription = stringResource(R.string.chat_pi_steering_open),
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
-                }
-
                 // Text field — minimal style, no heavy outline
                 val mentionHighlightColor = MaterialTheme.colorScheme.primary
                 val mentionBgColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
@@ -8260,7 +8351,7 @@ private fun RoundtableContextControls(
     onSupplement: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val isAwaitingAdvance = status == Roundtable.Status.Paused || status == Roundtable.Status.AwaitingCommand
+    val isAwaitingAdvance = status == Roundtable.Status.AwaitingCommand
     if (awaitingSkip == null && !isAwaitingAdvance) return
 
     Column(
@@ -8497,271 +8588,6 @@ private fun RoundtableRosterAvatar(
             }
         }
     }
-}
-
-@Composable
-private fun RoundtableSteeringSheetContent(
-    uiState: ChatUiState,
-    roundMarkers: List<RoundMarker>,
-    pendingCommand: String?,
-    onSwitchCadence: (RoundtableCadenceMode) -> Unit,
-    onContinue: () -> Unit,
-    onStop: () -> Unit,
-    onDeepen: () -> Unit,
-    onMention: (String, String) -> Unit,
-    onInject: (String) -> Unit,
-    onIntroduce: (String) -> Unit,
-    onJumpToRound: (Int) -> Unit,
-) {
-    val isAmoled = isAmoledTheme()
-    val hapticView = LocalView.current
-    val hapticOn = LocalHapticFeedbackEnabled.current
-    var cadenceExpanded by remember { mutableStateOf(false) }
-    var mentionText by remember { mutableStateOf("") }
-    var mentionTarget by remember(uiState.activeRoster) { mutableStateOf(uiState.activeRoster.firstOrNull()?.id.orEmpty()) }
-    var mentionExpanded by remember { mutableStateOf(false) }
-    var injectText by remember { mutableStateOf("") }
-    var introduceExpanded by remember { mutableStateOf(false) }
-    val canCommand = pendingCommand == null
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .navigationBarsPadding()
-            .padding(horizontal = 18.dp)
-            .padding(bottom = 18.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(
-                    text = stringResource(R.string.chat_pi_steering_title),
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-                Text(
-                    text = stringResource(R.string.chat_pi_steering_subtitle),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Surface(
-                shape = RoundedCornerShape(999.dp),
-                color = roundtableStatusContainerColor(uiState.roundtable?.status, isAmoled),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isAmoled) 0.58f else 0.22f)),
-            ) {
-                Text(
-                    text = stringResource(roundtableChatStatusLabelRes(uiState.roundtable?.status ?: Roundtable.Status.Unknown)),
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-
-        SteeringSection(title = stringResource(R.string.chat_pi_round_controls)) {
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                item {
-                    AssistChip(
-                        onClick = { performHaptic(hapticView, hapticOn); onContinue() },
-                        enabled = canCommand,
-                        label = { Text(stringResource(R.string.chat_pi_continue)) },
-                        leadingIcon = { Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp)) },
-                    )
-                }
-                item {
-                    AssistChip(
-                        onClick = { performHaptic(hapticView, hapticOn); onStop() },
-                        enabled = canCommand,
-                        label = { Text(stringResource(R.string.chat_pi_stop)) },
-                        leadingIcon = { Icon(Icons.Default.Stop, contentDescription = null, modifier = Modifier.size(16.dp)) },
-                    )
-                }
-                item {
-                    AssistChip(
-                        onClick = { performHaptic(hapticView, hapticOn); onDeepen() },
-                        enabled = canCommand,
-                        label = { Text(stringResource(R.string.chat_pi_deepen)) },
-                        leadingIcon = { Icon(Icons.Default.SouthEast, contentDescription = null, modifier = Modifier.size(16.dp)) },
-                    )
-                }
-                item {
-                    Box {
-                        AssistChip(
-                            onClick = { introduceExpanded = true },
-                            enabled = uiState.personaLibrary.isNotEmpty() && canCommand,
-                            label = { Text(stringResource(R.string.chat_pi_introduce)) },
-                            leadingIcon = { Icon(Icons.Default.PersonAdd, contentDescription = null, modifier = Modifier.size(16.dp)) },
-                        )
-                        DropdownMenu(expanded = introduceExpanded, onDismissRequest = { introduceExpanded = false }) {
-                            uiState.personaLibrary.forEach { persona ->
-                                val personaId = persona.id ?: return@forEach
-                                DropdownMenuItem(
-                                    text = { Text(persona.name) },
-                                    onClick = {
-                                        introduceExpanded = false
-                                        onIntroduce(personaId)
-                                    },
-                                )
-                            }
-                        }
-                    }
-                }
-                item {
-                    Box {
-                        AssistChip(
-                            onClick = { cadenceExpanded = true },
-                            enabled = canCommand,
-                            label = { Text(uiState.runState.cadence.label) },
-                            leadingIcon = { Icon(Icons.Default.SyncAlt, contentDescription = null, modifier = Modifier.size(16.dp)) },
-                        )
-                        DropdownMenu(expanded = cadenceExpanded, onDismissRequest = { cadenceExpanded = false }) {
-                            RoundtableCadenceMode.entries.forEach { cadence ->
-                                DropdownMenuItem(
-                                    text = { Text(cadence.label) },
-                                    onClick = {
-                                        cadenceExpanded = false
-                                        onSwitchCadence(cadence)
-                                    },
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if (uiState.runState.roleStates.isNotEmpty()) {
-            SteeringSection(title = stringResource(R.string.chat_pi_role_states)) {
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(uiState.runState.roleStates, key = { it.personaId }) { role ->
-                        RoundtableRoleStatePill(role)
-                    }
-                }
-            }
-        }
-
-        SteeringSection(title = stringResource(R.string.chat_pi_mention_section)) {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Box {
-                    OutlinedTextField(
-                        value = uiState.activeRoster.firstOrNull { it.id == mentionTarget }?.name ?: mentionTarget.ifBlank { stringResource(R.string.chat_pi_choose_role) },
-                        onValueChange = {},
-                        readOnly = true,
-                        label = { Text(stringResource(R.string.chat_pi_mention_target)) },
-                        trailingIcon = { Icon(Icons.Default.KeyboardArrowDown, contentDescription = null) },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Box(modifier = Modifier.matchParentSize().clickable(enabled = canCommand) { mentionExpanded = true })
-                    DropdownMenu(expanded = mentionExpanded, onDismissRequest = { mentionExpanded = false }) {
-                        uiState.activeRoster.forEach { role ->
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.chat_pi_role_option, role.name, role.role)) },
-                                onClick = { mentionTarget = role.id; mentionExpanded = false },
-                            )
-                        }
-                    }
-                }
-                OutlinedTextField(
-                    value = mentionText,
-                    onValueChange = { mentionText = it },
-                    label = { Text(stringResource(R.string.chat_pi_mention_content)) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    trailingIcon = {
-                        IconButton(
-                            onClick = {
-                                val target = mentionTarget
-                                val content = mentionText.trim()
-                                if (target.isNotBlank() && content.isNotBlank()) {
-                                    mentionText = ""
-                                    onMention(target, content)
-                                }
-                            },
-                            enabled = mentionTarget.isNotBlank() && mentionText.isNotBlank() && canCommand,
-                        ) { Icon(Icons.AutoMirrored.Filled.Send, contentDescription = stringResource(R.string.chat_pi_send_mention)) }
-                    },
-                )
-            }
-        }
-
-        SteeringSection(title = stringResource(R.string.chat_pi_inject_section)) {
-            OutlinedTextField(
-                value = injectText,
-                onValueChange = { injectText = it },
-                label = { Text(stringResource(R.string.chat_pi_inject_label)) },
-                minLines = 1,
-                modifier = Modifier.fillMaxWidth(),
-                trailingIcon = {
-                    IconButton(
-                        onClick = {
-                            val content = injectText.trim()
-                            if (content.isNotBlank()) {
-                                injectText = ""
-                                onInject(content)
-                            }
-                        },
-                        enabled = injectText.isNotBlank() && canCommand,
-                    ) { Icon(Icons.AutoMirrored.Filled.Send, contentDescription = stringResource(R.string.chat_pi_send_inject)) }
-                },
-            )
-        }
-
-        if (roundMarkers.isNotEmpty()) {
-            SteeringSection(title = stringResource(R.string.chat_pi_round_jump)) {
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(roundMarkers, key = { it.roundNumber }) { marker ->
-                        FilterChip(
-                            selected = false,
-                            onClick = { onJumpToRound(marker.roundNumber) },
-                            label = { Text(stringResource(R.string.chat_pi_round_chip, marker.roundNumber)) },
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun SteeringSection(
-    title: String,
-    content: @Composable ColumnScope.() -> Unit,
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        content()
-    }
-}
-
-@Composable
-private fun RoundtableRoleStatePill(role: PiRoleRunState) {
-    val accent = piSenderAccentColor(PiSenderIdentity(role.personaId, role.name, null, role.role, role.colorSeed))
-    val label = roundtableRoleStateLabelText(role) ?: role.role
-    val isLive = role.liveState != PiRoleLiveState.Idle
-    AssistChip(
-        onClick = {},
-        label = { Text(stringResource(R.string.chat_pi_role_state, role.name, label)) },
-        leadingIcon = {
-            if (isLive) {
-                BreathingCircleIndicator(size = 9.dp, color = roundtableRoleStateColor(role))
-            } else {
-                Box(modifier = Modifier.size(9.dp).background(roundtableRoleStateColor(role), CircleShape))
-            }
-        },
-        colors = AssistChipDefaults.assistChipColors(
-            labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-            leadingIconContentColor = accent,
-        ),
-    )
 }
 
 @Composable

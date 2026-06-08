@@ -1049,6 +1049,10 @@ class ChatViewModel @Inject constructor(
     }
 
     fun continueRoundtable(onResult: (Boolean) -> Unit = {}) {
+        if (uiState.value.roundtable?.status != Roundtable.Status.AwaitingCommand) {
+            onResult(false)
+            return
+        }
         sendRoundtableCommand("可", onResult = onResult)
     }
 
@@ -1656,9 +1660,8 @@ private fun PiRoundtableRoom.toRoundtable(): Roundtable = Roundtable(
 
 private fun String?.toRoundtableStatus(): Roundtable.Status = when (this?.lowercase()) {
     "running" -> Roundtable.Status.Running
-    "awaiting_command" -> Roundtable.Status.AwaitingCommand
-    "awaiting_skip" -> Roundtable.Status.AwaitingSkip
-    "paused", "awaiting" -> Roundtable.Status.Paused
+    "paused", "awaiting_command" -> Roundtable.Status.AwaitingCommand
+    "awaiting", "awaiting_skip" -> Roundtable.Status.AwaitingSkip
     "ended", "completed", "cancelled" -> Roundtable.Status.Completed
     "archived" -> Roundtable.Status.Archived
     "error" -> Roundtable.Status.Error
