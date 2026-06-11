@@ -16,6 +16,7 @@ import dev.minios.ocremote.data.preferences.SessionListPreferencesRepository
 import dev.minios.ocremote.data.repository.DraftRepository
 import dev.minios.ocremote.data.repository.EventReducer
 import dev.minios.ocremote.data.repository.SettingsRepository
+import dev.minios.ocremote.domain.model.Message
 import dev.minios.ocremote.domain.model.ServerType
 import dev.minios.ocremote.domain.transport.PiTransportEvent
 import dev.minios.ocremote.domain.transport.TransportEvent
@@ -182,6 +183,35 @@ class ChatViewModelRoundtableSteeringTest {
         awaitUserMessage(vm)
         val userMessage = vm.uiState.value.messages.single { it.isUser }
         assertEquals("hello table", userMessage.parts.filterIsInstance<dev.minios.ocremote.domain.model.Part.Text>().single().text)
+    }
+
+    @Test
+    fun `roundtable composer continue sends control command instead of transcript inject`() = runTest(dispatcher) {
+        val eventReducer = EventReducer()
+        val sentCommands = Collections.synchronizedList(mutableListOf<PiCommandRequest>())
+        val vm = newViewModel(sentCommands, eventReducer)
+        collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
+        advanceUntilIdle()
+
+        val accepted = sendAndAwaitResult { onDone -> vm.sendMessage("继续", onResult = onDone) }
+
+        assertEquals(true, accepted)
+        assertEquals(listOf("可"), sentCommands.map { it.command })
+        assertTrue(eventReducer.roundtableMessages.value[ROUND_ID].orEmpty().none { it is Message.User })
+    }
+
+    @Test
+    fun `roundtable composer continue waits for awaiting command state`() = runTest(dispatcher) {
+        val sentCommands = Collections.synchronizedList(mutableListOf<PiCommandRequest>())
+        val vm = newViewModel(sentCommands, roundtableStatus = "running")
+        collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
+        advanceUntilIdle()
+
+        val accepted = sendAndAwaitResult { onDone -> vm.sendMessage("继续", onResult = onDone) }
+
+        assertEquals(false, accepted)
+        assertTrue(sentCommands.isEmpty())
+        assertEquals(appContext().getString(R.string.chat_pi_continue_unavailable), vm.uiState.value.error)
     }
 
     @Test

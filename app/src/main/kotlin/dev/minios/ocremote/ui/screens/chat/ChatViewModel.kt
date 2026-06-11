@@ -1019,6 +1019,22 @@ class ChatViewModel @Inject constructor(
                         part.text ?: part.url ?: part.path ?: part.filename ?: ""
                     }.trim()
                     val transport = piTransport ?: error("Pi roundtable transport is unavailable")
+                    if (parts.size == 1 && roundtableText.isRoundtableContinueInput()) {
+                        if (uiState.value.roundtable?.status == Roundtable.Status.AwaitingCommand) {
+                            val accepted = transport.sendCommand(
+                                roomId = sessionId,
+                                command = "可",
+                                arguments = "",
+                                directory = sessionDirectory,
+                            )
+                            if (accepted) _error.value = null
+                            onResult(accepted)
+                        } else {
+                            _error.value = appContext.getString(R.string.chat_pi_continue_unavailable)
+                            onResult(false)
+                        }
+                        return@launch
+                    }
                     transport.sendMessage(
                         roomId = sessionId,
                         parts = parts.map { part ->
@@ -1720,6 +1736,11 @@ private fun String.isRoundtableTranscriptFullError(): Boolean {
     val normalized = lowercase()
     return normalized.contains("maxtranscriptbytes") ||
         normalized.contains("injected content would exceed")
+}
+
+private fun String.isRoundtableContinueInput(): Boolean {
+    val normalized = trim().lowercase()
+    return normalized == "可" || normalized == "继续" || normalized == "continue"
 }
 
 private fun resolveActiveRoster(
