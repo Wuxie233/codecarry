@@ -987,24 +987,30 @@ class ChatViewModel @Inject constructor(
     /** Get the session directory for building file:// URLs */
     fun getSessionDirectory(): String? = sessionDirectory
 
-    fun sendMessage(text: String, attachments: List<PromptPart> = emptyList()) {
-        if (text.isBlank() && attachments.isEmpty()) return
+    fun sendMessage(text: String, attachments: List<PromptPart> = emptyList(), onResult: (Boolean) -> Unit = {}) {
+        if (text.isBlank() && attachments.isEmpty()) {
+            onResult(false)
+            return
+        }
         val parts = mutableListOf<PromptPart>()
         if (text.isNotBlank()) {
             parts.add(PromptPart(type = "text", text = text))
         }
         parts.addAll(attachments)
-        sendParts(parts)
+        sendParts(parts, onResult)
     }
 
     /** Send pre-built prompt parts (used when @-file mentions need structured parts). */
-    fun sendMessage(promptParts: List<PromptPart>, attachments: List<PromptPart>) {
+    fun sendMessage(promptParts: List<PromptPart>, attachments: List<PromptPart>, onResult: (Boolean) -> Unit = {}) {
         val parts = promptParts + attachments
-        if (parts.isEmpty()) return
-        sendParts(parts)
+        if (parts.isEmpty()) {
+            onResult(false)
+            return
+        }
+        sendParts(parts, onResult)
     }
 
-    private fun sendParts(parts: List<PromptPart>) {
+    private fun sendParts(parts: List<PromptPart>, onResult: (Boolean) -> Unit = {}) {
         viewModelScope.launch {
             _isSending.value = true
             try {
@@ -1029,6 +1035,7 @@ class ChatViewModel @Inject constructor(
                     )
                     eventReducer.appendRoundtableUserMessage(sessionId, roundtableText)
                     _error.value = null
+                    onResult(true)
                     return@launch
                 }
                 val model = if (_selectedProviderId.value != null && _selectedModelId.value != null) {
@@ -1048,9 +1055,12 @@ class ChatViewModel @Inject constructor(
                     directory = sessionDirectory
                 )
                 if (BuildConfig.DEBUG) Log.d(TAG, "Sent prompt to session $sessionId (${parts.size} parts)")
+                _error.value = null
+                onResult(true)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to send message", e)
                 _error.value = roundtableErrorMessage(e, "Failed to send message")
+                onResult(false)
             } finally {
                 _isSending.value = false
             }

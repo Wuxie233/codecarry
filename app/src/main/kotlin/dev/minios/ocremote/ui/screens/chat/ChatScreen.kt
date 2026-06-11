@@ -647,6 +647,7 @@ private fun messageActionIcon(action: MessageCardAction) = when (action) {
     MessageCardAction.CopyText -> Icons.Default.ContentCopy
     MessageCardAction.CopyMarkdown -> Icons.AutoMirrored.Filled.Article
     MessageCardAction.QuoteIntoInput -> Icons.Default.FormatQuote
+    MessageCardAction.RestoreToInput -> Icons.Default.Edit
     MessageCardAction.RestoreToHere -> Icons.AutoMirrored.Filled.Undo
 }
 
@@ -2177,19 +2178,20 @@ fun ChatScreen(
                                 return@doSend
                             }
                             viewModel.runShellCommand(shellCommand) { ok ->
-                                if (!ok) {
+                                if (ok) {
+                                    inputText = TextFieldValue("")
+                                    if (isShellMode) {
+                                        inputMode = ChatInputMode.NORMAL.name
+                                    }
+                                    viewModel.clearConfirmedPaths()
+                                    viewModel.clearFileSearch()
+                                    viewModel.clearDraft()
+                                } else {
                                     coroutineScope.launch {
                                         snackbarHostState.showSnackbar(context.getString(R.string.chat_shell_failed))
                                     }
                                 }
                             }
-                            inputText = TextFieldValue("")
-                            if (isShellMode) {
-                                inputMode = ChatInputMode.NORMAL.name
-                            }
-                            viewModel.clearConfirmedPaths()
-                            viewModel.clearFileSearch()
-                            viewModel.clearDraft()
                             return@doSend
                         }
                         if (uiState.isPiRoundtable && roundtableSupplementMode) {
@@ -2213,13 +2215,21 @@ fun ChatScreen(
                                 return@doSend
                             }
                             submitRoundtableCommand("supplement") { onDone ->
-                                viewModel.supplementRoundtableGuidance(supplementText, onDone)
+                                viewModel.supplementRoundtableGuidance(supplementText) { ok ->
+                                    onDone(ok)
+                                    if (ok) {
+                                        inputText = TextFieldValue("")
+                                        roundtableSupplementMode = false
+                                        viewModel.clearConfirmedPaths()
+                                        viewModel.clearFileSearch()
+                                        viewModel.clearDraft()
+                                    } else {
+                                        coroutineScope.launch {
+                                            snackbarHostState.showSnackbar(context.getString(R.string.chat_send_failed_draft_kept))
+                                        }
+                                    }
+                                }
                             }
-                            inputText = TextFieldValue("")
-                            roundtableSupplementMode = false
-                            viewModel.clearConfirmedPaths()
-                            viewModel.clearFileSearch()
-                            viewModel.clearDraft()
                             return@doSend
                         }
                         // Build prompt parts: split text around confirmed @file mentions

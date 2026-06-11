@@ -262,6 +262,7 @@
     <string name="chat_send_disabled_not_ready">Session not ready yet</string>
     <string name="chat_send_disabled_pending">Answer the pending request first</string>
     <string name="chat_send_disabled_sending">Sending…</string>
+    <string name="chat_send_failed_draft_kept">Send failed. Draft kept.</string>
     <string name="chat_loading_messages">Loading messages…</string>
     <string name="chat_status_edits">%1$d edit</string>
     <string name="chat_status_edits_plural">%1$d edits</string>
