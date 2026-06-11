@@ -200,12 +200,8 @@ fun RoundtableCenterScreen(
                                 roundtable = roundtable,
                                 isAmoled = isAmoled,
                                 onOpen = {
-                                    if (roundtable.status == Roundtable.Status.Completed) {
-                                        onOpenSummary(roundtable.id)
-                                    } else {
-                                        viewModel.castingId(roundtable.id)?.let(onOpenCasting)
-                                            ?: viewModel.liveChatTarget(roundtable.id)?.let(onOpenRoundtable)
-                                    }
+                                    viewModel.castingId(roundtable.id)?.let(onOpenCasting)
+                                        ?: viewModel.liveChatTarget(roundtable.id)?.let(onOpenRoundtable)
                                 },
                                 onResume = {
                                     when {
@@ -214,7 +210,6 @@ fun RoundtableCenterScreen(
                                             viewModel.resumeRoundtable(roundtable.id)
                                             viewModel.liveChatTarget(roundtable.id)?.let(onOpenRoundtable)
                                         }
-                                        roundtable.status == Roundtable.Status.Completed -> onOpenSummary(roundtable.id)
                                         else -> viewModel.liveChatTarget(roundtable.id)?.let(onOpenRoundtable)
                                     }
                                 },
@@ -673,7 +668,7 @@ private data class RoundtablePrimaryAction(
 private fun Roundtable.primaryAction(): RoundtablePrimaryAction = when {
     kind == Roundtable.Kind.Casting -> RoundtablePrimaryAction(R.string.roundtable_continue_casting)
     status == Roundtable.Status.AwaitingCommand -> RoundtablePrimaryAction(R.string.roundtable_resume)
-    status == Roundtable.Status.Completed -> RoundtablePrimaryAction(R.string.roundtable_view_summary)
+    status == Roundtable.Status.Completed -> RoundtablePrimaryAction(R.string.open)
     status == Roundtable.Status.Archived -> RoundtablePrimaryAction(R.string.roundtable_view_summary, enabled = false)
     else -> RoundtablePrimaryAction(R.string.open)
 }

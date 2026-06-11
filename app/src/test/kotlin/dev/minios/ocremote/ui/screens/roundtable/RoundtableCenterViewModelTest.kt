@@ -329,7 +329,7 @@ class RoundtableCenterViewModelTest {
     }
 
     @Test
-    fun `active filter excludes ended archived error and unknown roundtables`() = runTest(dispatcher) {
+    fun `active filter keeps completed error and unknown but excludes archived roundtables`() = runTest(dispatcher) {
         val requests = Collections.synchronizedList(mutableListOf<HttpRequestData>())
         val service = FakeRoundtableService().apply {
             put("round-running", "running")
@@ -353,14 +353,17 @@ class RoundtableCenterViewModelTest {
         collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
         advanceUntilIdle()
 
-        val loaded = vm.uiState.first { state -> state.items.size == 5 }
+        val loaded = vm.uiState.first { state -> state.items.size == 8 }
         val activeIds = loaded.items.map { it.id }
 
-        assertEquals(setOf("round-running", "round-awaiting", "round-skip", "round-paused", "round-awaiting-registry"), activeIds.toSet())
-        assertEquals(5, activeIds.size)
+        assertEquals(setOf("round-running", "round-awaiting", "round-skip", "round-paused", "round-awaiting-registry", "round-ended", "round-error", "round-unknown"), activeIds.toSet())
+        assertEquals(8, activeIds.size)
         assertEquals(dev.minios.ocremote.domain.model.Roundtable.Status.AwaitingCommand, loaded.items.single { it.id == "round-awaiting" }.status)
         assertEquals(dev.minios.ocremote.domain.model.Roundtable.Status.AwaitingCommand, loaded.items.single { it.id == "round-paused" }.status)
         assertEquals(dev.minios.ocremote.domain.model.Roundtable.Status.AwaitingSkip, loaded.items.single { it.id == "round-awaiting-registry" }.status)
+        assertEquals(dev.minios.ocremote.domain.model.Roundtable.Status.Completed, loaded.items.single { it.id == "round-ended" }.status)
+        assertEquals(dev.minios.ocremote.domain.model.Roundtable.Status.Error, loaded.items.single { it.id == "round-error" }.status)
+        assertEquals(dev.minios.ocremote.domain.model.Roundtable.Status.Unknown, loaded.items.single { it.id == "round-unknown" }.status)
     }
 
     @Test

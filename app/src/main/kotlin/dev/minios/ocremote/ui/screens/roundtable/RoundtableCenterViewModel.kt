@@ -735,22 +735,15 @@ private fun String?.toDomainStatus(): Roundtable.Status = when (this?.lowercase(
 }
 
 private fun Roundtable.matches(filter: RoundtableFilter): Boolean = when (filter) {
-    RoundtableFilter.Active -> status.isActiveRoundtableStatus()
+    RoundtableFilter.Active -> status != Roundtable.Status.Archived
     RoundtableFilter.Running -> status == Roundtable.Status.Running || status == Roundtable.Status.AwaitingCommand || status == Roundtable.Status.AwaitingSkip || status == Roundtable.Status.Casting
     RoundtableFilter.Archived -> status == Roundtable.Status.Archived
     RoundtableFilter.All -> true
 }
 
 internal fun Roundtable.Status.isActiveRoundtableStatus(): Boolean = when (this) {
-    Roundtable.Status.Running,
-    Roundtable.Status.AwaitingCommand,
-    Roundtable.Status.AwaitingSkip,
-    Roundtable.Status.Paused,
-    Roundtable.Status.Casting -> true
-    Roundtable.Status.Unknown,
-    Roundtable.Status.Completed,
-    Roundtable.Status.Archived,
-    Roundtable.Status.Error -> false
+    Roundtable.Status.Archived -> false
+    else -> true
 }
 
 private fun RoundtableSort.comparator(): Comparator<Roundtable> = when (this) {
