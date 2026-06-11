@@ -5287,6 +5287,7 @@ private fun MarkdownContent(
     isUser: Boolean
 ) {
     val normalizedMarkdown = remember(markdown) { preserveRawHtmlPayload(markdown) }
+    val mathSegments = remember(normalizedMarkdown) { splitMarkdownMathSegments(normalizedMarkdown) }
     val isAmoled = isAmoledTheme()
 
     // Inline code: keep text styling, but no opaque background so selection remains visible.
@@ -5407,15 +5408,34 @@ private fun MarkdownContent(
         }
     )
 
-    SelectionContainer {
-        Markdown(
-            content = normalizedMarkdown,
-            colors = colors,
-            typography = typography,
-            components = components,
-            imageTransformer = Coil2ImageTransformerImpl,
-            modifier = Modifier.fillMaxWidth()
-        )
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        mathSegments.forEach { segment ->
+            when (segment) {
+                is MarkdownMathSegment.Markdown -> {
+                    if (segment.text.isNotBlank()) {
+                        SelectionContainer {
+                            Markdown(
+                                content = segment.text,
+                                colors = colors,
+                                typography = typography,
+                                components = components,
+                                imageTransformer = Coil2ImageTransformerImpl,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
+                }
+                is MarkdownMathSegment.Math -> {
+                    MarkdownMathFormula(
+                        source = segment.source,
+                        display = segment.display,
+                        textColor = textColor,
+                        fallbackStyle = bodyStyle,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+        }
     }
 }
 
