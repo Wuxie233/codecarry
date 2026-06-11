@@ -83,6 +83,7 @@ class EventReducer @Inject constructor() {
     val roundtableEvents: StateFlow<Map<String, List<PiTransportEvent>>> = _roundtableEvents.asStateFlow()
 
     private val piTurnInfo = mutableMapOf<String, PiTurnInfo>()
+    private val processedPiEvents = mutableSetOf<PiEventKey>()
     
     // ============ Event Processing ============
     
@@ -135,6 +136,8 @@ class EventReducer @Inject constructor() {
 
     private fun processPiEvent(event: PiTransportEvent, serverId: String) {
         val roundtableId = event.envelope.roundId
+        val eventKey = PiEventKey(roundtableId, event.envelope.eventId)
+        if (!processedPiEvents.add(eventKey)) return
         trackRoundtable(serverId, roundtableId)
         appendRoundtableEvent(roundtableId, event)
 
@@ -715,6 +718,7 @@ class EventReducer @Inject constructor() {
         _roundtableParts.value = emptyMap()
         _roundtableEvents.value = emptyMap()
         piTurnInfo.clear()
+        processedPiEvents.clear()
     }
     
     /**
@@ -763,6 +767,7 @@ class EventReducer @Inject constructor() {
         _roundtableParts.update { it - roundtableMessageIds }
         _roundtableEvents.update { it - roundtableIds }
         piTurnInfo.keys.removeAll(roundtableMessageIds)
+        processedPiEvents.removeAll { event -> event.roundtableId in roundtableIds }
 
         if (_activeSessionId.value in sessionIds) {
             _activeSessionId.value = null
@@ -798,4 +803,9 @@ private data class PiTurnInfo(
     val author: dev.minios.ocremote.domain.transport.PiAuthor,
     val actionTag: String?,
     val startedSequence: Long,
+)
+
+private data class PiEventKey(
+    val roundtableId: String,
+    val eventId: Long,
 )

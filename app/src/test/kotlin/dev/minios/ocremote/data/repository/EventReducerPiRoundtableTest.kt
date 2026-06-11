@@ -81,6 +81,28 @@ class EventReducerPiRoundtableTest {
         assertEquals("", textPart.text)
     }
 
+    @Test
+    fun `duplicate pi events from transcript replay and live stream are ignored`() {
+        val reducer = EventReducer()
+        val events = PiRoundtableEventProcessor(json).processSnapshot(fixtureEvents("happy-one-round.json"))
+
+        events.forEach { event -> reducer.processEvent(TransportEvent.Pi(event), serverId = "server-pi") }
+        events.forEach { event -> reducer.processEvent(TransportEvent.Pi(event), serverId = "server-pi") }
+
+        val roundtableId = "round-fixture-001"
+        val messages = reducer.roundtableMessages.value[roundtableId].orEmpty().filterIsInstance<Message.Assistant>()
+        val textBySender = messages.associate { message ->
+            message.senderId!! to reducer.roundtableParts.value[message.id]
+                .orEmpty()
+                .filterIsInstance<Part.Text>()
+                .joinToString(separator = "") { part -> part.text }
+        }
+
+        assertEquals(events.size, reducer.roundtableEvents.value[roundtableId].orEmpty().size)
+        assertEquals("Truth seeking should lead because coverage without pressure-testing becomes trivia.", textBySender["persona-ada"])
+        assertEquals("Coverage still matters when it maps the disagreement space before depth.", textBySender["persona-curie"])
+    }
+
     private fun fixtureEvents(name: String): List<RoundtableSseEvent> = json.decodeFromString(
         ListSerializer(RoundtableSseEvent.serializer()),
         fixtureFile(name).readText(),
