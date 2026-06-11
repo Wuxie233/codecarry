@@ -2243,12 +2243,20 @@ fun ChatScreen(
                                 filename = att.filename
                             )
                         }
-                        viewModel.sendMessage(allParts, attachmentParts)
-                        inputText = TextFieldValue("")
-                        attachments.clear()
-                        viewModel.clearConfirmedPaths()
-                        viewModel.clearFileSearch()
-                        viewModel.clearDraft()
+                        viewModel.sendMessage(allParts, attachmentParts) { ok ->
+                            if (ok) {
+                                inputText = TextFieldValue("")
+                                attachments.clear()
+                                viewModel.clearConfirmedPaths()
+                                viewModel.clearFileSearch()
+                                viewModel.clearDraft()
+                            } else {
+                                viewModel.updateDraftText(rawText)
+                                coroutineScope.launch {
+                                    snackbarHostState.showSnackbar(context.getString(R.string.chat_send_failed_draft_kept))
+                                }
+                            }
+                        }
                     }
                     if (confirmBeforeSend) {
                         pendingSendAction = doSend
