@@ -23,6 +23,7 @@ import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.MockRequestHandleScope
 import io.ktor.client.engine.mock.respond
+import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.request.HttpRequestData
 import io.ktor.http.ContentType
@@ -46,6 +47,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.yield
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.TestScope
@@ -280,6 +282,32 @@ class ChatViewModelRoundtableSteeringTest {
         assertEquals(appContext().getString(R.string.chat_pi_transcript_full), vm.uiState.value.error)
     }
 
+    @Test
+    fun `roundtable load hydrates transcript and subscribes current room with last event id`() = runTest(dispatcher) {
+        val sentCommands = Collections.synchronizedList(mutableListOf<PiCommandRequest>())
+        val requests = Collections.synchronizedList(mutableListOf<HttpRequestData>())
+        val eventReducer = EventReducer()
+        val transcriptEvents = fixtureEvents("happy-one-round.json").take(5)
+        val vm = newViewModel(
+            sentCommands = sentCommands,
+            eventReducer = eventReducer,
+            requests = requests,
+            transcriptEvents = transcriptEvents,
+            liveEvents = fixtureEvents("happy-one-round.json").drop(5).take(1),
+        )
+        collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
+        awaitRequest(requests, "/roundtables/$ROUND_ID/transcript", vm)
+        awaitReducerPiAssistantMessage(eventReducer, "persona-ada")
+
+        val adaMessage = awaitPiAssistantMessage(vm, "persona-ada")
+        val adaText = adaMessage.parts.filterIsInstance<dev.minios.ocremote.domain.model.Part.Text>().single().text
+
+        assertEquals("Truth seeking should lead because coverage without pressure-testing becomes trivia.", adaText)
+        awaitRequest(requests, "/roundtables/$ROUND_ID/events", vm)
+        val eventRequest = requests.first { request -> request.url.encodedPath == "/roundtables/$ROUND_ID/events" }
+        assertEquals("5", eventRequest.headers["Last-Event-ID"])
+    }
+
     private suspend fun sendAndAwait(send: ((Boolean) -> Unit) -> Unit) {
         assertEquals(true, sendAndAwaitResult(send))
     }
@@ -300,6 +328,16 @@ class ChatViewModelRoundtableSteeringTest {
         assertTrue("Expected a Pi command to be sent", sentCommands.isNotEmpty())
     }
 
+    private suspend fun awaitRequest(requests: List<HttpRequestData>, path: String, vm: ChatViewModel? = null) {
+        repeat(50) {
+            scheduler.advanceUntilIdle()
+            if (requests.any { request -> request.url.encodedPath == path }) return
+            withContext(Dispatchers.Default) { delay(5) }
+            yield()
+        }
+        assertTrue("Expected request $path, got ${requests.map { it.url.encodedPath }}; error=${vm?.uiState?.value?.error}", false)
+    }
+
     private suspend fun awaitUserMessage(vm: ChatViewModel) {
         repeat(20) {
             scheduler.advanceUntilIdle()
@@ -307,6 +345,37 @@ class ChatViewModelRoundtableSteeringTest {
             yield()
         }
         assertTrue("Expected a local user message", vm.uiState.value.messages.any { it.isUser })
+    }
+
+    private suspend fun awaitReducerPiAssistantMessage(eventReducer: EventReducer, senderId: String) {
+        repeat(50) {
+            scheduler.advanceUntilIdle()
+            val hasMessage = eventReducer.roundtableMessages.value[ROUND_ID].orEmpty().any { message ->
+                (message as? dev.minios.ocremote.domain.model.Message.Assistant)?.senderId == senderId
+            }
+            if (hasMessage) return
+            withContext(Dispatchers.Default) { delay(5) }
+            yield()
+        }
+        val senders = eventReducer.roundtableMessages.value[ROUND_ID].orEmpty().mapNotNull { message ->
+            (message as? dev.minios.ocremote.domain.model.Message.Assistant)?.senderId
+        }
+        assertTrue("Expected reducer to hydrate $senderId from transcript, got $senders", false)
+    }
+
+    private suspend fun awaitPiAssistantMessage(vm: ChatViewModel, senderId: String): ChatMessage {
+        repeat(20) {
+            scheduler.advanceUntilIdle()
+            vm.uiState.value.messages.firstOrNull { message ->
+                (message.message as? dev.minios.ocremote.domain.model.Message.Assistant)?.senderId == senderId
+            }?.let { return it }
+            yield()
+        }
+        val senders = vm.uiState.value.messages.mapNotNull { message ->
+            (message.message as? dev.minios.ocremote.domain.model.Message.Assistant)?.senderId
+        }
+        assertTrue("Expected Pi assistant message from $senderId, got $senders; error=${vm.uiState.value.error}", false)
+        error("Unreachable")
     }
 
     private suspend fun awaitError(vm: ChatViewModel) {
@@ -331,16 +400,19 @@ class ChatViewModelRoundtableSteeringTest {
         sentCommands: MutableList<PiCommandRequest>,
         eventReducer: EventReducer = EventReducer(),
         sentBodies: MutableList<String>? = null,
+        requests: MutableList<HttpRequestData>? = null,
         commandStatus: (PiCommandRequest) -> HttpStatusCode = { HttpStatusCode.OK },
         commandBody: (PiCommandRequest) -> String = { """{"accepted":true}""" },
         roundtableStatus: String = "awaiting_command",
+        transcriptEvents: List<RoundtableSseEvent> = emptyList(),
+        liveEvents: List<RoundtableSseEvent> = emptyList(),
     ): ChatViewModel {
         return ChatViewModel(
             appContext = appContext(),
             savedStateHandle = savedStateHandle(),
             eventReducer = eventReducer,
             api = openCodeApi(),
-            piApi = piApi(sentCommands, sentBodies, commandStatus, commandBody, roundtableStatus),
+            piApi = piApi(sentCommands, sentBodies, requests, commandStatus, commandBody, roundtableStatus, transcriptEvents, liveEvents),
             json = json,
             draftRepository = draftRepository(),
             sessionListPreferencesRepository = sessionListPreferencesRepository(),
@@ -363,14 +435,28 @@ class ChatViewModelRoundtableSteeringTest {
     private fun piApi(
         sentCommands: MutableList<PiCommandRequest>,
         sentBodies: MutableList<String>? = null,
+        requests: MutableList<HttpRequestData>? = null,
         commandStatus: (PiCommandRequest) -> HttpStatusCode = { HttpStatusCode.OK },
         commandBody: (PiCommandRequest) -> String = { """{"accepted":true}""" },
         roundtableStatus: String = "awaiting_command",
+        transcriptEvents: List<RoundtableSseEvent> = emptyList(),
+        liveEvents: List<RoundtableSseEvent> = emptyList(),
     ): PiApi {
+        var servedLiveEvents = false
         val engine = MockEngine { request ->
+            requests?.add(request)
             when {
                 request.url.encodedPath == "/roundtables" && request.method == HttpMethod.Get -> respondJson(roundtablesJson(roundtableStatus))
                 request.url.encodedPath == "/personas" && request.method == HttpMethod.Get -> respondJson(personasJson())
+                request.url.encodedPath == "/roundtables/$ROUND_ID/transcript" && request.method == HttpMethod.Get -> respondJson(transcriptJson(transcriptEvents))
+                request.url.encodedPath == "/roundtables/$ROUND_ID/events" && request.method == HttpMethod.Get -> {
+                    if (servedLiveEvents) {
+                        respondSse("")
+                    } else {
+                        servedLiveEvents = true
+                        respondSse(sseFrame(liveEvents))
+                    }
+                }
                 request.url.encodedPath == "/roundtables/$ROUND_ID/command" && request.method == HttpMethod.Post -> {
                     val body = request.body.bodyAsText()
                     sentBodies?.add(body)
@@ -381,7 +467,10 @@ class ChatViewModelRoundtableSteeringTest {
                 else -> respond("{}", HttpStatusCode.NotFound)
             }
         }
-        val client = HttpClient(engine) { install(ContentNegotiation) { json(json) } }
+        val client = HttpClient(engine) {
+            install(ContentNegotiation) { json(json) }
+            install(HttpTimeout)
+        }
         return PiApi(client, json)
     }
 
@@ -399,6 +488,13 @@ class ChatViewModelRoundtableSteeringTest {
           "roster":[{"id":"ada","name":"Ada","role":"analyst","colorSeed":"ada"}]
         }]
     """.trimIndent()
+
+    private fun transcriptJson(events: List<RoundtableSseEvent>): String = """{"protocolVersion":1,"roundId":"$ROUND_ID","events":${json.encodeToString(ListSerializer(RoundtableSseEvent.serializer()), events)},"commands":[],"assembled":{}}"""
+
+    private fun sseFrame(events: List<RoundtableSseEvent>): String = events.joinToString(separator = "") { event ->
+        val data = json.encodeToString(RoundtableSseEvent.serializer(), event)
+        "id: ${event.eventId}\ndata: $data\n\n"
+    }
 
     private fun personasJson(): String = json.encodeToString(
         listOf(
@@ -476,6 +572,12 @@ class ChatViewModelRoundtableSteeringTest {
         content = ByteReadChannel(content),
         status = status,
         headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
+    )
+
+    private fun MockRequestHandleScope.respondSse(content: String) = respond(
+        content = ByteReadChannel(content),
+        status = HttpStatusCode.OK,
+        headers = headersOf(HttpHeaders.ContentType, "text/event-stream"),
     )
 
     companion object {

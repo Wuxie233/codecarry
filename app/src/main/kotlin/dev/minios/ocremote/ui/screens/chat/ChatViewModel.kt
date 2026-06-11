@@ -14,15 +14,18 @@ import dev.minios.ocremote.data.api.CommandInfo
 import dev.minios.ocremote.data.api.ModelSelection
 import dev.minios.ocremote.data.api.OpenCodeApi
 import dev.minios.ocremote.data.api.PiApi
+import dev.minios.ocremote.data.api.PiConnection
 import dev.minios.ocremote.data.api.PiPersonaDto
 import dev.minios.ocremote.data.api.PromptPart
 import dev.minios.ocremote.data.api.ProviderInfo
+import dev.minios.ocremote.data.api.RoundtableSseEvent
 import dev.minios.ocremote.data.api.ServerConnection
 import dev.minios.ocremote.data.preferences.SessionListPreferencesRepository
 import dev.minios.ocremote.data.repository.DraftRepository
 import dev.minios.ocremote.data.repository.EventReducer
 import dev.minios.ocremote.data.repository.SettingsRepository
 import dev.minios.ocremote.data.transport.PiRoundtableTransport
+import dev.minios.ocremote.data.transport.PiRoundtableEventProcessor
 import dev.minios.ocremote.domain.model.*
 import dev.minios.ocremote.domain.transport.PiRoundtableRoom
 import dev.minios.ocremote.domain.transport.PiTransportEvent
@@ -35,6 +38,7 @@ import dev.minios.ocremote.domain.transport.PiTransportEvent.AwaitingSkip
 import dev.minios.ocremote.domain.transport.PiTransportEvent.MessageDelta
 import dev.minios.ocremote.domain.transport.PiTransportEvent.MessageEnd
 import dev.minios.ocremote.domain.transport.PiTransportEvent.RoundStart
+import dev.minios.ocremote.domain.transport.TransportEvent
 import dev.minios.ocremote.domain.transport.TransportMessagePart
 import dev.minios.ocremote.domain.transport.TransportRoom
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -43,8 +47,10 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -303,6 +309,7 @@ class ChatViewModel @Inject constructor(
     /** Whether a "load older" request is in flight. */
     private val _isLoadingOlder = MutableStateFlow(false)
     private val _piPersonas = MutableStateFlow<List<PiPersonaDto>>(emptyList())
+    private var piEventStreamJob: Job? = null
 
     val uiState: StateFlow<ChatUiState> = combine(
         eventReducer.sessions,
@@ -593,18 +600,48 @@ class ChatViewModel @Inject constructor(
             _isLoading.value = true
             _error.value = null
             try {
+                val piConnection = PiConnection.from(serverUrl, password.takeIf { it.isNotBlank() })
                 val rooms = transport.listRooms().mapNotNull { room ->
                     (room as? TransportRoom.Pi)?.room?.toRoundtable()
                 }
-                _piPersonas.value = piApi.listPersonas(
-                    dev.minios.ocremote.data.api.PiConnection.from(serverUrl, password.takeIf { it.isNotBlank() })
-                ).filter { it.enabled }
+                _piPersonas.value = piApi.listPersonas(piConnection).filter { it.enabled }
                 eventReducer.setRoundtables(serverId, rooms)
+                val transcript = transport.getTranscript(sessionId)
+                processPiTranscript(transcript.events)
+                startPiRoundtableEventStream(transport, transcript.events)
             } catch (error: Exception) {
                 Log.e(TAG, "Failed to load Pi roundtable", error)
                 _error.value = error.message ?: "Failed to load roundtable"
             } finally {
                 _isLoading.value = false
+            }
+        }
+    }
+
+    private fun processPiTranscript(events: List<RoundtableSseEvent>) {
+        val processor = PiRoundtableEventProcessor(json)
+        processor.processSnapshot(events).forEach { event ->
+            eventReducer.processEvent(TransportEvent.Pi(event), serverId)
+        }
+    }
+
+    private fun startPiRoundtableEventStream(transport: PiRoundtableTransport, replayedEvents: List<RoundtableSseEvent>) {
+        piEventStreamJob?.cancel()
+        val lastSeenEventId = replayedEvents.maxOfOrNull { event -> event.eventId }
+        piEventStreamJob = viewModelScope.launch {
+            try {
+                transport.openRoundtableEventStream(
+                    roundId = sessionId,
+                    lastSeenEventId = lastSeenEventId,
+                    replayedEvents = replayedEvents,
+                ).collect { event ->
+                    eventReducer.processEvent(event, serverId)
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                Log.e(TAG, "Failed to stream Pi roundtable events", error)
+                _error.value = error.message ?: "Failed to stream roundtable"
             }
         }
     }
@@ -941,6 +978,7 @@ class ChatViewModel @Inject constructor(
 
     override fun onCleared() {
         eventReducer.clearActiveSessionId(sessionId)
+        piEventStreamJob?.cancel()
         closeTerminalSession()
         super.onCleared()
         saveDraft()
