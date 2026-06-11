@@ -434,6 +434,7 @@ internal enum class MessageCardAction {
     CopyText,
     CopyMarkdown,
     QuoteIntoInput,
+    RestoreToInput,
     RestoreToHere,
 }
 
@@ -485,6 +486,11 @@ internal fun buildMessageCardActions(
             action = MessageCardAction.QuoteIntoInput,
             visible = hasCopyableText,
             enabled = hasCopyableText,
+        ),
+        MessageCardActionState(
+            action = MessageCardAction.RestoreToInput,
+            visible = chatMessage.isUser && hasCopyableText,
+            enabled = chatMessage.isUser && hasCopyableText,
         ),
         MessageCardActionState(
             action = MessageCardAction.RestoreToHere,
@@ -638,6 +644,7 @@ private fun messageActionLabel(action: MessageCardAction): String {
         MessageCardAction.CopyText -> stringResource(R.string.message_action_copy_text)
         MessageCardAction.CopyMarkdown -> stringResource(R.string.message_action_copy_markdown)
         MessageCardAction.QuoteIntoInput -> stringResource(R.string.message_action_quote)
+        MessageCardAction.RestoreToInput -> stringResource(R.string.message_action_restore_input)
         MessageCardAction.RestoreToHere -> stringResource(R.string.message_action_restore_here)
     }
 }
@@ -3180,6 +3187,15 @@ fun ChatScreen(
                         viewModel.updateDraftText(updatedText)
                         coroutineScope.launch {
                             snackbarHostState.showSnackbar(context.getString(R.string.message_action_quoted))
+                        }
+                    }
+                    MessageCardAction.RestoreToInput -> {
+                        val restoredText = messagePlainText(selectedMessage)
+                        inputText = TextFieldValue(restoredText, TextRange(restoredText.length))
+                        viewModel.updateDraftText(restoredText)
+                        viewModel.clearFileSearch()
+                        coroutineScope.launch {
+                            snackbarHostState.showSnackbar(context.getString(R.string.message_action_restored_input))
                         }
                     }
                     MessageCardAction.ForkFromHere -> {

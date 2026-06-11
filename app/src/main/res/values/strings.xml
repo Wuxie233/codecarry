@@ -202,11 +202,13 @@
     <string name="message_action_copy_text">Copy text</string>
     <string name="message_action_copy_markdown">Copy as Markdown</string>
     <string name="message_action_quote">Quote into input</string>
+    <string name="message_action_restore_input">Restore to input</string>
     <string name="message_action_restore_here">Restore to this message</string>
     <string name="message_action_restore_confirm_title">Restore conversation?</string>
     <string name="message_action_restore_confirm_body">This will revert the current conversation to the selected message.</string>
     <string name="message_action_copied">Copied</string>
     <string name="message_action_quoted">Quoted into input</string>
+    <string name="message_action_restored_input">Restored to input</string>
     <string name="message_action_fork_failed">Could not fork from this message</string>
     <string name="message_action_unavailable_streaming">Wait for this response to finish</string>
     <string name="chat_input_hint">Message OpenCode…</string>

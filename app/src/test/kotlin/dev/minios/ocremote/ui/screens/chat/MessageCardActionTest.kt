@@ -26,6 +26,7 @@ class MessageCardActionTest {
                 MessageCardAction.CopyText,
                 MessageCardAction.CopyMarkdown,
                 MessageCardAction.QuoteIntoInput,
+                MessageCardAction.RestoreToInput,
                 MessageCardAction.RestoreToHere,
             ),
             actions.map { it.action },
@@ -54,6 +55,7 @@ class MessageCardActionTest {
         )
         assertTrue(actions.all { it.enabled })
         assertFalse(actions.any { it.action == MessageCardAction.RestoreToHere })
+        assertFalse(actions.any { it.action == MessageCardAction.RestoreToInput })
     }
 
     @Test
@@ -70,6 +72,7 @@ class MessageCardActionTest {
         assertEnabled(actions.getValue(MessageCardAction.CopyText))
         assertEnabled(actions.getValue(MessageCardAction.CopyMarkdown))
         assertEnabled(actions.getValue(MessageCardAction.QuoteIntoInput))
+        assertEnabled(actions.getValue(MessageCardAction.RestoreToInput))
     }
 
     @Test
@@ -86,6 +89,7 @@ class MessageCardActionTest {
         assertEnabled(actions.getValue(MessageCardAction.CopyText))
         assertEnabled(actions.getValue(MessageCardAction.CopyMarkdown))
         assertEnabled(actions.getValue(MessageCardAction.QuoteIntoInput))
+        assertEnabled(actions.getValue(MessageCardAction.RestoreToInput))
     }
 
     @Test
@@ -102,6 +106,7 @@ class MessageCardActionTest {
                 MessageCardAction.CopyText,
                 MessageCardAction.CopyMarkdown,
                 MessageCardAction.QuoteIntoInput,
+                MessageCardAction.RestoreToInput,
             ),
             actions.map { it.action },
         )
@@ -124,6 +129,7 @@ class MessageCardActionTest {
         assertEnabled(actions.getValue(MessageCardAction.CopyText))
         assertEnabled(actions.getValue(MessageCardAction.CopyMarkdown))
         assertEnabled(actions.getValue(MessageCardAction.QuoteIntoInput))
+        assertEnabled(actions.getValue(MessageCardAction.RestoreToInput))
     }
 
     @Test
