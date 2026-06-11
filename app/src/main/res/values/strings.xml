@@ -646,7 +646,7 @@ Tokens: ~%4$d -&gt; ~%5$d</string>
     <string name="chat_pi_supplement_attachments_unsupported">Supplement notes do not support attachments yet.</string>
     <string name="chat_pi_supplement_pending">A roundtable command is already in progress. Try again in a moment.</string>
     <string name="chat_pi_continue_unavailable">This roundtable is not waiting to continue yet. Wait for the current turn to pause, then send Continue.</string>
-    <string name="chat_pi_transcript_full">This roundtable is full. Start a new roundtable or open the summary instead.</string>
+    <string name="chat_pi_append_too_large">That supplement is too long for the current roundtable. Shorten it, or send Continue without adding text.</string>
     <string name="chat_pi_skip_waiting_title">%1$s is waiting</string>
     <string name="chat_pi_skip_action">Skip this turn</string>
     <string name="chat_pi_steering_title">Roundtable steering</string>

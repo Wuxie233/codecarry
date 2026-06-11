@@ -1167,8 +1167,8 @@ class ChatViewModel @Inject constructor(
 
     private fun roundtableErrorMessage(error: Exception, fallback: String): String {
         val message = error.message
-        return if (isPiRoundtable && message?.isRoundtableTranscriptFullError() == true) {
-            appContext.getString(R.string.chat_pi_transcript_full)
+        return if (isPiRoundtable && message?.isRoundtableAppendTooLargeError() == true) {
+            appContext.getString(R.string.chat_pi_append_too_large)
         } else {
             message ?: fallback
         }
@@ -1732,7 +1732,7 @@ private fun String?.toRoundtableStatus(): Roundtable.Status = when (this?.lowerc
     else -> Roundtable.Status.Unknown
 }
 
-private fun String.isRoundtableTranscriptFullError(): Boolean {
+private fun String.isRoundtableAppendTooLargeError(): Boolean {
     val normalized = lowercase()
     return normalized.contains("maxtranscriptbytes") ||
         normalized.contains("injected content would exceed")

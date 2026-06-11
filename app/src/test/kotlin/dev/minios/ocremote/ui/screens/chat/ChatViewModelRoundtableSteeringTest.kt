@@ -295,7 +295,7 @@ class ChatViewModelRoundtableSteeringTest {
     }
 
     @Test
-    fun `roundtable transcript full rejection shows product guidance`() = runTest(dispatcher) {
+    fun `roundtable oversized supplement rejection shows recoverable guidance`() = runTest(dispatcher) {
         val sentCommands = Collections.synchronizedList(mutableListOf<PiCommandRequest>())
         val vm = newViewModel(
             sentCommands = sentCommands,
@@ -309,7 +309,7 @@ class ChatViewModelRoundtableSteeringTest {
 
         assertEquals(false, rejected)
         awaitError(vm)
-        assertEquals(appContext().getString(R.string.chat_pi_transcript_full), vm.uiState.value.error)
+        assertEquals(appContext().getString(R.string.chat_pi_append_too_large), vm.uiState.value.error)
     }
 
     @Test
