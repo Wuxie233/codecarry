@@ -68,7 +68,7 @@ class PiRoundtableTransport(
 ) : AgentTransport {
     private val conn = PiConnection.from(server.url, server.token)
     private var activeRoundId: String? = null
-    private var lastEventId: Long? = null
+    private val lastEventIds = mutableMapOf<String, Long>()
 
     override suspend fun listRooms(directory: String?, rootsOnly: Boolean): List<TransportRoom> {
         val rooms = api.listRoundtables(conn).mapNotNull { dto -> dto.toTransportRoom() }
@@ -80,13 +80,26 @@ class PiRoundtableTransport(
 
     override fun openEventStream(directory: String?): Flow<TransportEvent> = flow {
         val roundId = resolveRoundId(directory)
+        openRoundtableEventStream(roundId).collect { event -> emit(event) }
+    }
+
+    fun openRoundtableEventStream(
+        roundId: String,
+        lastSeenEventId: Long? = null,
+        replayedEvents: List<RoundtableSseEvent> = emptyList(),
+    ): Flow<TransportEvent> = flow {
+        activeRoundId = roundId
         val processor = PiRoundtableEventProcessor(json)
+        processor.processSnapshot(replayedEvents)
+        lastSeenEventId?.let { eventId ->
+            lastEventIds[roundId] = maxOf(lastEventIds[roundId] ?: eventId, eventId)
+        }
         var reconnectAttempts = 0
 
         while (currentCoroutineContext().isActive) {
             try {
-                api.connectEvents(conn, roundId, lastEventId).collect { wireEvent ->
-                    lastEventId = maxOf(lastEventId ?: wireEvent.eventId, wireEvent.eventId)
+                api.connectEvents(conn, roundId, lastEventIds[roundId]).collect { wireEvent ->
+                    lastEventIds[roundId] = maxOf(lastEventIds[roundId] ?: wireEvent.eventId, wireEvent.eventId)
                     val events = processor.accept(wireEvent)
                     events.forEach { event -> emit(TransportEvent.Pi(event)) }
                     reconnectAttempts = 0

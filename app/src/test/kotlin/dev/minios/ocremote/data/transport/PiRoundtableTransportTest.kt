@@ -163,6 +163,41 @@ class PiTransportTest {
     }
 
     @Test
+    fun `openRoundtableEventStream uses explicit room and resumes after transcript snapshot`() = runTest {
+        val captured = mutableListOf<HttpRequestData>()
+        val snapshot = fixtureEvents("happy-one-round.json").take(4)
+        val replayOverlap = sseFrame(fixtureEvents("happy-one-round.json").drop(3))
+        val transport = newTransport(captured) { request ->
+            captured += request
+            when (request.url.encodedPath) {
+                "/roundtables/round-fixture-001/events" -> {
+                    assertEquals("4", request.headers["Last-Event-ID"])
+                    respondSse(replayOverlap)
+                }
+                else -> respond(status = HttpStatusCode.NotFound, content = ByteReadChannel(""))
+            }
+        }
+
+        val collected = withRealTimeout {
+            transport.openRoundtableEventStream(
+                roundId = "round-fixture-001",
+                lastSeenEventId = snapshot.maxOf { event -> event.eventId },
+                replayedEvents = snapshot,
+            )
+                .filterIsInstance<TransportEvent.Pi>()
+                .map { event -> event.event }
+                .transformWhile { event ->
+                    emit(event)
+                    event !is PiTransportEvent.RoundEnd
+                }
+                .toList()
+        }
+
+        assertFalse(captured.any { request -> request.url.encodedPath == "/roundtables" })
+        assertEquals((5L..12L).toList(), collected.map { event -> event.envelope.eventId })
+    }
+
+    @Test
     fun `openEventStream stops after bounded empty reconnect attempts`() = runTest {
         val captured = mutableListOf<HttpRequestData>()
         var eventRequestCount = 0
