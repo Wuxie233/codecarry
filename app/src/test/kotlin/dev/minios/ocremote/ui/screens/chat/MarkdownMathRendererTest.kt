@@ -49,4 +49,19 @@ class MarkdownMathRendererTest {
         assertEquals(1, segments.size)
         assertTrue(segments.single() is MarkdownMathSegment.Markdown)
     }
+
+    @Test
+    fun `splitMarkdownMathSegments preserves multiple formulas in order`() {
+        val segments = splitMarkdownMathSegments("A \$x\$ B \$y\$ C \$\$z\$\$")
+
+        val math = segments.filterIsInstance<MarkdownMathSegment.Math>()
+        assertEquals(
+            listOf(
+                MarkdownMathSegment.Math("x", display = false, delimiter = "\$"),
+                MarkdownMathSegment.Math("y", display = false, delimiter = "\$"),
+                MarkdownMathSegment.Math("z", display = true, delimiter = "\$\$"),
+            ),
+            math,
+        )
+    }
 }

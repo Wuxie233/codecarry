@@ -3,7 +3,6 @@ package dev.minios.ocremote.ui.screens.chat
 import android.annotation.SuppressLint
 import android.os.Handler
 import android.os.Looper
-import android.view.View
 import android.view.ViewGroup
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
@@ -52,6 +51,7 @@ import kotlin.math.absoluteValue
 private const val MathAssetBaseUrl = "file:///android_asset/"
 private const val MathAssetScript = "mathjax-tex-svg-full.js"
 private const val MathRenderTimeoutMillis = 4_000L
+private const val MathWebViewPoolSize = 8
 
 internal sealed interface MarkdownMathSegment {
     data class Markdown(val text: String) : MarkdownMathSegment
@@ -225,8 +225,8 @@ fun MarkdownMathFormula(
     val borderColor = colorScheme.outlineVariant.copy(alpha = 0.65f)
     val isDark = colorScheme.surface.luminance() < 0.35f
     var html by remember(source, textColor, backgroundColor, isDark, display) { mutableStateOf<String?>(null) }
-    var renderState by remember(source) { mutableStateOf<MathWebRenderState>(MathWebRenderState.Preparing) }
-    var currentRenderKey by remember(source) { mutableStateOf(mathRenderKeyFor(source, display)) }
+    var renderState by remember(source, display) { mutableStateOf<MathWebRenderState>(MathWebRenderState.Preparing) }
+    var currentRenderKey by remember(source, display) { mutableStateOf(mathRenderKeyFor(source, display)) }
     val latestOnRendered by rememberUpdatedState<(String, Int) -> Unit> { key, heightPx ->
         if (key == currentRenderKey) {
             renderState = MathWebRenderState.Rendered(heightPx.coerceIn(if (display) 48 else 24, 720).dp)
@@ -385,7 +385,6 @@ private sealed interface MathWebRenderState {
 }
 
 private object MathWebViewPool {
-    private const val MaxPoolSize = 3
     private val pool = ArrayDeque<WebView>()
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -396,7 +395,6 @@ private object MathWebViewPool {
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT,
         )
-        view.setLayerType(View.LAYER_TYPE_SOFTWARE, null)
         view.setBackgroundColor(Color.Transparent.toArgb())
         view.webViewClient = WebViewClient()
         view.webChromeClient = WebChromeClient()
@@ -408,7 +406,7 @@ private object MathWebViewPool {
             allowFileAccess = true
             allowFileAccessFromFileURLs = false
             allowUniversalAccessFromFileURLs = false
-            cacheMode = WebSettings.LOAD_NO_CACHE
+            cacheMode = WebSettings.LOAD_CACHE_ELSE_NETWORK
             loadWithOverviewMode = true
             useWideViewPort = true
             builtInZoomControls = false
@@ -428,7 +426,7 @@ private object MathWebViewPool {
         webView.tag = null
         webView.removeJavascriptInterface("AndroidMathBridge")
         webView.loadUrl("about:blank")
-        if (pool.size < MaxPoolSize) {
+        if (pool.size < MathWebViewPoolSize) {
             pool.addLast(webView)
         } else {
             webView.destroy()

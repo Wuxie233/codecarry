@@ -5443,33 +5443,42 @@ private fun MarkdownContent(
     )
 
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        mathSegments.forEach { segment ->
-            when (segment) {
-                is MarkdownMathSegment.Markdown -> {
-                    if (segment.text.isNotBlank()) {
-                        SelectionContainer {
-                            Markdown(
-                                content = segment.text,
-                                colors = colors,
-                                typography = typography,
-                                components = components,
-                                imageTransformer = Coil2ImageTransformerImpl,
-                                modifier = Modifier.fillMaxWidth()
-                            )
+        mathSegments.forEachIndexed { index, segment ->
+            key(markdownMathSegmentKey(index, segment)) {
+                when (segment) {
+                    is MarkdownMathSegment.Markdown -> {
+                        if (segment.text.isNotBlank()) {
+                            SelectionContainer {
+                                Markdown(
+                                    content = segment.text,
+                                    colors = colors,
+                                    typography = typography,
+                                    components = components,
+                                    imageTransformer = Coil2ImageTransformerImpl,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
                         }
                     }
-                }
-                is MarkdownMathSegment.Math -> {
-                    MarkdownMathFormula(
-                        source = segment.source,
-                        display = segment.display,
-                        textColor = textColor,
-                        fallbackStyle = bodyStyle,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
+                    is MarkdownMathSegment.Math -> {
+                        MarkdownMathFormula(
+                            source = segment.source,
+                            display = segment.display,
+                            textColor = textColor,
+                            fallbackStyle = bodyStyle,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
                 }
             }
         }
+    }
+}
+
+private fun markdownMathSegmentKey(index: Int, segment: MarkdownMathSegment): String {
+    return when (segment) {
+        is MarkdownMathSegment.Markdown -> "md-$index-${segment.text.hashCode()}"
+        is MarkdownMathSegment.Math -> "math-$index-${segment.source.hashCode()}-${segment.display}"
     }
 }
 
