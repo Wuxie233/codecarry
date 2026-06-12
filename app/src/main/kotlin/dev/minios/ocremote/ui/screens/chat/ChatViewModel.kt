@@ -604,10 +604,11 @@ class ChatViewModel @Inject constructor(
                 val rooms = transport.listRooms().mapNotNull { room ->
                     (room as? TransportRoom.Pi)?.room?.toRoundtable()
                 }
-                _piPersonas.value = piApi.listPersonas(piConnection).filter { it.enabled }
                 eventReducer.setRoundtables(serverId, rooms)
+                _piPersonas.value = piApi.listPersonas(piConnection).filter { it.enabled }
                 val transcript = transport.getTranscript(sessionId)
                 processPiTranscript(transcript.events)
+                eventReducer.setRoundtables(serverId, rooms)
                 startPiRoundtableEventStream(transport, transcript.events)
             } catch (error: Exception) {
                 Log.e(TAG, "Failed to load Pi roundtable", error)

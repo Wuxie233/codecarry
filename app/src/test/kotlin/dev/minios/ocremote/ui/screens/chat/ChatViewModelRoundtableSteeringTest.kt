@@ -17,6 +17,7 @@ import dev.minios.ocremote.data.repository.DraftRepository
 import dev.minios.ocremote.data.repository.EventReducer
 import dev.minios.ocremote.data.repository.SettingsRepository
 import dev.minios.ocremote.domain.model.Message
+import dev.minios.ocremote.domain.model.Roundtable
 import dev.minios.ocremote.domain.model.ServerType
 import dev.minios.ocremote.domain.transport.PiTransportEvent
 import dev.minios.ocremote.domain.transport.TransportEvent
@@ -191,7 +192,7 @@ class ChatViewModelRoundtableSteeringTest {
         val sentCommands = Collections.synchronizedList(mutableListOf<PiCommandRequest>())
         val vm = newViewModel(sentCommands, eventReducer)
         collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
-        advanceUntilIdle()
+        awaitRoundtableStatus(vm, Roundtable.Status.AwaitingCommand)
 
         val accepted = sendAndAwaitResult { onDone -> vm.sendMessage("继续", onResult = onDone) }
 
@@ -334,8 +335,25 @@ class ChatViewModelRoundtableSteeringTest {
 
         assertEquals("Truth seeking should lead because coverage without pressure-testing becomes trivia.", adaText)
         awaitRequest(requests, "/roundtables/$ROUND_ID/events", vm)
-        val eventRequest = requests.first { request -> request.url.encodedPath == "/roundtables/$ROUND_ID/events" }
+        val eventRequest = requestSnapshot(requests).first { request -> request.url.encodedPath == "/roundtables/$ROUND_ID/events" }
         assertEquals("5", eventRequest.headers["Last-Event-ID"])
+    }
+
+    @Test
+    fun `roundtable load keeps registry paused status after transcript replay`() = runTest(dispatcher) {
+        val sentCommands = Collections.synchronizedList(mutableListOf<PiCommandRequest>())
+        val vm = newViewModel(
+            sentCommands = sentCommands,
+            roundtableStatus = "paused",
+            transcriptEvents = fixtureEvents("happy-one-round.json"),
+        )
+        collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
+        awaitRoundtableStatus(vm, Roundtable.Status.AwaitingCommand)
+
+        val accepted = sendAndAwaitResult { onDone -> vm.sendMessage("continue", onResult = onDone) }
+
+        assertEquals(true, accepted)
+        assertEquals(listOf("可"), sentCommands.map { it.command })
     }
 
     private suspend fun sendAndAwait(send: ((Boolean) -> Unit) -> Unit) {
@@ -361,11 +379,15 @@ class ChatViewModelRoundtableSteeringTest {
     private suspend fun awaitRequest(requests: List<HttpRequestData>, path: String, vm: ChatViewModel? = null) {
         repeat(50) {
             scheduler.advanceUntilIdle()
-            if (requests.any { request -> request.url.encodedPath == path }) return
+            if (requestSnapshot(requests).any { request -> request.url.encodedPath == path }) return
             withContext(Dispatchers.Default) { delay(5) }
             yield()
         }
-        assertTrue("Expected request $path, got ${requests.map { it.url.encodedPath }}; error=${vm?.uiState?.value?.error}", false)
+        assertTrue("Expected request $path, got ${requestSnapshot(requests).map { it.url.encodedPath }}; error=${vm?.uiState?.value?.error}", false)
+    }
+
+    private fun requestSnapshot(requests: List<HttpRequestData>): List<HttpRequestData> = synchronized(requests) {
+        requests.toList()
     }
 
     private suspend fun awaitUserMessage(vm: ChatViewModel) {
@@ -424,6 +446,15 @@ class ChatViewModelRoundtableSteeringTest {
             yield()
         }
         assertEquals(null, vm.uiState.value.error)
+    }
+
+    private suspend fun awaitRoundtableStatus(vm: ChatViewModel, status: Roundtable.Status) {
+        repeat(50) {
+            scheduler.advanceUntilIdle()
+            if (vm.uiState.value.roundtable?.status == status) return
+            yield()
+        }
+        assertEquals(status, vm.uiState.value.roundtable?.status)
     }
 
     private fun newViewModel(
