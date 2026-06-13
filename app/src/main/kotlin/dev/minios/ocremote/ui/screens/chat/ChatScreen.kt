@@ -5442,6 +5442,27 @@ private fun MarkdownContent(
         }
     )
 
+    val hasMath = remember(mathSegments) { mathSegments.any { it is MarkdownMathSegment.Math } }
+    if (hasMath) {
+        val context = androidx.compose.ui.platform.LocalContext.current
+        val linkColor = when {
+            isAmoled -> MaterialTheme.colorScheme.primary
+            isUser -> MaterialTheme.colorScheme.onPrimaryContainer
+            else -> MaterialTheme.colorScheme.primary
+        }
+        MarkdownMessageView(
+            markdown = normalizedMarkdown,
+            textColor = textColor,
+            codeBackground = codeBlockBg,
+            codeForeground = codeBlockFg,
+            linkColor = linkColor,
+            bodyFontSizeSp = bodyFontSize.value.toInt(),
+            onLinkClick = { url -> openMessageLink(context, url) },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        return
+    }
+
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         mathSegments.forEachIndexed { index, segment ->
             key(markdownMathSegmentKey(index, segment)) {

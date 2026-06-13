@@ -1,0 +1,368 @@
+package dev.minios.ocremote.ui.screens.chat
+
+import android.annotation.SuppressLint
+import android.os.Handler
+import android.os.Looper
+import android.view.View
+import android.view.ViewGroup
+import android.webkit.JavascriptInterface
+import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.net.toUri
+import kotlin.math.absoluteValue
+
+private const val MessageAssetBaseUrl = "file:///android_asset/"
+
+private fun mathPlaceholder(index: Int): String = "xMJXMATH${index}HTAMXJMx"
+
+internal fun buildPlaceholderMarkdown(markdown: String): Pair<String, List<MarkdownMathSegment.Math>> {
+    val segments = splitMarkdownMathSegments(markdown)
+    if (segments.none { it is MarkdownMathSegment.Math }) {
+        return markdown to emptyList()
+    }
+    val math = mutableListOf<MarkdownMathSegment.Math>()
+    val builder = StringBuilder(markdown.length)
+    for (segment in segments) {
+        when (segment) {
+            is MarkdownMathSegment.Markdown -> builder.append(segment.text)
+            is MarkdownMathSegment.Math -> {
+                builder.append(mathPlaceholder(math.size))
+                math += segment
+            }
+        }
+    }
+    return builder.toString() to math
+}
+
+@Composable
+fun MarkdownMessageView(
+    markdown: String,
+    textColor: Color,
+    codeBackground: Color,
+    codeForeground: Color,
+    linkColor: Color,
+    bodyFontSizeSp: Int,
+    onLinkClick: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val context = LocalContext.current
+    val colorScheme = androidx.compose.material3.MaterialTheme.colorScheme
+    val borderColor = colorScheme.outlineVariant.copy(alpha = 0.55f)
+    val isDark = textColor.luminance() > 0.5f
+    val html = remember(markdown, textColor, codeBackground, codeForeground, linkColor, bodyFontSizeSp, isDark) {
+        val (placeholderMarkdown, math) = buildPlaceholderMarkdown(markdown)
+        buildMessageHtml(
+            placeholderMarkdown = placeholderMarkdown,
+            math = math,
+            textColor = textColor,
+            codeBackground = codeBackground,
+            codeForeground = codeForeground,
+            linkColor = linkColor,
+            borderColor = borderColor,
+            bodyFontSizePx = bodyFontSizeSp,
+            darkMode = isDark,
+        )
+    }
+    val renderKey = remember(html) { html.hashCode().absoluteValue.toString(36) }
+    var heightPx by remember(html) { mutableStateOf(0) }
+    val latestOnHeight by rememberUpdatedState<(String, Int) -> Unit> { key, px ->
+        if (key == renderKey && px > 0) {
+            heightPx = px
+        }
+    }
+    val latestOnLink by rememberUpdatedState(onLinkClick)
+    var webView by remember { mutableStateOf<WebView?>(null) }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            webView?.let(MarkdownWebViewPool::release)
+            webView = null
+        }
+    }
+
+    val heightDp = heightPx.dp
+
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .then(if (heightPx > 0) Modifier.height(heightDp) else Modifier.heightIn(min = 24.dp)),
+    ) {
+        AndroidView(
+            factory = {
+                MarkdownWebViewPool.acquire(context.applicationContext) { url -> latestOnLink(url) }
+                    .also { view -> webView = view }
+            },
+            update = { view ->
+                view.removeJavascriptInterface("AndroidMarkdownBridge")
+                view.addJavascriptInterface(MarkdownJavascriptBridge(renderKey, latestOnHeight), "AndroidMarkdownBridge")
+                if (view.tag != renderKey) {
+                    view.tag = renderKey
+                    view.loadDataWithBaseURL(MessageAssetBaseUrl, html, "text/html", "UTF-8", null)
+                }
+            },
+            modifier = Modifier.fillMaxWidth().then(if (heightPx > 0) Modifier.height(heightDp) else Modifier),
+        )
+    }
+}
+
+@SuppressLint("SetJavaScriptEnabled")
+private object MarkdownWebViewPool {
+    private const val MaxPoolSize = 6
+    private val pool = ArrayDeque<WebView>()
+
+    fun acquire(context: android.content.Context, onLink: (String) -> Unit): WebView {
+        val view = if (pool.isEmpty()) WebView(context) else pool.removeFirst()
+        (view.parent as? ViewGroup)?.removeView(view)
+        view.layoutParams = ViewGroup.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+        )
+        view.setLayerType(View.LAYER_TYPE_SOFTWARE, null)
+        view.setBackgroundColor(Color.Transparent.toArgb())
+        view.isVerticalScrollBarEnabled = false
+        view.isHorizontalScrollBarEnabled = false
+        view.webChromeClient = WebChromeClient()
+        view.webViewClient = object : WebViewClient() {
+            override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                val url = request?.url?.toString() ?: return false
+                if (url.startsWith("http://") || url.startsWith("https://")) {
+                    onLink(url)
+                    return true
+                }
+                return false
+            }
+        }
+        view.settings.apply {
+            javaScriptEnabled = true
+            domStorageEnabled = false
+            databaseEnabled = false
+            allowContentAccess = false
+            allowFileAccess = true
+            cacheMode = WebSettings.LOAD_NO_CACHE
+            loadWithOverviewMode = false
+            useWideViewPort = false
+            builtInZoomControls = false
+            displayZoomControls = false
+            javaScriptCanOpenWindowsAutomatically = false
+            textZoom = 100
+            blockNetworkLoads = true
+        }
+        return view
+    }
+
+    fun release(webView: WebView) {
+        (webView.parent as? ViewGroup)?.removeView(webView)
+        webView.stopLoading()
+        webView.tag = null
+        webView.removeJavascriptInterface("AndroidMarkdownBridge")
+        webView.loadUrl("about:blank")
+        if (pool.size < MaxPoolSize) {
+            pool.addLast(webView)
+        } else {
+            webView.destroy()
+        }
+    }
+}
+
+private class MarkdownJavascriptBridge(
+    private val renderKey: String,
+    private val onHeightReported: (String, Int) -> Unit,
+) {
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    @JavascriptInterface
+    fun onHeight(heightPx: Int) {
+        mainHandler.post { onHeightReported(renderKey, heightPx) }
+    }
+}
+
+internal fun openMessageLink(context: android.content.Context, url: String) {
+    runCatching {
+        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, url.toUri())
+        intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        context.startActivity(intent)
+    }
+}
+
+private fun messageCssColor(color: Color): String {
+    val argb = color.toArgb()
+    val a = (argb ushr 24) and 0xFF
+    val r = (argb shr 16) and 0xFF
+    val g = (argb shr 8) and 0xFF
+    val b = argb and 0xFF
+    return "rgba($r,$g,$b,${"%.3f".format(a / 255.0)})"
+}
+
+private fun buildMessageHtml(
+    placeholderMarkdown: String,
+    math: List<MarkdownMathSegment.Math>,
+    textColor: Color,
+    codeBackground: Color,
+    codeForeground: Color,
+    linkColor: Color,
+    borderColor: Color,
+    bodyFontSizePx: Int,
+    darkMode: Boolean,
+): String {
+    val text = messageCssColor(textColor)
+    val codeBg = messageCssColor(codeBackground)
+    val codeFg = messageCssColor(codeForeground)
+    val link = messageCssColor(linkColor)
+    val border = messageCssColor(borderColor)
+    val codeFontSize = (bodyFontSizePx - 1).coerceAtLeast(11)
+    val sourceLiteral = jsStringLiteral(placeholderMarkdown)
+    val mathJson = math.joinToString(prefix = "[", postfix = "]") { seg ->
+        "{\"s\":${jsStringLiteral(seg.source)},\"d\":${if (seg.display) "true" else "false"}}"
+    }
+    return """
+        <!doctype html>
+        <html class="${if (darkMode) "dark" else "light"}">
+        <head>
+          <meta charset="utf-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1" />
+          <link rel="stylesheet" href="katex/katex.min.css" />
+          <style>
+            :root { color-scheme: ${if (darkMode) "dark" else "light"}; }
+            html, body { margin: 0; padding: 0; background: transparent; }
+            body {
+              color: $text;
+              font-family: -apple-system, "Roboto", "Noto Sans", system-ui, sans-serif;
+              font-size: ${bodyFontSizePx}px;
+              line-height: 1.55;
+              overflow-wrap: anywhere;
+              word-break: break-word;
+              -webkit-text-size-adjust: 100%;
+            }
+            #content { padding: 0; }
+            #content > *:first-child { margin-top: 0; }
+            #content > *:last-child { margin-bottom: 0; }
+            p { margin: 0 0 8px; }
+            a { color: $link; text-decoration: none; }
+            h1, h2, h3, h4, h5, h6 { margin: 14px 0 8px; line-height: 1.3; font-weight: 600; }
+            h1 { font-size: ${bodyFontSizePx + 6}px; }
+            h2 { font-size: ${bodyFontSizePx + 4}px; }
+            h3 { font-size: ${bodyFontSizePx + 2}px; }
+            ul, ol { margin: 0 0 8px; padding-left: 22px; }
+            li { margin: 2px 0; }
+            blockquote { margin: 0 0 8px; padding: 2px 0 2px 12px; border-left: 3px solid $border; opacity: 0.85; }
+            hr { border: none; border-top: 1px solid $border; margin: 12px 0; }
+            code { font-family: "JetBrains Mono", "Roboto Mono", monospace; font-size: ${codeFontSize}px; }
+            :not(pre) > code { background: $codeBg; color: $codeFg; padding: 1px 5px; border-radius: 4px; }
+            pre { background: $codeBg; color: $codeFg; padding: 10px 12px; border-radius: 8px; overflow-x: auto; margin: 0 0 8px; }
+            pre code { background: transparent; padding: 0; }
+            table { border-collapse: collapse; display: block; width: max-content; max-width: 100%; overflow-x: auto; margin: 0 0 8px; }
+            th, td { border: 1px solid $border; padding: 6px 10px; text-align: left; }
+            th { background: $codeBg; }
+            img { max-width: 100%; height: auto; border-radius: 6px; }
+            .katex { color: $text; }
+            .katex-display { margin: 8px 0; overflow-x: auto; overflow-y: hidden; padding: 2px 0; }
+            .katex-display > .katex { white-space: nowrap; }
+          </style>
+          <script src="marked.min.js"></script>
+          <script src="katex/katex.min.js"></script>
+        </head>
+        <body>
+          <div id="content"></div>
+          <script>
+            (function() {
+              var bridge = window.AndroidMarkdownBridge;
+              var lastH = 0;
+              function report() {
+                requestAnimationFrame(function() {
+                  var rect = document.body.getBoundingClientRect();
+                  if (rect.width < 10) return;
+                  var h = Math.ceil(rect.height);
+                  if (h > 0 && h !== lastH) {
+                    lastH = h;
+                    if (bridge && bridge.onHeight) bridge.onHeight(h);
+                  }
+                });
+              }
+              function renderMath(token) {
+                try {
+                  return katex.renderToString(token.s, { displayMode: token.d, throwOnError: false, output: 'html' });
+                } catch (e) {
+                  return token.d ? ('$$' + token.s + '$$') : ('\\(' + token.s + '\\)');
+                }
+              }
+              try {
+                if (window.marked && marked.setOptions) {
+                  marked.setOptions({ gfm: true, breaks: false });
+                }
+                var source = $sourceLiteral;
+                var mathList = $mathJson;
+                var html = window.marked ? marked.parse(source) : source;
+                for (var i = 0; i < mathList.length; i++) {
+                  var ph = 'xMJXMATH' + i + 'HTAMXJMx';
+                  html = html.split(ph).join(renderMath(mathList[i]));
+                }
+                document.getElementById('content').innerHTML = html;
+              } catch (err) {
+                document.getElementById('content').textContent = $sourceLiteral;
+              }
+              if (window.ResizeObserver) {
+                try { new ResizeObserver(report).observe(document.body); } catch (e) {}
+              }
+              if (document.fonts && document.fonts.ready) {
+                document.fonts.ready.then(report);
+              }
+              report();
+              setTimeout(report, 120);
+              setTimeout(report, 400);
+              setTimeout(report, 1000);
+            })();
+          </script>
+        </body>
+        </html>
+    """.trimIndent()
+}
+
+private fun jsStringLiteral(value: String): String {
+    val builder = StringBuilder(value.length + 2)
+    builder.append('"')
+    value.forEach { char ->
+        when (char) {
+            '\\' -> builder.append("\\\\")
+            '"' -> builder.append("\\\"")
+            '\n' -> builder.append("\\n")
+            '\r' -> builder.append("\\r")
+            '\t' -> builder.append("\\t")
+            '\u2028' -> builder.append("\\u2028")
+            '\u2029' -> builder.append("\\u2029")
+            '<' -> builder.append("\\u003C")
+            '>' -> builder.append("\\u003E")
+            '&' -> builder.append("\\u0026")
+            else -> {
+                if (char.code < 0x20) {
+                    builder.append("\\u").append(char.code.toString(16).padStart(4, '0'))
+                } else {
+                    builder.append(char)
+                }
+            }
+        }
+    }
+    builder.append('"')
+    return builder.toString()
+}
