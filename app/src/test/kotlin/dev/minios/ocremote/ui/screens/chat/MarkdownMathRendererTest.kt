@@ -51,6 +51,19 @@ class MarkdownMathRendererTest {
     }
 
     @Test
+    fun `splitMarkdownMathSegments treats digit-leading math as math not currency`() {
+        val segments = splitMarkdownMathSegments("两边加 \$3x^2y\$ 得 \$y'=y+3x^2y\$。")
+        val math = segments.filterIsInstance<MarkdownMathSegment.Math>()
+        assertEquals(
+            listOf(
+                MarkdownMathSegment.Math("3x^2y", display = false, delimiter = "\$"),
+                MarkdownMathSegment.Math("y'=y+3x^2y", display = false, delimiter = "\$"),
+            ),
+            math,
+        )
+    }
+
+    @Test
     fun `splitMarkdownMathSegments preserves multiple formulas in order`() {
         val segments = splitMarkdownMathSegments("A \$x\$ B \$y\$ C \$\$z\$\$")
 
