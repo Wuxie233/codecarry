@@ -35,6 +35,20 @@ import kotlin.math.absoluteValue
 
 private const val MessageAssetBaseUrl = "file:///android_asset/"
 
+private object MarkdownRendererAssets {
+    @Volatile private var markedJs: String? = null
+    @Volatile private var katexJs: String? = null
+
+    private fun read(context: android.content.Context, path: String): String =
+        context.assets.open(path).use { it.readBytes().decodeToString() }.replace("</script", "<\\/script")
+
+    fun marked(context: android.content.Context): String =
+        markedJs ?: synchronized(this) { markedJs ?: read(context, "marked.min.js").also { markedJs = it } }
+
+    fun katex(context: android.content.Context): String =
+        katexJs ?: synchronized(this) { katexJs ?: read(context, "katex/katex.min.js").also { katexJs = it } }
+}
+
 private fun mathPlaceholder(index: Int): String = "xMJXMATH${index}HTAMXJMx"
 
 internal fun buildPlaceholderMarkdown(markdown: String): Pair<String, List<MarkdownMathSegment.Math>> {
@@ -71,6 +85,8 @@ fun MarkdownMessageView(
     val colorScheme = androidx.compose.material3.MaterialTheme.colorScheme
     val borderColor = colorScheme.outlineVariant.copy(alpha = 0.55f)
     val isDark = textColor.luminance() > 0.5f
+    val markedJs = remember { MarkdownRendererAssets.marked(context.applicationContext) }
+    val katexJs = remember { MarkdownRendererAssets.katex(context.applicationContext) }
     val html = remember(markdown, textColor, codeBackground, codeForeground, linkColor, bodyFontSizeSp, isDark) {
         val (placeholderMarkdown, math) = buildPlaceholderMarkdown(markdown)
         buildMessageHtml(
@@ -83,6 +99,8 @@ fun MarkdownMessageView(
             borderColor = borderColor,
             bodyFontSizePx = bodyFontSizeSp,
             darkMode = isDark,
+            markedJs = markedJs,
+            katexJs = katexJs,
         )
     }
     val renderKey = remember(html) { html.hashCode().absoluteValue.toString(36) }
@@ -139,7 +157,7 @@ private object MarkdownWebViewPool {
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT,
         )
-        view.setLayerType(View.LAYER_TYPE_SOFTWARE, null)
+        view.setLayerType(View.LAYER_TYPE_NONE, null)
         view.setBackgroundColor(Color.Transparent.toArgb())
         view.isVerticalScrollBarEnabled = false
         view.isHorizontalScrollBarEnabled = false
@@ -225,6 +243,8 @@ private fun buildMessageHtml(
     borderColor: Color,
     bodyFontSizePx: Int,
     darkMode: Boolean,
+    markedJs: String,
+    katexJs: String,
 ): String {
     val text = messageCssColor(textColor)
     val codeBg = messageCssColor(codeBackground)
@@ -280,8 +300,8 @@ private fun buildMessageHtml(
             .katex-display { margin: 8px 0; overflow-x: auto; overflow-y: hidden; padding: 2px 0; }
             .katex-display > .katex { white-space: nowrap; }
           </style>
-          <script src="marked.min.js"></script>
-          <script src="katex/katex.min.js"></script>
+          <script>$markedJs</script>
+          <script>$katexJs</script>
         </head>
         <body>
           <div id="content"></div>
