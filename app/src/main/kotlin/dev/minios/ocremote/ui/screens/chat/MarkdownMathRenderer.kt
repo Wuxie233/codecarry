@@ -251,6 +251,14 @@ private fun findEscapedDollarClose(text: String, start: Int, display: Boolean): 
     return -1
 }
 
+// Sticky: once a formula renders, later appearances start rendered and never revert to
+// raw-text fallback (stops the "renders then turns back into text" flicker on recompose).
+private object MathRenderHeightCache {
+    private val heights = java.util.concurrent.ConcurrentHashMap<String, Float>()
+    fun heightOf(key: String): Dp? = heights[key]?.dp
+    fun store(key: String, height: Dp) { heights[key] = height.value }
+}
+
 @Composable
 fun MarkdownMathFormula(
     source: String,
@@ -264,21 +272,32 @@ fun MarkdownMathFormula(
     val borderColor = colorScheme.outlineVariant.copy(alpha = 0.65f)
     val isDark = colorScheme.surface.luminance() < 0.35f
     var html by remember(source, textColor, backgroundColor, isDark, display) { mutableStateOf<String?>(null) }
-    var renderState by remember(source, display) { mutableStateOf<MathWebRenderState>(MathWebRenderState.Preparing) }
+    var renderState by remember(source, display) {
+        val cached = MathRenderHeightCache.heightOf(mathRenderKeyFor(source, display))
+        mutableStateOf<MathWebRenderState>(
+            if (cached != null) MathWebRenderState.Rendered(cached) else MathWebRenderState.Preparing,
+        )
+    }
     var currentRenderKey by remember(source, display) { mutableStateOf(mathRenderKeyFor(source, display)) }
     val latestOnRendered by rememberUpdatedState<(String, Int) -> Unit> { key, heightPx ->
         if (key == currentRenderKey) {
-            renderState = MathWebRenderState.Rendered(heightPx.coerceIn(if (display) 48 else 24, 720).dp)
+            val height = heightPx.coerceIn(if (display) 48 else 24, 720).dp
+            MathRenderHeightCache.store(key, height)
+            renderState = MathWebRenderState.Rendered(height)
         }
     }
     val latestOnFailed by rememberUpdatedState<(String, String?) -> Unit> { key, _ ->
-        if (key == currentRenderKey) renderState = MathWebRenderState.Fallback
+        if (key == currentRenderKey && MathRenderHeightCache.heightOf(key) == null) {
+            renderState = MathWebRenderState.Fallback
+        }
     }
 
     LaunchedEffect(source, textColor, backgroundColor, isDark, display) {
-        renderState = MathWebRenderState.Preparing
         val key = mathRenderKeyFor(source, display)
         currentRenderKey = key
+        if (MathRenderHeightCache.heightOf(key) == null) {
+            renderState = MathWebRenderState.Preparing
+        }
         html = withContext(Dispatchers.Default) {
             buildMathRenderHtml(
                 source = source,
@@ -294,7 +313,9 @@ fun MarkdownMathFormula(
     LaunchedEffect(html, currentRenderKey) {
         if (html != null) {
             delay(MathRenderTimeoutMillis)
-            if (renderState == MathWebRenderState.Preparing || renderState == MathWebRenderState.Loading) {
+            if ((renderState == MathWebRenderState.Preparing || renderState == MathWebRenderState.Loading) &&
+                MathRenderHeightCache.heightOf(currentRenderKey) == null
+            ) {
                 renderState = MathWebRenderState.Fallback
             }
         }
@@ -341,7 +362,11 @@ fun MarkdownMathFormula(
                 backgroundColor = backgroundColor,
                 onRendered = latestOnRendered,
                 onFailed = latestOnFailed,
-                onLoading = { renderState = MathWebRenderState.Loading },
+                onLoading = {
+                    if (MathRenderHeightCache.heightOf(currentRenderKey) == null) {
+                        renderState = MathWebRenderState.Loading
+                    }
+                },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(height)
