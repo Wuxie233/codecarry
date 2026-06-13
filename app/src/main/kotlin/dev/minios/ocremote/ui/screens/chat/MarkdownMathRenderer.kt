@@ -3,6 +3,7 @@ package dev.minios.ocremote.ui.screens.chat
 import android.annotation.SuppressLint
 import android.os.Handler
 import android.os.Looper
+import android.view.View
 import android.view.ViewGroup
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
@@ -51,7 +52,7 @@ import kotlin.math.absoluteValue
 private const val MathAssetBaseUrl = "file:///android_asset/"
 private const val MathAssetScript = "mathjax-tex-svg-full.js"
 private const val MathRenderTimeoutMillis = 4_000L
-private const val MathWebViewPoolSize = 8
+private const val MathWebViewPoolSize = 3
 
 internal sealed interface MarkdownMathSegment {
     data class Markdown(val text: String) : MarkdownMathSegment
@@ -433,6 +434,7 @@ private object MathWebViewPool {
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT,
         )
+        view.setLayerType(View.LAYER_TYPE_SOFTWARE, null)
         view.setBackgroundColor(Color.Transparent.toArgb())
         view.webViewClient = WebViewClient()
         view.webChromeClient = WebChromeClient()
@@ -444,7 +446,7 @@ private object MathWebViewPool {
             allowFileAccess = true
             allowFileAccessFromFileURLs = false
             allowUniversalAccessFromFileURLs = false
-            cacheMode = WebSettings.LOAD_CACHE_ELSE_NETWORK
+            cacheMode = WebSettings.LOAD_NO_CACHE
             loadWithOverviewMode = true
             useWideViewPort = true
             builtInZoomControls = false
