@@ -99,6 +99,27 @@ internal fun splitMarkdownMathSegments(markdown: String): List<MarkdownMathSegme
         }
         if (!inlineCode && char == '\\' && index + 1 < markdown.length) {
             val next = markdown[index + 1]
+            if (next == '$') {
+                val display = markdown.startsWith("\\$\\$", index)
+                val delimiter = if (display) "\\$\\$" else "\\$"
+                if (!display && isEscapedCurrencyLikeDollar(markdown, index)) {
+                    markdownBuffer.append(char)
+                    markdownBuffer.append(next)
+                    index += 2
+                    continue
+                }
+                val sourceStart = index + delimiter.length
+                val closeIndex = findEscapedDollarClose(markdown, sourceStart, display)
+                if (closeIndex >= 0) {
+                    val source = markdown.substring(sourceStart, closeIndex).trim()
+                    if (source.isNotEmpty()) {
+                        flushMarkdown()
+                        segments += MarkdownMathSegment.Math(source, display = display, delimiter = delimiter)
+                    }
+                    index = closeIndex + delimiter.length
+                    continue
+                }
+            }
             if (next == '[' || next == '(') {
                 val close = if (next == '[') "\\]" else "\\)"
                 val closeIndex = markdown.indexOf(close, startIndex = index + 2)
@@ -200,6 +221,11 @@ private fun isCurrencyLikeDollar(text: String, index: Int): Boolean {
     return next != null && next.isDigit()
 }
 
+private fun isEscapedCurrencyLikeDollar(text: String, index: Int): Boolean {
+    val next = text.getOrNull(index + 2)
+    return next != null && next.isDigit()
+}
+
 private fun findDollarClose(text: String, start: Int, display: Boolean): Int {
     val delimiter = if (display) "$$" else "$"
     var cursor = start
@@ -207,6 +233,18 @@ private fun findDollarClose(text: String, start: Int, display: Boolean): Int {
         val close = text.indexOf(delimiter, cursor)
         if (close < 0) return -1
         if (!isEscaped(text, close) && (display || !isCurrencyLikeDollar(text, close))) return close
+        cursor = close + delimiter.length
+    }
+    return -1
+}
+
+private fun findEscapedDollarClose(text: String, start: Int, display: Boolean): Int {
+    val delimiter = if (display) "\\$\\$" else "\\$"
+    var cursor = start
+    while (cursor < text.length) {
+        val close = text.indexOf(delimiter, cursor)
+        if (close < 0) return -1
+        if (display || !isEscapedCurrencyLikeDollar(text, close)) return close
         cursor = close + delimiter.length
     }
     return -1

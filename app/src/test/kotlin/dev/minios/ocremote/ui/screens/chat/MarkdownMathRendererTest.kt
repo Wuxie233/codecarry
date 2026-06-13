@@ -64,4 +64,28 @@ class MarkdownMathRendererTest {
             math,
         )
     }
+
+    @Test
+    fun `splitMarkdownMathSegments detects markdown escaped display math`() {
+        val markdown = """
+            之前那个等式，换成撇号就是：
+
+            \$\$
+            \frac{1}{y}\,y' \;=\; \big(\ln|y|\big)'
+            \$\$
+        """.trimIndent()
+
+        val math = splitMarkdownMathSegments(markdown).filterIsInstance<MarkdownMathSegment.Math>()
+
+        assertEquals(
+            listOf(
+                MarkdownMathSegment.Math(
+                    "\\frac{1}{y}\\,y' \\;=\\; \\big(\\ln|y|\\big)'",
+                    display = true,
+                    delimiter = "\\\$\\\$",
+                ),
+            ),
+            math,
+        )
+    }
 }
