@@ -233,7 +233,7 @@ private fun messageCssColor(color: Color): String {
     return "rgba($r,$g,$b,${"%.3f".format(a / 255.0)})"
 }
 
-private fun buildMessageHtml(
+internal fun buildMessageHtml(
     placeholderMarkdown: String,
     math: List<MarkdownMathSegment.Math>,
     textColor: Color,
@@ -290,14 +290,30 @@ private fun buildMessageHtml(
             hr { border: none; border-top: 1px solid $border; margin: 12px 0; }
             code { font-family: "JetBrains Mono", "Roboto Mono", monospace; font-size: ${codeFontSize}px; }
             :not(pre) > code { background: $codeBg; color: $codeFg; padding: 1px 5px; border-radius: 4px; }
-            pre { background: $codeBg; color: $codeFg; padding: 10px 12px; border-radius: 8px; overflow-x: auto; margin: 0 0 8px; }
+            .markdown-horizontal-scroll {
+              max-width: 100%;
+              overflow-x: auto;
+              overflow-y: hidden;
+              -webkit-overflow-scrolling: touch;
+              touch-action: pan-x;
+              overscroll-behavior-x: contain;
+            }
+            pre {
+              background: $codeBg;
+              color: $codeFg;
+              padding: 10px 12px;
+              border-radius: 8px;
+              margin: 0 0 8px;
+              white-space: pre;
+            }
             pre code { background: transparent; padding: 0; }
-            table { border-collapse: collapse; display: block; width: max-content; max-width: 100%; overflow-x: auto; margin: 0 0 8px; }
+            .table-scroll { margin: 0 0 8px; }
+            table { border-collapse: collapse; width: max-content; }
             th, td { border: 1px solid $border; padding: 6px 10px; text-align: left; }
             th { background: $codeBg; }
             img { max-width: 100%; height: auto; border-radius: 6px; }
             .katex { color: $text; }
-            .katex-display { margin: 8px 0; overflow-x: auto; overflow-y: hidden; padding: 2px 0; }
+            .katex-display { margin: 8px 0; padding: 2px 0; }
             .katex-display > .katex { white-space: nowrap; }
           </style>
           <script>$markedJs</script>
@@ -327,6 +343,18 @@ private fun buildMessageHtml(
                   return token.d ? ('$$' + token.s + '$$') : ('\\(' + token.s + '\\)');
                 }
               }
+              function prepareHorizontalScrollables() {
+                document.querySelectorAll('table').forEach(function(table) {
+                  if (table.parentElement && table.parentElement.classList.contains('table-scroll')) return;
+                  var wrapper = document.createElement('div');
+                  wrapper.className = 'table-scroll markdown-horizontal-scroll';
+                  table.parentNode.insertBefore(wrapper, table);
+                  wrapper.appendChild(table);
+                });
+                document.querySelectorAll('pre, .table-scroll, .katex-display').forEach(function(node) {
+                  node.classList.add('markdown-horizontal-scroll');
+                });
+              }
               try {
                 if (window.marked && marked.setOptions) {
                   marked.setOptions({ gfm: true, breaks: false });
@@ -339,6 +367,7 @@ private fun buildMessageHtml(
                   html = html.split(ph).join(renderMath(mathList[i]));
                 }
                 document.getElementById('content').innerHTML = html;
+                prepareHorizontalScrollables();
               } catch (err) {
                 document.getElementById('content').textContent = $sourceLiteral;
               }
