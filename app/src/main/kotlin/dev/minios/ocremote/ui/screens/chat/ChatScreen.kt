@@ -23,7 +23,6 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.layout.WindowInsets
@@ -62,7 +61,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.runtime.toMutableStateList
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -380,27 +378,9 @@ private fun String.cleanPiInShortLine(): String {
 private fun Modifier.codeHorizontalScroll(): Modifier {
     return if (!LocalCodeWordWrap.current) {
         this
-            .horizontalDragGuard()
             .horizontalScroll(rememberScrollState())
     } else {
         this
-    }
-}
-
-@Composable
-@OptIn(ExperimentalComposeUiApi::class)
-private fun Modifier.horizontalDragGuard(): Modifier {
-    val view = LocalView.current
-    return this.pointerInteropFilter { event ->
-        when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> {
-                view.parent?.requestDisallowInterceptTouchEvent(true)
-            }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                view.parent?.requestDisallowInterceptTouchEvent(false)
-            }
-        }
-        false
     }
 }
 
@@ -5533,7 +5513,6 @@ private fun ScrollableMarkdownTable(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .horizontalDragGuard()
                 .horizontalScroll(scrollState)
         ) {
             Column(
