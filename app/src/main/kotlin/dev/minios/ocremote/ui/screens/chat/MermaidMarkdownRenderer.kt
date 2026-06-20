@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
@@ -83,17 +84,19 @@ fun MermaidAwareMarkdownCodeFence(
     node: ASTNode,
     highlights: Highlights.Builder = Highlights.Builder(),
 ) {
-    MarkdownCodeFence(content, node) { code, language ->
-        val decision = remember(code, language) { decideMermaidFenceRendering(code, language) }
-        if (decision.mode == MermaidFenceRenderMode.RenderDiagram) {
-            MermaidMarkdownDiagram(
-                source = code,
-                fallbackContent = {
-                    SafeMarkdownHighlightedCode(code, language, highlights)
-                },
-            )
-        } else {
-            SafeMarkdownHighlightedCode(code, language, highlights)
+    DisableSelection {
+        MarkdownCodeFence(content, node) { code, language ->
+            val decision = remember(code, language) { decideMermaidFenceRendering(code, language) }
+            if (decision.mode == MermaidFenceRenderMode.RenderDiagram) {
+                MermaidMarkdownDiagram(
+                    source = code,
+                    fallbackContent = {
+                        SafeMarkdownHighlightedCode(code, language, highlights)
+                    },
+                )
+            } else {
+                SafeMarkdownHighlightedCode(code, language, highlights)
+            }
         }
     }
 }

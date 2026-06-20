@@ -1,10 +1,13 @@
 package dev.minios.ocremote.ui.screens.chat
 
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.DisableSelection
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -25,7 +28,6 @@ import com.mikepenz.markdown.compose.components.MarkdownComponent
 import com.mikepenz.markdown.compose.elements.MarkdownCodeBackground
 import com.mikepenz.markdown.compose.elements.MarkdownCodeBlock
 import com.mikepenz.markdown.compose.elements.MarkdownCodeFence
-import com.mikepenz.markdown.compose.elements.material.MarkdownBasicText
 import dev.snipme.highlights.Highlights
 import dev.snipme.highlights.model.BoldHighlight
 import dev.snipme.highlights.model.ColorHighlight
@@ -46,8 +48,10 @@ fun SafeMarkdownHighlightedCodeFence(
     node: ASTNode,
     highlights: Highlights.Builder = Highlights.Builder(),
 ) {
-    MarkdownCodeFence(content, node) { code, language ->
-        SafeMarkdownHighlightedCode(code, language, highlights)
+    DisableSelection {
+        MarkdownCodeFence(content, node) { code, language ->
+            SafeMarkdownHighlightedCode(code, language, highlights)
+        }
     }
 }
 
@@ -57,8 +61,10 @@ fun SafeMarkdownHighlightedCodeBlock(
     node: ASTNode,
     highlights: Highlights.Builder = Highlights.Builder(),
 ) {
-    MarkdownCodeBlock(content, node) { code, language ->
-        SafeMarkdownHighlightedCode(code, language, highlights)
+    DisableSelection {
+        MarkdownCodeBlock(content, node) { code, language ->
+            SafeMarkdownHighlightedCode(code, language, highlights)
+        }
     }
 }
 
@@ -73,30 +79,37 @@ fun SafeMarkdownHighlightedCode(
     val codeTextColor = LocalMarkdownColors.current.codeText
     val codeBackgroundCornerSize = LocalMarkdownDimens.current.codeBackgroundCornerSize
     val codeBlockPadding = LocalMarkdownPadding.current.codeBlock
-    val codeScrollModifier = if (LocalCodeWordWrap.current) {
-        Modifier
-    } else {
-        Modifier
-            .horizontalScroll(rememberScrollState())
-    }
+    val codeScrollState = rememberScrollState()
     val annotatedCode = remember(code, language, highlights, codeTextColor) {
         buildSafeHighlightedAnnotatedString(code, language, highlights, codeTextColor)
     }
 
-    MarkdownCodeBackground(
-        color = backgroundCodeColor,
-        shape = RoundedCornerShape(codeBackgroundCornerSize),
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 8.dp),
-    ) {
-        MarkdownBasicText(
-            annotatedCode,
-            color = codeTextColor,
-            modifier = codeScrollModifier
-                .padding(codeBlockPadding),
-            style = style,
-        )
+    DisableSelection {
+        MarkdownCodeBackground(
+            color = backgroundCodeColor,
+            shape = RoundedCornerShape(codeBackgroundCornerSize),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 8.dp),
+        ) {
+            Box(
+                modifier = if (LocalCodeWordWrap.current) {
+                    Modifier.fillMaxWidth()
+                } else {
+                    Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(codeScrollState)
+                }
+            ) {
+                Text(
+                    text = annotatedCode,
+                    color = codeTextColor,
+                    modifier = Modifier.padding(codeBlockPadding),
+                    style = style,
+                    softWrap = LocalCodeWordWrap.current,
+                )
+            }
+        }
     }
 }
 

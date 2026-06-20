@@ -19,8 +19,8 @@ class MarkdownMessageWebViewScrollTest {
     @Test
     fun webViewHtmlMakesEveryPreTableAndMathBlockIndependentlyScrollable() {
         val html = buildMessageHtml(
-            placeholderMarkdown = "ignored ${'$'}x${'$'}",
-            math = listOf(MarkdownMathSegment.Math("x", display = false, delimiter = "${'$'}")),
+            placeholderMarkdown = "xMJXMATH0HTAMXJMx",
+            math = listOf(MarkdownMathSegment.Math("x", display = true, delimiter = "${'$'}${'$'}")),
             textColor = Color.Black,
             codeBackground = Color.LightGray,
             codeForeground = Color.Black,
@@ -31,10 +31,17 @@ class MarkdownMessageWebViewScrollTest {
             markedJs = """
                 window.marked={
                   setOptions:function(){},
-                  parse:function(){return '<pre><code>'+('a'.repeat(400))+'</code></pre><table><tr><td>'+('b'.repeat(400))+'</td></tr></table><pre><code>'+('c'.repeat(400))+'</code></pre><table><tr><td>'+('d'.repeat(400))+'</td></tr></table>';}
+                  parse:function(source){return '<pre><code>'+('a'.repeat(400))+'</code></pre><table><tr><td>'+('b'.repeat(400))+'</td></tr></table><pre><code>'+('c'.repeat(400))+'</code></pre><table><tr><td>'+('d'.repeat(400))+'</td></tr></table>'+source;}
                 };
             """.trimIndent(),
-            katexJs = "window.katex={renderToString:function(){return '<span>'+('e'.repeat(400))+'</span>';}};",
+            katexJs = """
+                window.katex={
+                  renderToString:function(source, options){
+                    var content = '<span>'+('e'.repeat(400))+'</span>';
+                    return options && options.displayMode ? '<span class="katex-display">'+content+'</span>' : content;
+                  }
+                };
+            """.trimIndent(),
         )
 
         val context = InstrumentationRegistry.getInstrumentation().targetContext
@@ -58,11 +65,11 @@ class MarkdownMessageWebViewScrollTest {
             (function(){
               var nodes = Array.prototype.slice.call(document.querySelectorAll('pre, .table-scroll, .katex-display'));
               nodes.forEach(function(node){ node.scrollLeft = 64; });
-              return JSON.stringify({count:nodes.length, scrolled:nodes.map(function(node){ return node.scrollLeft > 0; })});
+              return 'count=' + nodes.length + ';scrolled=' + nodes.map(function(node){ return node.scrollLeft > 0; }).join(',');
             })()
         """.trimIndent())
 
-        assertTrue("expected four markdown blocks plus one math block: $result", result.contains("\"count\":5"))
+        assertTrue("expected four markdown blocks plus one math block: $result", result.contains("count=5"))
         assertEquals("expected every horizontal block to accept scrollLeft: $result", 5, Regex("true").findAll(result).count())
 
         main.post { webView.destroy() }
