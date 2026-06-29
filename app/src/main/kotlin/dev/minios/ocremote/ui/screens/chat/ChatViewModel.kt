@@ -1108,6 +1108,10 @@ class ChatViewModel @Inject constructor(
                     directory = sessionDirectory
                 )
                 if (BuildConfig.DEBUG) Log.d(TAG, "Sent prompt to session $sessionId (${parts.size} parts)")
+                // Optimistically mark the session busy so the working indicator shows immediately
+                // instead of waiting for the server's session.status=busy event to stream back.
+                // The real SSE status reconciles this (idle on completion/error).
+                eventReducer.updateSessionStatus(sessionId, SessionStatus.Busy)
                 _error.value = null
                 onResult(true)
             } catch (e: Exception) {
