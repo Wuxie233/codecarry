@@ -146,6 +146,9 @@ class OpenCodeConnectionService : Service() {
     private val lastNotifiedAssistantMessageBySession = ConcurrentHashMap<String, String>()
     private val postedPiNotificationKeys = ConcurrentHashMap.newKeySet<String>()
 
+    /** Dedup permission notifications fired from the connect-time bootstrap, keyed by request ID. */
+    private val postedPermissionRequestIds = ConcurrentHashMap.newKeySet<String>()
+
     inner class LocalBinder : Binder() {
         fun getService(): OpenCodeConnectionService = this@OpenCodeConnectionService
     }
@@ -450,27 +453,44 @@ class OpenCodeConnectionService : Service() {
                     Log.w(TAG, "[${server.displayName}] Failed to pre-load sessions: ${e.message}")
                 }
 
+                bootstrapSessionStatuses(server, transport)
+
+                // Capture which permissions are carried over from a previous connection BEFORE
+                // subscribing, so the permission reconcile can tell stale (replied while away)
+                // from live (arriving on this fresh stream) apart.
+                val prePermissionIds = currentServerPermissionIds(server.id)
+
                 try {
-                    transport.openEventStream()
-                        .catch { error ->
-                            Log.e(TAG, "[${server.displayName}] SSE stream error", error)
-                            updateServerConnected(server.id, false)
-                            throw error
-                        }
-                        .collect { transportEvent ->
-                            if (connections[server.id]?.isConnected != true) {
-                                updateServerConnected(server.id, true)
-                                attempt = 0
-                                updatePersistentNotification()
+                    coroutineScope {
+                        val streamScope = this
+                        transport.openEventStream()
+                            .catch { error ->
+                                Log.e(TAG, "[${server.displayName}] SSE stream error", error)
+                                updateServerConnected(server.id, false)
+                                throw error
                             }
-                            when (transportEvent) {
-                                is TransportEvent.OpenCode -> processEvent(server, transportEvent.event)
-                                is TransportEvent.Pi -> {
-                                    eventReducer.processEvent(transportEvent, server.id)
-                                    maybeShowPiNotification(server, transportEvent.event)
+                            .collect { transportEvent ->
+                                if (connections[server.id]?.isConnected != true) {
+                                    updateServerConnected(server.id, true)
+                                    attempt = 0
+                                    updatePersistentNotification()
+                                    // Fetch the permission snapshot only once the stream is confirmed
+                                    // open (first event received). Any permission asked after this point
+                                    // arrives on the live stream, so fetching now closes the no-replay
+                                    // gap a fetch-before-subscribe order would leave open.
+                                    streamScope.launch {
+                                        bootstrapPendingPermissions(server, transport, prePermissionIds)
+                                    }
+                                }
+                                when (transportEvent) {
+                                    is TransportEvent.OpenCode -> processEvent(server, transportEvent.event)
+                                    is TransportEvent.Pi -> {
+                                        eventReducer.processEvent(transportEvent, server.id)
+                                        maybeShowPiNotification(server, transportEvent.event)
+                                    }
                                 }
                             }
-                        }
+                    }
 
                     // Flow completed normally (server closed connection)
                     Log.w(TAG, "[${server.displayName}] SSE stream completed")
@@ -491,6 +511,66 @@ class OpenCodeConnectionService : Service() {
                 updatePersistentNotification()
                 delay(delayMs)
             }
+        }
+    }
+
+    private fun currentServerPermissionIds(serverId: String): Set<String> {
+        val sessionIds = eventReducer.serverSessions.value[serverId] ?: emptySet()
+        return eventReducer.permissions.value
+            .filterKeys { it in sessionIds }
+            .values
+            .flatten()
+            .mapTo(mutableSetOf()) { it.id }
+    }
+
+    /**
+     * Pull current session statuses (retry/cooldown/busy) on (re)connect so they show
+     * immediately instead of waiting for the next pushed SSE event. Runs before subscribing:
+     * no SSE deltas exist yet, so the status reconcile (absent-from-snapshot -> idle) is safe,
+     * and a status missed in the tiny window self-heals from the session's ongoing status events.
+     */
+    private suspend fun bootstrapSessionStatuses(server: ServerConfig, transport: AgentTransport) {
+        try {
+            val statuses = transport.getSessionStatuses()
+            eventReducer.setSessionStatuses(server.id, statuses)
+            Log.i(TAG, "[${server.displayName}] Bootstrapped ${statuses.size} non-idle session status(es)")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "[${server.displayName}] Failed to bootstrap session statuses: ${e.message}")
+        }
+    }
+
+    /**
+     * Pull pending permission requests on (re)connect and reconcile them, firing a deduped
+     * notification for each genuinely new one. Called concurrently with the live SSE stream so
+     * permissions asked during the fetch are not lost.
+     */
+    private suspend fun bootstrapPendingPermissions(
+        server: ServerConfig,
+        transport: AgentTransport,
+        preExistingIds: Set<String>,
+    ) {
+        try {
+            val pending = transport.listPendingPermissions()
+            eventReducer.reconcilePermissions(server.id, pending, preExistingIds)
+            if (pending.isNotEmpty() && settingsRepository.notificationsEnabled.first()) {
+                for (perm in pending) {
+                    if (isChildSession(perm.sessionId)) continue
+                    if (!postedPermissionRequestIds.add(perm.id)) continue
+                    showPermissionNotification(
+                        server = server,
+                        sessionId = perm.sessionId,
+                        requestId = perm.id,
+                        permission = perm.permission,
+                    )
+                }
+            }
+            Log.i(TAG, "[${server.displayName}] Bootstrapped ${pending.size} pending permission(s)")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "[${server.displayName}] Failed to bootstrap pending permissions: ${e.message}")
         }
     }
 
@@ -577,6 +657,7 @@ class OpenCodeConnectionService : Service() {
             }
             is SseEvent.PermissionAsked -> {
                 if (isChildSession(event.sessionId)) return
+                if (!postedPermissionRequestIds.add(event.id)) return
                 Log.i(TAG, "[${server.displayName}] Permission asked: ${event.permission} (id=${event.id})")
                 showPermissionNotification(
                     server = server,

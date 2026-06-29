@@ -509,6 +509,7 @@ class EventReducer @Inject constructor() {
     private fun handlePermissionAsked(event: SseEvent.PermissionAsked) {
         _permissions.update { current ->
             val sessionPermissions = current[event.sessionId]?.toMutableList() ?: mutableListOf()
+            if (sessionPermissions.any { it.id == event.id }) return@update current
             sessionPermissions.add(event)
             current + (event.sessionId to sessionPermissions)
         }
@@ -539,6 +540,53 @@ class EventReducer @Inject constructor() {
             current.mapValues { (_, permissions) ->
                 permissions.filter { it.id != requestId }
             }
+        }
+    }
+
+    /**
+     * Additively merge a REST permission snapshot into a session's pending list, deduped by
+     * request ID. Used when opening a session: it surfaces permissions asked before open without
+     * ever wiping a permission that arrived concurrently via SSE.
+     */
+    fun mergePermissions(sessionId: String, permissions: List<SseEvent.PermissionAsked>) {
+        if (permissions.isEmpty()) return
+        _permissions.update { current ->
+            val existing = current[sessionId]?.toMutableList() ?: mutableListOf()
+            val existingIds = existing.mapTo(mutableSetOf()) { it.id }
+            for (permission in permissions) {
+                if (existingIds.add(permission.id)) existing.add(permission)
+            }
+            current + (sessionId to existing)
+        }
+    }
+
+    /**
+     * Reconcile a server's pending permissions against a full REST snapshot (GET /permission) on
+     * connect/reconnect. Adds snapshot entries, keeps permissions that arrived live during the
+     * bootstrap window (ids not in [preExistingIds]), and drops stale pre-existing permissions that
+     * the snapshot no longer lists (replied while the client was disconnected). [preExistingIds] is
+     * the set of permission ids already held for this server when the bootstrap began.
+     */
+    fun reconcilePermissions(
+        serverId: String,
+        snapshot: List<SseEvent.PermissionAsked>,
+        preExistingIds: Set<String>,
+    ) {
+        val snapshotIds = snapshot.mapTo(mutableSetOf()) { it.id }
+        val snapshotBySession = snapshot.groupBy { it.sessionId }
+        val serverSessionIds = _serverSessions.value[serverId] ?: emptySet()
+        val sessionsToReconcile = serverSessionIds + snapshotBySession.keys
+        _permissions.update { current ->
+            val next = current.toMutableMap()
+            for (sessionId in sessionsToReconcile) {
+                val existing = next[sessionId].orEmpty()
+                val keptIds = mutableSetOf<String>()
+                val kept = existing.filter { (it.id in snapshotIds || it.id !in preExistingIds) && keptIds.add(it.id) }
+                val additions = snapshotBySession[sessionId].orEmpty().filter { keptIds.add(it.id) }
+                val merged = kept + additions
+                if (merged.isEmpty()) next.remove(sessionId) else next[sessionId] = merged
+            }
+            next
         }
     }
     
@@ -633,6 +681,28 @@ class EventReducer @Inject constructor() {
     fun updateSessionStatus(sessionId: String, status: SessionStatus) {
         _sessionStatuses.update { it + (sessionId to status) }
         if (BuildConfig.DEBUG) Log.d(TAG, "Manually updated session $sessionId status to $status")
+    }
+
+    /**
+     * Reconcile session statuses from a REST snapshot (GET /session/status) on connect/reconnect.
+     * The snapshot only lists non-idle sessions, so this server's tracked sessions that are
+     * absent from [statuses] are reset to Idle (they finished while the client was disconnected).
+     * Other servers' sessions are left untouched.
+     */
+    fun setSessionStatuses(serverId: String, statuses: Map<String, SessionStatus>) {
+        val serverSessionIds = _serverSessions.value[serverId] ?: emptySet()
+        _sessionStatuses.update { current ->
+            val next = current.toMutableMap()
+            for ((sessionId, status) in statuses) {
+                next[sessionId] = status
+            }
+            for (sessionId in serverSessionIds) {
+                if (sessionId !in statuses) {
+                    next[sessionId] = SessionStatus.Idle
+                }
+            }
+            next
+        }
     }
 
     fun setRoundtables(serverId: String, roundtables: List<Roundtable>) {

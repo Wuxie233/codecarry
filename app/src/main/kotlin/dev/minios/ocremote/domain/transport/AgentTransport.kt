@@ -2,6 +2,7 @@ package dev.minios.ocremote.domain.transport
 
 import dev.minios.ocremote.domain.model.Project
 import dev.minios.ocremote.domain.model.Session
+import dev.minios.ocremote.domain.model.SessionStatus
 import dev.minios.ocremote.domain.model.SseEvent
 import kotlinx.coroutines.flow.Flow
 
@@ -11,6 +12,10 @@ interface AgentTransport {
     suspend fun listRoomScopes(): List<TransportRoomScope>
 
     fun openEventStream(directory: String? = null): Flow<TransportEvent>
+
+    suspend fun getSessionStatuses(): Map<String, SessionStatus> = emptyMap()
+
+    suspend fun listPendingPermissions(): List<SseEvent.PermissionAsked> = emptyList()
 
     suspend fun sendMessage(
         roomId: String,

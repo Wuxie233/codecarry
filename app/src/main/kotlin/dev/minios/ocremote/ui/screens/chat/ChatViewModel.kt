@@ -19,6 +19,7 @@ import dev.minios.ocremote.data.api.PiPersonaDto
 import dev.minios.ocremote.data.api.PromptPart
 import dev.minios.ocremote.data.api.ProviderInfo
 import dev.minios.ocremote.data.api.RoundtableSseEvent
+import dev.minios.ocremote.data.api.toPermissionAsked
 import dev.minios.ocremote.data.api.ServerConnection
 import dev.minios.ocremote.data.preferences.SessionListPreferencesRepository
 import dev.minios.ocremote.data.repository.DraftRepository
@@ -586,6 +587,8 @@ class ChatViewModel @Inject constructor(
                 loadSession()
                 loadMessages()
                 loadPendingQuestions()
+                loadPendingPermissions()
+                loadSessionStatus()
             }
             loadProviders()
             loadAgents()
@@ -774,6 +777,39 @@ class ChatViewModel @Inject constructor(
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to load pending questions: ${e.javaClass.simpleName}: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Load pending permission requests for this session from REST on open, so a
+     * permission asked before the chat opened is visible without waiting for an SSE push.
+     * Merges additively (never wipes a permission that arrived live via SSE). Mirrors
+     * [loadPendingQuestions]; must run after loadSession() so sessionDirectory is set.
+     */
+    private suspend fun loadPendingPermissions() {
+        try {
+            val sessionPermissions = api.listPendingPermissions(conn, directory = sessionDirectory)
+                .filter { it.sessionId == sessionId }
+                .map { it.toPermissionAsked() }
+            eventReducer.mergePermissions(sessionId, sessionPermissions)
+            if (BuildConfig.DEBUG) Log.d(TAG, "Loaded ${sessionPermissions.size} pending permission(s) for session $sessionId")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to load pending permissions: ${e.javaClass.simpleName}: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Surface this session's current status (retry/cooldown/busy) from REST on open, so the
+     * status banner reflects an in-progress retry immediately instead of waiting for an SSE push.
+     * Only applies a non-idle status; clearing a stale status is the connection service's job.
+     */
+    private suspend fun loadSessionStatus() {
+        try {
+            val status = api.getSessionStatuses(conn, directory = sessionDirectory)[sessionId] ?: return
+            eventReducer.updateSessionStatus(sessionId, status)
+            if (BuildConfig.DEBUG) Log.d(TAG, "Loaded status $status for session $sessionId")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to load session status: ${e.javaClass.simpleName}: ${e.message}", e)
         }
     }
 

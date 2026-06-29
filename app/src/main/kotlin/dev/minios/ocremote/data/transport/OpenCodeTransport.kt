@@ -5,7 +5,10 @@ import dev.minios.ocremote.data.api.OpenCodeApi
 import dev.minios.ocremote.data.api.PromptPart
 import dev.minios.ocremote.data.api.ServerConnection
 import dev.minios.ocremote.data.api.SseClient
+import dev.minios.ocremote.data.api.toPermissionAsked
 import dev.minios.ocremote.domain.model.ServerConfig
+import dev.minios.ocremote.domain.model.SessionStatus
+import dev.minios.ocremote.domain.model.SseEvent
 import dev.minios.ocremote.domain.transport.AgentTransport
 import dev.minios.ocremote.domain.transport.TransportEvent
 import dev.minios.ocremote.domain.transport.TransportMessagePart
@@ -32,6 +35,12 @@ class OpenCodeTransport(
     override fun openEventStream(directory: String?): Flow<TransportEvent> =
         sseClient.connectToGlobalEvents(conn, directory = directory)
             .map { event -> TransportEvent.OpenCode(event) }
+
+    override suspend fun getSessionStatuses(): Map<String, SessionStatus> =
+        api.getSessionStatuses(conn)
+
+    override suspend fun listPendingPermissions(): List<SseEvent.PermissionAsked> =
+        api.listPendingPermissions(conn).map { it.toPermissionAsked() }
 
     override suspend fun sendMessage(
         roomId: String,

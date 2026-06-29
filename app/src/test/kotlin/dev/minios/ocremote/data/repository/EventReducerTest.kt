@@ -244,6 +244,148 @@ class EventReducerTest {
         assertTrue(reducer.permissions.value["ses-1"].orEmpty().isEmpty())
     }
 
+    // ============ Bootstrap hydration (proactive REST snapshot on connect/open) ============
+
+    @Test
+    fun setSessionStatusesUpsertsBusyAndRetryFromSnapshot() {
+        val reducer = EventReducer()
+        reducer.setSessions("server-1", listOf(testSession("ses-busy"), testSession("ses-retry")))
+
+        reducer.setSessionStatuses(
+            "server-1",
+            mapOf(
+                "ses-busy" to SessionStatus.Busy,
+                "ses-retry" to SessionStatus.Retry(attempt = 2, message = "rate limited", next = 1_700L),
+            ),
+        )
+
+        assertEquals(SessionStatus.Busy, reducer.sessionStatuses.value["ses-busy"])
+        assertEquals(
+            SessionStatus.Retry(attempt = 2, message = "rate limited", next = 1_700L),
+            reducer.sessionStatuses.value["ses-retry"],
+        )
+    }
+
+    @Test
+    fun setSessionStatusesResetsTrackedSessionAbsentFromSnapshotToIdle() {
+        val reducer = EventReducer()
+        reducer.setSessions("server-1", listOf(testSession("ses-was-busy"), testSession("ses-now-busy")))
+        // ses-was-busy was retrying before; the fresh snapshot no longer lists it (it completed while we were away).
+        processStatusEvent(reducer, "ses-was-busy", SessionStatus.Retry(attempt = 1, message = "x", next = 9L), "server-1")
+
+        reducer.setSessionStatuses("server-1", mapOf("ses-now-busy" to SessionStatus.Busy))
+
+        assertEquals(SessionStatus.Idle, reducer.sessionStatuses.value["ses-was-busy"])
+        assertEquals(SessionStatus.Busy, reducer.sessionStatuses.value["ses-now-busy"])
+    }
+
+    @Test
+    fun setSessionStatusesDoesNotResetOtherServersSessions() {
+        val reducer = EventReducer()
+        reducer.setSessions("server-1", listOf(testSession("ses-s1")))
+        reducer.setSessions("server-2", listOf(testSession("ses-s2")))
+        processStatusEvent(reducer, "ses-s2", SessionStatus.Busy, "server-2")
+
+        // Bootstrapping server-1 with an empty snapshot must not touch server-2's busy session.
+        reducer.setSessionStatuses("server-1", emptyMap())
+
+        assertEquals(SessionStatus.Busy, reducer.sessionStatuses.value["ses-s2"])
+    }
+
+    @Test
+    fun permissionAskedIsIdempotentByRequestId() {
+        val reducer = EventReducer()
+        val asked = SseEvent.PermissionAsked(id = "perm-1", sessionId = "ses-1", permission = "p")
+
+        reducer.processEvent(asked, serverId = "server-1")
+        reducer.processEvent(asked, serverId = "server-1")
+
+        assertEquals(listOf("perm-1"), reducer.permissions.value["ses-1"].orEmpty().map { it.id })
+    }
+
+    @Test
+    fun mergePermissionsAddsSnapshotEntriesWithoutWipingLiveEntries() {
+        val reducer = EventReducer()
+        reducer.processEvent(
+            SseEvent.PermissionAsked(id = "live-1", sessionId = "ses-1", permission = "live"),
+            serverId = "server-1",
+        )
+
+        reducer.mergePermissions(
+            "ses-1",
+            listOf(
+                SseEvent.PermissionAsked(id = "live-1", sessionId = "ses-1", permission = "live"),
+                SseEvent.PermissionAsked(id = "snap-1", sessionId = "ses-1", permission = "snap"),
+            ),
+        )
+
+        assertEquals(setOf("live-1", "snap-1"), reducer.permissions.value["ses-1"].orEmpty().map { it.id }.toSet())
+    }
+
+    @Test
+    fun mergePermissionsWithEmptySnapshotPreservesLiveEntry() {
+        val reducer = EventReducer()
+        reducer.processEvent(
+            SseEvent.PermissionAsked(id = "live-1", sessionId = "ses-1", permission = "live"),
+            serverId = "server-1",
+        )
+
+        reducer.mergePermissions("ses-1", emptyList())
+
+        assertEquals(listOf("live-1"), reducer.permissions.value["ses-1"].orEmpty().map { it.id })
+    }
+
+    @Test
+    fun reconcilePermissionsClearsStalePreExistingEntryAbsentFromSnapshot() {
+        val reducer = EventReducer()
+        reducer.setSessions("server-1", listOf(testSession("ses-1")))
+        // This permission was pending before reconnect; it was replied while disconnected, so the snapshot omits it.
+        reducer.processEvent(
+            SseEvent.PermissionAsked(id = "stale-1", sessionId = "ses-1", permission = "stale"),
+            serverId = "server-1",
+        )
+
+        reducer.reconcilePermissions("server-1", snapshot = emptyList(), preExistingIds = setOf("stale-1"))
+
+        assertTrue(reducer.permissions.value["ses-1"].orEmpty().isEmpty())
+    }
+
+    @Test
+    fun reconcilePermissionsPreservesLiveEntryArrivedDuringBootstrap() {
+        val reducer = EventReducer()
+        reducer.setSessions("server-1", listOf(testSession("ses-1")))
+        // "live-1" arrived via SSE during the bootstrap window, so it is NOT in preExistingIds and NOT in the snapshot.
+        reducer.processEvent(
+            SseEvent.PermissionAsked(id = "live-1", sessionId = "ses-1", permission = "live"),
+            serverId = "server-1",
+        )
+
+        reducer.reconcilePermissions("server-1", snapshot = emptyList(), preExistingIds = emptySet())
+
+        assertEquals(listOf("live-1"), reducer.permissions.value["ses-1"].orEmpty().map { it.id })
+    }
+
+    @Test
+    fun reconcilePermissionsAddsSnapshotEntriesAndKeepsConfirmedPreExisting() {
+        val reducer = EventReducer()
+        reducer.setSessions("server-1", listOf(testSession("ses-1")))
+        reducer.processEvent(
+            SseEvent.PermissionAsked(id = "keep-1", sessionId = "ses-1", permission = "keep"),
+            serverId = "server-1",
+        )
+
+        reducer.reconcilePermissions(
+            "server-1",
+            snapshot = listOf(
+                SseEvent.PermissionAsked(id = "keep-1", sessionId = "ses-1", permission = "keep"),
+                SseEvent.PermissionAsked(id = "new-1", sessionId = "ses-1", permission = "new"),
+            ),
+            preExistingIds = setOf("keep-1"),
+        )
+
+        assertEquals(setOf("keep-1", "new-1"), reducer.permissions.value["ses-1"].orEmpty().map { it.id }.toSet())
+    }
+
     private fun testSession(id: String, updated: Long = 1L, archived: Long? = null) = Session(
         id = id,
         directory = "/tmp/project",

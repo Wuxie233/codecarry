@@ -539,6 +539,33 @@ class OpenCodeApi @Inject constructor(
 
     // ============ Messages ============
 
+    /**
+     * Fetch the current status of every non-idle session: GET /session/status.
+     * The server returns a map { sessionID -> { type, attempt?, message?, next? } } and
+     * omits idle sessions (absent == idle). Parsed manually to mirror the SSE
+     * `session.status` decoder in [SseClient], since [SessionStatus] is not a plain
+     * polymorphic-by-discriminator type.
+     */
+    suspend fun getSessionStatuses(conn: ServerConnection, directory: String? = null): Map<String, SessionStatus> {
+        val raw = httpClient.get("${conn.baseUrl}/session/status") {
+            conn.authHeader?.let { header("Authorization", it) }
+            directory?.let { header("x-opencode-directory", encodeDirectoryHeader(it)) }
+        }.bodyAsText()
+        val root = json.parseToJsonElement(raw).jsonObject
+        return root.mapValues { (_, value) -> parseSessionStatus(value.jsonObject) }
+    }
+
+    private fun parseSessionStatus(obj: JsonObject): SessionStatus =
+        when (obj["type"]?.jsonPrimitive?.contentOrNull) {
+            "busy" -> SessionStatus.Busy
+            "retry" -> SessionStatus.Retry(
+                attempt = obj["attempt"]?.jsonPrimitive?.intOrNull ?: 0,
+                message = obj["message"]?.jsonPrimitive?.contentOrNull ?: "",
+                next = obj["next"]?.jsonPrimitive?.contentOrNull?.toLongOrNull() ?: 0L,
+            )
+            else -> SessionStatus.Idle
+        }
+
     suspend fun listMessages(
         conn: ServerConnection,
         sessionId: String,
@@ -1301,6 +1328,16 @@ data class PermissionRequest(
     val metadata: Map<String, JsonElement>? = null,
     val always: List<String> = emptyList(),
     val tool: ToolRef? = null
+)
+
+fun PermissionRequest.toPermissionAsked(): SseEvent.PermissionAsked = SseEvent.PermissionAsked(
+    id = id,
+    sessionId = sessionId,
+    permission = permission,
+    patterns = patterns,
+    metadata = metadata,
+    always = always,
+    tool = tool,
 )
 
 @Serializable
