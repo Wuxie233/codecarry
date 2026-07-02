@@ -217,14 +217,21 @@ private fun isEscaped(text: String, index: Int): Boolean {
     return slashCount % 2 == 1
 }
 
-private const val MathBoundaryChars = "^_{}\\()+=*/|<>"
+private const val MathContinuationChars = "^_{}\\(+=*|<>"
 
 private fun looksLikeCurrencyAmount(text: String, contentStart: Int): Boolean {
     var cursor = contentStart
     if (cursor >= text.length || !text[cursor].isDigit()) return false
     while (cursor < text.length && (text[cursor].isDigit() || text[cursor] == ',' || text[cursor] == '.')) cursor++
     val next = text.getOrNull(cursor) ?: return true
-    return !(next.isLetter() || next in MathBoundaryChars)
+    if (next.isLetter() || next in MathContinuationChars) return false
+    return next != '/' || looksLikeCurrencyRatioSeparator(text, cursor)
+}
+
+private fun looksLikeCurrencyRatioSeparator(text: String, slashIndex: Int): Boolean {
+    var cursor = slashIndex + 1
+    while (cursor < text.length && text[cursor].isWhitespace()) cursor++
+    return cursor < text.length - 1 && text[cursor] == '$' && text[cursor + 1].isDigit()
 }
 
 private fun isCurrencyLikeDollar(text: String, index: Int): Boolean = looksLikeCurrencyAmount(text, index + 1)

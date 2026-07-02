@@ -43,6 +43,23 @@ class MarkdownMathRendererTest {
     }
 
     @Test
+    fun `splitMarkdownMathSegments keeps financial dollar amounts as markdown`() {
+        val examples = listOf(
+            "The monthly cost is (${ '$' }827/${ '$' }1484).",
+            "Budget was ${ '$' }7000).",
+            "Paid ${ '$' }827/${ '$' }1484 today.",
+            "Expected ${ '$' }1,484 and got ${ '$' }827.50.",
+            "Total is ${ '$' }769 + ${ '$' }58 = ${ '$' }827.",
+        )
+
+        for (markdown in examples) {
+            val math = splitMarkdownMathSegments(markdown).filterIsInstance<MarkdownMathSegment.Math>()
+
+            assertEquals("Expected no math in: $markdown", emptyList<MarkdownMathSegment.Math>(), math)
+        }
+    }
+
+    @Test
     fun `splitMarkdownMathSegments leaves unmatched delimiters as markdown`() {
         val segments = splitMarkdownMathSegments("Keep \$unfinished and \\(also unfinished")
 
@@ -58,6 +75,20 @@ class MarkdownMathRendererTest {
             listOf(
                 MarkdownMathSegment.Math("3x^2y", display = false, delimiter = "\$"),
                 MarkdownMathSegment.Math("y'=y+3x^2y", display = false, delimiter = "\$"),
+            ),
+            math,
+        )
+    }
+
+    @Test
+    fun `splitMarkdownMathSegments treats numeric operator expressions as math not currency`() {
+        val segments = splitMarkdownMathSegments("Ratios can be written as \$3/4\$ or \$3+2\$.")
+        val math = segments.filterIsInstance<MarkdownMathSegment.Math>()
+
+        assertEquals(
+            listOf(
+                MarkdownMathSegment.Math("3/4", display = false, delimiter = "\$"),
+                MarkdownMathSegment.Math("3+2", display = false, delimiter = "\$"),
             ),
             math,
         )

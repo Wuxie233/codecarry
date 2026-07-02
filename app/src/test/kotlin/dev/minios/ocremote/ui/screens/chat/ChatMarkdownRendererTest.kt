@@ -49,6 +49,19 @@ class ChatMarkdownRendererTest {
     }
 
     @Test
+    fun `resolveMessageMarkdownRoute keeps financial markdown with dollar ratios on compose route`() {
+        val markdown = """
+            **Total budget**: ${'$'}7000
+            **Current spend**: ${'$'}769 + ${'$'}58 = ${'$'}827
+            **Coverage**: (${ '$' }827/${ '$' }1484)
+        """.trimIndent()
+
+        val route = resolveMessageMarkdownRoute(markdown)
+
+        assertEquals(MessageMarkdownRoute.ComposeMarkdown, route)
+    }
+
+    @Test
     fun `resolveMessageMarkdownRoute keeps mermaid fences on compose route`() {
         val markdown = """
             ```mermaid
