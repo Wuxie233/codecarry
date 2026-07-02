@@ -1215,7 +1215,7 @@ private suspend fun buildAttachmentFromUri(
 fun ChatScreen(
     onNavigateBack: () -> Unit,
     onNavigateToSession: (sessionId: String, directory: String) -> Unit = { _, _ -> },
-    onOpenInWebView: () -> Unit = {},
+    onCopyWebLink: () -> String = { "" },
     initialSharedImages: List<Uri> = emptyList(),
     onSharedImagesConsumed: () -> Unit = {},
     startInTerminalMode: Boolean = false,
@@ -1904,10 +1904,16 @@ fun ChatScreen(
                             border = if (isAmoled) BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)) else null
                         ) {
                             DropdownMenuItem(
-                                text = { Text(stringResource(R.string.menu_open_in_web)) },
+                                text = { Text(stringResource(R.string.menu_copy_web_link)) },
                                 onClick = {
                                     showMenu = false
-                                    onOpenInWebView()
+                                    val link = onCopyWebLink()
+                                    if (link.isNotBlank()) {
+                                        clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(link))
+                                        coroutineScope.launch {
+                                            snackbarHostState.showSnackbar(context.getString(R.string.chat_copied_clipboard))
+                                        }
+                                    }
                                 },
                                 leadingIcon = {
                                     Icon(Icons.Default.Language, contentDescription = null)
@@ -1983,6 +1989,21 @@ fun ChatScreen(
                             )
                             // Show Share or Unshare depending on current share status
                             if (uiState.shareUrl != null) {
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.menu_copy_share_link)) },
+                                    onClick = {
+                                        showMenu = false
+                                        uiState.shareUrl?.let { url ->
+                                            clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(url))
+                                            coroutineScope.launch {
+                                                snackbarHostState.showSnackbar(context.getString(R.string.chat_share_url_copied))
+                                            }
+                                        }
+                                    },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.CopyAll, contentDescription = null)
+                                    }
+                                )
                                 DropdownMenuItem(
                                     text = { Text(stringResource(R.string.cmd_unshare)) },
                                     onClick = {

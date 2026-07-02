@@ -625,23 +625,10 @@ fun NavGraph(
                         launchSingleTop = true
                     }
                 },
-                onOpenInWebView = {
-                    // Build the session path: /<base64url(directory)>/session/<sessionId>
+                onCopyWebLink = {
                     val session = eventReducer.sessions.value.find { it.id == sessionId }
                     val dir = session?.directory ?: ""
-                    val encodedDir = android.util.Base64.encodeToString(
-                        dir.toByteArray(Charsets.UTF_8),
-                        android.util.Base64.NO_WRAP
-                    ).replace('+', '-').replace('/', '_').replace("=", "")
-                    val sessionPath = "/$encodedDir/session/$sessionId"
-                    val route = Screen.WebView.createRoute(
-                        serverUrl = serverUrl,
-                        username = username,
-                        password = password,
-                        serverName = serverName,
-                        initialPath = sessionPath
-                    )
-                    navController.navigate(route) { launchSingleTop = true }
+                    buildWebSessionLink(serverUrl, dir, sessionId)
                 },
                 initialSharedImages = imagesForThisSession,
                 onSharedImagesConsumed = {
