@@ -262,7 +262,7 @@ private fun ScrollableMarkdownParagraph(model: MarkdownComponentModel) {
     }
 }
 
-internal fun containsWideAsciiToken(text: String, threshold: Int = 48): Boolean {
+internal fun containsWideAsciiToken(text: String, threshold: Int = 28): Boolean {
     var run = 0
     text.forEach { char ->
         run = if (char.code in 0x21..0x7E) run + 1 else 0

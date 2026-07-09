@@ -81,6 +81,8 @@ class ChatMarkdownRendererTest {
     fun `containsWideAsciiToken detects unbreakable prose segments`() {
         assertTrue(containsWideAsciiToken("→ ${"a".repeat(48)}"))
         assertTrue(containsWideAsciiToken("/root/CODE/oc-remote/app/src/main/kotlin/dev/minios/ocremote/ui/screens/chat/ChatScreen.kt"))
+        assertTrue(containsWideAsciiToken("`chatgpt-comparison-detection`"))
+        assertTrue(containsWideAsciiToken("`~/.config/opencode/skills/**/SKILL.md`"))
     }
 
     @Test

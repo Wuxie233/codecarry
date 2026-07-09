@@ -62,6 +62,44 @@ class MessageMarkdownHorizontalDragTest {
     }
 
     @Test
+    fun assistantParagraphWithMediumInlineCodeTokensCanBeDraggedHorizontally() {
+        rule.setContent {
+            MaterialTheme {
+                CompositionLocalProvider(
+                    LocalChatFontSize provides "medium",
+                    LocalCodeWordWrap provides false,
+                ) {
+                    MessageMarkdownContent(
+                        markdown = """
+                            已完成安装和验证。
+
+                            `opencode debug skill` 已能列出全部 10 个新 skill；每个目录都只有 1 个 `SKILL.md`，且 frontmatter `name` 和目录名匹配。最后确认 `debug skill` 总计输出 80 个 skill，stderr 为空。没有改 `opencode.json` 或 `oh-my-openagent.json`，因为 OpenCode 本来就会扫描 `~/.config/opencode/skills/**/SKILL.md`。
+                        """.trimIndent(),
+                        textColor = Color.Black,
+                        isUser = false,
+                        modifier = Modifier
+                            .testTag(MessageTag)
+                            .width(220.dp)
+                            .padding(8.dp),
+                    )
+                }
+            }
+        }
+
+        val node = rule.onNodeWithTag(MessageTag)
+        val before = node.captureToImage()
+        node.performTouchInput { swipeLeft() }
+        rule.waitForIdle()
+        val after = node.captureToImage()
+        val changed = changedPixels(before, after)
+
+        assertTrue(
+            "expected horizontal drag to shift assistant markdown with medium inline-code tokens, changed=$changed",
+            changed > 250,
+        )
+    }
+
+    @Test
     fun wideReasoningBlockCanBeDraggedHorizontally() {
         rule.setContent {
             MaterialTheme {
@@ -84,6 +122,46 @@ class MessageMarkdownHorizontalDragTest {
 
         assertTrue(
             "expected horizontal drag to visibly shift wide reasoning content, changed=$changed",
+            changed > 250,
+        )
+    }
+
+    @Test
+    fun wideCodeBlockCanBeDraggedHorizontally() {
+        rule.setContent {
+            MaterialTheme {
+                CompositionLocalProvider(
+                    LocalChatFontSize provides "medium",
+                    LocalCodeWordWrap provides false,
+                ) {
+                    MessageMarkdownContent(
+                        markdown = """
+                            Real response:
+
+                            ```text
+                            /root/CODE/hackathon/pulse/docs/design-system.md -> ${"0123456789abcdef".repeat(12)}
+                            ```
+                        """.trimIndent(),
+                        textColor = Color.Black,
+                        isUser = false,
+                        modifier = Modifier
+                            .testTag(MessageTag)
+                            .width(220.dp)
+                            .padding(8.dp),
+                    )
+                }
+            }
+        }
+
+        val node = rule.onNodeWithTag(MessageTag)
+        val before = node.captureToImage()
+        node.performTouchInput { swipeLeft() }
+        rule.waitForIdle()
+        val after = node.captureToImage()
+        val changed = changedPixels(before, after)
+
+        assertTrue(
+            "expected horizontal drag to visibly shift wide code block content, changed=$changed",
             changed > 250,
         )
     }
