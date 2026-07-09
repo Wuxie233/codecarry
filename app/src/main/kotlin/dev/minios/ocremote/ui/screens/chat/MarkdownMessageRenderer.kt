@@ -160,7 +160,7 @@ private object MarkdownWebViewPool {
         view.setLayerType(View.LAYER_TYPE_NONE, null)
         view.setBackgroundColor(Color.Transparent.toArgb())
         view.isVerticalScrollBarEnabled = false
-        view.isHorizontalScrollBarEnabled = false
+        view.isHorizontalScrollBarEnabled = true
         view.webChromeClient = WebChromeClient()
         view.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {

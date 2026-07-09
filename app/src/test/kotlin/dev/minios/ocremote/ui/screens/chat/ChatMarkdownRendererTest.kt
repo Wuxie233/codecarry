@@ -1,6 +1,8 @@
 package dev.minios.ocremote.ui.screens.chat
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ChatMarkdownRendererTest {
@@ -73,5 +75,19 @@ class ChatMarkdownRendererTest {
         val route = resolveMessageMarkdownRoute(markdown)
 
         assertEquals(MessageMarkdownRoute.ComposeMarkdown, route)
+    }
+
+    @Test
+    fun `containsWideAsciiToken detects unbreakable prose segments`() {
+        assertTrue(containsWideAsciiToken("→ ${"a".repeat(48)}"))
+        assertTrue(containsWideAsciiToken("/root/CODE/oc-remote/app/src/main/kotlin/dev/minios/ocremote/ui/screens/chat/ChatScreen.kt"))
+    }
+
+    @Test
+    fun `containsWideAsciiToken ignores normal wrapped prose`() {
+        val prose = "This is a normal assistant reply with spaces between words and no single token that needs horizontal drag."
+
+        assertFalse(containsWideAsciiToken(prose))
+        assertFalse(containsWideAsciiToken("中文内容会按正常气泡宽度显示，不应该触发横向拖动"))
     }
 }

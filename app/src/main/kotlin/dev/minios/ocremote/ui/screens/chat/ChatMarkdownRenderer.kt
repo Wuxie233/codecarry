@@ -6,6 +6,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.DisableSelection
@@ -36,7 +38,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mikepenz.markdown.coil2.Coil2ImageTransformerImpl
+import com.mikepenz.markdown.compose.components.MarkdownComponentModel
 import com.mikepenz.markdown.compose.components.markdownComponents
+import com.mikepenz.markdown.compose.elements.MarkdownParagraph
 import com.mikepenz.markdown.m3.Markdown
 import com.mikepenz.markdown.m3.markdownColor
 import com.mikepenz.markdown.m3.markdownTypography
@@ -159,6 +163,9 @@ internal fun MessageMarkdownContent(
     val components = markdownComponents(
         codeBlock = safeHighlightedCodeBlock,
         codeFence = mermaidAwareCodeFence,
+        paragraph = { model ->
+            ScrollableMarkdownParagraph(model)
+        },
         table = {
             DisableSelection {
                 val rawTable = runCatching {
@@ -218,6 +225,50 @@ internal fun MessageMarkdownContent(
             }
         }
     }
+}
+
+@Composable
+private fun ScrollableMarkdownParagraph(model: MarkdownComponentModel) {
+    val rawParagraph = remember(model.content, model.node.startOffset, model.node.endOffset) {
+        runCatching {
+            model.content.substring(model.node.startOffset, model.node.endOffset)
+        }.getOrElse { _ -> model.content }
+    }
+    if (!containsWideAsciiToken(rawParagraph)) {
+        MarkdownParagraph(
+            model.content,
+            model.node,
+            Modifier.fillMaxWidth(),
+            model.typography.paragraph,
+        )
+        return
+    }
+
+    val scrollState = rememberScrollState()
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val paragraphMinWidth = maxWidth
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(scrollState),
+        ) {
+            MarkdownParagraph(
+                model.content,
+                model.node,
+                Modifier.widthIn(min = paragraphMinWidth),
+                model.typography.paragraph,
+            )
+        }
+    }
+}
+
+internal fun containsWideAsciiToken(text: String, threshold: Int = 48): Boolean {
+    var run = 0
+    text.forEach { char ->
+        run = if (char.code in 0x21..0x7E) run + 1 else 0
+        if (run >= threshold) return true
+    }
+    return false
 }
 
 @Composable

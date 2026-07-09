@@ -28,3 +28,7 @@
 - Do not restart OpenCode services or processes from this repo work.
 - Do not force-push or clobber existing tags unless the user explicitly requests it.
 - Keep `.codegraph/`, `.kotlin/`, and local OpenCode cache/config artifacts out of commits.
+
+## Gotchas & Decisions
+
+- Chat markdown has two render paths: normal markdown uses Compose in `ChatMarkdownRenderer.kt`; KaTeX/math markdown uses the WebView renderer in `MarkdownMessageRenderer.kt`. Keep code blocks, tables, and display math independently horizontally scrollable; only wrap ordinary paragraphs when they contain long unbreakable ASCII tokens so normal prose still wraps to the bubble width.
