@@ -2,6 +2,7 @@ package dev.minios.ocremote.ui.screens.chat
 
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.Box
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
@@ -60,6 +61,33 @@ class MessageMarkdownHorizontalDragTest {
         )
     }
 
+    @Test
+    fun wideReasoningBlockCanBeDraggedHorizontally() {
+        rule.setContent {
+            MaterialTheme {
+                Box(
+                    modifier = Modifier
+                        .testTag(ReasoningTag)
+                        .width(220.dp),
+                ) {
+                    ReasoningBlock("→ ${"abcdefghijklmnopqrstuvwxyz".repeat(8)}")
+                }
+            }
+        }
+
+        val node = rule.onNodeWithTag(ReasoningTag)
+        val before = node.captureToImage()
+        rule.onNodeWithTag(WidePlainTextTag).performTouchInput { swipeLeft() }
+        rule.waitForIdle()
+        val after = node.captureToImage()
+        val changed = changedPixels(before, after)
+
+        assertTrue(
+            "expected horizontal drag to visibly shift wide reasoning content, changed=$changed",
+            changed > 250,
+        )
+    }
+
     private fun changedPixels(before: ImageBitmap, after: ImageBitmap): Int {
         val beforePixels = before.toPixelMap()
         val afterPixels = after.toPixelMap()
@@ -76,5 +104,6 @@ class MessageMarkdownHorizontalDragTest {
 
     private companion object {
         const val MessageTag = "wide-markdown-message"
+        const val ReasoningTag = "wide-reasoning-message"
     }
 }

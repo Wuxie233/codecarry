@@ -41,6 +41,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.text.selection.LocalTextSelectionColors
 import androidx.compose.foundation.text.selection.TextSelectionColors
@@ -67,6 +68,7 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.testTag
 
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
@@ -179,6 +181,8 @@ val LocalCollapseTools = compositionLocalOf { false }
 
 /** Whether haptic feedback is enabled. */
 val LocalHapticFeedbackEnabled = compositionLocalOf { true }
+
+internal const val WidePlainTextTag = "wide-plain-text"
 
 /** Image save request callback available to image preview composables. */
 val LocalImageSaveRequest = compositionLocalOf<(ByteArray, String, String?) -> Unit> { { _, _, _ -> } }
@@ -792,7 +796,7 @@ private fun ErrorPayloadContent(
 ) {
     if (!looksLikeHtmlPayload(text)) {
         SelectionContainer {
-            Text(
+            ScrollablePlainText(
                 text = text,
                 style = textStyle,
                 color = textColor,
@@ -869,7 +873,7 @@ private fun ErrorPayloadContent(
             )
         } else {
             SelectionContainer {
-                Text(
+                ScrollablePlainText(
                     text = text,
                     style = textStyle,
                     color = textColor,
@@ -5366,7 +5370,7 @@ private fun normalizeHtmlForEmbeddedPreview(html: String): String {
 }
 
 @Composable
-private fun ReasoningBlock(text: String) {
+internal fun ReasoningBlock(text: String) {
     val isAmoled = isAmoledTheme()
     Surface(
         shape = RoundedCornerShape(8.dp),
@@ -5383,7 +5387,11 @@ private fun ReasoningBlock(text: String) {
                     .background(MaterialTheme.colorScheme.outlineVariant)
             )
             
-            Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = 12.dp, vertical = 10.dp)
+            ) {
                 Text(
                     text = stringResource(R.string.chat_status_thinking),
                     style = MaterialTheme.typography.labelSmall.copy(
@@ -5393,15 +5401,51 @@ private fun ReasoningBlock(text: String) {
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
                 )
                 Spacer(modifier = Modifier.height(6.dp))
-                Text(
-                    text = text,
-                    style = MaterialTheme.typography.bodyMedium.copy(
-                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
-                        lineHeight = 20.sp
-                    ),
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                )
+                SelectionContainer {
+                    ScrollablePlainText(
+                        text = text,
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                            lineHeight = 20.sp
+                        ),
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
+                }
             }
+        }
+    }
+}
+
+@Composable
+private fun ScrollablePlainText(
+    text: String,
+    style: TextStyle,
+    color: Color,
+    modifier: Modifier = Modifier,
+) {
+    if (!containsWideAsciiToken(text)) {
+        Text(
+            text = text,
+            style = style,
+            color = color,
+            modifier = modifier,
+        )
+        return
+    }
+
+    DisableSelection {
+        Box(
+            modifier = modifier
+                .fillMaxWidth()
+                .testTag(WidePlainTextTag)
+                .horizontalScroll(rememberScrollState())
+        ) {
+            Text(
+                text = text,
+                style = style,
+                color = color,
+                softWrap = false,
+            )
         }
     }
 }
