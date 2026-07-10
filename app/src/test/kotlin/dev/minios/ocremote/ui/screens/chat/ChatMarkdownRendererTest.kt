@@ -79,17 +79,88 @@ class ChatMarkdownRendererTest {
 
     @Test
     fun `containsWideAsciiToken detects unbreakable prose segments`() {
-        assertTrue(containsWideAsciiToken("→ ${"a".repeat(48)}"))
-        assertTrue(containsWideAsciiToken("/root/CODE/oc-remote/app/src/main/kotlin/dev/minios/ocremote/ui/screens/chat/ChatScreen.kt"))
-        assertTrue(containsWideAsciiToken("`chatgpt-comparison-detection`"))
-        assertTrue(containsWideAsciiToken("`~/.config/opencode/skills/**/SKILL.md`"))
+        assertTrue(ChatOverflowPolicy.containsWideAsciiToken("→ ${"a".repeat(48)}"))
+        assertTrue(ChatOverflowPolicy.containsWideAsciiToken("/root/CODE/oc-remote/app/src/main/kotlin/dev/minios/ocremote/ui/screens/chat/ChatScreen.kt"))
+        assertTrue(ChatOverflowPolicy.containsWideAsciiToken("`chatgpt-comparison-detection`"))
+        assertTrue(ChatOverflowPolicy.containsWideAsciiToken("`~/.config/opencode/skills/**/SKILL.md`"))
     }
 
     @Test
     fun `containsWideAsciiToken ignores normal wrapped prose`() {
         val prose = "This is a normal assistant reply with spaces between words and no single token that needs horizontal drag."
+        val reviewFindings = """
+            1. High risk: main-thread command queue timeout does not cancel the pending command.
+            [DispatchAsync](/root/CODE/RimWorld/RimWorldMod_RimWorldAI/RimWorldMCP/McpCommandQueue.cs:72) times out, but the queued command can still execute later.
+        """.trimIndent()
 
-        assertFalse(containsWideAsciiToken(prose))
-        assertFalse(containsWideAsciiToken("中文内容会按正常气泡宽度显示，不应该触发横向拖动"))
+        assertFalse(ChatOverflowPolicy.containsWideAsciiToken(prose))
+        assertFalse(ChatOverflowPolicy.containsWideAsciiToken("中文内容会按正常气泡宽度显示，不应该触发横向拖动"))
+        assertFalse(ChatOverflowPolicy.containsWideAsciiToken(reviewFindings))
+    }
+
+    @Test
+    fun `containsWideAsciiToken keeps 28 character threshold`() {
+        assertFalse(ChatOverflowPolicy.containsWideAsciiToken("a".repeat(27)))
+        assertTrue(ChatOverflowPolicy.containsWideAsciiToken("a".repeat(ChatOverflowPolicy.WideAsciiThreshold)))
+    }
+
+    @Test
+    fun `overflow policy scrolls only wide wrap by default text kinds`() {
+        val reviewFindings = """
+            1. High risk: main-thread command queue timeout does not cancel the pending command.
+            [DispatchAsync](/root/CODE/RimWorld/RimWorldMod_RimWorldAI/RimWorldMCP/McpCommandQueue.cs:72) times out, but the queued command can still execute later.
+        """.trimIndent()
+
+        assertEquals(
+            ChatOverflowTreatment.HorizontalScroll,
+            ChatOverflowPolicy.resolve(
+                kind = ChatOverflowContentKind.MarkdownParagraph,
+                text = "`~/.config/opencode/skills/**/SKILL.md`",
+            ),
+        )
+        assertEquals(
+            ChatOverflowTreatment.HorizontalScroll,
+            ChatOverflowPolicy.resolve(
+                kind = ChatOverflowContentKind.PlainText,
+                text = "→ ${"a".repeat(48)}",
+            ),
+        )
+        assertEquals(
+            ChatOverflowTreatment.Wrap,
+            ChatOverflowPolicy.resolve(
+                kind = ChatOverflowContentKind.MarkdownParagraph,
+                text = reviewFindings,
+            ),
+        )
+    }
+
+    @Test
+    fun `overflow policy preserves code table and webview semantics`() {
+        assertEquals(
+            ChatOverflowTreatment.HorizontalScroll,
+            ChatOverflowPolicy.resolve(
+                kind = ChatOverflowContentKind.CodeBlock,
+                codeWordWrap = false,
+            ),
+        )
+        assertEquals(
+            ChatOverflowTreatment.Wrap,
+            ChatOverflowPolicy.resolve(
+                kind = ChatOverflowContentKind.CodeBlock,
+                codeWordWrap = true,
+            ),
+        )
+        assertEquals(
+            ChatOverflowTreatment.HorizontalScroll,
+            ChatOverflowPolicy.resolve(ChatOverflowContentKind.Table),
+        )
+        assertEquals(
+            ChatOverflowTreatment.Wrap,
+            ChatOverflowPolicy.resolve(ChatOverflowContentKind.WebViewProse),
+        )
+        assertEquals(
+            ChatOverflowTreatment.HorizontalScroll,
+            ChatOverflowPolicy.resolve(ChatOverflowContentKind.WebViewStructuredBlock),
+        )
     }
 }

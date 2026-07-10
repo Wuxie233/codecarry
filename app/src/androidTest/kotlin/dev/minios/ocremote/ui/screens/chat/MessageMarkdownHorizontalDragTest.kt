@@ -14,7 +14,9 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -97,6 +99,35 @@ class MessageMarkdownHorizontalDragTest {
             "expected horizontal drag to shift assistant markdown with medium inline-code tokens, changed=$changed",
             changed > 250,
         )
+    }
+
+    @Test
+    fun reviewStyleParagraphWithFileLinksKeepsWrappedLayout() {
+        rule.setContent {
+            MaterialTheme {
+                CompositionLocalProvider(
+                    LocalChatFontSize provides "medium",
+                    LocalCodeWordWrap provides false,
+                ) {
+                    MessageMarkdownContent(
+                        markdown = """
+                            **Findings**
+
+                            1. High risk: the timeout path leaves the queued command behind.
+                            [DispatchAsync](/root/CODE/RimWorld/RimWorldMod_RimWorldAI/RimWorldMCP/McpCommandQueue.cs:72) can still execute after the caller has already seen a timeout.
+                        """.trimIndent(),
+                        textColor = Color.Black,
+                        isUser = false,
+                        modifier = Modifier
+                            .testTag(MessageTag)
+                            .width(220.dp)
+                            .padding(8.dp),
+                    )
+                }
+            }
+        }
+
+        rule.onAllNodesWithTag(WidePlainTextTag, useUnmergedTree = true).assertCountEquals(0)
     }
 
     @Test

@@ -234,7 +234,13 @@ private fun ScrollableMarkdownParagraph(model: MarkdownComponentModel) {
             model.content.substring(model.node.startOffset, model.node.endOffset)
         }.getOrElse { _ -> model.content }
     }
-    if (!containsWideAsciiToken(rawParagraph)) {
+    val overflowTreatment = remember(rawParagraph) {
+        ChatOverflowPolicy.resolve(
+            kind = ChatOverflowContentKind.MarkdownParagraph,
+            text = rawParagraph,
+        )
+    }
+    if (overflowTreatment == ChatOverflowTreatment.Wrap) {
         MarkdownParagraph(
             model.content,
             model.node,
@@ -263,12 +269,7 @@ private fun ScrollableMarkdownParagraph(model: MarkdownComponentModel) {
 }
 
 internal fun containsWideAsciiToken(text: String, threshold: Int = 28): Boolean {
-    var run = 0
-    text.forEach { char ->
-        run = if (char.code in 0x21..0x7E) run + 1 else 0
-        if (run >= threshold) return true
-    }
-    return false
+    return ChatOverflowPolicy.containsWideAsciiToken(text = text, threshold = threshold)
 }
 
 @Composable
@@ -303,6 +304,7 @@ private fun ScrollableMarkdownTable(
     val (header, rows) = parsed
     val columnCount = header.size
     val scrollState = rememberScrollState()
+    val tableScrollsHorizontally = ChatOverflowPolicy.shouldUseHorizontalScroll(ChatOverflowContentKind.Table)
     val tableShape = RoundedCornerShape(8.dp)
     val borderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)
     val dividerColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
@@ -314,7 +316,13 @@ private fun ScrollableMarkdownTable(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .horizontalScroll(scrollState),
+                .then(
+                    if (tableScrollsHorizontally) {
+                        Modifier.horizontalScroll(scrollState)
+                    } else {
+                        Modifier
+                    }
+                ),
         ) {
             Column(
                 modifier = Modifier

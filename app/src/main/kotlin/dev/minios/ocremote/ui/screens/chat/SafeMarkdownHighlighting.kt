@@ -1,10 +1,8 @@
 package dev.minios.ocremote.ui.screens.chat
 
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.material3.Text
@@ -79,7 +77,11 @@ fun SafeMarkdownHighlightedCode(
     val codeTextColor = LocalMarkdownColors.current.codeText
     val codeBackgroundCornerSize = LocalMarkdownDimens.current.codeBackgroundCornerSize
     val codeBlockPadding = LocalMarkdownPadding.current.codeBlock
-    val codeScrollState = rememberScrollState()
+    val codeWordWrap = LocalCodeWordWrap.current
+    val overflowTreatment = ChatOverflowPolicy.resolve(
+        kind = ChatOverflowContentKind.CodeBlock,
+        codeWordWrap = codeWordWrap,
+    )
     val annotatedCode = remember(code, language, highlights, codeTextColor) {
         buildSafeHighlightedAnnotatedString(code, language, highlights, codeTextColor)
     }
@@ -93,12 +95,10 @@ fun SafeMarkdownHighlightedCode(
                 .padding(vertical = 8.dp),
         ) {
             Box(
-                modifier = if (LocalCodeWordWrap.current) {
+                modifier = if (overflowTreatment == ChatOverflowTreatment.Wrap) {
                     Modifier.fillMaxWidth()
                 } else {
-                    Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(codeScrollState)
+                    Modifier.fillMaxWidth().chatCodeOverflow(codeWordWrap = codeWordWrap)
                 }
             ) {
                 Text(
@@ -106,7 +106,7 @@ fun SafeMarkdownHighlightedCode(
                     color = codeTextColor,
                     modifier = Modifier.padding(codeBlockPadding),
                     style = style,
-                    softWrap = LocalCodeWordWrap.current,
+                    softWrap = overflowTreatment == ChatOverflowTreatment.Wrap,
                 )
             }
         }

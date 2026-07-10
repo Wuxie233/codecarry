@@ -374,12 +374,7 @@ private fun String.cleanPiInShortLine(): String {
  */
 @Composable
 private fun Modifier.codeHorizontalScroll(): Modifier {
-    return if (!LocalCodeWordWrap.current) {
-        this
-            .horizontalScroll(rememberScrollState())
-    } else {
-        this
-    }
+    return chatCodeOverflow(codeWordWrap = LocalCodeWordWrap.current)
 }
 
 /**
@@ -5423,7 +5418,11 @@ private fun ScrollablePlainText(
     color: Color,
     modifier: Modifier = Modifier,
 ) {
-    if (!containsWideAsciiToken(text)) {
+    val overflowTreatment = ChatOverflowPolicy.resolve(
+        kind = ChatOverflowContentKind.PlainText,
+        text = text,
+    )
+    if (overflowTreatment == ChatOverflowTreatment.Wrap) {
         Text(
             text = text,
             style = style,

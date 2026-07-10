@@ -1,6 +1,7 @@
 package dev.minios.ocremote.ui.screens.chat
 
 import androidx.compose.ui.graphics.Color
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -35,6 +36,8 @@ class MarkdownMessageRendererTest {
         assertTrue(html.contains("touch-action: pan-x"))
         assertTrue(html.contains("function prepareHorizontalScrollables"))
         assertTrue(html.contains("querySelectorAll('table')"))
-        assertTrue(html.contains("querySelectorAll('pre, .table-scroll, .katex-display')"))
+        assertTrue(html.contains("wrapper.className = '${ChatOverflowPolicy.webViewTableWrapperClasses()}'"))
+        assertTrue(html.contains("querySelectorAll('${ChatOverflowPolicy.webViewStructuredScrollSelector()}')"))
+        assertFalse(html.contains("querySelectorAll('p')"))
     }
 }

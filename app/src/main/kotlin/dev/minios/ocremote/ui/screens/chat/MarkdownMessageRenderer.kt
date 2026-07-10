@@ -252,6 +252,10 @@ internal fun buildMessageHtml(
     val link = messageCssColor(linkColor)
     val border = messageCssColor(borderColor)
     val codeFontSize = (bodyFontSizePx - 1).coerceAtLeast(11)
+    val webViewProseWraps = ChatOverflowPolicy.resolve(ChatOverflowContentKind.WebViewProse) == ChatOverflowTreatment.Wrap
+    val horizontalScrollClass = ChatOverflowPolicy.webViewOverflowClass(ChatOverflowContentKind.WebViewStructuredBlock).orEmpty()
+    val tableWrapperClasses = ChatOverflowPolicy.webViewTableWrapperClasses()
+    val structuredScrollSelector = ChatOverflowPolicy.webViewStructuredScrollSelector()
     val sourceLiteral = jsStringLiteral(placeholderMarkdown)
     val mathJson = math.joinToString(prefix = "[", postfix = "]") { seg ->
         "{\"s\":${jsStringLiteral(seg.source)},\"d\":${if (seg.display) "true" else "false"}}"
@@ -271,8 +275,8 @@ internal fun buildMessageHtml(
               font-family: -apple-system, "Roboto", "Noto Sans", system-ui, sans-serif;
               font-size: ${bodyFontSizePx}px;
               line-height: 1.55;
-              overflow-wrap: anywhere;
-              word-break: break-word;
+              ${if (webViewProseWraps) "overflow-wrap: anywhere;" else ""}
+              ${if (webViewProseWraps) "word-break: break-word;" else ""}
               -webkit-text-size-adjust: 100%;
             }
             #content { padding: 0; }
@@ -290,7 +294,7 @@ internal fun buildMessageHtml(
             hr { border: none; border-top: 1px solid $border; margin: 12px 0; }
             code { font-family: "JetBrains Mono", "Roboto Mono", monospace; font-size: ${codeFontSize}px; }
             :not(pre) > code { background: $codeBg; color: $codeFg; padding: 1px 5px; border-radius: 4px; }
-            .markdown-horizontal-scroll {
+            .$horizontalScrollClass {
               max-width: 100%;
               overflow-x: auto;
               overflow-y: hidden;
@@ -347,12 +351,12 @@ internal fun buildMessageHtml(
                 document.querySelectorAll('table').forEach(function(table) {
                   if (table.parentElement && table.parentElement.classList.contains('table-scroll')) return;
                   var wrapper = document.createElement('div');
-                  wrapper.className = 'table-scroll markdown-horizontal-scroll';
+                  wrapper.className = '$tableWrapperClasses';
                   table.parentNode.insertBefore(wrapper, table);
                   wrapper.appendChild(table);
                 });
-                document.querySelectorAll('pre, .table-scroll, .katex-display').forEach(function(node) {
-                  node.classList.add('markdown-horizontal-scroll');
+                document.querySelectorAll('$structuredScrollSelector').forEach(function(node) {
+                  node.classList.add('$horizontalScrollClass');
                 });
               }
               try {
