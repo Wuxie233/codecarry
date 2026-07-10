@@ -3,8 +3,10 @@ package dev.minios.ocremote.ui.screens.chat
 import android.annotation.SuppressLint
 import android.os.Handler
 import android.os.Looper
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewConfiguration
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -31,7 +33,10 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.net.toUri
+import androidx.core.view.NestedScrollingChildHelper
+import androidx.core.view.ViewCompat
 import kotlin.math.absoluteValue
+import kotlin.math.roundToInt
 
 private const val MessageAssetBaseUrl = "file:///android_asset/"
 
@@ -149,6 +154,7 @@ fun MarkdownMessageView(
 private object MarkdownWebViewPool {
     private const val MaxPoolSize = 6
     private val pool = ArrayDeque<WebView>()
+    private val touchArbitrators = mutableMapOf<WebView, MarkdownWebViewTouchArbitrator>()
 
     fun acquire(context: android.content.Context, onLink: (String) -> Unit): WebView {
         val view = if (pool.isEmpty()) WebView(context) else pool.removeFirst()
@@ -161,6 +167,10 @@ private object MarkdownWebViewPool {
         view.setBackgroundColor(Color.Transparent.toArgb())
         view.isVerticalScrollBarEnabled = false
         view.isHorizontalScrollBarEnabled = true
+        touchArbitrators.remove(view)?.detach(view)
+        val touchArbitrator = MarkdownWebViewTouchArbitrator(view)
+        touchArbitrators[view] = touchArbitrator
+        view.setOnTouchListener(touchArbitrator)
         view.webChromeClient = WebChromeClient()
         view.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
@@ -191,6 +201,9 @@ private object MarkdownWebViewPool {
     }
 
     fun release(webView: WebView) {
+        touchArbitrators.remove(webView)?.detach(webView)
+        webView.setOnTouchListener(null)
+        webView.parent?.requestDisallowInterceptTouchEvent(false)
         (webView.parent as? ViewGroup)?.removeView(webView)
         webView.stopLoading()
         webView.tag = null
@@ -201,6 +214,95 @@ private object MarkdownWebViewPool {
         } else {
             webView.destroy()
         }
+    }
+}
+
+private class MarkdownWebViewTouchArbitrator(view: View) : View.OnTouchListener {
+    private val nestedScrollingChild = NestedScrollingChildHelper(view).apply {
+        isNestedScrollingEnabled = true
+    }
+    private val touchSlop = ViewConfiguration.get(view.context).scaledTouchSlop
+    private var downX = 0f
+    private var downY = 0f
+    private var lastY = 0f
+    private var direction: GestureDirection? = null
+    private val consumedScroll = IntArray(2)
+
+    init {
+        ViewCompat.setNestedScrollingEnabled(view, true)
+    }
+
+    override fun onTouch(view: View, event: MotionEvent): Boolean {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                downX = event.x
+                downY = event.y
+                lastY = event.y
+                direction = null
+                nestedScrollingChild.startNestedScroll(ViewCompat.SCROLL_AXIS_VERTICAL, ViewCompat.TYPE_TOUCH)
+                view.parent?.requestDisallowInterceptTouchEvent(true)
+            }
+            MotionEvent.ACTION_MOVE -> {
+                if (direction == null) {
+                    val deltaX = kotlin.math.abs(event.x - downX)
+                    val deltaY = kotlin.math.abs(event.y - downY)
+                    if (maxOf(deltaX, deltaY) > touchSlop) {
+                        val isHorizontal = deltaX > deltaY
+                        direction = if (isHorizontal) GestureDirection.Horizontal else GestureDirection.Vertical
+                        view.parent?.requestDisallowInterceptTouchEvent(isHorizontal)
+                        if (isHorizontal) {
+                            nestedScrollingChild.stopNestedScroll(ViewCompat.TYPE_TOUCH)
+                        }
+                    }
+                }
+                if (direction == GestureDirection.Vertical) {
+                    val deltaY = (lastY - event.y).roundToInt()
+                    if (deltaY != 0) {
+                        consumedScroll.fill(0)
+                        nestedScrollingChild.dispatchNestedPreScroll(
+                            0,
+                            deltaY,
+                            consumedScroll,
+                            null,
+                            ViewCompat.TYPE_TOUCH,
+                        )
+                        val unconsumedY = deltaY - consumedScroll[1]
+                        if (unconsumedY != 0) {
+                            nestedScrollingChild.dispatchNestedScroll(
+                                0,
+                                0,
+                                0,
+                                unconsumedY,
+                                null,
+                                ViewCompat.TYPE_TOUCH,
+                            )
+                        }
+                    }
+                    lastY = event.y
+                }
+            }
+            MotionEvent.ACTION_UP,
+            MotionEvent.ACTION_CANCEL,
+            -> reset(view)
+        }
+        return false
+    }
+
+    fun detach(view: View) {
+        reset(view)
+        nestedScrollingChild.isNestedScrollingEnabled = false
+        ViewCompat.setNestedScrollingEnabled(view, false)
+    }
+
+    private fun reset(view: View) {
+        direction = null
+        nestedScrollingChild.stopNestedScroll(ViewCompat.TYPE_TOUCH)
+        view.parent?.requestDisallowInterceptTouchEvent(false)
+    }
+
+    private enum class GestureDirection {
+        Horizontal,
+        Vertical,
     }
 }
 
