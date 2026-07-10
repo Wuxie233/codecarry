@@ -26,6 +26,7 @@ import dev.minios.ocremote.domain.model.Message
 import dev.minios.ocremote.domain.model.Part
 import dev.minios.ocremote.domain.model.ServerConfig
 import dev.minios.ocremote.domain.model.ServerType
+import dev.minios.ocremote.domain.model.SessionStatus
 import dev.minios.ocremote.domain.model.SseEvent
 import dev.minios.ocremote.domain.transport.AgentTransport
 import dev.minios.ocremote.domain.transport.PiTransportEvent
@@ -66,6 +67,27 @@ private data class ServerConnectionState(
     val sseJob: Job,
     val isConnected: Boolean = false
 )
+
+internal suspend fun loadSessionStatusSnapshot(
+    transport: AgentTransport,
+    projectDirectories: List<String>,
+): Map<String, SessionStatus> {
+    val statuses = transport.getSessionStatuses().toMutableMap()
+    for (directory in projectDirectories.distinct()) {
+        statuses.putAll(transport.getSessionStatuses(directory))
+    }
+    return statuses
+}
+
+internal suspend fun EventReducer.reconcileSessionStatusSnapshot(
+    serverId: String,
+    transport: AgentTransport,
+    projectDirectories: List<String>,
+): Int {
+    val statuses = loadSessionStatusSnapshot(transport, projectDirectories)
+    setSessionStatuses(serverId, statuses)
+    return statuses.size
+}
 
 /**
  * Foreground Service for maintaining OpenCode SSE connections to multiple servers.
@@ -429,12 +451,12 @@ class OpenCodeConnectionService : Service() {
                 attempt++
                 Log.i(TAG, "[${server.displayName}] SSE connection attempt #$attempt")
 
+                val projects = try { transport.listRoomScopes() } catch (_: Exception) { emptyList() }
                 try {
                     val roots = transport.listRooms(rootsOnly = true).openCodeSessions()
                     eventReducer.setSessions(server.id, roots)
                     Log.i(TAG, "[${server.displayName}] Pre-loaded ${roots.size} root sessions")
 
-                    val projects = try { transport.listRoomScopes() } catch (_: Exception) { emptyList() }
                     var childCount = 0
                     for (project in projects) {
                         try {
@@ -453,7 +475,11 @@ class OpenCodeConnectionService : Service() {
                     Log.w(TAG, "[${server.displayName}] Failed to pre-load sessions: ${e.message}")
                 }
 
-                bootstrapSessionStatuses(server, transport)
+                bootstrapSessionStatuses(
+                    server = server,
+                    transport = transport,
+                    projectDirectories = projects.map { it.directory },
+                )
 
                 // Capture which permissions are carried over from a previous connection BEFORE
                 // subscribing, so the permission reconcile can tell stale (replied while away)
@@ -529,11 +555,18 @@ class OpenCodeConnectionService : Service() {
      * no SSE deltas exist yet, so the status reconcile (absent-from-snapshot -> idle) is safe,
      * and a status missed in the tiny window self-heals from the session's ongoing status events.
      */
-    private suspend fun bootstrapSessionStatuses(server: ServerConfig, transport: AgentTransport) {
+    private suspend fun bootstrapSessionStatuses(
+        server: ServerConfig,
+        transport: AgentTransport,
+        projectDirectories: List<String>,
+    ) {
         try {
-            val statuses = transport.getSessionStatuses()
-            eventReducer.setSessionStatuses(server.id, statuses)
-            Log.i(TAG, "[${server.displayName}] Bootstrapped ${statuses.size} non-idle session status(es)")
+            val statusCount = eventReducer.reconcileSessionStatusSnapshot(
+                serverId = server.id,
+                transport = transport,
+                projectDirectories = projectDirectories,
+            )
+            Log.i(TAG, "[${server.displayName}] Bootstrapped $statusCount non-idle session status(es)")
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

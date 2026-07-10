@@ -36,8 +36,8 @@ class OpenCodeTransport(
         sseClient.connectToGlobalEvents(conn, directory = directory)
             .map { event -> TransportEvent.OpenCode(event) }
 
-    override suspend fun getSessionStatuses(): Map<String, SessionStatus> =
-        api.getSessionStatuses(conn)
+    override suspend fun getSessionStatuses(directory: String?): Map<String, SessionStatus> =
+        api.getSessionStatuses(conn, directory = directory)
 
     override suspend fun listPendingPermissions(): List<SseEvent.PermissionAsked> =
         api.listPendingPermissions(conn).map { it.toPermissionAsked() }

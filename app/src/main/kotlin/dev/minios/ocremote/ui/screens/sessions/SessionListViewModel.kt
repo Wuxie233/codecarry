@@ -295,20 +295,31 @@ class SessionListViewModel @Inject constructor(
         val serverScopedSessions = allSessions.filter { it.id in serverSessionIds }
         val archivedCount = serverScopedSessions.count { it.parentId == null && it.isArchived }
         val sessionsById = serverScopedSessions.associateBy { it.id }
+        val (rootSessions, childSessions) = serverScopedSessions.partition { it.parentId == null }
+        val childBuckets = childSessions.groupBy { it.parentId!! }
+        val effectiveStatuses = statuses.toMutableMap().apply {
+            for (root in rootSessions) {
+                val childStatuses = childBuckets[root.id]
+                    .orEmpty()
+                    .map { child -> statuses[child.id] ?: SessionStatus.Idle }
+                this[root.id] = when {
+                    statuses[root.id] is SessionStatus.Busy || childStatuses.any { it is SessionStatus.Busy } -> SessionStatus.Busy
+                    statuses[root.id] is SessionStatus.Retry -> statuses.getValue(root.id)
+                    else -> childStatuses.firstOrNull { it is SessionStatus.Retry } ?: SessionStatus.Idle
+                }
+            }
+        }
         val itemsById = serverScopedSessions.associate { session ->
             session.id to SessionItem(
                 session = session,
-                status = statuses[session.id] ?: SessionStatus.Idle,
+                status = effectiveStatuses[session.id] ?: SessionStatus.Idle,
                 isUnread = session.parentId == null && session.id in unreadMainSessionIds,
             )
         }
 
-        val (rootSessions, childSessions) = serverScopedSessions.partition { it.parentId == null }
-        val childBuckets = childSessions.groupBy { it.parentId!! }
         val activeConversations = buildActiveConversations(
             rootSessions = rootSessions,
-            childSessionsByParent = childBuckets,
-            statuses = statuses,
+            statuses = effectiveStatuses,
             pendingQuestions = pendingQuestions,
             pendingPermissions = pendingPermissions,
             unreadSessionIds = unreadMainSessionIds,
@@ -978,7 +989,6 @@ internal fun partitionSubagentsByActivity(subagents: List<SessionItem>): Subagen
 
 internal fun buildActiveConversations(
     rootSessions: List<Session>,
-    childSessionsByParent: Map<String, List<Session>> = emptyMap(),
     statuses: Map<String, SessionStatus>,
     pendingQuestions: Map<String, List<SseEvent.QuestionAsked>>,
     pendingPermissions: Map<String, List<SseEvent.PermissionAsked>>,
@@ -994,16 +1004,13 @@ internal fun buildActiveConversations(
             val questionCount = pendingQuestions[session.id]?.size ?: 0
             val permissionCount = pendingPermissions[session.id]?.size ?: 0
             val status = statuses[session.id] ?: SessionStatus.Idle
-            val childStatuses = childSessionsByParent[session.id]
-                .orEmpty()
-                .map { child -> statuses[child.id] ?: SessionStatus.Idle }
 
             val (conversationStatus, pendingCount) = when {
                 session.id in unreadSessionIds -> ConversationStatus.UNREAD to 0
                 questionCount > 0 -> ConversationStatus.AWAITING_QUESTION to questionCount
                 permissionCount > 0 -> ConversationStatus.AWAITING_PERMISSION to permissionCount
-                status is SessionStatus.Busy || childStatuses.any { it is SessionStatus.Busy } -> ConversationStatus.BUSY to 0
-                status is SessionStatus.Retry || childStatuses.any { it is SessionStatus.Retry } -> ConversationStatus.RETRY to 0
+                status is SessionStatus.Busy -> ConversationStatus.BUSY to 0
+                status is SessionStatus.Retry -> ConversationStatus.RETRY to 0
                 else -> return@mapNotNull null
             }
 

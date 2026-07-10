@@ -227,6 +227,9 @@ class SessionListViewModelTest {
         val active = vm.uiState.value.activeConversations.single()
         assertEquals(parent.id, active.sessionId)
         assertEquals(ConversationStatus.BUSY, active.status)
+        val group = vm.uiState.value.groups.single()
+        assertEquals(SessionStatus.Busy, group.sessions.single().status)
+        assertEquals(1, group.activeCount)
     }
 
     @Test
@@ -247,6 +250,27 @@ class SessionListViewModelTest {
         val active = vm.uiState.value.activeConversations.single()
         assertEquals(parent.id, active.sessionId)
         assertEquals(ConversationStatus.RETRY, active.status)
+        assertEquals(SessionStatus.Retry::class, vm.uiState.value.groups.single().sessions.single().status::class)
+    }
+
+    @Test
+    fun `busy child outranks retrying parent conversation`() = runTest(dispatcher) {
+        val eventReducer = EventReducer()
+        val parent = testSession(id = "parent")
+        val child = testSession(id = "child", parentId = parent.id)
+        val vm = newSessionListViewModel(eventReducer = eventReducer)
+        collectUiState(vm)
+        eventReducer.setSessions("srv-session-list", listOf(parent, child))
+        eventReducer.updateSessionStatus(
+            parent.id,
+            SessionStatus.Retry(attempt = 1, message = "retrying", next = 0L),
+        )
+
+        eventReducer.updateSessionStatus(child.id, SessionStatus.Busy)
+        advanceUntilIdle()
+
+        assertEquals(ConversationStatus.BUSY, vm.uiState.value.activeConversations.single().status)
+        assertEquals(SessionStatus.Busy, vm.uiState.value.groups.single().sessions.single().status)
     }
 
     @Test

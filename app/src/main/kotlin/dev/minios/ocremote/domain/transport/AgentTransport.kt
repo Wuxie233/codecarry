@@ -13,7 +13,7 @@ interface AgentTransport {
 
     fun openEventStream(directory: String? = null): Flow<TransportEvent>
 
-    suspend fun getSessionStatuses(): Map<String, SessionStatus> = emptyMap()
+    suspend fun getSessionStatuses(directory: String? = null): Map<String, SessionStatus> = emptyMap()
 
     suspend fun listPendingPermissions(): List<SseEvent.PermissionAsked> = emptyList()
 
