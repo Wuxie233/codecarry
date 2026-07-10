@@ -152,15 +152,6 @@ class MessageMarkdownHorizontalDragTest {
 
         waitForKatexWebView()
 
-        lateinit var scrollJob: Job
-        rule.runOnIdle {
-            scrollJob = rule.activity.lifecycleScope.launch {
-                parentScrollState.scrollToItem(targetRowIndex)
-            }
-        }
-        rule.waitUntil(LoadTimeoutMillis) { scrollJob.isCompleted }
-        rule.waitForIdle()
-
         val target = waitForChunkedTarget(
             targetPrefix = TallChunkedCodePrefix,
             parentScrollState = parentScrollState,
@@ -172,10 +163,9 @@ class MessageMarkdownHorizontalDragTest {
             "expected bounded top-level target item, size=${target.rowSize}",
             target.rowSize in 1 until MaxTopLevelItemHeightPx,
         )
-        val targetWebViewHeight = readViewHeight(target.webView)
         assertTrue(
-            "expected bounded target WebView, height=$targetWebViewHeight",
-            targetWebViewHeight in 1 until MaxChunkWebViewHeightPx,
+            "expected bounded target WebView, target=$target",
+            target.view.height in 1 until MaxChunkWebViewHeightPx,
         )
         assertEquals("target pre should start at the left edge", 0, target.metrics.scrollLeft)
         assertTrue(
@@ -183,20 +173,19 @@ class MessageMarkdownHorizontalDragTest {
             target.metrics.top < MaxTargetPreCssTopPx,
         )
 
-        val geometry = target.webView.preScreenGeometry(target.metrics)
-        assertTrue(
-            "expected the later-chunk target pre to be visible, geometry=$geometry",
-            geometry.visibleBounds.contains(
-                geometry.targetBounds.centerX(),
-                geometry.targetBounds.centerY(),
-            ),
+        val horizontalSwipe = prepareChunkedSwipe(
+            stableTarget = target,
+            targetPrefix = TallChunkedCodePrefix,
+            parentScrollState = parentScrollState,
+            targetRowKey = targetRow.key,
+            direction = SwipeDirection.Horizontal,
         )
 
         injectSwipe(
-            startX = geometry.targetBounds.right - GestureEdgeInsetPx,
-            startY = geometry.targetBounds.centerY().toFloat(),
-            endX = geometry.targetBounds.left + GestureEdgeInsetPx,
-            endY = geometry.targetBounds.centerY().toFloat(),
+            startX = horizontalSwipe.startX,
+            startY = horizontalSwipe.startY,
+            endX = horizontalSwipe.endX,
+            endY = horizontalSwipe.endY,
         )
         rule.waitForIdle()
         SystemClock.sleep(GestureSettleMillis)
@@ -204,23 +193,39 @@ class MessageMarkdownHorizontalDragTest {
         val afterHorizontal = readTargetPreMetrics(target.webView, TallChunkedCodePrefix)
         assertTrue(
             "expected a physical horizontal drag on the later chunk pre to increase scrollLeft, " +
-                "before=${target.metrics.scrollLeft}, after=${afterHorizontal.scrollLeft}, geometry=$geometry",
+                "before=${target.metrics.scrollLeft}, after=${afterHorizontal.scrollLeft}, " +
+                "swipe=$horizontalSwipe, stableTarget=$target",
             afterHorizontal.scrollLeft > target.metrics.scrollLeft,
         )
 
+        val verticalTarget = waitForChunkedTarget(
+            targetPrefix = TallChunkedCodePrefix,
+            parentScrollState = parentScrollState,
+            targetRowIndex = targetRowIndex,
+            targetRowKey = targetRow.key,
+        )
+        val verticalSwipe = prepareChunkedSwipe(
+            stableTarget = verticalTarget,
+            targetPrefix = TallChunkedCodePrefix,
+            parentScrollState = parentScrollState,
+            targetRowKey = targetRow.key,
+            direction = SwipeDirection.Vertical,
+        )
         val parentPositionBeforeVertical = readPosition(parentScrollState)
         injectSwipe(
-            startX = geometry.targetBounds.centerX().toFloat(),
-            startY = geometry.targetBounds.bottom - GestureEdgeInsetPx,
-            endX = geometry.targetBounds.centerX().toFloat(),
-            endY = geometry.targetBounds.top + GestureEdgeInsetPx,
+            startX = verticalSwipe.startX,
+            startY = verticalSwipe.startY,
+            endX = verticalSwipe.endX,
+            endY = verticalSwipe.endY,
         )
         rule.waitForIdle()
         SystemClock.sleep(GestureSettleMillis)
+        val parentPositionAfterVertical = readPosition(parentScrollState)
         assertTrue(
             "expected a vertical drag over the later KaTeX chunk to scroll the Compose parent, " +
-                "before=$parentPositionBeforeVertical, after=${readPosition(parentScrollState)}",
-            readPosition(parentScrollState) > parentPositionBeforeVertical,
+                "before=$parentPositionBeforeVertical, after=$parentPositionAfterVertical, " +
+                "swipe=$verticalSwipe, stableTarget=$verticalTarget",
+            parentPositionAfterVertical > parentPositionBeforeVertical,
         )
     }
 
@@ -594,27 +599,6 @@ class MessageMarkdownHorizontalDragTest {
         )
     }
 
-    private fun WebView.preScreenGeometry(metrics: PreMetrics): PreScreenGeometry {
-        val location = IntArray(2)
-        val visibleBounds = Rect()
-        var viewWidth = 0
-        rule.runOnIdle {
-            getLocationOnScreen(location)
-            getGlobalVisibleRect(visibleBounds)
-            viewWidth = width
-        }
-        val pageScale = viewWidth.toFloat() / metrics.viewportWidth
-        return PreScreenGeometry(
-            visibleBounds = visibleBounds,
-            targetBounds = Rect(
-                (location[0] + metrics.left * pageScale).toInt(),
-                (location[1] + metrics.top * pageScale).toInt(),
-                (location[0] + (metrics.left + metrics.width) * pageScale).toInt(),
-                (location[1] + (metrics.top + metrics.height) * pageScale).toInt(),
-            ),
-        )
-    }
-
     private fun WebView.globalVisibleBounds(): Rect = Rect().also { bounds ->
         rule.runOnIdle {
             check(getGlobalVisibleRect(bounds)) { "WebView should be visible" }
@@ -724,43 +708,198 @@ class MessageMarkdownHorizontalDragTest {
         targetRowKey: String,
     ): ChunkedTarget {
         val deadline = SystemClock.uptimeMillis() + LoadTimeoutMillis
-        var latest = emptyList<WebView>()
-        var latestHeights = emptyList<Int>()
+        var latest: ChunkedTarget? = null
+        var stableSamples = 0
         while (SystemClock.uptimeMillis() < deadline) {
-            lateinit var scrollJob: Job
-            rule.runOnIdle {
-                scrollJob = rule.activity.lifecycleScope.launch {
-                    parentScrollState.scrollToItem(targetRowIndex)
-                }
-            }
-            rule.waitUntil(LoadTimeoutMillis) { scrollJob.isCompleted }
-            rule.waitForIdle()
-            var targetItemSize: Int? = null
-            rule.runOnIdle {
-                latest = findWebViews(rule.activity.window.decorView)
-                latestHeights = latest.map(WebView::getHeight)
-                targetItemSize = parentScrollState.layoutInfo.visibleItemsInfo
-                    .firstOrNull { it.key == targetRowKey }
-                    ?.size
-            }
-            if (targetItemSize != null && latest.isNotEmpty()) {
-                latest.forEach { webView ->
-                    val metrics = readTargetPreMetrics(webView, targetPrefix)
-                    if (metrics.clientWidth > 0 && metrics.scrollWidth > metrics.clientWidth) {
-                        return ChunkedTarget(
-                            webView = webView,
-                            metrics = metrics,
-                            rowKey = targetRowKey,
-                            rowSize = requireNotNull(targetItemSize),
-                        )
-                    }
-                }
+            scrollToItem(parentScrollState, targetRowIndex)
+            val sample = captureChunkedTarget(parentScrollState, targetRowKey, targetPrefix)
+            if (sample != null && sample.isReady()) {
+                stableSamples = if (latest?.isStableWith(sample) == true) stableSamples + 1 else 1
+                latest = sample
+                if (stableSamples >= RequiredStableSamples) return sample
+            } else {
+                stableSamples = 0
+                latest = sample
             }
             SystemClock.sleep(DomPollMillis)
         }
         throw AssertionError(
-            "expected an attached chunk WebView with a wide target pre, " +
-                "actual=${latest.size}, heights=$latestHeights",
+            "expected $RequiredStableSamples consecutive aligned/stable target samples, " +
+                "targetRowKey=$targetRowKey, targetRowIndex=$targetRowIndex, " +
+                "stableSamples=$stableSamples, latest=$latest",
+        )
+    }
+
+    private fun scrollToItem(state: LazyListState, index: Int) {
+        lateinit var scrollJob: Job
+        rule.runOnIdle {
+            scrollJob = rule.activity.lifecycleScope.launch { state.scrollToItem(index) }
+        }
+        rule.waitUntil(LoadTimeoutMillis) { scrollJob.isCompleted }
+        rule.waitForIdle()
+    }
+
+    private fun captureChunkedTarget(
+        state: LazyListState,
+        targetRowKey: String,
+        targetPrefix: String,
+        expectedWebView: WebView? = null,
+    ): ChunkedTarget? {
+        var listSnapshot: ListSnapshot? = null
+        var candidates = emptyList<ViewSnapshot>()
+        rule.runOnIdle {
+            val layoutInfo = state.layoutInfo
+            val item = layoutInfo.visibleItemsInfo.firstOrNull { it.key == targetRowKey }
+            listSnapshot = item?.let {
+                ListSnapshot(
+                    rowKey = targetRowKey,
+                    rowOffset = it.offset,
+                    rowSize = it.size,
+                    viewportStartOffset = layoutInfo.viewportStartOffset,
+                    viewportEndOffset = layoutInfo.viewportEndOffset,
+                    position = state.position(),
+                )
+            }
+            candidates = findWebViews(rule.activity.window.decorView)
+                .asSequence()
+                .filter { expectedWebView == null || it === expectedWebView }
+                .map { it.snapshotOnUiThread() }
+                .toList()
+        }
+        val list = listSnapshot ?: return null
+        candidates.forEach { view ->
+            val metrics = readTargetPreMetrics(view.webView, targetPrefix)
+            if (metrics != PreMetrics.Empty) {
+                var currentView: ViewSnapshot? = null
+                var currentList: ListSnapshot? = null
+                rule.runOnIdle {
+                    currentView = view.webView.snapshotOnUiThread()
+                    val layoutInfo = state.layoutInfo
+                    currentList = layoutInfo.visibleItemsInfo
+                        .firstOrNull { it.key == targetRowKey }
+                        ?.let {
+                            ListSnapshot(
+                                rowKey = targetRowKey,
+                                rowOffset = it.offset,
+                                rowSize = it.size,
+                                viewportStartOffset = layoutInfo.viewportStartOffset,
+                                viewportEndOffset = layoutInfo.viewportEndOffset,
+                                position = state.position(),
+                            )
+                        }
+                }
+                val verifiedView = currentView
+                val verifiedList = currentList
+                if (verifiedView != null && verifiedList != null && view == verifiedView && list == verifiedList) {
+                    return ChunkedTarget(verifiedView.webView, metrics, verifiedList, verifiedView)
+                }
+            }
+        }
+        return null
+    }
+
+    private fun WebView.snapshotOnUiThread(): ViewSnapshot {
+        val bounds = Rect()
+        val visibleBounds = Rect()
+        getGlobalVisibleRect(visibleBounds)
+        getGlobalBounds(bounds)
+        return ViewSnapshot(
+            webView = this,
+            identity = System.identityHashCode(this),
+            tag = tag?.toString(),
+            width = width,
+            height = height,
+            bounds = bounds,
+            visibleBounds = visibleBounds,
+            isAttached = isAttachedToWindow,
+            hasWindowFocus = hasWindowFocus(),
+            isShown = isShown,
+        )
+    }
+
+    private fun View.getGlobalBounds(outBounds: Rect) {
+        val location = IntArray(2)
+        getLocationOnScreen(location)
+        outBounds.set(location[0], location[1], location[0] + width, location[1] + height)
+    }
+
+    private fun prepareChunkedSwipe(
+        stableTarget: ChunkedTarget,
+        targetPrefix: String,
+        parentScrollState: LazyListState,
+        targetRowKey: String,
+        direction: SwipeDirection,
+    ): ScreenSwipe {
+        val current = captureChunkedTarget(
+            state = parentScrollState,
+            targetRowKey = targetRowKey,
+            targetPrefix = targetPrefix,
+            expectedWebView = stableTarget.webView,
+        ) ?: throw AssertionError("target disappeared before $direction injection, stableTarget=$stableTarget")
+        check(stableTarget.isStableWith(current)) {
+            "target changed after stable readiness and before $direction injection, " +
+                "stable=$stableTarget, current=$current"
+        }
+        check(current.isReady()) { "target no longer ready before $direction injection, current=$current" }
+
+        val geometry = current.screenGeometry()
+        val intersection = Rect(geometry.targetBounds)
+        check(intersection.intersect(geometry.visibleBounds)) {
+            "target has no visible intersection before $direction injection, current=$current, geometry=$geometry"
+        }
+        check(intersection.width() > GestureEdgeInsetPx * 2 && intersection.height() > GestureEdgeInsetPx * 2) {
+            "target intersection lacks gesture interior, intersection=$intersection, current=$current"
+        }
+        val swipe = when (direction) {
+            SwipeDirection.Horizontal -> ScreenSwipe(
+                startX = intersection.right - GestureEdgeInsetPx,
+                startY = intersection.centerY().toFloat(),
+                endX = intersection.left + GestureEdgeInsetPx,
+                endY = intersection.centerY().toFloat(),
+                geometry = geometry,
+            )
+            SwipeDirection.Vertical -> ScreenSwipe(
+                startX = intersection.centerX().toFloat(),
+                startY = intersection.bottom - GestureEdgeInsetPx,
+                endX = intersection.centerX().toFloat(),
+                endY = intersection.top + GestureEdgeInsetPx,
+                geometry = geometry,
+            )
+        }
+        val hit = readTargetHit(current, targetPrefix, swipe.startX, swipe.startY)
+        check(hit.hitsTarget) {
+            "injection point does not hit target pre for $direction, hit=$hit, swipe=$swipe, current=$current"
+        }
+        return swipe
+    }
+
+    private fun readTargetHit(
+        target: ChunkedTarget,
+        targetPrefix: String,
+        screenX: Float,
+        screenY: Float,
+    ): TargetHit {
+        val scale = target.view.width.toFloat() / target.metrics.viewportWidth
+        val clientX = (screenX - target.view.bounds.left) / scale
+        val clientY = (screenY - target.view.bounds.top) / scale
+        val values = evaluateArray(
+            target.webView,
+            """
+                (function() {
+                  var pre = Array.from(document.querySelectorAll('pre')).find(function(node) {
+                    return node.textContent.indexOf('$targetPrefix') >= 0;
+                  });
+                  var hit = document.elementFromPoint($clientX, $clientY);
+                  return [!!pre && !!hit && (hit === pre || pre.contains(hit)), hit ? hit.tagName : '', hit ? hit.className : ''];
+                })()
+            """.trimIndent(),
+        )
+        return TargetHit(
+            hitsTarget = values.length() == TargetHitMetricCount && values.getBoolean(0),
+            tagName = if (values.length() == TargetHitMetricCount) values.getString(1) else "",
+            className = if (values.length() == TargetHitMetricCount) values.getString(2) else "",
+            clientX = clientX,
+            clientY = clientY,
         )
     }
 
@@ -828,6 +967,18 @@ class MessageMarkdownHorizontalDragTest {
         val viewportWidth: Int,
         val documentHeight: Float,
     ) {
+        fun isStableWith(other: PreMetrics): Boolean =
+            preCount == other.preCount &&
+                scrollLeft == other.scrollLeft &&
+                clientWidth == other.clientWidth &&
+                scrollWidth == other.scrollWidth &&
+                kotlin.math.abs(left - other.left) <= GeometryTolerancePx &&
+                kotlin.math.abs(top - other.top) <= GeometryTolerancePx &&
+                kotlin.math.abs(width - other.width) <= GeometryTolerancePx &&
+                kotlin.math.abs(height - other.height) <= GeometryTolerancePx &&
+                viewportWidth == other.viewportWidth &&
+                kotlin.math.abs(documentHeight - other.documentHeight) <= GeometryTolerancePx
+
         companion object {
             val Empty = PreMetrics(0, 0, 0, 0, 0f, 0f, 0f, 0f, 1, 0f)
         }
@@ -842,9 +993,86 @@ class MessageMarkdownHorizontalDragTest {
     private data class ChunkedTarget(
         val webView: WebView,
         val metrics: PreMetrics,
+        val list: ListSnapshot,
+        val view: ViewSnapshot,
+    ) {
+        val rowKey: String get() = list.rowKey
+        val rowSize: Int get() = list.rowSize
+
+        fun isReady(): Boolean =
+            kotlin.math.abs(list.rowOffset - list.viewportStartOffset) <= RowAlignmentTolerancePx &&
+                list.rowSize in 1 until MaxTopLevelItemHeightPx &&
+                view.width > 0 &&
+                view.height in 1 until MaxChunkWebViewHeightPx &&
+                view.isAttached &&
+                view.hasWindowFocus &&
+                view.isShown &&
+                !view.visibleBounds.isEmpty &&
+                metrics.clientWidth > 0 &&
+                metrics.scrollWidth > metrics.clientWidth &&
+                metrics.viewportWidth > 0 &&
+                metrics.documentHeight > 0f &&
+                metrics.height > 0f
+
+        fun isStableWith(other: ChunkedTarget): Boolean =
+            isSameGeneration(other) &&
+                list == other.list &&
+                view.isStableWith(other.view) &&
+                metrics.isStableWith(other.metrics)
+
+        fun isSameGeneration(other: ChunkedTarget): Boolean =
+            webView === other.webView &&
+                view.identity == other.view.identity &&
+                view.tag == other.view.tag &&
+                list.rowKey == other.list.rowKey
+
+        fun screenGeometry(): PreScreenGeometry {
+            val pageScale = view.width.toFloat() / metrics.viewportWidth
+            return PreScreenGeometry(
+                visibleBounds = Rect(view.visibleBounds),
+                targetBounds = Rect(
+                    (view.bounds.left + metrics.left * pageScale).toInt(),
+                    (view.bounds.top + metrics.top * pageScale).toInt(),
+                    (view.bounds.left + (metrics.left + metrics.width) * pageScale).toInt(),
+                    (view.bounds.top + (metrics.top + metrics.height) * pageScale).toInt(),
+                ),
+            )
+        }
+    }
+
+    private data class ListSnapshot(
         val rowKey: String,
+        val rowOffset: Int,
         val rowSize: Int,
+        val viewportStartOffset: Int,
+        val viewportEndOffset: Int,
+        val position: LazyPosition,
     )
+
+    private data class ViewSnapshot(
+        val webView: WebView,
+        val identity: Int,
+        val tag: String?,
+        val width: Int,
+        val height: Int,
+        val bounds: Rect,
+        val visibleBounds: Rect,
+        val isAttached: Boolean,
+        val hasWindowFocus: Boolean,
+        val isShown: Boolean,
+    ) {
+        fun isStableWith(other: ViewSnapshot): Boolean =
+            webView === other.webView &&
+                identity == other.identity &&
+                tag == other.tag &&
+                width == other.width &&
+                height == other.height &&
+                bounds == other.bounds &&
+                visibleBounds == other.visibleBounds &&
+                isAttached == other.isAttached &&
+                hasWindowFocus == other.hasWindowFocus &&
+                isShown == other.isShown
+    }
 
     private data class LazyPosition(val index: Int, val offset: Int) : Comparable<LazyPosition> {
         override fun compareTo(other: LazyPosition): Int {
@@ -859,6 +1087,27 @@ class MessageMarkdownHorizontalDragTest {
         val visibleBounds: Rect,
         val targetBounds: Rect,
     )
+
+    private data class ScreenSwipe(
+        val startX: Float,
+        val startY: Float,
+        val endX: Float,
+        val endY: Float,
+        val geometry: PreScreenGeometry,
+    )
+
+    private data class TargetHit(
+        val hitsTarget: Boolean,
+        val tagName: String,
+        val className: String,
+        val clientX: Float,
+        val clientY: Float,
+    )
+
+    private enum class SwipeDirection {
+        Horizontal,
+        Vertical,
+    }
 
     private companion object {
         const val DomPollMillis = 100L
@@ -875,13 +1124,17 @@ class MessageMarkdownHorizontalDragTest {
         const val PreMetricCount = 10
         const val PhysicalGestureStepCount = 30
         const val PhysicalGestureStepMillis = 30L
+        const val RequiredStableSamples = 3
+        const val RowAlignmentTolerancePx = 2
         const val ReasoningTag = "wide-reasoning-message"
+        const val TargetHitMetricCount = 3
         const val VerticalParentTag = "vertical-markdown-parent"
         const val TallChunkedCodePrefix = "信号是连续的、网络只吃向量"
         const val TallMessageId = "assistant-production-scale"
         const val TallSessionId = "session-production-scale"
         const val TallTextPartId = "assistant-production-scale-text"
         const val TopLevelRowTag = "top-level-message-row"
+        const val GeometryTolerancePx = 0.5f
 
         val KatexMarkdown = """
             ```text
