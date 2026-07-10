@@ -14,6 +14,8 @@ import dev.minios.ocremote.data.repository.EventReducer
 import dev.minios.ocremote.data.repository.SettingsRepository
 import dev.minios.ocremote.domain.model.Session
 import dev.minios.ocremote.domain.model.SessionStatus
+import dev.minios.ocremote.domain.model.SseEvent
+import dev.minios.ocremote.ui.screens.sessions.components.ConversationStatus
 import dev.minios.ocremote.ui.navigation.Screen
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
@@ -208,6 +210,79 @@ class SessionListViewModelTest {
             setOf(PinDirectoryRefreshTarget.SESSIONS),
             pinDirectoryRefreshTargets(changed = false),
         )
+    }
+
+    @Test
+    fun `running child subagent keeps idle parent conversation active`() = runTest(dispatcher) {
+        val eventReducer = EventReducer()
+        val parent = testSession(id = "parent")
+        val child = testSession(id = "child", parentId = parent.id)
+        val vm = newSessionListViewModel(eventReducer = eventReducer)
+        collectUiState(vm)
+        eventReducer.setSessions("srv-session-list", listOf(parent, child))
+
+        eventReducer.updateSessionStatus(child.id, SessionStatus.Busy)
+        advanceUntilIdle()
+
+        val active = vm.uiState.value.activeConversations.single()
+        assertEquals(parent.id, active.sessionId)
+        assertEquals(ConversationStatus.BUSY, active.status)
+    }
+
+    @Test
+    fun `retrying child subagent keeps idle parent conversation active`() = runTest(dispatcher) {
+        val eventReducer = EventReducer()
+        val parent = testSession(id = "parent")
+        val child = testSession(id = "child", parentId = parent.id)
+        val vm = newSessionListViewModel(eventReducer = eventReducer)
+        collectUiState(vm)
+        eventReducer.setSessions("srv-session-list", listOf(parent, child))
+
+        eventReducer.updateSessionStatus(
+            child.id,
+            SessionStatus.Retry(attempt = 1, message = "retrying", next = 0L),
+        )
+        advanceUntilIdle()
+
+        val active = vm.uiState.value.activeConversations.single()
+        assertEquals(parent.id, active.sessionId)
+        assertEquals(ConversationStatus.RETRY, active.status)
+    }
+
+    @Test
+    fun `parent pending question outranks running child subagent`() = runTest(dispatcher) {
+        val eventReducer = EventReducer()
+        val parent = testSession(id = "parent")
+        val child = testSession(id = "child", parentId = parent.id)
+        val vm = newSessionListViewModel(eventReducer = eventReducer)
+        collectUiState(vm)
+        eventReducer.setSessions("srv-session-list", listOf(parent, child))
+        eventReducer.updateSessionStatus(child.id, SessionStatus.Busy)
+
+        eventReducer.setQuestions(
+            parent.id,
+            listOf(SseEvent.QuestionAsked(id = "question", sessionId = parent.id, questions = emptyList())),
+        )
+        advanceUntilIdle()
+
+        assertEquals(ConversationStatus.AWAITING_QUESTION, vm.uiState.value.activeConversations.single().status)
+    }
+
+    @Test
+    fun `parent conversation stops being active after child subagent finishes`() = runTest(dispatcher) {
+        val eventReducer = EventReducer()
+        val parent = testSession(id = "parent")
+        val child = testSession(id = "child", parentId = parent.id)
+        val vm = newSessionListViewModel(eventReducer = eventReducer)
+        collectUiState(vm)
+        eventReducer.setSessions("srv-session-list", listOf(parent, child))
+        eventReducer.updateSessionStatus(child.id, SessionStatus.Busy)
+        advanceUntilIdle()
+
+        eventReducer.updateSessionStatus(child.id, SessionStatus.Idle)
+        advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.activeConversations.isEmpty())
     }
 
     @Test
