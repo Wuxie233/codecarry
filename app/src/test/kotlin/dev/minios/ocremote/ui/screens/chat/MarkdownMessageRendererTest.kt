@@ -40,4 +40,14 @@ class MarkdownMessageRendererTest {
         assertTrue(html.contains("querySelectorAll('${ChatOverflowPolicy.webViewStructuredScrollSelector()}')"))
         assertFalse(html.contains("querySelectorAll('p')"))
     }
+
+    @Test
+    fun `only http and https schemes can leave a markdown WebView`() {
+        assertTrue(isExternalMessageLinkScheme("http"))
+        assertTrue(isExternalMessageLinkScheme("HTTPS"))
+        assertFalse(isExternalMessageLinkScheme("file"))
+        assertFalse(isExternalMessageLinkScheme("javascript"))
+        assertFalse(isExternalMessageLinkScheme("content"))
+        assertFalse(isExternalMessageLinkScheme(null))
+    }
 }

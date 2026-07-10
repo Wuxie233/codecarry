@@ -1754,44 +1754,34 @@ fun ChatScreen(
     }
 
 
-    // Auto-scroll to bottom when new content arrives (only if auto-scroll is enabled)
-    // Track message count, part count, and content length of the last part to catch streaming updates
     val messageCount = uiState.messages.size
     var collapsedRoundNumbers by remember { mutableStateOf<Set<Int>>(emptySet()) }
     val roundMarkers = remember(uiState.roundtableEvents) { buildRoundMarkers(uiState.roundtableEvents) }
     val messageRoundNumbers = remember(uiState.messages, roundMarkers) { mapMessageRounds(uiState.messages, roundMarkers) }
+    val messageRows = remember(uiState.messages) { planChatMessageRows(uiState.messages) }
 
     fun jumpToRoundtableRound(roundNumber: Int) {
         coroutineScope.launch {
             val itemIndex = timelineIndexForRound(
                 roundNumber = roundNumber,
                 hasOlderMessages = uiState.hasOlderMessages,
+                hasRoster = uiState.isPiRoundtable,
                 roundMarkers = roundMarkers,
                 messages = uiState.messages,
+                rows = messageRows,
             )
             listState.animateScrollToItem(itemIndex.coerceAtLeast(0))
             autoScrollEnabled = false
         }
     }
-    val lastPartCount = uiState.messages.lastOrNull()?.parts?.size ?: 0
-    val lastContentLength = uiState.messages.lastOrNull()?.parts?.lastOrNull()?.let { part ->
-        when (part) {
-            is Part.Text -> part.text.length
-            is Part.Reasoning -> part.text.length
-            is Part.Tool -> when (val s = part.state) {
-                is ToolState.Completed -> s.output.length
-                is ToolState.Error -> s.error.length
-                is ToolState.Running -> s.title?.length ?: 1
-                is ToolState.Pending -> 0
-            }
-            else -> 0
-        }
-    } ?: 0
+    val autoFollowTarget = remember(uiState.messages, messageRows) {
+        chatAutoFollowTarget(uiState.messages, messageRows)
+    }
     val pendingCount = uiState.pendingPermissions.size + uiState.pendingQuestions.size
     val isBusy = uiState.sessionStatus is SessionStatus.Busy
     val sessionBusyForMessageActions = uiState.sessionStatus !is SessionStatus.Idle || uiState.isSending || forkFromMessageInFlight
     val sessionReadyForMessageActions = !uiState.isLoading && (uiState.isPiRoundtable || uiState.error == null) && viewModel.sessionId.isNotBlank()
-    LaunchedEffect(messageCount, lastPartCount, lastContentLength, pendingCount, isBusy) {
+    LaunchedEffect(messageCount, autoFollowTarget, pendingCount, isBusy) {
         if (messageCount > 0 && autoScrollEnabled) {
             val lastIndex = listState.layoutInfo.totalItemsCount.coerceAtLeast(1) - 1
             listState.scrollToItem(lastIndex)
@@ -2805,9 +2795,12 @@ fun ChatScreen(
                                         // Pending cards are rendered after the optional older-loader,
                                         // all messages, and the optional revert banner.
                                         val pendingStartIndex =
-                                            (if (uiState.hasOlderMessages) 1 else 0) +
-                                                    uiState.messages.size +
-                                                    (if (uiState.revert != null) 1 else 0)
+                                            pendingTimelineStartIndex(
+                                                rows = messageRows,
+                                                hasOlderMessages = uiState.hasOlderMessages,
+                                                hasRoster = uiState.isPiRoundtable,
+                                                hasRevertBanner = uiState.revert != null,
+                                            )
                                         val maxIndex = listState.layoutInfo.totalItemsCount.coerceAtLeast(1) - 1
                                         listState.animateScrollToItem(pendingStartIndex.coerceIn(0, maxIndex))
                                         autoScrollEnabled = false
@@ -2822,7 +2815,7 @@ fun ChatScreen(
                                 .weight(1f)
                                 .fillMaxWidth(),
                             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                            verticalArrangement = Arrangement.spacedBy(messageSpacing)
+                            verticalArrangement = Arrangement.spacedBy(0.dp)
                         ) {
                         // "Load earlier messages" button at the top
                     if (uiState.hasOlderMessages) {
@@ -2830,7 +2823,7 @@ fun ChatScreen(
                                 Box(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(vertical = 4.dp),
+                                        .padding(top = 4.dp, bottom = messageSpacing),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     if (uiState.isLoadingOlder) {
@@ -2860,22 +2853,30 @@ fun ChatScreen(
 
                         if (uiState.isPiRoundtable) {
                             item(key = "roundtable_roster_strip") {
-                                RoundtableCompactRosterStrip(
-                                    roster = uiState.activeRoster,
-                                    roleStates = uiState.runState.roleStates,
-                                    status = uiState.roundtable?.status,
-                                    modifier = Modifier,
-                                )
+                                Box(modifier = Modifier.padding(bottom = messageSpacing)) {
+                                    RoundtableCompactRosterStrip(
+                                        roster = uiState.activeRoster,
+                                        roleStates = uiState.runState.roleStates,
+                                        status = uiState.roundtable?.status,
+                                        modifier = Modifier,
+                                    )
+                                }
                             }
                         }
 
                         itemsIndexed(
-                            uiState.messages,
-                            key = { _, item -> item.message.id }
-                        ) { index, chatMessage ->
+                            messageRows,
+                            key = { _, row -> row.key }
+                        ) { rowIndex, messageRow ->
+                            val index = messageRow.sourceMessageIndex
+                            val chatMessage = messageRow.chatMessage
+                            val isFirstMessageRow = messageRow.position == ChatMessageSegmentPosition.Single ||
+                                messageRow.position == ChatMessageSegmentPosition.First
+                            val nextBelongsToSameMessage = messageRows.getOrNull(rowIndex + 1)
+                                ?.chatMessage?.message?.id == chatMessage.message.id
                             val roundNumber = messageRoundNumbers[chatMessage.message.id]
                             val previousRoundNumber = uiState.messages.getOrNull(index - 1)?.message?.id?.let { messageRoundNumbers[it] }
-                            if (uiState.isPiRoundtable && roundNumber != null && roundNumber != previousRoundNumber) {
+                            if (isFirstMessageRow && uiState.isPiRoundtable && roundNumber != null && roundNumber != previousRoundNumber) {
                                 RoundDivider(
                                     roundNumber = roundNumber,
                                     isCollapsed = roundNumber in collapsedRoundNumbers,
@@ -2892,7 +2893,7 @@ fun ChatScreen(
                                 return@itemsIndexed
                             }
                             // Detect compaction trigger messages (user messages with Part.Compaction)
-                            val isCompactionTrigger = chatMessage.isUser &&
+                            val isCompactionTrigger = isFirstMessageRow && chatMessage.isUser &&
                                 chatMessage.parts.any { it is Part.Compaction }
 
                             // Show compact system-style divider for compaction triggers
@@ -2959,56 +2960,66 @@ fun ChatScreen(
                                 return@itemsIndexed
                             }
 
-                            ChatMessageBubble(
-                                chatMessage = chatMessage,
-                                showSenderHeader = !isSamePiSender(
-                                    current = chatMessage,
-                                    previous = uiState.messages.getOrNull(index - 1),
+                            Box(
+                                modifier = Modifier.padding(
+                                    bottom = if (nextBelongsToSameMessage) 1.dp else messageSpacing,
                                 ),
-                                onRevert = if (chatMessage.isUser) {
-                                    {
-                                        val revertText = chatMessage.parts
-                                            .filterIsInstance<Part.Text>()
-                                            .joinToString("\n") { it.text }
-                                        viewModel.abortSession()
-                                        viewModel.revertMessage(chatMessage.message.id, revertText) { ok ->
-                                            coroutineScope.launch {
-                                                snackbarHostState.showSnackbar(
-                                                    if (ok) context.getString(R.string.chat_message_reverted) else context.getString(R.string.chat_message_revert_failed)
-                                                )
+                            ) {
+                                ChatMessageBubble(
+                                    chatMessage = chatMessage,
+                                    showSenderHeader = isFirstMessageRow && !isSamePiSender(
+                                        current = chatMessage,
+                                        previous = uiState.messages.getOrNull(index - 1),
+                                    ),
+                                    segmentPosition = messageRow.position,
+                                    plannedChunk = (messageRow as? ChatMessageRow.TextChunk)?.markdown,
+                                    onRevert = if (chatMessage.isUser) {
+                                        {
+                                            val revertText = chatMessage.parts
+                                                .filterIsInstance<Part.Text>()
+                                                .joinToString("\n") { it.text }
+                                            viewModel.abortSession()
+                                            viewModel.revertMessage(chatMessage.message.id, revertText) { ok ->
+                                                coroutineScope.launch {
+                                                    snackbarHostState.showSnackbar(
+                                                        if (ok) context.getString(R.string.chat_message_reverted) else context.getString(R.string.chat_message_revert_failed)
+                                                    )
+                                                }
                                             }
                                         }
-                                    }
-                                } else null,
-                                onCopyText = {
-                                    val text = chatMessage.parts
-                                        .filterIsInstance<Part.Text>()
-                                        .joinToString("\n") { it.text }
-                                    if (text.isNotBlank()) {
-                                        clipboardManager.setText(
-                                            androidx.compose.ui.text.AnnotatedString(text)
-                                        )
-                                        coroutineScope.launch {
-                                            snackbarHostState.showSnackbar(context.getString(R.string.chat_copied_clipboard))
+                                    } else null,
+                                    onCopyText = {
+                                        val text = chatMessage.parts
+                                            .filterIsInstance<Part.Text>()
+                                            .joinToString("\n") { it.text }
+                                        if (text.isNotBlank()) {
+                                            clipboardManager.setText(
+                                                androidx.compose.ui.text.AnnotatedString(text)
+                                            )
+                                            coroutineScope.launch {
+                                                snackbarHostState.showSnackbar(context.getString(R.string.chat_copied_clipboard))
+                                            }
                                         }
-                                    }
-                                },
-                                onMessageActionsRequested = { actionMenuMessage = it }
-                            )
+                                    },
+                                    onMessageActionsRequested = { actionMenuMessage = it }
+                                )
+                            }
                         }
 
                         // Revert banner
                         if (uiState.revert != null) {
                             item(key = "revert_banner") {
-                                RevertBanner(onRedo = {
-                                    viewModel.redoMessage { ok ->
-                                        coroutineScope.launch {
-                                            snackbarHostState.showSnackbar(
-                                                if (ok) context.getString(R.string.chat_messages_restored) else context.getString(R.string.chat_message_redo_failed)
-                                            )
+                                Box(modifier = Modifier.padding(bottom = messageSpacing)) {
+                                    RevertBanner(onRedo = {
+                                        viewModel.redoMessage { ok ->
+                                            coroutineScope.launch {
+                                                snackbarHostState.showSnackbar(
+                                                    if (ok) context.getString(R.string.chat_messages_restored) else context.getString(R.string.chat_message_redo_failed)
+                                                )
+                                            }
                                         }
-                                    }
-                                })
+                                    })
+                                }
                             }
                         }
 
@@ -3017,12 +3028,14 @@ fun ChatScreen(
                             uiState.pendingPermissions,
                             key = { "perm_${it.id}" }
                         ) { permission ->
-                            PermissionCard(
-                                permission = permission,
-                                onOnce = { viewModel.replyToPermission(permission.id, "once") },
-                                onAlways = { viewModel.replyToPermission(permission.id, "always") },
-                                onReject = { viewModel.replyToPermission(permission.id, "reject") }
-                            )
+                            Box(modifier = Modifier.padding(bottom = messageSpacing)) {
+                                PermissionCard(
+                                    permission = permission,
+                                    onOnce = { viewModel.replyToPermission(permission.id, "once") },
+                                    onAlways = { viewModel.replyToPermission(permission.id, "always") },
+                                    onReject = { viewModel.replyToPermission(permission.id, "reject") }
+                                )
+                            }
                         }
 
                         // Pending questions
@@ -3030,15 +3043,17 @@ fun ChatScreen(
                             uiState.pendingQuestions,
                             key = { "question_${it.id}" }
                         ) { question ->
-                            QuestionCard(
-                                question = question,
-                                onSubmit = { answers ->
-                                    viewModel.replyToQuestion(question.id, answers)
-                                },
-                                onReject = {
-                                    viewModel.rejectQuestion(question.id)
-                                }
-                            )
+                            Box(modifier = Modifier.padding(bottom = messageSpacing)) {
+                                QuestionCard(
+                                    question = question,
+                                    onSubmit = { answers ->
+                                        viewModel.replyToQuestion(question.id, answers)
+                                    },
+                                    onReject = {
+                                        viewModel.rejectQuestion(question.id)
+                                    }
+                                )
+                            }
                         }
                     }
                     }
@@ -4332,6 +4347,8 @@ private fun resolveStepsStatus(stepParts: List<Part>): String {
 private fun ChatMessageBubble(
     chatMessage: ChatMessage,
     showSenderHeader: Boolean = true,
+    segmentPosition: ChatMessageSegmentPosition = ChatMessageSegmentPosition.Single,
+    plannedChunk: PlannedMarkdownMessageChunk? = null,
     onRevert: (() -> Unit)? = null,
     onCopyText: (() -> Unit)? = null,
     onMessageActionsRequested: (ChatMessage) -> Unit = {},
@@ -4377,6 +4394,10 @@ private fun ChatMessageBubble(
     }
     val hapticView = LocalView.current
     val hapticOn = LocalHapticFeedbackEnabled.current
+    val showsTop = segmentPosition == ChatMessageSegmentPosition.Single ||
+        segmentPosition == ChatMessageSegmentPosition.First
+    val showsBottom = segmentPosition == ChatMessageSegmentPosition.Single ||
+        segmentPosition == ChatMessageSegmentPosition.Last
 
     // Separate parts into text/reasoning (shown directly) and step parts (behind toggle)
     val visibleParts = if (isUser) {
@@ -4403,14 +4424,14 @@ private fun ChatMessageBubble(
     val contentParts: List<Part>
     val stepParts: List<Part>
     if (!isUser) {
-        contentParts = visibleParts.filter { part ->
+        contentParts = if (plannedChunk != null) emptyList() else visibleParts.filter { part ->
             part is Part.Text || part is Part.Reasoning || part is Part.Patch ||
                     part is Part.File || part is Part.Permission || part is Part.Question ||
                     part is Part.Abort || part is Part.Retry
         }
-        stepParts = visibleParts.filter { part ->
+        stepParts = if (showsTop) visibleParts.filter { part ->
             part is Part.Tool || part is Part.StepStart || part is Part.StepFinish
-        }
+        } else emptyList()
     } else {
         contentParts = visibleParts
         stepParts = emptyList()
@@ -4419,6 +4440,7 @@ private fun ChatMessageBubble(
     val hasRenderableUserPart = contentParts.any(::isBubbleRenderablePart)
     val hasRenderableUserContent = !isUser || hasRenderableUserPart || userFallbackText != null || userCommandLabel != null
     val hasRenderableAssistantContent = isUser ||
+            plannedChunk != null ||
             contentParts.isNotEmpty() ||
             stepParts.isNotEmpty() ||
             assistantErrorText != null
@@ -4439,7 +4461,7 @@ private fun ChatMessageBubble(
 
     // Check if any tool is currently running (show spinner)
     val hasRunningTool = stepParts.any { it is Part.Tool && it.state is ToolState.Running }
-    val hasAssistantText = contentParts
+    val hasAssistantText = plannedChunk != null || contentParts
         .filterIsInstance<Part.Text>()
         .any { part -> part.text.isNotBlank() && part.synthetic != true && part.ignored != true }
     val isLivePiSender = senderIdentity != null && assistantMessage?.finish == null
@@ -4451,10 +4473,10 @@ private fun ChatMessageBubble(
         val bubbleContent: @Composable () -> Unit = {
         Surface(
             shape = RoundedCornerShape(
-                topStart = if (isUser) 18.dp else 4.dp,
-                topEnd = if (isUser) 4.dp else 18.dp,
-                bottomStart = 18.dp,
-                bottomEnd = 18.dp
+                topStart = if (!showsTop) 2.dp else if (isUser) 18.dp else 4.dp,
+                topEnd = if (!showsTop) 2.dp else if (isUser) 4.dp else 18.dp,
+                bottomStart = if (showsBottom) 18.dp else 2.dp,
+                bottomEnd = if (showsBottom) 18.dp else 2.dp
             ),
             color = backgroundColor,
             border = bubbleBorder,
@@ -4464,16 +4486,19 @@ private fun ChatMessageBubble(
             val compact = LocalCompactMessages.current
             val horizontalPadding = if (compact) 10.dp else 16.dp
             val verticalPadding = if (compact) 8.dp else 14.dp
+            val edgePadding = 2.dp
             Box(modifier = Modifier.fillMaxWidth()) {
                 Column(
                     modifier = Modifier.padding(
-                        horizontal = horizontalPadding,
-                        vertical = verticalPadding
+                        start = horizontalPadding,
+                        top = if (showsTop) verticalPadding else edgePadding,
+                        end = horizontalPadding,
+                        bottom = if (showsBottom) verticalPadding else edgePadding,
                     ),
                     verticalArrangement = Arrangement.spacedBy(if (compact) 4.dp else 10.dp)
                 ) {
                     // "Response" header with provider icon and copy button — assistant messages only
-                    if (!isUser) {
+                    if (!isUser && showsTop) {
                         val assistantMsg = assistantMessage
                         if (senderIdentity != null && senderAccentColor != null) {
                             PiSenderHeader(
@@ -4487,7 +4512,7 @@ private fun ChatMessageBubble(
                                 } else {
                                     stringResource(R.string.chat_tool_thinking)
                                 },
-                                onCopyText = onCopyText?.let { copy ->
+                                onCopyText = onCopyText?.takeIf { segmentPosition == ChatMessageSegmentPosition.Single }?.let { copy ->
                                     { performHaptic(hapticView, hapticOn); copy() }
                                 },
                             )
@@ -4517,7 +4542,7 @@ private fun ChatMessageBubble(
                                         color = textColor.copy(alpha = 0.4f)
                                     )
                                 }
-                                if (onCopyText != null) {
+                                if (onCopyText != null && segmentPosition == ChatMessageSegmentPosition.Single) {
                                     Icon(
                                         Icons.Default.ContentCopy,
                                         contentDescription = stringResource(R.string.chat_copy),
@@ -4590,11 +4615,19 @@ private fun ChatMessageBubble(
                     val renderableOtherParts = otherParts.filter(::isBubbleRenderablePart)
 
                     // Render image thumbnails as a horizontal row
-                    if (imageFiles.isNotEmpty()) {
+                    if (plannedChunk != null) {
+                        MessageMarkdownContent(
+                            markdown = plannedChunk.chunk.source,
+                            textColor = textColor,
+                            isUser = false,
+                            modifier = Modifier.fillMaxWidth(),
+                            plannedChunk = plannedChunk,
+                        )
+                    } else if (imageFiles.isNotEmpty()) {
                         ImageThumbnailRow(imageFiles = imageFiles)
                     }
 
-                    if (!isUser && isLivePiSender && renderableOtherParts.isEmpty() && imageFiles.isEmpty() && assistantErrorText == null) {
+                    if (plannedChunk == null && !isUser && isLivePiSender && renderableOtherParts.isEmpty() && imageFiles.isEmpty() && assistantErrorText == null) {
                         PiSenderThinkingPlaceholder(
                             textColor = textColor,
                             accentColor = senderAccentColor ?: textColor,
@@ -4638,7 +4671,7 @@ private fun ChatMessageBubble(
                         }
                     }
 
-                    if (!isUser && assistantErrorText != null) {
+                    if (!isUser && showsBottom && assistantErrorText != null) {
                         Surface(
                             color = if (isAmoled) Color.Black else MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.2f),
                             shape = RoundedCornerShape(10.dp),
@@ -4654,14 +4687,32 @@ private fun ChatMessageBubble(
                         }
                     }
 
-                    if (!isUser && assistantMetaText != null) {
-                        Text(
-                            text = assistantMetaText,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f),
-                            textAlign = TextAlign.End,
-                            modifier = Modifier.fillMaxWidth()
-                        )
+                    if (!isUser && showsBottom && (assistantMetaText != null || segmentPosition == ChatMessageSegmentPosition.Last)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            assistantMetaText?.let { meta ->
+                                Text(
+                                    text = meta,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f),
+                                    textAlign = TextAlign.End,
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                            if (segmentPosition == ChatMessageSegmentPosition.Last && onCopyText != null) {
+                                Icon(
+                                    Icons.Default.ContentCopy,
+                                    contentDescription = stringResource(R.string.chat_copy),
+                                    modifier = Modifier
+                                        .size(15.dp)
+                                        .clickable { performHaptic(hapticView, hapticOn); onCopyText() },
+                                    tint = textColor.copy(alpha = 0.3f),
+                                )
+                            }
+                        }
                     }
 
                     // If text parts are absent but server provided a summary, render it.
@@ -4673,11 +4724,13 @@ private fun ChatMessageBubble(
                         )
                     }
                 }
-                MessageActionChromeGestureLayer(
-                    modifier = Modifier,
-                    verticalPadding = verticalPadding,
-                    onRequest = requestMessageActions,
-                )
+                if (showsBottom) {
+                    MessageActionChromeGestureLayer(
+                        modifier = Modifier,
+                        verticalPadding = verticalPadding,
+                        onRequest = requestMessageActions,
+                    )
+                }
             }
         }
     }
@@ -8086,12 +8139,15 @@ private fun mapMessageRounds(
 private fun timelineIndexForRound(
     roundNumber: Int,
     hasOlderMessages: Boolean,
+    hasRoster: Boolean,
     roundMarkers: List<RoundMarker>,
     messages: List<ChatMessage>,
+    rows: List<ChatMessageRow>,
 ): Int {
-    val marker = roundMarkers.firstOrNull { it.roundNumber == roundNumber } ?: return if (hasOlderMessages) 1 else 0
+    val marker = roundMarkers.firstOrNull { it.roundNumber == roundNumber }
+        ?: return timelineLeadingItemCount(hasOlderMessages, hasRoster)
     val messageIndex = messages.indexOfFirst { it.message.time.created >= marker.sequence }.coerceAtLeast(0)
-    return (if (hasOlderMessages) 1 else 0) + messageIndex
+    return timelineIndexForMessage(rows, messageIndex, hasOlderMessages, hasRoster)
 }
 
 @Composable

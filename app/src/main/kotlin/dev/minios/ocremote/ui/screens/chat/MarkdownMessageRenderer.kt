@@ -14,11 +14,13 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -76,7 +78,7 @@ internal fun buildPlaceholderMarkdown(markdown: String): Pair<String, List<Markd
 }
 
 @Composable
-fun MarkdownMessageView(
+internal fun MarkdownMessageView(
     markdown: String,
     textColor: Color,
     codeBackground: Color,
@@ -85,6 +87,7 @@ fun MarkdownMessageView(
     bodyFontSizeSp: Int,
     onLinkClick: (String) -> Unit,
     modifier: Modifier = Modifier,
+    plannedChunk: PlannedMarkdownMessageChunk? = null,
 ) {
     val context = LocalContext.current
     val colorScheme = androidx.compose.material3.MaterialTheme.colorScheme
@@ -92,26 +95,73 @@ fun MarkdownMessageView(
     val isDark = textColor.luminance() > 0.5f
     val markedJs = remember { MarkdownRendererAssets.marked(context.applicationContext) }
     val katexJs = remember { MarkdownRendererAssets.katex(context.applicationContext) }
-    val html = remember(markdown, textColor, codeBackground, codeForeground, linkColor, bodyFontSizeSp, isDark) {
-        val (placeholderMarkdown, math) = buildPlaceholderMarkdown(markdown)
-        buildMessageHtml(
-            placeholderMarkdown = placeholderMarkdown,
-            math = math,
-            textColor = textColor,
-            codeBackground = codeBackground,
-            codeForeground = codeForeground,
-            linkColor = linkColor,
-            borderColor = borderColor,
-            bodyFontSizePx = bodyFontSizeSp,
-            darkMode = isDark,
-            markedJs = markedJs,
-            katexJs = katexJs,
-        )
+    val renderedChunks = remember(
+        markdown,
+        textColor,
+        codeBackground,
+        codeForeground,
+        linkColor,
+        bodyFontSizeSp,
+        isDark,
+        plannedChunk,
+    ) {
+        val plannedMarkdown = if (plannedChunk != null) {
+            listOf(plannedChunk)
+        } else {
+            val (placeholderMarkdown, globalMath) = buildPlaceholderMarkdown(markdown)
+            planMarkdownMessageChunks(placeholderMarkdown).map { chunk ->
+                PlannedMarkdownMessageChunk(chunk = chunk, math = globalMath)
+            }
+        }
+        plannedMarkdown.mapIndexed { index, item ->
+            val html = buildMessageHtml(
+                placeholderMarkdown = item.chunk.renderMarkdown,
+                math = item.math,
+                textColor = textColor,
+                codeBackground = codeBackground,
+                codeForeground = codeForeground,
+                linkColor = linkColor,
+                borderColor = borderColor,
+                bodyFontSizePx = bodyFontSizeSp,
+                darkMode = isDark,
+                markedJs = markedJs,
+                katexJs = katexJs,
+            )
+            RenderedMarkdownChunk(
+                html = html,
+                renderKey = "${index.toString(36)}-${html.hashCode().absoluteValue.toString(36)}",
+            )
+        }
     }
-    val renderKey = remember(html) { html.hashCode().absoluteValue.toString(36) }
-    var heightPx by remember(html) { mutableStateOf(0) }
+
+    Column(modifier = modifier.fillMaxWidth()) {
+        renderedChunks.forEach { chunk ->
+            key(chunk.renderKey) {
+                MarkdownMessageChunkView(
+                    chunk = chunk,
+                    onLinkClick = onLinkClick,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
+    }
+}
+
+private data class RenderedMarkdownChunk(
+    val html: String,
+    val renderKey: String,
+)
+
+@Composable
+private fun MarkdownMessageChunkView(
+    chunk: RenderedMarkdownChunk,
+    onLinkClick: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val context = LocalContext.current
+    var heightPx by remember(chunk.renderKey) { mutableStateOf(0) }
     val latestOnHeight by rememberUpdatedState<(String, Int) -> Unit> { key, px ->
-        if (key == renderKey && px > 0) {
+        if (key == chunk.renderKey && px > 0) {
             heightPx = px
         }
     }
@@ -139,10 +189,13 @@ fun MarkdownMessageView(
             },
             update = { view ->
                 view.removeJavascriptInterface("AndroidMarkdownBridge")
-                view.addJavascriptInterface(MarkdownJavascriptBridge(renderKey, latestOnHeight), "AndroidMarkdownBridge")
-                if (view.tag != renderKey) {
-                    view.tag = renderKey
-                    view.loadDataWithBaseURL(MessageAssetBaseUrl, html, "text/html", "UTF-8", null)
+                view.addJavascriptInterface(
+                    MarkdownJavascriptBridge(chunk.renderKey, latestOnHeight),
+                    "AndroidMarkdownBridge",
+                )
+                if (view.tag != chunk.renderKey) {
+                    view.tag = chunk.renderKey
+                    view.loadDataWithBaseURL(MessageAssetBaseUrl, chunk.html, "text/html", "UTF-8", null)
                 }
             },
             modifier = Modifier.fillMaxWidth().then(if (heightPx > 0) Modifier.height(heightDp) else Modifier),
@@ -174,12 +227,11 @@ private object MarkdownWebViewPool {
         view.webChromeClient = WebChromeClient()
         view.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
-                val url = request?.url?.toString() ?: return false
-                if (url.startsWith("http://") || url.startsWith("https://")) {
-                    onLink(url)
-                    return true
+                val uri = request?.url ?: return true
+                if (isExternalMessageLinkScheme(uri.scheme)) {
+                    onLink(uri.toString())
                 }
-                return false
+                return true
             }
         }
         view.settings.apply {
@@ -188,6 +240,7 @@ private object MarkdownWebViewPool {
             databaseEnabled = false
             allowContentAccess = false
             allowFileAccess = true
+            disableFileUrlCrossOriginAccess()
             cacheMode = WebSettings.LOAD_NO_CACHE
             loadWithOverviewMode = false
             useWideViewPort = false
@@ -208,6 +261,8 @@ private object MarkdownWebViewPool {
         webView.stopLoading()
         webView.tag = null
         webView.removeJavascriptInterface("AndroidMarkdownBridge")
+        webView.webViewClient = WebViewClient()
+        webView.webChromeClient = WebChromeClient()
         webView.loadUrl("about:blank")
         if (pool.size < MaxPoolSize) {
             pool.addLast(webView)
@@ -215,6 +270,15 @@ private object MarkdownWebViewPool {
             webView.destroy()
         }
     }
+}
+
+internal fun isExternalMessageLinkScheme(scheme: String?): Boolean =
+    scheme.equals("http", ignoreCase = true) || scheme.equals("https", ignoreCase = true)
+
+@Suppress("DEPRECATION")
+private fun WebSettings.disableFileUrlCrossOriginAccess() {
+    allowFileAccessFromFileURLs = false
+    allowUniversalAccessFromFileURLs = false
 }
 
 private class MarkdownWebViewTouchArbitrator(view: View) : View.OnTouchListener {

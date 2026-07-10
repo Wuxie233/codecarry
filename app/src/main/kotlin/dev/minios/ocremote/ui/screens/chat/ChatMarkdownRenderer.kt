@@ -58,6 +58,7 @@ internal fun MessageMarkdownContent(
     textColor: Color,
     isUser: Boolean,
     modifier: Modifier = Modifier,
+    plannedChunk: PlannedMarkdownMessageChunk? = null,
 ) {
     val normalizedMarkdown = remember(markdown) { preserveRawHtmlPayload(markdown) }
     val mathSegments = remember(normalizedMarkdown) { splitMarkdownMathSegments(normalizedMarkdown) }
@@ -180,7 +181,8 @@ internal fun MessageMarkdownContent(
         },
     )
 
-    when (resolveMessageMarkdownRoute(normalizedMarkdown)) {
+    val route = if (plannedChunk != null) MessageMarkdownRoute.KatexWebView else resolveMessageMarkdownRoute(normalizedMarkdown)
+    when (route) {
         MessageMarkdownRoute.KatexWebView -> {
             val context = LocalContext.current
             val linkColor = when {
@@ -197,6 +199,7 @@ internal fun MessageMarkdownContent(
                 bodyFontSizeSp = bodyFontSize.value.toInt(),
                 onLinkClick = { url -> openMessageLink(context, url) },
                 modifier = modifier.fillMaxWidth(),
+                plannedChunk = plannedChunk,
             )
         }
         MessageMarkdownRoute.ComposeMarkdown -> {
