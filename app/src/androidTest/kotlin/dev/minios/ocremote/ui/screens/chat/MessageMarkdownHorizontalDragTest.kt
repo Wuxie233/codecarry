@@ -26,12 +26,15 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.down
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.moveTo
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.swipeLeft
@@ -295,6 +298,60 @@ class MessageMarkdownHorizontalDragTest {
         assertTrue(
             "expected horizontal drag to visibly shift wide markdown content",
             changedPixels(before, after) > 250,
+        )
+    }
+
+    @Test
+    fun releaseUrlWrapsWithoutHorizontalDrag() {
+        rule.setContent {
+            MaterialTheme {
+                CompositionLocalProvider(
+                    LocalChatFontSize provides "medium",
+                    LocalCodeWordWrap provides false,
+                ) {
+                    MessageMarkdownContent(
+                        markdown = ReleaseUrlMarkdown,
+                        textColor = Color.Black,
+                        isUser = false,
+                        modifier = Modifier
+                            .testTag(MessageTag)
+                            .width(220.dp)
+                            .padding(8.dp),
+                    )
+                }
+            }
+        }
+
+        assertEquals(
+            ChatOverflowTreatment.Wrap,
+            ChatOverflowPolicy.resolve(
+                kind = ChatOverflowContentKind.MarkdownParagraph,
+                text = ReleaseUrlMarkdown,
+            ),
+        )
+        rule.onAllNodes(
+            SemanticsMatcher.keyIsDefined(SemanticsProperties.HorizontalScrollAxisRange),
+            useUnmergedTree = true,
+        ).assertCountEquals(0)
+
+        val message = rule.onNodeWithTag(MessageTag)
+        val messageBounds = message.fetchSemanticsNode().boundsInRoot
+        val urlBounds = rule.onNodeWithText(ReleaseUrl, useUnmergedTree = true)
+            .fetchSemanticsNode()
+            .boundsInRoot
+        assertTrue(
+            "expected the URL layout to stay within the message width, message=$messageBounds, url=$urlBounds",
+            urlBounds.width <= messageBounds.width,
+        )
+
+        val before = message.captureToImage()
+        message.performTouchInput { swipeLeft() }
+        rule.waitForIdle()
+        val after = message.captureToImage()
+        assertEquals(
+            "expected horizontal swipe not to shift wrapped release URL pixels",
+            0,
+            changedPixels(before, after),
         )
     }
 
@@ -1127,6 +1184,8 @@ class MessageMarkdownHorizontalDragTest {
         const val RequiredStableSamples = 3
         const val RowAlignmentTolerancePx = 2
         const val ReasoningTag = "wide-reasoning-message"
+        const val ReleaseUrl = "https://github.com/Wuxie233/oc-remote/releases/tag/v1.7.42"
+        const val ReleaseUrlMarkdown = "v1.7.42 已发布:\n\n$ReleaseUrl"
         const val TargetHitMetricCount = 3
         const val VerticalParentTag = "vertical-markdown-parent"
         const val TallChunkedCodePrefix = "信号是连续的、网络只吃向量"

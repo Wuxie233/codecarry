@@ -25,7 +25,10 @@ internal object ChatOverflowPolicy {
     internal const val WebViewTableWrapperClass = "table-scroll"
 
     private const val WebViewKatexDisplayClass = "katex-display"
-    private val markdownFileLinkTarget = Regex("""\]\(/[^\s)]+:[0-9]+\)""")
+    private val markdownLinkTarget = Regex(
+        """\]\(\s*(?:<[^>\r\n]+>|[^\s)]+)(?:\s+(?:"[^"\r\n]*"|'[^'\r\n]*'|\([^\r\n)]*\)))?\s*\)""",
+    )
+    private val bareHttpUrl = Regex("""https?://[^\s<>\[\]{},]+""", RegexOption.IGNORE_CASE)
     private val webViewStructuredScrollSelectors = listOf(
         "pre",
         ".${WebViewTableWrapperClass}",
@@ -69,7 +72,7 @@ internal object ChatOverflowPolicy {
     }
 
     internal fun containsWideAsciiToken(text: String, threshold: Int = WideAsciiThreshold): Boolean {
-        val sanitized = markdownFileLinkTarget.replace(text, "](/link)")
+        val sanitized = bareHttpUrl.replace(markdownLinkTarget.replace(text, " "), " ")
         var run = 0
         sanitized.forEach { char ->
             run = if (char.code in 0x21..0x7E) run + 1 else 0
