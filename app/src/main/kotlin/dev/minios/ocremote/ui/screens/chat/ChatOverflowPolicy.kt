@@ -28,7 +28,11 @@ internal object ChatOverflowPolicy {
     private val markdownLinkTarget = Regex(
         """\]\(\s*(?:<[^>\r\n]+>|[^\s)]+)(?:\s+(?:"[^"\r\n]*"|'[^'\r\n]*'|\([^\r\n)]*\)))?\s*\)""",
     )
+    private val markdownLink = Regex(
+        """\[[^\]\r\n]*\]\(\s*(?:<[^>\r\n]+>|[^\s)]+)(?:\s+(?:"[^"\r\n]*"|'[^'\r\n]*'|\([^\r\n)]*\)))?\s*\)""",
+    )
     private val bareHttpUrl = Regex("""https?://[^\s<>\[\]{},]+""", RegexOption.IGNORE_CASE)
+    private val wideAsciiToken = Regex("[!-~]{$WideAsciiThreshold,}")
     private val webViewStructuredScrollSelectors = listOf(
         "pre",
         ".${WebViewTableWrapperClass}",
@@ -43,7 +47,7 @@ internal object ChatOverflowPolicy {
         return when (kind) {
             ChatOverflowContentKind.MarkdownParagraph,
             ChatOverflowContentKind.PlainText,
-            -> if (containsWideAsciiToken(text)) {
+            -> if (containsWideAsciiToken(text) && containsOnlyStandaloneWideAsciiContent(text)) {
                 ChatOverflowTreatment.HorizontalScroll
             } else {
                 ChatOverflowTreatment.Wrap
@@ -79,6 +83,13 @@ internal object ChatOverflowPolicy {
             if (run >= threshold) return true
         }
         return false
+    }
+
+    private fun containsOnlyStandaloneWideAsciiContent(text: String): Boolean {
+        val sanitized = bareHttpUrl.replace(markdownLink.replace(text, " "), " ")
+        if (!wideAsciiToken.containsMatchIn(sanitized)) return false
+        val surroundingContent = wideAsciiToken.replace(sanitized, " ")
+        return surroundingContent.none(Char::isLetterOrDigit)
     }
 
     internal fun webViewOverflowClass(kind: ChatOverflowContentKind): String? {

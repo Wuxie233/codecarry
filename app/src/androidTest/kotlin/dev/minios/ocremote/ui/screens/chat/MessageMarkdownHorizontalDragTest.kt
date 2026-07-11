@@ -356,7 +356,7 @@ class MessageMarkdownHorizontalDragTest {
     }
 
     @Test
-    fun assistantParagraphWithMediumInlineCodeTokensCanBeDraggedHorizontally() {
+    fun assistantParagraphWithLongInlineTokensWrapsWithoutHorizontalDrag() {
         rule.setContent {
             MaterialTheme {
                 CompositionLocalProvider(
@@ -365,9 +365,7 @@ class MessageMarkdownHorizontalDragTest {
                 ) {
                     MessageMarkdownContent(
                         markdown = """
-                            已完成安装和验证。
-
-                            `opencode debug skill` 已能列出全部 10 个新 skill；每个目录都只有 1 个 `SKILL.md`，且 frontmatter `name` 和目录名匹配。最后确认 `debug skill` 总计输出 80 个 skill，stderr 为空。没有改 `opencode.json` 或 `oh-my-openagent.json`，因为 OpenCode 本来就会扫描 `~/.config/opencode/skills/**/SKILL.md`。
+                            部署数据库时请使用 `registry.example.com/team/postgres:18-alpine` 镜像，并将版本更新为 `1.151-regression-fix-202607111622`。完成后继续检查 service health。
                         """.trimIndent(),
                         textColor = Color.Black,
                         isUser = false,
@@ -380,16 +378,21 @@ class MessageMarkdownHorizontalDragTest {
             }
         }
 
+        rule.onAllNodes(
+            SemanticsMatcher.keyIsDefined(SemanticsProperties.HorizontalScrollAxisRange),
+            useUnmergedTree = true,
+        ).assertCountEquals(0)
+
         val node = rule.onNodeWithTag(MessageTag)
         val before = node.captureToImage()
         node.performTouchInput { swipeLeft() }
         rule.waitForIdle()
         val after = node.captureToImage()
-        val changed = changedPixels(before, after)
 
-        assertTrue(
-            "expected horizontal drag to shift assistant markdown with medium inline-code tokens, changed=$changed",
-            changed > 250,
+        assertEquals(
+            "expected horizontal swipe not to shift mixed-language prose pixels",
+            0,
+            changedPixels(before, after),
         )
     }
 

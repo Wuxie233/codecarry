@@ -51,6 +51,22 @@ class ChatOverflowPolicyTest {
     }
 
     @Test
+    fun `docker image references inside ordinary prose wrap`() {
+        val text = "部署数据库时请使用 registry.example.com/team/postgres:18-alpine 镜像，完成后继续检查服务状态。"
+
+        assertMarkdownParagraphWraps(text)
+        assertWraps(kind = ChatOverflowContentKind.PlainText, text = text)
+    }
+
+    @Test
+    fun `version tokens inside ordinary prose wrap`() {
+        val text = "当前版本是 1.151-regression-fix-202607111622，请更新后重新打开会话。"
+
+        assertMarkdownParagraphWraps(text)
+        assertWraps(kind = ChatOverflowContentKind.PlainText, text = text)
+    }
+
+    @Test
     fun `non link wide ascii tokens remain horizontally scrollable`() {
         assertEquals(
             ChatOverflowTreatment.HorizontalScroll,
