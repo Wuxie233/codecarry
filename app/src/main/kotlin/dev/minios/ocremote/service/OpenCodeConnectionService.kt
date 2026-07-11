@@ -684,6 +684,7 @@ class OpenCodeConnectionService : Service() {
 
                     // Give reducer a brief moment to receive trailing message/part events.
                     delay(250)
+                    if (eventReducer.activeSessionId.value == event.sessionId) return@launch
 
                     val assistantMessageId = latestNotifiableAssistantMessageId(event.sessionId)
                     if (assistantMessageId == null) {
@@ -910,7 +911,7 @@ class OpenCodeConnectionService : Service() {
 
     /** Generate a stable notification ID for a server+session event type. */
     private fun eventNotificationId(serverId: String, sessionId: String, typeOffset: Int): Int {
-        return (serverId + sessionId).hashCode() + typeOffset
+        return SessionNotificationIdentity.eventId(serverId, sessionId, typeOffset)
     }
 
     companion object {
@@ -1076,7 +1077,7 @@ class OpenCodeConnectionService : Service() {
         val silent = settingsRepository.silentNotifications.first()
         val channelId = if (silent) NOTIFICATION_CHANNEL_TASKS_SILENT_ID else NOTIFICATION_CHANNEL_TASKS_ID
 
-        val notifId = eventNotificationId(server.id, sessionId, 0)
+        val notifId = SessionNotificationIdentity.responseReadyId(server.id, sessionId)
         val builder = NotificationCompat.Builder(this, channelId)
             .setContentTitle(getString(R.string.notification_response_ready))
             .setContentText(body)
@@ -1085,7 +1086,7 @@ class OpenCodeConnectionService : Service() {
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
             .setPriority(if (silent) NotificationCompat.PRIORITY_LOW else NotificationCompat.PRIORITY_HIGH)
-            .setGroup("server_${server.id}")
+            .setGroup(SessionNotificationIdentity.serverGroup(server.id))
 
         if (!silent) {
             builder.setDefaults(NotificationCompat.DEFAULT_ALL)
@@ -1119,7 +1120,7 @@ class OpenCodeConnectionService : Service() {
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setDefaults(NotificationCompat.DEFAULT_ALL)
             .setVibrate(longArrayOf(0, 300, 100, 300))
-            .setGroup("server_${server.id}")
+            .setGroup(SessionNotificationIdentity.serverGroup(server.id))
             .addAction(
                 R.mipmap.ic_launcher,
                 getString(R.string.notification_permission_action_allow_once),
@@ -1164,7 +1165,7 @@ class OpenCodeConnectionService : Service() {
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setDefaults(NotificationCompat.DEFAULT_ALL)
             .setVibrate(longArrayOf(0, 300, 100, 300))
-            .setGroup("server_${server.id}")
+            .setGroup(SessionNotificationIdentity.serverGroup(server.id))
             .build()
 
         notificationManager.notify(notifId, notification)
@@ -1191,7 +1192,7 @@ class OpenCodeConnectionService : Service() {
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setDefaults(NotificationCompat.DEFAULT_ALL)
-            .setGroup("server_${server.id}")
+            .setGroup(SessionNotificationIdentity.serverGroup(server.id))
             .build()
 
         notificationManager.notify(notifId, notification)
@@ -1210,7 +1211,7 @@ class OpenCodeConnectionService : Service() {
             .setContentIntent(createAppPendingIntent(notifId))
             .setAutoCancel(true)
             .setPriority(if (silent) NotificationCompat.PRIORITY_LOW else NotificationCompat.PRIORITY_HIGH)
-            .setGroup("server_${server.id}")
+            .setGroup(SessionNotificationIdentity.serverGroup(server.id))
 
         if (!silent) {
             builder.setDefaults(NotificationCompat.DEFAULT_ALL)
@@ -1226,12 +1227,12 @@ class OpenCodeConnectionService : Service() {
      * event notifications from the same server together.
      */
     private fun showServerGroupSummary(server: ServerConfig) {
-        val summaryId = "server_summary_${server.id}".hashCode()
+        val summaryId = SessionNotificationIdentity.serverSummaryId(server.id)
         val summary = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_TASKS_SILENT_ID)
             .setContentTitle(server.displayName)
             .setContentText(getString(R.string.notification_group_summary))
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setGroup("server_${server.id}")
+            .setGroup(SessionNotificationIdentity.serverGroup(server.id))
             .setGroupSummary(true)
             .setAutoCancel(true)
             .build()

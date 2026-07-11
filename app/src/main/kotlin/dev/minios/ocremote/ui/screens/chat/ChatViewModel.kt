@@ -42,6 +42,7 @@ import dev.minios.ocremote.domain.transport.PiTransportEvent.RoundStart
 import dev.minios.ocremote.domain.transport.TransportEvent
 import dev.minios.ocremote.domain.transport.TransportMessagePart
 import dev.minios.ocremote.domain.transport.TransportRoom
+import dev.minios.ocremote.service.dismissResponseReadyNotification
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -566,6 +567,7 @@ class ChatViewModel @Inject constructor(
         } else {
             viewModelScope.launch {
                 sessionListPreferencesRepository.markMainSessionRead(sessionId)
+                dismissResponseReadyNotification(appContext, serverId, sessionId)
             }
 
             // Restore draft from disk
