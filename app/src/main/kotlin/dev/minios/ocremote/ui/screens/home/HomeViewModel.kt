@@ -22,6 +22,7 @@ import dev.minios.ocremote.data.repository.ServerRepository
 import dev.minios.ocremote.data.repository.SettingsRepository
 import dev.minios.ocremote.domain.model.ServerConfig
 import dev.minios.ocremote.domain.model.ServerType
+import dev.minios.ocremote.domain.model.ConnectionPhase
 import dev.minios.ocremote.service.OpenCodeConnectionService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
@@ -70,6 +71,7 @@ data class HomeUiState(
     val connectedServerIds: Set<String> = emptySet(),
     val serverSettingsReadyIds: Set<String> = emptySet(),
     val connectingServerIds: Set<String> = emptySet(),
+    val connectionPhases: Map<String, ConnectionPhase> = emptyMap(),
     val connectionErrors: Map<String, String> = emptyMap(),
     val showAddServerDialog: Boolean = false,
     val editingServer: ServerConfig? = null,
@@ -127,7 +129,13 @@ class HomeViewModel @Inject constructor(
             serviceBinder = null
             sseObserverJob?.cancel()
             sseObserverJob = null
-            _uiState.update { it.copy(connectedServerIds = emptySet()) }
+            _uiState.update {
+                it.copy(
+                    connectedServerIds = emptySet(),
+                    connectingServerIds = emptySet(),
+                    connectionPhases = emptyMap(),
+                )
+            }
         }
     }
 
@@ -224,7 +232,8 @@ class HomeViewModel @Inject constructor(
                     _uiState.update {
                         it.copy(
                             connectedServerIds = ids,
-                            serverSettingsReadyIds = it.serverSettingsReadyIds.intersect(ids)
+                            serverSettingsReadyIds = it.serverSettingsReadyIds.intersect(ids),
+                            connectionPhases = it.connectionPhases - ids,
                         )
                     }
                     refreshServerSettingsAvailability(ids)
@@ -234,6 +243,16 @@ class HomeViewModel @Inject constructor(
                 service.connectingServerIds.collect { ids ->
                     if (BuildConfig.DEBUG) Log.d(TAG, "Service connecting server IDs changed: $ids")
                     _uiState.update { it.copy(connectingServerIds = ids) }
+                }
+            }
+            launch {
+                service.connectionPhases.collect { phases ->
+                    _uiState.update { state ->
+                        val localHealthChecks = state.connectionPhases.filterValues {
+                            it == ConnectionPhase.CheckingServer
+                        }
+                        state.copy(connectionPhases = localHealthChecks + phases)
+                    }
                 }
             }
         }
@@ -382,6 +401,7 @@ class HomeViewModel @Inject constructor(
         _uiState.update {
             it.copy(
                 connectingServerIds = it.connectingServerIds + serverId,
+                connectionPhases = it.connectionPhases + (serverId to ConnectionPhase.CheckingServer),
                 connectionErrors = it.connectionErrors - serverId
             )
         }
@@ -393,6 +413,7 @@ class HomeViewModel @Inject constructor(
                     _uiState.update {
                         it.copy(
                             connectingServerIds = it.connectingServerIds - serverId,
+                            connectionPhases = it.connectionPhases - serverId,
                             connectionErrors = it.connectionErrors + (serverId to "Server is not responding")
                         )
                     }
@@ -422,6 +443,7 @@ class HomeViewModel @Inject constructor(
                 _uiState.update {
                     it.copy(
                         connectingServerIds = it.connectingServerIds - serverId,
+                        connectionPhases = it.connectionPhases - serverId,
                         connectionErrors = it.connectionErrors + (serverId to (e.message ?: "Connection failed"))
                     )
                 }
@@ -815,7 +837,11 @@ class HomeViewModel @Inject constructor(
     fun disconnectFromServer(serverId: String) {
         serviceBinder?.getService()?.disconnect(serverId)
         _uiState.update {
-            it.copy(connectedServerIds = it.connectedServerIds - serverId)
+            it.copy(
+                connectedServerIds = it.connectedServerIds - serverId,
+                connectingServerIds = it.connectingServerIds - serverId,
+                connectionPhases = it.connectionPhases - serverId,
+            )
         }
     }
 

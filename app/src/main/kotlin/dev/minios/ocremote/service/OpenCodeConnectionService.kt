@@ -24,6 +24,7 @@ import dev.minios.ocremote.data.transport.OpenCodeTransport
 import dev.minios.ocremote.data.transport.PiRoundtableTransport
 import dev.minios.ocremote.domain.model.Message
 import dev.minios.ocremote.domain.model.Part
+import dev.minios.ocremote.domain.model.ConnectionPhase
 import dev.minios.ocremote.domain.model.ServerConfig
 import dev.minios.ocremote.domain.model.ServerType
 import dev.minios.ocremote.domain.model.SessionStatus
@@ -164,6 +165,9 @@ class OpenCodeConnectionService : Service() {
     private val _connectingServerIds = MutableStateFlow<Set<String>>(emptySet())
     val connectingServerIds: StateFlow<Set<String>> = _connectingServerIds.asStateFlow()
 
+    private val _connectionPhases = MutableStateFlow<Map<String, ConnectionPhase>>(emptyMap())
+    val connectionPhases: StateFlow<Map<String, ConnectionPhase>> = _connectionPhases.asStateFlow()
+
     /** Dedup response-ready notifications per session by last assistant message ID. */
     private val lastNotifiedAssistantMessageBySession = ConcurrentHashMap<String, String>()
     private val postedPiNotificationKeys = ConcurrentHashMap.newKeySet<String>()
@@ -293,6 +297,8 @@ class OpenCodeConnectionService : Service() {
         )
 
         _connectingServerIds.update { it + server.id }
+        updateConnectionPhase(server.id, ConnectionPhase.LoadingWorkspace)
+        job.start()
 
         // Update persistent notification
         updatePersistentNotification()
@@ -312,6 +318,7 @@ class OpenCodeConnectionService : Service() {
 
         _connectedServerIds.update { it - serverId }
         _connectingServerIds.update { it - serverId }
+        _connectionPhases.update { it - serverId }
 
         eventReducer.clearForServer(serverId)
 
@@ -361,6 +368,7 @@ class OpenCodeConnectionService : Service() {
 
         _connectedServerIds.value = emptySet()
         _connectingServerIds.value = emptySet()
+        _connectionPhases.value = emptyMap()
 
         for (serverId in serverIds) {
             eventReducer.clearForServer(serverId)
@@ -444,15 +452,17 @@ class OpenCodeConnectionService : Service() {
     // ============ SSE Connection with Auto-Reconnect ============
 
     private fun startSseConnection(server: ServerConfig, transport: AgentTransport): Job {
-        return serviceScope.launch {
+        return serviceScope.launch(start = CoroutineStart.LAZY) {
             var attempt = 0
 
             while (isActive) {
                 attempt++
                 Log.i(TAG, "[${server.displayName}] SSE connection attempt #$attempt")
 
+                updateConnectionPhase(server.id, ConnectionPhase.LoadingWorkspace)
                 val projects = try { transport.listRoomScopes() } catch (_: Exception) { emptyList() }
                 try {
+                    updateConnectionPhase(server.id, ConnectionPhase.SyncingSessions)
                     val roots = transport.listRooms(rootsOnly = true).openCodeSessions()
                     eventReducer.setSessions(server.id, roots)
                     Log.i(TAG, "[${server.displayName}] Pre-loaded ${roots.size} root sessions")
@@ -475,6 +485,7 @@ class OpenCodeConnectionService : Service() {
                     Log.w(TAG, "[${server.displayName}] Failed to pre-load sessions: ${e.message}")
                 }
 
+                updateConnectionPhase(server.id, ConnectionPhase.RestoringActivity)
                 bootstrapSessionStatuses(
                     server = server,
                     transport = transport,
@@ -489,6 +500,7 @@ class OpenCodeConnectionService : Service() {
                 try {
                     coroutineScope {
                         val streamScope = this
+                        updateConnectionPhase(server.id, ConnectionPhase.OpeningLiveUpdates)
                         transport.openEventStream()
                             .catch { error ->
                                 Log.e(TAG, "[${server.displayName}] SSE stream error", error)
@@ -534,6 +546,7 @@ class OpenCodeConnectionService : Service() {
 
                 val delayMs = calculateBackoff(attempt)
                 Log.i(TAG, "[${server.displayName}] Reconnecting in ${delayMs}ms (attempt #$attempt)")
+                updateConnectionPhase(server.id, ConnectionPhase.WaitingToRetry)
                 updatePersistentNotification()
                 delay(delayMs)
             }
@@ -613,10 +626,15 @@ class OpenCodeConnectionService : Service() {
         if (connected) {
             _connectingServerIds.update { it - serverId }
             _connectedServerIds.update { it + serverId }
+            _connectionPhases.update { it - serverId }
         } else {
             _connectedServerIds.update { it - serverId }
             _connectingServerIds.update { it + serverId }
         }
+    }
+
+    private fun updateConnectionPhase(serverId: String, phase: ConnectionPhase) {
+        _connectionPhases.update { it + (serverId to phase) }
     }
 
     private suspend fun calculateBackoff(attempt: Int): Long {

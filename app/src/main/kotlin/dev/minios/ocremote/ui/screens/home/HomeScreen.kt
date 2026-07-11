@@ -46,8 +46,10 @@ import dev.minios.ocremote.R
 import dev.minios.ocremote.data.repository.LocalServerManager
 import dev.minios.ocremote.domain.model.ServerConfig
 import dev.minios.ocremote.domain.model.ServerType
+import dev.minios.ocremote.domain.model.ConnectionPhase
 import dev.minios.ocremote.ui.theme.StatusConnected
 import androidx.compose.animation.core.*
+import kotlinx.coroutines.delay
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -341,6 +343,7 @@ fun HomeScreen(
                                 server = server,
                                 isConnected = server.id in uiState.connectedServerIds,
                                 isConnecting = server.id in uiState.connectingServerIds,
+                                connectionPhase = uiState.connectionPhases[server.id],
                                 connectionError = uiState.connectionErrors[server.id],
                                 showServerSettings = server.id in uiState.serverSettingsReadyIds,
                                 onConnect = { requestNotificationPermissionAndConnect(server.id) },
@@ -1233,10 +1236,11 @@ private fun EmptyServersView(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ServerCard(
+internal fun ServerCard(
     server: ServerConfig,
     isConnected: Boolean,
     isConnecting: Boolean,
+    connectionPhase: ConnectionPhase?,
     connectionError: String?,
     showServerSettings: Boolean,
     onConnect: () -> Unit,
@@ -1247,6 +1251,14 @@ private fun ServerCard(
     onDelete: () -> Unit
 ) {
     var showMenu by remember { mutableStateOf(false) }
+    var showSlowConnectionHint by remember { mutableStateOf(false) }
+    LaunchedEffect(isConnecting) {
+        showSlowConnectionHint = false
+        if (isConnecting) {
+            delay(8_000)
+            showSlowConnectionHint = true
+        }
+    }
     val isAmoled = MaterialTheme.colorScheme.background == Color.Black && MaterialTheme.colorScheme.surface == Color.Black
     val cardContainerColor = if (isAmoled) {
         Color.Black
@@ -1307,7 +1319,8 @@ private fun ServerCard(
                         )
                     } else if (isConnecting) {
                         Text(
-                            text = stringResource(R.string.home_connecting),
+                            text = connectionPhase?.let { stringResource(it.messageRes) }
+                                ?: stringResource(R.string.home_connecting),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.tertiary
                         )
@@ -1353,6 +1366,14 @@ private fun ServerCard(
                         }
                     }
                 }
+            }
+
+            if (showSlowConnectionHint) {
+                Text(
+                    text = stringResource(R.string.home_connection_taking_longer),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
 
             // Connection error
@@ -1460,7 +1481,12 @@ private fun ServerCard(
                             color = if (isAmoled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
                         )
                         Spacer(Modifier.width(6.dp))
-                        Text(stringResource(R.string.home_connecting))
+                        Text(
+                            text = connectionPhase?.let { stringResource(it.messageRes) }
+                                ?: stringResource(R.string.home_connecting),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                     } else {
                         Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
@@ -1471,6 +1497,16 @@ private fun ServerCard(
         }
     }
 }
+
+internal val ConnectionPhase.messageRes: Int
+    get() = when (this) {
+        ConnectionPhase.CheckingServer -> R.string.home_connection_checking_server
+        ConnectionPhase.LoadingWorkspace -> R.string.home_connection_loading_workspace
+        ConnectionPhase.SyncingSessions -> R.string.home_connection_syncing_sessions
+        ConnectionPhase.RestoringActivity -> R.string.home_connection_restoring_activity
+        ConnectionPhase.OpeningLiveUpdates -> R.string.home_connection_opening_live_updates
+        ConnectionPhase.WaitingToRetry -> R.string.home_connection_waiting_to_retry
+    }
 
 @Composable
 private fun BatteryOptimizationBanner(

@@ -10,6 +10,13 @@
     <string name="home_server_health_bad">Disconnected</string>
     <string name="home_connect">Connect</string>
     <string name="home_connecting">Connecting…</string>
+    <string name="home_connection_checking_server">Checking server…</string>
+    <string name="home_connection_loading_workspace">Reading workspaces…</string>
+    <string name="home_connection_syncing_sessions">Syncing sessions…</string>
+    <string name="home_connection_restoring_activity">Restoring task status…</string>
+    <string name="home_connection_opening_live_updates">Opening live updates…</string>
+    <string name="home_connection_waiting_to_retry">Waiting to retry…</string>
+    <string name="home_connection_taking_longer">Still working. Large workspaces or many sessions can take longer.</string>
     <string name="home_loading_servers">Loading servers…</string>
     <string name="home_disconnect">Disconnect</string>
     <string name="home_edit">Edit</string>
