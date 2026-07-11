@@ -89,6 +89,8 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.TextToolbar
 import androidx.compose.ui.platform.TextToolbarStatus
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -1257,6 +1259,11 @@ fun ChatScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
+    LaunchedEffect(viewModel) {
+        viewModel.retryNowFailureEvent.collect {
+            snackbarHostState.showSnackbar(context.getString(R.string.chat_retry_now_failed))
+        }
+    }
     val isAmoled = isAmoledTheme()
     val keyboardController = LocalSoftwareKeyboardController.current
     val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
@@ -1870,7 +1877,7 @@ fun ChatScreen(
                         ) {
                             Icon(
                                 Icons.Default.Stop,
-                                contentDescription = if (uiState.sessionStatus is SessionStatus.Retry) "停止重试" else stringResource(R.string.chat_stop),
+                                contentDescription = stringResource(R.string.chat_stop),
                                 tint = MaterialTheme.colorScheme.error
                             )
                         }
@@ -2084,6 +2091,8 @@ fun ChatScreen(
                         if (uiState.sessionStatus is SessionStatus.Retry) {
                             RetryStatusBanner(
                                 retry = uiState.sessionStatus as SessionStatus.Retry,
+                                isRetryingNow = uiState.isRetryingNow,
+                                onRetryNow = { viewModel.retrySessionNow() },
                                 onStop = { viewModel.abortSession() },
                                 modifier = Modifier.padding(horizontal = 12.dp),
                             )
@@ -5805,11 +5814,16 @@ private fun extractToolOutput(tool: Part.Tool): String {
 @Composable
 private fun RetryStatusBanner(
     retry: SessionStatus.Retry,
+    isRetryingNow: Boolean,
+    onRetryNow: () -> Unit,
     onStop: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val isAmoled = isAmoledTheme()
     val retryText = stringResource(R.string.chat_retry, retry.attempt, retry.message)
+    val retryNowLabel = stringResource(R.string.chat_retry_now)
+    val retryingNowLabel = stringResource(R.string.chat_retrying_now)
+    val retryActionDescription = if (isRetryingNow) retryingNowLabel else retryNowLabel
 
     Surface(
         shape = RoundedCornerShape(10.dp),
@@ -5819,33 +5833,58 @@ private fun RetryStatusBanner(
             .fillMaxWidth()
             .padding(vertical = 4.dp)
     ) {
-        Row(
+        Column(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(
-                imageVector = Icons.Default.Refresh,
-                contentDescription = stringResource(R.string.sessions_retrying),
-                tint = MaterialTheme.colorScheme.error,
-                modifier = Modifier.size(16.dp)
-            )
-            Text(
-                text = retryText,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.weight(1f),
-            )
-            IconButton(
-                onClick = onStop,
-                modifier = Modifier.size(48.dp)
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(
-                    Icons.Default.Stop,
-                    contentDescription = stringResource(R.string.chat_stop),
+                    imageVector = Icons.Default.Refresh,
+                    contentDescription = stringResource(R.string.sessions_retrying),
                     tint = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.size(18.dp)
+                    modifier = Modifier.size(16.dp)
                 )
+                Text(
+                    text = retryText,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextButton(
+                    onClick = onRetryNow,
+                    enabled = !isRetryingNow,
+                    modifier = Modifier
+                        .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
+                        .semantics { contentDescription = retryActionDescription },
+                ) {
+                    if (isRetryingNow) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                    }
+                    Text(if (isRetryingNow) retryingNowLabel else retryNowLabel)
+                }
+                IconButton(
+                    onClick = onStop,
+                    modifier = Modifier.size(48.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Stop,
+                        contentDescription = stringResource(R.string.chat_stop),
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
             }
         }
     }

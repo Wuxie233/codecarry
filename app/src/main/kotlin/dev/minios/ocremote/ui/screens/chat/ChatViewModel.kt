@@ -89,6 +89,7 @@ data class ChatUiState(
     val isLoading: Boolean = true,
     val error: String? = null,
     val isSending: Boolean = false,
+    val isRetryingNow: Boolean = false,
     val providers: List<ProviderInfo> = emptyList(),
     val hasServerModelCatalog: Boolean = false,
     val defaultModels: Map<String, String> = emptyMap(),
@@ -222,6 +223,10 @@ class ChatViewModel @Inject constructor(
     private val _isLoading = MutableStateFlow(true)
     private val _error = MutableStateFlow<String?>(null)
     private val _isSending = MutableStateFlow(false)
+    private val _isRetryingNow = MutableStateFlow(false)
+    private val _retryNowFailureEvent = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val retryNowFailureEvent: SharedFlow<Unit> = _retryNowFailureEvent
+    private var retryNowAwaitingStatus = false
     private val _allProviders = MutableStateFlow<List<ProviderInfo>>(emptyList())
     private val _providers = MutableStateFlow<List<ProviderInfo>>(emptyList())
     private val _hiddenModels = MutableStateFlow<Set<String>>(emptySet())
@@ -326,6 +331,7 @@ class ChatViewModel @Inject constructor(
         _isLoading,
         _error,
         _isSending,
+        _isRetryingNow,
         _selectedProviderId,
         _selectedModelId,
         _allProviders,
@@ -358,21 +364,22 @@ class ChatViewModel @Inject constructor(
         val loading = args[10] as Boolean
         val error = args[11] as String?
         val sending = args[12] as Boolean
-        val selProviderId = args[13] as String?
-        val selModelId = args[14] as String?
-        val allProviders = args[15] as List<ProviderInfo>
-        val providers = args[16] as List<ProviderInfo>
-        val defaultModels = args[17] as Map<String, String>
-        val agents = args[18] as List<AgentInfo>
+        val retryingNow = args[13] as Boolean
+        val selProviderId = args[14] as String?
+        val selModelId = args[15] as String?
+        val allProviders = args[16] as List<ProviderInfo>
+        val providers = args[17] as List<ProviderInfo>
+        val defaultModels = args[18] as Map<String, String>
+        val agents = args[19] as List<AgentInfo>
         @Suppress("UNCHECKED_CAST")
-        val agentSelection = args[19] as Pair<String, Boolean>
+        val agentSelection = args[20] as Pair<String, Boolean>
         val selectedAgent = agentSelection.first
         val isAgentExplicitlySelected = agentSelection.second
-        val selectedVariant = args[20] as String?
-        val catalogState = args[21] as PiRoundtableCatalogState
+        val selectedVariant = args[21] as String?
+        val catalogState = args[22] as PiRoundtableCatalogState
         val commands = catalogState.commands
-        val hasOlderMessages = args[22] as Boolean
-        val isLoadingOlder = args[23] as Boolean
+        val hasOlderMessages = args[23] as Boolean
+        val isLoadingOlder = args[24] as Boolean
         val piPersonas = catalogState.personaLibrary
 
         val session = allSessions.find { it.id == sessionId }
@@ -499,6 +506,7 @@ class ChatViewModel @Inject constructor(
             isLoading = loading,
             error = error,
             isSending = sending,
+            isRetryingNow = retryingNow,
             providers = providers,
             hasServerModelCatalog = allProviders.any { it.models.isNotEmpty() },
             defaultModels = defaultModels,
@@ -532,6 +540,14 @@ class ChatViewModel @Inject constructor(
 
     init {
         eventReducer.setActiveSessionId(sessionId)
+
+        viewModelScope.launch {
+            eventReducer.sessionStatuses.collect { statuses ->
+                if (!retryNowAwaitingStatus || statuses[sessionId] is SessionStatus.Retry) return@collect
+                retryNowAwaitingStatus = false
+                _isRetryingNow.value = false
+            }
+        }
 
         // Route guard (issue #27): if sessionId is missing after URL decode,
         // surface an error state instead of triggering REST calls with an empty sessionId.
@@ -1255,6 +1271,30 @@ class ChatViewModel @Inject constructor(
                     _error.value = message
                 },
             )
+        }
+    }
+
+    fun retrySessionNow() {
+        if (!_isRetryingNow.compareAndSet(expect = false, update = true)) return
+        viewModelScope.launch {
+            try {
+                val wokeRetry = api.retrySessionNow(conn, sessionId, directory = sessionDirectory)
+                if (!wokeRetry) {
+                    _retryNowFailureEvent.tryEmit(Unit)
+                    return@launch
+                }
+                retryNowAwaitingStatus = true
+                if (eventReducer.sessionStatuses.value[sessionId] is SessionStatus.Retry) return@launch
+                retryNowAwaitingStatus = false
+                _isRetryingNow.value = false
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                Log.e(TAG, "Failed to retry session now", error)
+                _retryNowFailureEvent.tryEmit(Unit)
+            } finally {
+                if (!retryNowAwaitingStatus) _isRetryingNow.value = false
+            }
         }
     }
 

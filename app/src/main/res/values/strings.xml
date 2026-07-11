@@ -216,6 +216,9 @@
     <string name="chat_send_shell">Send shell command</string>
     <string name="chat_shell_mode_hold_send_hint">Shell mode active. Hold Send to switch back.</string>
     <string name="chat_stop">Stop</string>
+    <string name="chat_retry_now">Retry now</string>
+    <string name="chat_retrying_now">Retrying now</string>
+    <string name="chat_retry_now_failed">Could not retry now</string>
     <string name="chat_stop_failed">Failed to stop session</string>
     <string name="chat_abort">Abort</string>
     <string name="chat_empty">Start a conversation with OpenCode</string>

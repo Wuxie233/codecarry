@@ -263,6 +263,13 @@ class OpenCodeApi @Inject constructor(
         return response.status.isSuccess()
     }
 
+    suspend fun retrySessionNow(conn: ServerConnection, sessionId: String, directory: String? = null): Boolean {
+        return httpClient.post("${conn.baseUrl}/session/$sessionId/retry") {
+            conn.authHeader?.let { header("Authorization", it) }
+            directory?.let { header("x-opencode-directory", encodeDirectoryHeader(it)) }
+        }.body()
+    }
+
     suspend fun getSessionDiff(conn: ServerConnection, sessionId: String): List<FileDiff> {
         return httpClient.get("${conn.baseUrl}/session/$sessionId/diff") {
             conn.authHeader?.let { header("Authorization", it) }

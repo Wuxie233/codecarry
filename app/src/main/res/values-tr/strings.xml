@@ -96,6 +96,9 @@
     <string name="session_delete">Oturumu Sil</string>
     <string name="session_delete_confirm">"%1$s" silinsin mi? Bu işlem geri alınamaz.</string>
     <string name="chat_stop">Dur</string>
+    <string name="chat_retry_now">Şimdi yeniden dene</string>
+    <string name="chat_retrying_now">Şimdi yeniden deneniyor</string>
+    <string name="chat_retry_now_failed">Şimdi yeniden denenemedi</string>
     <string name="chat_stop_failed">Oturum durdurulamadı</string>
     <string name="chat_copy">Kopyala</string>
     <string name="chat_revert">Geri al</string>

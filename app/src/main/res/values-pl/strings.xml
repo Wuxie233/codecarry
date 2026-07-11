@@ -96,6 +96,9 @@
     <string name="session_delete">Usuń sesję</string>
     <string name="session_delete_confirm">Usunąć "%1$s"? Tego nie można cofnąć.</string>
     <string name="chat_stop">Zatrzymaj</string>
+    <string name="chat_retry_now">Ponów teraz</string>
+    <string name="chat_retrying_now">Ponawianie teraz</string>
+    <string name="chat_retry_now_failed">Nie udało się ponowić teraz</string>
     <string name="chat_stop_failed">Nie udało się zatrzymać sesji</string>
     <string name="chat_copy">Kopiuj</string>
     <string name="chat_revert">Cofnij</string>

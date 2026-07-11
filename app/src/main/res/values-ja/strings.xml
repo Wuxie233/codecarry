@@ -96,6 +96,9 @@
     <string name="session_delete">セッション削除</string>
     <string name="session_delete_confirm">「%1$s」を削除しますか？この操作は元に戻せません。</string>
     <string name="chat_stop">停止</string>
+    <string name="chat_retry_now">今すぐ再試行</string>
+    <string name="chat_retrying_now">今すぐ再試行中</string>
+    <string name="chat_retry_now_failed">今すぐ再試行できませんでした</string>
     <string name="chat_stop_failed">セッションを停止できませんでした</string>
     <string name="chat_copy">コピー</string>
     <string name="chat_revert">元に戻す</string>

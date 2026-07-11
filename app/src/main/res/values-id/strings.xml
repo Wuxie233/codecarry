@@ -77,6 +77,9 @@
     <string name="chat_input_hint">Pesan OpenCode…</string>
     <string name="chat_send">Kirim</string>
     <string name="chat_stop">Stop</string>
+    <string name="chat_retry_now">Coba lagi sekarang</string>
+    <string name="chat_retrying_now">Sedang mencoba lagi</string>
+    <string name="chat_retry_now_failed">Gagal mencoba lagi sekarang</string>
     <string name="chat_stop_failed">Gagal menghentikan sesi</string>
     <string name="chat_abort">Batalkan</string>
     <string name="chat_empty">Mulai percakapan dengan OpenCode</string>

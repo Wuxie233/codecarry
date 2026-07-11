@@ -1,5 +1,6 @@
 package dev.minios.ocremote.data.api
 
+import android.net.Uri
 import dev.minios.ocremote.domain.model.SessionStatus
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
@@ -18,6 +19,7 @@ import io.ktor.utils.io.ByteReadChannel
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -91,6 +93,36 @@ class OpenCodeApiSessionStatusTest {
 
         assertEquals(SessionStatus.Idle, result["ses-idle"])
         assertEquals(SessionStatus.Idle, result["ses-future"])
+    }
+
+    @Test
+    fun `retrySessionNow posts authenticated encoded-directory request and decodes boolean response bodies`() = runBlocking {
+        val captured = mutableListOf<HttpRequestData>()
+        val responseBodies = ArrayDeque(listOf("true", "false"))
+        val api = newApi { request ->
+            captured += request
+            respondJson(responseBodies.removeFirst())
+        }
+        val conn = ServerConnection.from(
+            url = "http://example.test:4096",
+            username = "opencode-user",
+            password = "secret",
+        )
+        val directory = "/workspace/project name/项目"
+
+        val firstResult = api.retrySessionNow(conn, "ses-retry", directory)
+        val secondResult = api.retrySessionNow(conn, "ses-retry", directory)
+
+        assertTrue(firstResult)
+        assertFalse(secondResult)
+        assertEquals(2, captured.size)
+        captured.forEach { request ->
+            assertEquals(HttpMethod.Post, request.method)
+            assertEquals("/session/ses-retry/retry", request.url.encodedPath)
+            assertEquals(conn.authHeader, request.headers[HttpHeaders.Authorization])
+            assertTrue(request.headers[HttpHeaders.Authorization].orEmpty().startsWith("Basic "))
+            assertEquals(Uri.encode(directory), request.headers["x-opencode-directory"])
+        }
     }
 
     private fun MockRequestHandleScope.respondJson(content: String) = respond(

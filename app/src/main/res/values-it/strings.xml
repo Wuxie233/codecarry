@@ -96,6 +96,9 @@
     <string name="session_delete">Elimina sessione</string>
     <string name="session_delete_confirm">Eliminare "%1$s"? Questa operazione non può essere annullata.</string>
     <string name="chat_stop">Ferma</string>
+    <string name="chat_retry_now">Riprova ora</string>
+    <string name="chat_retrying_now">Nuovo tentativo in corso</string>
+    <string name="chat_retry_now_failed">Impossibile riprovare ora</string>
     <string name="chat_stop_failed">Impossibile interrompere la sessione</string>
     <string name="chat_copy">Copia</string>
     <string name="chat_revert">Ripristina</string>

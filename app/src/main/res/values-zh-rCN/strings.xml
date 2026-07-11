@@ -98,6 +98,9 @@
     <string name="session_delete">删除会话</string>
     <string name="session_delete_confirm">确定要删除“%1$s”？此操作无法撤销。</string>
     <string name="chat_stop">停止</string>
+    <string name="chat_retry_now">立即重试</string>
+    <string name="chat_retrying_now">正在立即重试</string>
+    <string name="chat_retry_now_failed">无法立即重试</string>
     <string name="chat_stop_failed">停止会话失败</string>
     <string name="chat_copy">复制</string>
     <string name="chat_bubble_menu_copy">复制</string>

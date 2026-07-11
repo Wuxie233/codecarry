@@ -96,6 +96,9 @@
     <string name="session_delete">Sitzung löschen</string>
     <string name="session_delete_confirm">„%1$s“ löschen? Dies kann nicht rückgängig gemacht werden.</string>
     <string name="chat_stop">Stoppen</string>
+    <string name="chat_retry_now">Jetzt erneut versuchen</string>
+    <string name="chat_retrying_now">Erneuter Versuch läuft</string>
+    <string name="chat_retry_now_failed">Erneuter Versuch fehlgeschlagen</string>
     <string name="chat_stop_failed">Sitzung konnte nicht gestoppt werden</string>
     <string name="chat_copy">Kopieren</string>
     <string name="chat_revert">Zurücksetzen</string>
