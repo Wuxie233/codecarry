@@ -42,6 +42,16 @@ sealed class Screen(val route: String) {
         }
     }
 
+    data object CodexThreads : Screen("codex_threads") {
+        fun createRoute(serverId: String): String =
+            "codex_threads?serverId=${URLEncoder.encode(serverId, "UTF-8")}"
+    }
+
+    data object CodexChat : Screen("codex_chat") {
+        fun createRoute(serverId: String, threadId: String): String =
+            "codex_chat?serverId=${URLEncoder.encode(serverId, "UTF-8")}&threadId=${URLEncoder.encode(threadId, "UTF-8")}"
+    }
+
     data object RoundtableCenter : Screen("roundtable_center") {
         fun createRoute(serverId: String): String {
             val encodedServerId = URLEncoder.encode(serverId, "UTF-8")

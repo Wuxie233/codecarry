@@ -15,6 +15,13 @@ import dev.minios.ocremote.R
 import dev.minios.ocremote.data.api.OpenCodeApi
 import dev.minios.ocremote.data.api.PiApi
 import dev.minios.ocremote.data.api.SseClient
+import dev.minios.ocremote.data.codex.CodexClientConnectionState
+import dev.minios.ocremote.data.codex.CodexConnectionManager
+import dev.minios.ocremote.data.codex.CodexManagedConnection
+import dev.minios.ocremote.data.codex.CodexServerRequest
+import dev.minios.ocremote.data.codex.CodexThreadKey
+import dev.minios.ocremote.data.codex.ScopedCodexNotification
+import dev.minios.ocremote.data.codex.requestKey
 import dev.minios.ocremote.data.preferences.SessionListPreferencesRepository
 import dev.minios.ocremote.data.repository.EventReducer
 import dev.minios.ocremote.data.repository.LocalServerManager
@@ -145,11 +152,16 @@ class OpenCodeConnectionService : Service() {
     @Inject
     lateinit var serverRepository: ServerRepository
 
+    @Inject
+    lateinit var codexConnectionManager: CodexConnectionManager
+
     private val binder = LocalBinder()
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /** All active/pending server connections keyed by serverId. */
     private val connections = mutableMapOf<String, ServerConnectionState>()
+    private val codexConnections = CodexOwnershipRegistry()
+    private val codexConnectionErrors = ConcurrentHashMap<String, String>()
 
     private var notificationWatchdogJob: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
@@ -167,6 +179,8 @@ class OpenCodeConnectionService : Service() {
 
     private val _connectionPhases = MutableStateFlow<Map<String, ConnectionPhase>>(emptyMap())
     val connectionPhases: StateFlow<Map<String, ConnectionPhase>> = _connectionPhases.asStateFlow()
+    private val _connectionErrors = MutableStateFlow<Map<String, String>>(emptyMap())
+    val connectionErrors: StateFlow<Map<String, String>> = _connectionErrors.asStateFlow()
 
     /** Dedup response-ready notifications per session by last assistant message ID. */
     private val lastNotifiedAssistantMessageBySession = ConcurrentHashMap<String, String>()
@@ -174,6 +188,9 @@ class OpenCodeConnectionService : Service() {
 
     /** Dedup permission notifications fired from the connect-time bootstrap, keyed by request ID. */
     private val postedPermissionRequestIds = ConcurrentHashMap.newKeySet<String>()
+    private val handledCodexTurns = BoundedNotificationKeys(capacity = 512)
+    private val postedCodexRequestIds = ConcurrentHashMap<String, Int>()
+    private val manuallyDisconnectedServerIds = ConcurrentHashMap.newKeySet<String>()
 
     inner class LocalBinder : Binder() {
         fun getService(): OpenCodeConnectionService = this@OpenCodeConnectionService
@@ -186,6 +203,9 @@ class OpenCodeConnectionService : Service() {
         notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         createNotificationChannels()
 
+        serviceScope.launch { observeCodexConnections() }
+        serviceScope.launch { observeCodexNotifications() }
+        serviceScope.launch { observeActiveCodexThreads() }
         serviceScope.launch {
             autoConnectConfiguredServers()
         }
@@ -227,27 +247,9 @@ class OpenCodeConnectionService : Service() {
 
         ensureForegroundStarted()
 
-        // Read server details from intent and connect
-        intent?.let { i ->
-            val serverId = i.getStringExtra("server_id")
-            val serverName = i.getStringExtra("server_name")
-            val serverUrl = i.getStringExtra("server_url")
-            val serverUsername = i.getStringExtra("server_username") ?: "opencode"
-            val serverPassword = i.getStringExtra("server_password")
-            val serverType = runCatching { ServerType.valueOf(i.getStringExtra("server_type") ?: ServerType.OPENCODE.name) }.getOrDefault(ServerType.OPENCODE)
-            val serverToken = i.getStringExtra("server_token")
-
-            if (serverId != null && serverUrl != null) {
-                val serverConfig = ServerConfig(
-                    id = serverId,
-                    url = serverUrl,
-                    type = serverType,
-                    username = serverUsername,
-                    password = serverPassword,
-                    token = serverToken,
-                    name = serverName
-                )
-                connect(serverConfig)
+        intent?.getStringExtra(EXTRA_SERVER_ID)?.let { serverId ->
+            serviceScope.launch {
+                serverRepository.getServer(serverId)?.let(::connect)
             }
         }
 
@@ -272,6 +274,15 @@ class OpenCodeConnectionService : Service() {
      * Multiple servers can be connected simultaneously.
      */
     fun connect(server: ServerConfig) {
+        manuallyDisconnectedServerIds.remove(server.id)
+        connectInternal(server)
+    }
+
+    private fun connectInternal(server: ServerConfig) {
+        if (server.type == ServerType.CODEX) {
+            connectCodex(server)
+            return
+        }
         if (connections.containsKey(server.id)) {
             if (BuildConfig.DEBUG) Log.d(TAG, "Already connected to server ${server.id}, skipping")
             return
@@ -312,6 +323,12 @@ class OpenCodeConnectionService : Service() {
      */
     fun disconnect(serverId: String) {
         if (BuildConfig.DEBUG) Log.d(TAG, "Disconnecting server $serverId")
+        manuallyDisconnectedServerIds.add(serverId)
+
+        if (codexConnections.current(serverId) != null) {
+            disconnectCodex(serverId)
+            return
+        }
 
         val state = connections.remove(serverId) ?: return
         state.sseJob.cancel()
@@ -319,10 +336,11 @@ class OpenCodeConnectionService : Service() {
         _connectedServerIds.update { it - serverId }
         _connectingServerIds.update { it - serverId }
         _connectionPhases.update { it - serverId }
+        _connectionErrors.update { it - serverId }
 
         eventReducer.clearForServer(serverId)
 
-        if (connections.isEmpty()) {
+        if (!hasManagedConnections()) {
             // Last server disconnected — clean up and stop service
             releaseWakeLock()
             notificationWatchdogJob?.cancel()
@@ -346,6 +364,7 @@ class OpenCodeConnectionService : Service() {
         val visibleServerIds = connections.values
             .filterNot { isLocalServer(it.config) }
             .map { it.config.id }
+            .plus(codexConnections.snapshot().keys)
 
         if (visibleServerIds.isEmpty()) {
             updatePersistentNotification()
@@ -363,12 +382,20 @@ class OpenCodeConnectionService : Service() {
         for ((_, state) in connections) {
             state.sseJob.cancel()
         }
-        val serverIds = connections.keys.toList()
+        val codexOwners = codexConnections.clear()
+        val serverIds = connections.keys.toList() + codexOwners.map { it.config.id }
         connections.clear()
+        codexOwners.forEach { owner ->
+            owner.connectJob.cancel()
+            codexConnectionManager.releasePersistent(owner.config.id)
+        }
+        codexConnectionErrors.clear()
+        cancelAllCodexRequestNotifications()
 
         _connectedServerIds.value = emptySet()
         _connectingServerIds.value = emptySet()
         _connectionPhases.value = emptyMap()
+        _connectionErrors.value = emptyMap()
 
         for (serverId in serverIds) {
             eventReducer.clearForServer(serverId)
@@ -387,10 +414,14 @@ class OpenCodeConnectionService : Service() {
 
     private suspend fun autoConnectConfiguredServers() {
         try {
-            val autoConnectServers = serverRepository.servers.first().filter { it.autoConnect }
+            val autoConnectServers = serverRepository.servers.first().filter {
+                it.autoConnect
+            }
             if (autoConnectServers.isEmpty()) return
             Log.i(TAG, "Auto-connecting ${autoConnectServers.size} server(s)")
-            autoConnectServers.forEach { connect(it) }
+            autoConnectServers.forEach { server ->
+                if (server.id !in manuallyDisconnectedServerIds) connectInternal(server)
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to auto-connect servers", e)
         }
@@ -406,15 +437,265 @@ class OpenCodeConnectionService : Service() {
      * Check if a specific server is connected.
      */
     fun isConnected(serverId: String): Boolean {
-        return connections[serverId]?.sseJob?.isActive == true
+        return serverId in _connectedServerIds.value
     }
+
+    private fun connectCodex(server: ServerConfig) {
+        val owner = codexConnections.register(server) { generation ->
+            serviceScope.launch(start = CoroutineStart.LAZY) {
+                try {
+                    codexConnectionManager.connect(server)
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Throwable) {
+                    if (codexConnections.isCurrent(server.id, generation)) {
+                        codexConnectionErrors[server.id] = error.message ?: "Codex connection failed"
+                        publishCodexConnectionStates(codexConnectionManager.connections.value)
+                    }
+                }
+            }
+        } ?: return
+        ensureForegroundStarted()
+        acquireWakeLock()
+        _connectingServerIds.update { it + server.id }
+        updateConnectionPhase(server.id, ConnectionPhase.OpeningLiveUpdates)
+        owner.connectJob.start()
+        updatePersistentNotification()
+        startNotificationWatchdog()
+    }
+
+    private fun disconnectCodex(serverId: String) {
+        val owned = codexConnections.remove(serverId) ?: return
+        owned.connectJob.cancel()
+        codexConnectionErrors.remove(serverId)
+        cancelCodexRequestNotifications(serverId)
+        codexConnectionManager.releasePersistent(serverId)
+        _connectedServerIds.update { it - serverId }
+        _connectingServerIds.update { it - serverId }
+        _connectionPhases.update { it - serverId }
+        _connectionErrors.update { it - serverId }
+        if (!hasManagedConnections()) {
+            releaseWakeLock()
+            notificationWatchdogJob?.cancel()
+            notificationWatchdogJob = null
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            foregroundStarted = false
+            stopSelf()
+        } else {
+            updatePersistentNotification()
+        }
+    }
+
+    private suspend fun observeCodexConnections() {
+        codexConnectionManager.connections.collect { managed ->
+            publishCodexConnectionStates(managed)
+            reconcileCodexRequestNotifications(managed)
+        }
+    }
+
+    private fun publishCodexConnectionStates(managed: Map<String, CodexManagedConnection>) {
+        val owned = codexConnections.snapshot()
+        val ownedIds = owned.keys
+        val states = ownedIds.associateWith { id -> codexServiceConnectionState(managed[id]) }
+        val connected = states.filterValues(CodexServiceConnectionState::connected).keys
+        val connecting = states.filterValues(CodexServiceConnectionState::connecting).keys
+        managed.forEach { (id, connection) ->
+            if (id !in ownedIds) return@forEach
+            val failed = connection.state as? CodexClientConnectionState.Failed
+            if (failed != null) codexConnectionErrors[id] = failed.error.message ?: "Codex connection failed"
+            if (connection.state is CodexClientConnectionState.Connected) codexConnectionErrors.remove(id)
+        }
+        _connectionErrors.update { errors ->
+            errors.filterKeys { it !in ownedIds } + codexConnectionErrors.filterKeys { it in ownedIds }
+        }
+        val nonCodexConnected = _connectedServerIds.value - ownedIds
+        val nonCodexConnecting = _connectingServerIds.value - ownedIds
+        _connectedServerIds.value = nonCodexConnected + connected
+        _connectingServerIds.value = nonCodexConnecting + connecting
+        _connectionPhases.update { phases ->
+            phases.filterKeys { it !in ownedIds } + connecting.associateWith { id ->
+                if (codexConnectionErrors.containsKey(id)) {
+                    ConnectionPhase.WaitingToRetry
+                } else {
+                    ConnectionPhase.OpeningLiveUpdates
+                }
+            }
+        }
+        val currentOwnedIds = codexConnections.snapshot().keys
+        val removedIds = ownedIds - currentOwnedIds
+        if (removedIds.isNotEmpty()) {
+            _connectedServerIds.update { it - removedIds }
+            _connectingServerIds.update { it - removedIds }
+            _connectionPhases.update { it - removedIds }
+            _connectionErrors.update { it - removedIds }
+        }
+        if (foregroundStarted) updatePersistentNotification()
+    }
+
+    private suspend fun observeCodexNotifications() {
+        codexConnectionManager.notificationEvents.collect { event ->
+            val owned = codexConnections.current(event.serverId) ?: return@collect
+            val currentId = codexConnectionManager.connections.value[event.serverId]?.connectionId
+            if (currentId != event.connectionId) return@collect
+            if (!codexConnections.isCurrent(event.serverId, owned.generation)) return@collect
+            maybeShowCodexTurnNotification(owned.config, event)
+        }
+    }
+
+    private suspend fun maybeShowCodexTurnNotification(
+        server: ServerConfig,
+        event: ScopedCodexNotification,
+    ) {
+        val threadId = event.notification.threadId ?: return
+        val turn = event.notification.turn ?: return
+        val decision = codexTurnNotificationDecision(
+            serverId = event.serverId,
+            notification = event.notification,
+            activeThreads = codexConnectionManager.activeThreads.value,
+            notificationsEnabled = settingsRepository.notificationsEnabled.first(),
+        )
+        if (decision == CodexTurnNotificationDecision.IGNORE) return
+        val turnKey = "${event.serverId}:${event.connectionId}:$threadId:${turn.id}"
+        if (!handledCodexTurns.add(turnKey)) return
+        when (decision) {
+            CodexTurnNotificationDecision.IGNORE -> Unit
+            CodexTurnNotificationDecision.SUPPRESS_ACTIVE -> {
+                cancelCodexResponseNotification(event.serverId, threadId)
+                return
+            }
+            CodexTurnNotificationDecision.POST -> Unit
+        }
+        delay(150)
+        if (CodexThreadKey(event.serverId, threadId) in codexConnectionManager.activeThreads.value) {
+            cancelCodexResponseNotification(event.serverId, threadId)
+            return
+        }
+        showCodexResponseNotification(server, threadId)
+    }
+
+    private suspend fun observeActiveCodexThreads() {
+        codexConnectionManager.activeThreads.collect { active ->
+            active.forEach { key -> cancelCodexResponseNotification(key.serverId, key.threadId) }
+        }
+    }
+
+    private suspend fun reconcileCodexRequestNotifications(managed: Map<String, CodexManagedConnection>) {
+        val currentKeys = mutableSetOf<String>()
+        val ownedSnapshot = codexConnections.snapshot()
+        for ((serverId, owned) in ownedSnapshot) {
+            val requests = managed[serverId]?.pendingRequests.orEmpty()
+            for (request in requests) {
+                if (request.notificationKind() == null) continue
+                val key = "$serverId:${request.id.requestKey()}"
+                currentKeys += key
+                if (postedCodexRequestIds.containsKey(key)) continue
+                if (!settingsRepository.notificationsEnabled.first()) continue
+                if (!codexConnections.isCurrent(serverId, owned.generation)) continue
+                val id = CodexNotificationIdentity.requestId(serverId, request)
+                postedCodexRequestIds[key] = id
+                showCodexRequestNotification(owned.config, request, id)
+            }
+        }
+        val removed = postedCodexRequestIds.keys - currentKeys
+        removed.forEach { key ->
+            val serverId = key.substringBefore(':')
+            postedCodexRequestIds.remove(key)?.let { id -> dismissCodexChildNotification(serverId, id) }
+        }
+    }
+
+    private suspend fun showCodexResponseNotification(server: ServerConfig, threadId: String) {
+        val thread = codexConnectionManager.get(server.id)?.events?.value?.threads?.get(threadId)
+        val body = thread?.name?.takeIf(String::isNotBlank)
+            ?: thread?.preview?.lineSequence()?.firstOrNull()?.take(80)
+            ?: getString(R.string.notification_new_session)
+        val id = CodexNotificationIdentity.responseReadyId(server.id, threadId)
+        val silent = settingsRepository.silentNotifications.first()
+        val channel = if (silent) NOTIFICATION_CHANNEL_TASKS_SILENT_ID else NOTIFICATION_CHANNEL_TASKS_ID
+        val notification = NotificationCompat.Builder(this, channel)
+            .setContentTitle(getString(R.string.notification_response_ready))
+            .setContentText(body)
+            .setSubText(server.displayName)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentIntent(createCodexThreadPendingIntent(server.id, threadId, id))
+            .setAutoCancel(true)
+            .setPriority(if (silent) NotificationCompat.PRIORITY_LOW else NotificationCompat.PRIORITY_HIGH)
+            .setGroup(SessionNotificationIdentity.serverGroup(server.id))
+            .build()
+        notificationManager.notify(id, notification)
+        showServerGroupSummary(server)
+    }
+
+    private fun showCodexRequestNotification(server: ServerConfig, request: CodexServerRequest, id: Int) {
+        val threadId = request.params["threadId"]?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.content } ?: return
+        val notification = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_PERMISSIONS_ID)
+            .setContentTitle(request.notificationTitle())
+            .setContentText(server.displayName)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentIntent(createCodexThreadPendingIntent(server.id, threadId, id))
+            .setAutoCancel(true)
+            .setOnlyAlertOnce(true)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setDefaults(NotificationCompat.DEFAULT_ALL)
+            .setGroup(SessionNotificationIdentity.serverGroup(server.id))
+            .build()
+        notificationManager.notify(id, notification)
+        showServerGroupSummary(server)
+    }
+
+    private fun createCodexThreadPendingIntent(serverId: String, threadId: String, requestCode: Int): PendingIntent {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            action = ACTION_OPEN_CODEX_THREAD
+            data = android.net.Uri.Builder()
+                .scheme("ocremote")
+                .authority("codex")
+                .appendPath(serverId)
+                .appendPath("thread")
+                .appendPath(threadId)
+                .build()
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra(EXTRA_SERVER_ID, serverId)
+            putExtra(EXTRA_THREAD_ID, threadId)
+        }
+        return PendingIntent.getActivity(
+            this,
+            requestCode,
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+    }
+
+    private fun cancelCodexResponseNotification(serverId: String, threadId: String) {
+        dismissCodexChildNotification(serverId, CodexNotificationIdentity.responseReadyId(serverId, threadId))
+    }
+
+    private fun cancelCodexRequestNotifications(serverId: String) {
+        postedCodexRequestIds.keys.filter { it.startsWith("$serverId:") }.forEach { key ->
+            postedCodexRequestIds.remove(key)?.let { id -> dismissCodexChildNotification(serverId, id) }
+        }
+    }
+
+    private fun cancelAllCodexRequestNotifications() {
+        postedCodexRequestIds.values.forEach(notificationManager::cancel)
+        postedCodexRequestIds.clear()
+    }
+
+    private fun dismissCodexChildNotification(serverId: String, childId: Int) {
+        val children = notificationManager.activeNotifications
+            .filter { active -> active.notification.flags and Notification.FLAG_GROUP_SUMMARY == 0 }
+            .map { active -> active.id to active.notification.group }
+        val cancelSummary = shouldCancelServerSummary(children, serverId, childId)
+        notificationManager.cancel(childId)
+        if (cancelSummary) notificationManager.cancel(SessionNotificationIdentity.serverSummaryId(serverId))
+    }
+
+    private fun hasManagedConnections(): Boolean = connections.isNotEmpty() || !codexConnections.isEmpty()
 
     // ============ Notification Watchdog ============
 
     private fun startNotificationWatchdog() {
         if (notificationWatchdogJob?.isActive == true) return
         notificationWatchdogJob = serviceScope.launch {
-            while (isActive && connections.isNotEmpty()) {
+            while (isActive && hasManagedConnections()) {
                 delay(5_000)
                 if (!isNotificationVisible()) {
                     Log.i(TAG, "Foreground notification was dismissed, restoring it")
@@ -765,6 +1046,7 @@ class OpenCodeConnectionService : Service() {
 
     private fun createTransport(server: ServerConfig): AgentTransport = when (server.type) {
         ServerType.OPENCODE -> OpenCodeTransport(server, api, sseClient)
+        ServerType.CODEX -> error("Codex app-server connections are owned by CodexConnectionManager")
         ServerType.PI_ROUNDTABLE -> PiRoundtableTransport(server, piApi, json)
     }
 
@@ -916,6 +1198,7 @@ class OpenCodeConnectionService : Service() {
 
     companion object {
         const val ACTION_OPEN_SESSION = "dev.minios.ocremote.OPEN_SESSION"
+        const val ACTION_OPEN_CODEX_THREAD = "dev.minios.ocremote.OPEN_CODEX_THREAD"
         const val ACTION_PERMISSION_REPLY = "dev.minios.ocremote.PERMISSION_REPLY"
         const val ACTION_DISCONNECT = "dev.minios.ocremote.DISCONNECT"
         const val ACTION_DISCONNECT_ALL = "dev.minios.ocremote.DISCONNECT_ALL"
@@ -926,6 +1209,7 @@ class OpenCodeConnectionService : Service() {
         const val EXTRA_SERVER_NAME = "server_name"
         const val EXTRA_SESSION_PATH = "session_path"
         const val EXTRA_SESSION_ID = "sessionId"
+        const val EXTRA_THREAD_ID = "thread_id"
         const val EXTRA_PERMISSION_REQUEST_ID = "permission_request_id"
         const val EXTRA_PERMISSION_REPLY_VALUE = "permission_reply_value"
         const val PERMISSION_REPLY_ONCE = "once"
@@ -1017,16 +1301,21 @@ class OpenCodeConnectionService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
-        val visibleConnections = connections.values.filterNot { isLocalServer(it.config) }
+        val visibleConnections = connections.values
+            .filterNot { isLocalServer(it.config) }
+            .map { it.config to it.isConnected } +
+            codexConnections.snapshot().values.map { owned ->
+                owned.config to (owned.config.id in _connectedServerIds.value)
+            }
         val serverCount = visibleConnections.size
-        val connectedCount = visibleConnections.count { it.isConnected }
+        val connectedCount = visibleConnections.count { it.second }
 
         val title = if (serverCount == 0) {
             getString(R.string.app_name)
         } else if (serverCount == 1) {
             val server = visibleConnections.first()
-            if (server.isConnected) getString(R.string.notification_connected, server.config.displayName)
-            else getString(R.string.notification_connecting, server.config.displayName)
+            if (server.second) getString(R.string.notification_connected, server.first.displayName)
+            else getString(R.string.notification_connecting, server.first.displayName)
         } else {
             getString(R.string.notification_connected_count, connectedCount, serverCount)
         }
@@ -1052,8 +1341,8 @@ class OpenCodeConnectionService : Service() {
             val inboxStyle = NotificationCompat.InboxStyle()
                 .setBigContentTitle(getString(R.string.notification_inbox_title, connectedCount, serverCount))
             for (state in visibleConnections) {
-                val status = if (state.isConnected) getString(R.string.notification_status_connected) else getString(R.string.notification_status_connecting)
-                inboxStyle.addLine("${state.config.displayName}: $status")
+                val status = if (state.second) getString(R.string.notification_status_connected) else getString(R.string.notification_status_connecting)
+                inboxStyle.addLine("${state.first.displayName}: $status")
             }
             builder.setStyle(inboxStyle)
         }

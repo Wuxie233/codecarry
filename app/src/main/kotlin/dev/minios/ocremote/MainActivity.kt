@@ -49,8 +49,25 @@ data class SessionDeepLink(
     val password: String,
     val serverName: String,
     val sessionPath: String,  // e.g. /L2hvbWUv.../session/abc123
-    val sessionId: String = "" // raw session ID (fallback when sessionPath is empty)
+    val sessionId: String = "", // raw session ID (fallback when sessionPath is empty)
+    val codexServerId: String = "",
+    val codexThreadId: String = "",
 )
+
+internal fun codexDeepLinkFromIntent(intent: Intent?): SessionDeepLink? {
+    if (intent?.action != OpenCodeConnectionService.ACTION_OPEN_CODEX_THREAD) return null
+    val serverId = intent.getStringExtra(OpenCodeConnectionService.EXTRA_SERVER_ID) ?: return null
+    val threadId = intent.getStringExtra(OpenCodeConnectionService.EXTRA_THREAD_ID) ?: return null
+    return SessionDeepLink(
+        serverUrl = "",
+        username = "",
+        password = "",
+        serverName = "",
+        sessionPath = "",
+        codexServerId = serverId,
+        codexThreadId = threadId,
+    )
+}
 
 /**
  * Main Activity - Single Activity architecture with Jetpack Compose
@@ -191,6 +208,10 @@ class MainActivity : ComponentActivity() {
     }
     
     private fun handleSessionIntent(intent: Intent?) {
+        codexDeepLinkFromIntent(intent)?.let { deepLink ->
+            _deepLinkFlow.tryEmit(deepLink)
+            return
+        }
         if (intent?.action != OpenCodeConnectionService.ACTION_OPEN_SESSION) return
         
         val serverUrl = intent.getStringExtra(OpenCodeConnectionService.EXTRA_SERVER_URL) ?: return

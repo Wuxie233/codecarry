@@ -24,6 +24,7 @@ import dev.minios.ocremote.domain.model.ServerConfig
 import dev.minios.ocremote.domain.model.ServerType
 import dev.minios.ocremote.domain.model.ConnectionPhase
 import dev.minios.ocremote.service.OpenCodeConnectionService
+import dev.minios.ocremote.service.mergeCodexConnectionErrors
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -55,6 +56,15 @@ internal fun hasServerSettingsAccess(
         providerCatalog.connected.isNotEmpty() ||
         providerCatalog.default.isNotEmpty()
 }
+
+internal fun serverConnectionIntent(context: Context, serverId: String): Intent =
+    Intent(context, OpenCodeConnectionService::class.java).apply {
+        putExtra(OpenCodeConnectionService.EXTRA_SERVER_ID, serverId)
+    }
+
+internal val serverConnectionIntentExtraKeys: Set<String> = setOf(
+    OpenCodeConnectionService.EXTRA_SERVER_ID,
+)
 
 enum class LocalRuntimeStatus {
     Unavailable,
@@ -116,11 +126,16 @@ class HomeViewModel @Inject constructor(
     private var serviceBinder: OpenCodeConnectionService.LocalBinder? = null
     private var sseObserverJob: Job? = null
     private val serverSettingsCheckJobs = mutableMapOf<String, Job>()
+    private val pendingDisconnectServerIds = mutableSetOf<String>()
     private var localAutoStartTriggered = false
 
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             serviceBinder = service as? OpenCodeConnectionService.LocalBinder
+            serviceBinder?.getService()?.let { connectedService ->
+                pendingDisconnectServerIds.toList().forEach(connectedService::disconnect)
+                pendingDisconnectServerIds.clear()
+            }
             restoreConnectionStateFromService()
             observeServiceConnectionState()
         }
@@ -242,7 +257,7 @@ class HomeViewModel @Inject constructor(
             launch {
                 service.connectingServerIds.collect { ids ->
                     if (BuildConfig.DEBUG) Log.d(TAG, "Service connecting server IDs changed: $ids")
-                    _uiState.update { it.copy(connectingServerIds = ids) }
+                    _uiState.update { state -> state.copy(connectingServerIds = ids) }
                 }
             }
             launch {
@@ -252,6 +267,22 @@ class HomeViewModel @Inject constructor(
                             it == ConnectionPhase.CheckingServer
                         }
                         state.copy(connectionPhases = localHealthChecks + phases)
+                    }
+                }
+            }
+            launch {
+                service.connectionErrors.collect { errors ->
+                    _uiState.update { state ->
+                        val codexIds = state.servers
+                            .filter { server -> server.type == ServerType.CODEX }
+                            .mapTo(mutableSetOf(), ServerConfig::id)
+                        state.copy(
+                            connectionErrors = mergeCodexConnectionErrors(
+                                current = state.connectionErrors,
+                                codexServerIds = codexIds,
+                                codexErrors = errors,
+                            ),
+                        )
                     }
                 }
             }
@@ -285,6 +316,11 @@ class HomeViewModel @Inject constructor(
             serverSettingsCheckJobs[serverId] = viewModelScope.launch {
                 val server = _uiState.value.servers.find { it.id == serverId }
                 if (server == null) {
+                    _uiState.update { it.copy(serverSettingsReadyIds = it.serverSettingsReadyIds - serverId) }
+                    return@launch
+                }
+
+                if (server.type != ServerType.OPENCODE) {
                     _uiState.update { it.copy(serverSettingsReadyIds = it.serverSettingsReadyIds - serverId) }
                     return@launch
                 }
@@ -360,6 +396,14 @@ class HomeViewModel @Inject constructor(
                     token = token,
                     autoConnect = autoConnect
                 )
+                val connectionChanged = editingServer.type != updatedServer.type ||
+                    editingServer.url != updatedServer.url ||
+                    editingServer.username != updatedServer.username ||
+                    editingServer.password != updatedServer.password ||
+                    editingServer.token != updatedServer.token
+                if (connectionChanged) {
+                    disconnectConfiguredServer(editingServer)
+                }
                 serverRepository.updateServer(updatedServer)
             } else {
                 serverRepository.addServer(
@@ -379,11 +423,7 @@ class HomeViewModel @Inject constructor(
 
     fun deleteServer(serverId: String) {
         viewModelScope.launch {
-            // Disconnect first if connected or connecting
-            if (_uiState.value.connectedServerIds.contains(serverId) ||
-                _uiState.value.connectingServerIds.contains(serverId)) {
-                disconnectFromServer(serverId)
-            }
+            _uiState.value.servers.find { it.id == serverId }?.let(::disconnectConfiguredServer)
             serverRepository.deleteServer(serverId)
         }
     }
@@ -408,7 +448,7 @@ class HomeViewModel @Inject constructor(
 
         viewModelScope.launch {
             try {
-                val isHealthy = serverRepository.checkServerHealth(server)
+                val isHealthy = server.type == ServerType.CODEX || serverRepository.checkServerHealth(server)
                 if (!isHealthy) {
                     _uiState.update {
                         it.copy(
@@ -421,15 +461,7 @@ class HomeViewModel @Inject constructor(
                 }
 
                 val context = getApplication<Application>()
-                val intent = Intent(context, OpenCodeConnectionService::class.java).apply {
-                    putExtra("server_id", server.id)
-                    putExtra("server_name", server.name)
-                    putExtra("server_url", server.url)
-                    putExtra("server_username", server.username)
-                    putExtra("server_password", server.password)
-                    putExtra("server_type", server.type.name)
-                    putExtra("server_token", server.token)
-                }
+                val intent = serverConnectionIntent(context, server.id)
 
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     context.startForegroundService(intent)
@@ -835,7 +867,8 @@ class HomeViewModel @Inject constructor(
      * Disconnect from a specific server.
      */
     fun disconnectFromServer(serverId: String) {
-        serviceBinder?.getService()?.disconnect(serverId)
+        val server = _uiState.value.servers.find { it.id == serverId }
+        if (server != null) disconnectConfiguredServer(server)
         _uiState.update {
             it.copy(
                 connectedServerIds = it.connectedServerIds - serverId,
@@ -843,6 +876,15 @@ class HomeViewModel @Inject constructor(
                 connectionPhases = it.connectionPhases - serverId,
             )
         }
+    }
+
+    private fun disconnectConfiguredServer(server: ServerConfig) {
+        val service = serviceBinder?.getService()
+        if (service != null) {
+            service.disconnect(server.id)
+            return
+        }
+        pendingDisconnectServerIds += server.id
     }
 
     override fun onCleared() {

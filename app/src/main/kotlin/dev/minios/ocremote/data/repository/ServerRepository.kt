@@ -138,6 +138,10 @@ class ServerRepository @Inject constructor(
                     api.getHealth(conn)
                 }
 
+                ServerType.CODEX -> {
+                    throw IllegalStateException("Codex health is managed by CodexConnectionManager")
+                }
+
                 ServerType.PI_ROUNDTABLE -> {
                     val conn = PiConnection.from(server.url, server.token)
                     piApi.listRoundtables(conn)

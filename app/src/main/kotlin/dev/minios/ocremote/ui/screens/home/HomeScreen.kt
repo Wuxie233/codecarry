@@ -109,6 +109,9 @@ private fun PulsingDotsIndicator(
     }
 }
 
+internal fun shouldShowServerDisconnect(isConnected: Boolean, isConnecting: Boolean): Boolean =
+    isConnected || isConnecting
+
 /**
  * Home Screen - Server list and management
  * 
@@ -119,6 +122,7 @@ private fun PulsingDotsIndicator(
 @Composable
 fun HomeScreen(
     onNavigateToSessions: (serverUrl: String, username: String, password: String, serverName: String, serverId: String) -> Unit = { _, _, _, _, _ -> },
+    onNavigateToCodexThreads: (serverId: String) -> Unit = {},
     onNavigateToRoundtables: (serverUrl: String, token: String, serverName: String, serverId: String) -> Unit = { _, _, _, _ -> },
     onNavigateToServerSettings: (serverUrl: String, username: String, password: String, serverName: String, serverId: String) -> Unit = { _, _, _, _, _ -> },
     onNavigateToSettings: () -> Unit = {},
@@ -357,6 +361,7 @@ fun HomeScreen(
                                             server.displayName,
                                             server.id
                                         )
+                                        ServerType.CODEX -> onNavigateToCodexThreads(server.id)
                                         ServerType.PI_ROUNDTABLE -> onNavigateToRoundtables(
                                             server.url,
                                             server.token.orEmpty(),
@@ -1419,11 +1424,18 @@ internal fun ServerCard(
                     ) {
                         Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text(if (server.type == ServerType.PI_ROUNDTABLE) "Roundtables" else stringResource(R.string.sessions_title), maxLines = 1)
+                        Text(
+                            when (server.type) {
+                                ServerType.OPENCODE -> stringResource(R.string.sessions_title)
+                                ServerType.CODEX -> stringResource(R.string.codex_threads_title)
+                                ServerType.PI_ROUNDTABLE -> stringResource(R.string.roundtable_center_title)
+                            },
+                            maxLines = 1,
+                        )
                     }
                 }
             }
-            if (isConnected) {
+            if (shouldShowServerDisconnect(isConnected, isConnecting)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -1451,7 +1463,7 @@ internal fun ServerCard(
                     }
                 }
             }
-            if (!isConnected) {
+            if (!isConnected && !isConnecting) {
                 Button(
                     onClick = onConnect,
                     modifier = Modifier

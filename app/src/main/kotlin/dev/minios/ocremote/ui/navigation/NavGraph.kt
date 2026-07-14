@@ -35,6 +35,8 @@ import dev.minios.ocremote.domain.model.ServerConfig
 import dev.minios.ocremote.domain.model.ServerType
 import dev.minios.ocremote.domain.model.Session
 import dev.minios.ocremote.ui.screens.chat.ChatScreen
+import dev.minios.ocremote.ui.screens.codex.CodexChatScreen
+import dev.minios.ocremote.ui.screens.codex.CodexThreadListScreen
 import dev.minios.ocremote.ui.screens.diagnostics.DiagnosticsScreen
 import dev.minios.ocremote.ui.screens.home.HomeScreen
 import dev.minios.ocremote.ui.screens.roundtable.RoundtableCastingScreen
@@ -185,6 +187,21 @@ fun NavGraph(
             // Consume the event so it's not replayed on recomposition
             deepLinkFlow.resetReplayCache()
             val currentRoute = navController.currentDestination?.route
+            if (deepLink.codexServerId.isNotBlank() && deepLink.codexThreadId.isNotBlank()) {
+                val route = Screen.CodexChat.createRoute(deepLink.codexServerId, deepLink.codexThreadId)
+                val currentServerId = navController.currentBackStackEntry?.arguments
+                    ?.getString("serverId")?.let(::decodeRouteArg)
+                val currentThreadId = navController.currentBackStackEntry?.arguments
+                    ?.getString("threadId")?.let(::decodeRouteArg)
+                if (currentRoute?.startsWith("codex_chat") == true &&
+                    currentServerId == deepLink.codexServerId && currentThreadId == deepLink.codexThreadId
+                ) {
+                    return@collect
+                }
+                if (currentRoute?.startsWith("codex_chat") == true) navController.popBackStack()
+                navController.navigate(route) { launchSingleTop = true }
+                return@collect
+            }
             if (BuildConfig.DEBUG) Log.d(TAG, "Deep-link received: sessionPath=${deepLink.sessionPath}, sessionId=${deepLink.sessionId}, currentRoute=$currentRoute, useNativeUi=$useNativeUi")
             
             if (useNativeUi) {
@@ -267,6 +284,9 @@ fun NavGraph(
                     navController.navigate(
                         Screen.SessionList.createRoute(serverUrl, username, password, serverName, serverId)
                     )
+                },
+                onNavigateToCodexThreads = { serverId ->
+                    navController.navigate(Screen.CodexThreads.createRoute(serverId))
                 },
                 onNavigateToRoundtables = { _, _, _, serverId ->
                     navController.navigate(
@@ -469,6 +489,29 @@ fun NavGraph(
                     navController.popBackStack()
                 }
             )
+        }
+
+        composable(
+            route = "codex_threads?serverId={serverId}",
+            arguments = listOf(navArgument("serverId") { type = NavType.StringType }),
+        ) { backStackEntry ->
+            val serverId = decodeRouteArg(backStackEntry.arguments?.getString("serverId"))
+            CodexThreadListScreen(
+                onNavigateBack = { navController.popBackStack() },
+                onOpenThread = { threadId ->
+                    navController.navigate(Screen.CodexChat.createRoute(serverId, threadId))
+                },
+            )
+        }
+
+        composable(
+            route = "codex_chat?serverId={serverId}&threadId={threadId}",
+            arguments = listOf(
+                navArgument("serverId") { type = NavType.StringType },
+                navArgument("threadId") { type = NavType.StringType },
+            ),
+        ) {
+            CodexChatScreen(onNavigateBack = { navController.popBackStack() })
         }
 
         composable(

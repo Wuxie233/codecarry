@@ -40,7 +40,8 @@ class ServerCardConnectionProgressTest {
             }
         }
 
-        compose.onAllNodesWithText("Syncing sessions…").assertCountEquals(2)
+        compose.onAllNodesWithText("Syncing sessions…").assertCountEquals(1)
+        compose.onNodeWithText("Disconnect").assertExists()
         compose.mainClock.advanceTimeBy(8_100)
         compose.waitForIdle()
         compose.onNodeWithText("Still working. Large workspaces or many sessions can take longer.")

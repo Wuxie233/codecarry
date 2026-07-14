@@ -5,6 +5,7 @@ import kotlinx.serialization.Serializable
 @Serializable
 enum class ServerType {
     OPENCODE,
+    CODEX,
     PI_ROUNDTABLE,
 }
 
@@ -18,7 +19,7 @@ data class ServerConfig(
     val url: String, // e.g. http://192.168.1.100:4096
     val username: String = "opencode",
     val password: String? = null,
-    val token: String? = null,
+    val token: String? = null, // Pi token or Codex app-server bearer token
     val name: String? = null, // User-friendly name
     val autoConnect: Boolean = false,
     val lastConnected: Long? = null,

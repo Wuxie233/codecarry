@@ -123,3 +123,16 @@ internal fun Modifier.chatCodeOverflow(codeWordWrap: Boolean): Modifier {
         this
     }
 }
+
+@Composable
+internal fun Modifier.chatTextOverflow(text: String): Modifier {
+    return if (ChatOverflowPolicy.shouldUseHorizontalScroll(
+            kind = ChatOverflowContentKind.PlainText,
+            text = text,
+        )
+    ) {
+        horizontalScroll(rememberScrollState())
+    } else {
+        this
+    }
+}

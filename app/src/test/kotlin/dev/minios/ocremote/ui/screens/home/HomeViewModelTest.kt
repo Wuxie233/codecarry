@@ -4,11 +4,33 @@ import dev.minios.ocremote.data.api.ProviderCatalogResponse
 import dev.minios.ocremote.data.api.ProviderInfo
 import dev.minios.ocremote.data.api.ProviderModel
 import dev.minios.ocremote.data.api.ProvidersResponse
+import dev.minios.ocremote.domain.model.ServerType
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class HomeViewModelTest {
+
+    @Test
+    fun `connecting server keeps disconnect action available`() {
+        assertTrue(shouldShowServerDisconnect(isConnected = false, isConnecting = true))
+        assertTrue(shouldShowServerDisconnect(isConnected = true, isConnecting = false))
+        assertFalse(shouldShowServerDisconnect(isConnected = false, isConnecting = false))
+    }
+
+    @Test
+    fun `connection service intent contains only server identity`() {
+        assertEquals(setOf("server_id"), serverConnectionIntentExtraKeys)
+    }
+
+    @Test
+    fun `Codex endpoints require TLS outside loopback`() {
+        assertEquals("wss://codex.example.com", validateAndNormalizeUrl("codex.example.com", ServerType.CODEX))
+        assertEquals("ws://127.0.0.1:8765", validateAndNormalizeUrl("ws://127.0.0.1:8765", ServerType.CODEX))
+        assertEquals("ws://localhost:8765", validateAndNormalizeUrl("ws://localhost:8765", ServerType.CODEX))
+        assertEquals(null, validateAndNormalizeUrl("ws://192.168.1.20:8765", ServerType.CODEX))
+    }
 
     @Test
     fun `returns true when provider response already has models`() {

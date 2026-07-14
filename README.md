@@ -1,6 +1,6 @@
 # OC Remote
 
-Android client for [OpenCode](https://github.com/anomalyco/opencode) servers with a native UI and broad feature coverage.
+Android client for remote [OpenCode](https://github.com/anomalyco/opencode) servers and Codex app-server endpoints, with native chat and session management.
 
 **This is an unofficial community project, not affiliated with the OpenCode team.**
 
@@ -84,7 +84,8 @@ Android client for [OpenCode](https://github.com/anomalyco/opencode) servers wit
 - **Image optimization controls** — tune max image side (keep original or 720–2560 px) and WebP quality for attachments
 
 ### Connection
-- **Multi-server** — connect to multiple OpenCode servers simultaneously
+- **Multi-server** — connect to multiple OpenCode, Codex, and Pi Roundtable servers
+- **Codex app-server** — native threads, streaming turns, approvals, models, goals, per-thread memory mode, archive/restore, rename, fork, compact, and interrupt actions
 - **Local runtime via Termux** — set up and run OpenCode directly on-device from the Home screen (setup/start/stop/sessions)
 - **Local runtime launch options** — configure LAN binding (`0.0.0.0`), optional server username/password auth, background launch mode, auto-start (background-only), startup timeout, and proxy/`NO_PROXY` from the app
 - **Provider OAuth flow** — browser OAuth, headless fallback handling, and provider-state refresh on resume
@@ -96,7 +97,7 @@ Android client for [OpenCode](https://github.com/anomalyco/opencode) servers wit
 ## Requirements
 
 - Android 8.0+ (API 26)
-- OpenCode server accessible over the network
+- OpenCode server or Codex app-server WebSocket endpoint accessible over the network
 
 ## Setup
 
@@ -109,6 +110,24 @@ opencode serve --port 4096 --hostname 0.0.0.0
 2. In the app, tap **+** and enter the server URL (e.g. `http://192.168.0.10:4096`), username, and optional password.
 
 3. Tap **Connect** on the server card.
+
+### Codex app-server
+
+Codex support uses the experimental app-server WebSocket protocol, not the local daemon control socket. Generate a private capability token and start a listener on the server:
+
+```bash
+umask 077
+openssl rand -hex 32 > /absolute/private/codex-app-server.token
+
+codex app-server \
+  --listen ws://127.0.0.1:8765 \
+  --ws-auth capability-token \
+  --ws-token-file /absolute/private/codex-app-server.token
+```
+
+Expose the loopback listener through an SSH port forward, or a reverse proxy that provides `wss://` and preserves the `Authorization` and WebSocket upgrade headers. OC Remote rejects plain `ws://` for non-loopback Codex endpoints because bearer tokens and protocol traffic would otherwise cross the network unencrypted.
+
+In OC Remote, add a **Codex** server with the `ws://`/`wss://` endpoint and the token file contents. Because the protocol is experimental, keep the server Codex CLI reasonably current and verify compatibility after upgrades.
 
 ## Building
 

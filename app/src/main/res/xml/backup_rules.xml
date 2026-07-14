@@ -1,2 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources />
+<full-backup-content>
+    <exclude
+        domain="file"
+        path="datastore/opencode_prefs.preferences_pb" />
+</full-backup-content>

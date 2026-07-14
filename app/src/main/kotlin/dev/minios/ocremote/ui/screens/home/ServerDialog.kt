@@ -39,38 +39,46 @@ import dev.minios.ocremote.domain.model.ServerType
  *
  * Returns the normalized URL (with scheme) or null if invalid.
  */
-private fun validateAndNormalizeUrl(input: String): String? {
+internal fun validateAndNormalizeUrl(input: String, serverType: ServerType): String? {
     val trimmed = input.trim()
     if (trimmed.isBlank()) return null
 
-    // Add scheme if missing
-    val withScheme = if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) {
-        "http://$trimmed"
+    val allowedSchemes = if (serverType == ServerType.CODEX) setOf("ws", "wss") else setOf("http", "https")
+    val defaultScheme = if (serverType == ServerType.CODEX) "wss" else "http"
+    val suppliedScheme = trimmed.substringBefore("://", missingDelimiterValue = "")
+    val withScheme = if (suppliedScheme !in allowedSchemes) {
+        if ("://" in trimmed) return null
+        "$defaultScheme://$trimmed"
     } else {
         trimmed
     }
 
     return try {
-        val url = java.net.URL(withScheme)
-        // Must have a host
-        if (url.host.isNullOrBlank()) return null
-        // Port must be valid if specified
-        if (url.port != -1 && url.port !in 1..65535) return null
-        // Rebuild a clean URL (scheme + host + optional port)
-        val port = url.port
-        if (port != -1) {
-            "${url.protocol}://${url.host}:$port"
-        } else {
-            "${url.protocol}://${url.host}"
-        }
+        val uri = java.net.URI(withScheme)
+        if (uri.scheme !in allowedSchemes || uri.host.isNullOrBlank()) return null
+        if (serverType == ServerType.CODEX && uri.scheme == "ws" && !uri.host.isCodexLoopbackHost()) return null
+        if (uri.port != -1 && uri.port !in 1..65535) return null
+        if (uri.userInfo != null || uri.query != null || uri.fragment != null) return null
+        java.net.URI(
+            uri.scheme,
+            null,
+            uri.host,
+            uri.port,
+            uri.path.takeUnless { it.isNullOrBlank() || it == "/" },
+            null,
+            null,
+        ).toString().trimEnd('/')
     } catch (e: Exception) {
         null
     }
 }
 
+private fun String.isCodexLoopbackHost(): Boolean =
+    removeSurrounding("[", "]").lowercase() in setOf("localhost", "127.0.0.1", "::1")
+
 private fun deriveServerNameFromUrl(normalizedUrl: String): String {
     return try {
-        val url = java.net.URL(normalizedUrl)
+        val url = java.net.URI(normalizedUrl)
         val host = url.host
         val port = url.port
         if (port != -1) "$host:$port" else host
@@ -78,6 +86,8 @@ private fun deriveServerNameFromUrl(normalizedUrl: String): String {
         normalizedUrl
             .removePrefix("http://")
             .removePrefix("https://")
+            .removePrefix("ws://")
+            .removePrefix("wss://")
     }
 }
 
@@ -182,12 +192,18 @@ fun ServerDialog(
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    val serverTypeOptions = listOf(ServerType.OPENCODE, ServerType.PI_ROUNDTABLE)
+                    val serverTypeOptions = listOf(ServerType.OPENCODE, ServerType.CODEX, ServerType.PI_ROUNDTABLE)
                     SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
                         serverTypeOptions.forEachIndexed { index, option ->
                             SegmentedButton(
                                 selected = serverType == option,
-                                onClick = { serverType = option },
+                                onClick = {
+                                    if (server == null && (url == "http://" || url == "ws://" || url == "wss://")) {
+                                        url = if (option == ServerType.CODEX) "wss://" else "http://"
+                                    }
+                                    serverType = option
+                                    urlError = null
+                                },
                                 shape = SegmentedButtonDefaults.itemShape(
                                     index = index,
                                     count = serverTypeOptions.size,
@@ -197,6 +213,7 @@ fun ServerDialog(
                                         text = stringResource(
                                             when (option) {
                                                 ServerType.OPENCODE -> R.string.server_type_opencode
+                                                ServerType.CODEX -> R.string.server_type_codex
                                                 ServerType.PI_ROUNDTABLE -> R.string.server_type_pi_roundtable
                                             }
                                         )
@@ -213,12 +230,16 @@ fun ServerDialog(
                             urlError = null
                         },
                         label = { Text(urlLabel) },
-                        placeholder = { Text(stringResource(R.string.server_url_hint)) },
+                        placeholder = {
+                            Text(stringResource(if (serverType == ServerType.CODEX) R.string.server_codex_url_hint else R.string.server_url_hint))
+                        },
                         isError = urlError != null,
                         supportingText = if (urlError != null) {
                             { Text(urlError!!) }
                         } else {
-                            { Text(stringResource(R.string.server_url_example)) }
+                            {
+                                Text(stringResource(if (serverType == ServerType.CODEX) R.string.server_codex_url_example else R.string.server_url_example))
+                            }
                         },
                         keyboardOptions = KeyboardOptions(
                             keyboardType = KeyboardType.Uri,
@@ -269,10 +290,27 @@ fun ServerDialog(
                         OutlinedTextField(
                             value = token,
                             onValueChange = { token = it },
-                            label = { Text(tokenLabel) },
-                            placeholder = { Text(stringResource(R.string.server_token_hint)) },
+                            label = {
+                                Text(stringResource(if (serverType == ServerType.CODEX) R.string.server_codex_token else R.string.server_token))
+                            },
+                            placeholder = {
+                                Text(stringResource(if (serverType == ServerType.CODEX) R.string.server_codex_token_hint else R.string.server_token_hint))
+                            },
+                            visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                            trailingIcon = {
+                                IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                                    Icon(
+                                        imageVector = if (passwordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                        contentDescription = passwordToggleDescription,
+                                    )
+                                }
+                            },
                             singleLine = true,
-                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Password,
+                                imeAction = ImeAction.Done,
+                                autoCorrectEnabled = false,
+                            ),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .semantics { contentDescription = tokenLabel }
@@ -324,7 +362,7 @@ fun ServerDialog(
                     TextButton(
                         modifier = Modifier.semantics { contentDescription = saveServerDescription },
                         onClick = {
-                            val normalizedUrl = validateAndNormalizeUrl(url)
+                            val normalizedUrl = validateAndNormalizeUrl(url, serverType)
                             urlError = when {
                                 url.isBlank() -> urlRequiredText
                                 normalizedUrl == null -> urlInvalidText
@@ -341,7 +379,7 @@ fun ServerDialog(
                                     serverType,
                                     username.ifBlank { "opencode" },
                                     password.takeIf { serverType == ServerType.OPENCODE },
-                                    token.trim().takeIf { serverType == ServerType.PI_ROUNDTABLE && it.isNotBlank() },
+                                    token.trim().takeIf { serverType != ServerType.OPENCODE && it.isNotBlank() },
                                     autoConnect
                                 )
                             }

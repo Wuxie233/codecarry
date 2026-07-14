@@ -70,6 +70,7 @@ object NetworkModule {
         install(Logging) {
             logger = Logger.ANDROID
             level = LogLevel.HEADERS
+            sanitizeHeader { header -> header.equals(io.ktor.http.HttpHeaders.Authorization, ignoreCase = true) }
         }
         
         install(HttpTimeout) {

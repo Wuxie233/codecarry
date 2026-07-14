@@ -19,4 +19,17 @@ class ScreenRouteTest {
             assertTrue(route, route.contains("serverId="))
         }
     }
+
+    @Test
+    fun `Codex routes contain only server and thread identity`() {
+        val secret = "codex-secret-token"
+
+        val route = Screen.CodexChat.createRoute("server-1", "thread-1")
+
+        assertTrue(route.contains("serverId=server-1"))
+        assertTrue(route.contains("threadId=thread-1"))
+        assertFalse(route.contains(secret))
+        assertFalse(route.contains("token=", ignoreCase = true))
+        assertFalse(route.contains("serverUrl=", ignoreCase = true))
+    }
 }
