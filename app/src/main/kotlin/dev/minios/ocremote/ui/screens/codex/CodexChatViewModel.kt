@@ -15,6 +15,7 @@ import dev.minios.ocremote.data.codex.CodexModel
 import dev.minios.ocremote.data.codex.CodexServerRequest
 import dev.minios.ocremote.data.codex.CodexThread
 import dev.minios.ocremote.data.codex.CodexServerConnection
+import dev.minios.ocremote.data.codex.requestKey
 import dev.minios.ocremote.data.codex.CodexPermissionGrant
 import dev.minios.ocremote.data.codex.CodexPermissionGrantScope
 import dev.minios.ocremote.data.repository.ServerRepository
@@ -56,10 +57,17 @@ data class CodexChatUiState(
     val selectedModel: CodexModel? = null,
     val selectedEffort: String? = null,
     val pendingRequests: List<CodexServerRequest> = emptyList(),
+    val submittingRequestKeys: Set<String> = emptySet(),
     val error: String? = null,
 )
 
 data class CodexSendResult(val content: String, val accepted: Boolean)
+
+internal fun beginCodexRequestSubmission(state: CodexChatUiState, key: String): CodexChatUiState? =
+    if (key in state.submittingRequestKeys) null else state.copy(
+        submittingRequestKeys = state.submittingRequestKeys + key,
+        error = null,
+    )
 
 @HiltViewModel
 class CodexChatViewModel @Inject constructor(
@@ -409,10 +417,9 @@ class CodexChatViewModel @Inject constructor(
     }
 
     fun answerApproval(request: CodexServerRequest, decision: String) {
-        viewModelScope.launch {
-            val approval = request.approval ?: return@launch
-            runCatching {
-                when (approval.kind) {
+        submitRequest(request) {
+            val approval = requireNotNull(request.approval)
+            when (approval.kind) {
                     CodexApprovalKind.PERMISSIONS -> {
                         if (decision == "accept" || decision == "acceptForSession") {
                             val permissions = approval.permissions as? JsonObject ?: JsonObject(emptyMap())
@@ -437,33 +444,27 @@ class CodexChatViewModel @Inject constructor(
                         }
                     }
                     else -> requireConnection().replyApproval(approval, decision)
-                }
-            }.onFailure { error -> _uiState.update { it.copy(error = error.message) } }
+            }
         }
     }
 
     fun answerUserInput(request: CodexServerRequest, answers: Map<String, List<String>>) {
-        viewModelScope.launch {
-            runCatching {
-                val userInput = requireNotNull(request.userInput)
-                requireConnection().replyUserInput(userInput, answers)
-            }.onFailure { error -> _uiState.update { it.copy(error = error.message) } }
+        submitRequest(request) {
+            val userInput = requireNotNull(request.userInput)
+            requireConnection().replyUserInput(userInput, answers)
         }
     }
 
     fun answerElicitation(request: CodexServerRequest, action: String, content: JsonElement? = null) {
-        viewModelScope.launch {
-            runCatching {
-                requireConnection().reply(request, codexElicitationResponse(action, content))
-            }.onFailure { error -> _uiState.update { it.copy(error = error.message) } }
+        submitRequest(request) {
+            requireConnection().reply(request, codexElicitationResponse(action, content))
         }
     }
 
     fun cancelRequest(request: CodexServerRequest) {
-        viewModelScope.launch {
-            runCatching {
-                val connected = requireConnection()
-                when {
+        submitRequest(request) {
+            val connected = requireConnection()
+            when {
                     request.approval?.kind == CodexApprovalKind.PERMISSIONS -> connected
                         .replyPermissionApproval(
                             requireNotNull(request.approval),
@@ -483,8 +484,27 @@ class CodexChatViewModel @Inject constructor(
                         buildJsonObject { put("action", "cancel") },
                     )
                     else -> connected.replyError(request, -32601, "Unsupported request in OC Remote")
+            }
+        }
+    }
+
+    private fun submitRequest(request: CodexServerRequest, block: suspend () -> Unit) {
+        val key = request.id.requestKey()
+        while (true) {
+            val current = _uiState.value
+            val started = beginCodexRequestSubmission(current, key) ?: return
+            if (_uiState.compareAndSet(current, started)) break
+        }
+        viewModelScope.launch {
+            runCatching { block() }
+                .onFailure { error ->
+                    _uiState.update {
+                        it.copy(
+                            submittingRequestKeys = it.submittingRequestKeys - key,
+                            error = error.message,
+                        )
+                    }
                 }
-            }.onFailure { error -> _uiState.update { it.copy(error = error.message) } }
         }
     }
 
@@ -564,10 +584,13 @@ class CodexChatViewModel @Inject constructor(
         requestsJob = viewModelScope.launch {
             connectionManager.connections.collect { connections ->
                 _uiState.update { state ->
+                    val pending = connections[serverId]?.pendingRequests
+                        .orEmpty()
+                        .filter { request -> request.params.string("threadId") == threadId }
+                    val pendingKeys = pending.mapTo(mutableSetOf()) { it.id.requestKey() }
                     state.copy(
-                        pendingRequests = connections[serverId]?.pendingRequests
-                            .orEmpty()
-                            .filter { request -> request.params.string("threadId") == threadId },
+                        pendingRequests = pending,
+                        submittingRequestKeys = state.submittingRequestKeys.intersect(pendingKeys),
                     )
                 }
             }

@@ -633,6 +633,7 @@ data class CodexToolUserInputQuestion(
     val header: String,
     val question: String,
     val options: List<CodexToolUserInputOption> = emptyList(),
+    val multiSelect: Boolean = false,
     val isOther: Boolean = false,
     val isSecret: Boolean = false,
     val extra: JsonObject = JsonObject(emptyMap()),
@@ -647,9 +648,10 @@ data class CodexToolUserInputQuestion(
                 .mapNotNull { element ->
                     (element as? JsonObject)?.let(CodexToolUserInputOption::fromJson)
                 },
+            multiSelect = value.boolean("multiSelect") ?: false,
             isOther = value.boolean("isOther") ?: false,
             isSecret = value.boolean("isSecret") ?: false,
-            extra = value.without("id", "header", "question", "options", "isOther", "isSecret"),
+            extra = value.without("id", "header", "question", "options", "multiSelect", "isOther", "isSecret"),
         )
     }
 }

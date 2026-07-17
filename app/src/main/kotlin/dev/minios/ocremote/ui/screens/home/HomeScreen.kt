@@ -47,7 +47,9 @@ import dev.minios.ocremote.data.repository.LocalServerManager
 import dev.minios.ocremote.domain.model.ServerConfig
 import dev.minios.ocremote.domain.model.ServerType
 import dev.minios.ocremote.domain.model.ConnectionPhase
-import dev.minios.ocremote.ui.theme.StatusConnected
+import dev.minios.ocremote.ui.theme.AppDimensions
+import dev.minios.ocremote.ui.components.LoadingStateCard
+import dev.minios.ocremote.ui.components.StatusLabel
 import androidx.compose.animation.core.*
 import kotlinx.coroutines.delay
 import androidx.compose.foundation.background
@@ -58,56 +60,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-
-/** Pulsing dots loading indicator — 3 dots that scale up/down in sequence. */
-@Composable
-private fun PulsingDotsIndicator(
-    modifier: Modifier = Modifier,
-    dotSize: androidx.compose.ui.unit.Dp = 10.dp,
-    dotSpacing: androidx.compose.ui.unit.Dp = 8.dp,
-    color: Color = MaterialTheme.colorScheme.primary
-) {
-    val transition = rememberInfiniteTransition(label = "pulsing_dots")
-    val scales2 = (0..2).map { index ->
-        transition.animateFloat(
-            initialValue = 0.4f,
-            targetValue = 0.4f,
-            animationSpec = infiniteRepeatable(
-                animation = keyframes {
-                    durationMillis = 1200
-                    val offset = index * 150
-                    0.4f at 0 + offset
-                    1.0f at 300 + offset
-                    0.4f at 600 + offset
-                    0.4f at 1200
-                },
-                repeatMode = RepeatMode.Restart
-            ),
-            label = "dot_scale_$index"
-        )
-    }
-    Row(
-        modifier = modifier,
-        horizontalArrangement = Arrangement.spacedBy(dotSpacing),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        scales2.forEach { scale ->
-            Box(
-                modifier = Modifier
-                    .size(dotSize)
-                    .graphicsLayer {
-                        scaleX = scale.value
-                        scaleY = scale.value
-                        alpha = 0.3f + 0.7f * ((scale.value - 0.4f) / 0.6f)
-                    }
-                    .background(color, CircleShape)
-            )
-        }
-    }
-}
 
 internal fun shouldShowServerDisconnect(isConnected: Boolean, isConnecting: Boolean): Boolean =
     isConnected || isConnecting
@@ -132,6 +86,7 @@ fun HomeScreen(
     val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
+    var showHomeMenu by remember { mutableStateOf(false) }
 
     // Track battery optimization status, re-check when app resumes
     var isBatteryOptimized by remember { mutableStateOf(false) }
@@ -204,11 +159,31 @@ fun HomeScreen(
                     IconButton(onClick = { viewModel.showAddServerDialog() }) {
                         Icon(Icons.Default.Add, contentDescription = stringResource(R.string.home_add_server))
                     }
-                    IconButton(onClick = onNavigateToSettings) {
-                        Icon(Icons.Default.Settings, contentDescription = stringResource(R.string.settings_title))
-                    }
-                    IconButton(onClick = onNavigateToAbout) {
-                        Icon(Icons.Default.Info, contentDescription = stringResource(R.string.about_title))
+                    Box {
+                        IconButton(onClick = { showHomeMenu = true }) {
+                            Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.more_options))
+                        }
+                        DropdownMenu(
+                            expanded = showHomeMenu,
+                            onDismissRequest = { showHomeMenu = false },
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.settings_title)) },
+                                leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) },
+                                onClick = {
+                                    showHomeMenu = false
+                                    onNavigateToSettings()
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.about_title)) },
+                                leadingIcon = { Icon(Icons.Default.Info, contentDescription = null) },
+                                onClick = {
+                                    showHomeMenu = false
+                                    onNavigateToAbout()
+                                },
+                            )
+                        }
                     }
                 }
             )
@@ -221,30 +196,33 @@ fun HomeScreen(
         ) {
             when {
                 uiState.isLoading -> {
-                    Column(
-                        modifier = Modifier.align(Alignment.Center),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        PulsingDotsIndicator(
-                            dotSize = 12.dp,
-                            dotSpacing = 8.dp
-                        )
-                        Text(
-                            text = stringResource(R.string.home_loading_servers),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+                    LoadingStateCard(
+                        label = stringResource(R.string.home_loading_servers),
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .widthIn(max = AppDimensions.contentMaxWidth)
+                            .padding(AppDimensions.space4),
+                    )
                 }
                 else -> {
                     val localServer = uiState.servers.firstOrNull { it.url == LocalServerManager.LOCAL_SERVER_URL }
-                    val remoteServers = uiState.servers.filterNot { it.url == LocalServerManager.LOCAL_SERVER_URL }
+                    val remoteServers = uiState.servers
+                        .filterNot { it.url == LocalServerManager.LOCAL_SERVER_URL }
+                        .sortedBy { server ->
+                            when (server.id) {
+                                in uiState.connectedServerIds -> 0
+                                in uiState.connectingServerIds -> 1
+                                else -> 2
+                            }
+                        }
 
                     LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .widthIn(max = AppDimensions.contentMaxWidth)
+                            .fillMaxSize(),
+                        contentPadding = PaddingValues(AppDimensions.space4),
+                        verticalArrangement = Arrangement.spacedBy(AppDimensions.space2)
                     ) {
                         // Battery optimization warning banner
                         if (isBatteryOptimized) {
@@ -333,11 +311,9 @@ fun HomeScreen(
                                 val hasLocalCard = uiState.showLocalRuntime
                                 EmptyServersView(
                                     onAddServer = { viewModel.showAddServerDialog() },
-                                    modifier = if (hasLocalCard) {
-                                        Modifier.fillParentMaxHeight(0.5f)
-                                    } else {
-                                        Modifier.fillParentMaxHeight(0.8f)
-                                    }
+                                    modifier = Modifier.padding(
+                                        top = if (hasLocalCard) AppDimensions.space4 else AppDimensions.space6,
+                                    ),
                                 )
                             }
                         }
@@ -452,7 +428,7 @@ private fun LocalRuntimeCard(
     val cardContainerColor = if (isAmoled) {
         Color.Black
     } else {
-        MaterialTheme.colorScheme.surfaceContainerHighest
+        MaterialTheme.colorScheme.surfaceContainerLow
     }
     val cardContentColor = if (isAmoled) {
         MaterialTheme.colorScheme.onSurface
@@ -460,16 +436,12 @@ private fun LocalRuntimeCard(
         MaterialTheme.colorScheme.onSurfaceVariant
     }
 
-    Card(
+    Surface(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = cardContainerColor,
-        ),
-        border = if (isAmoled) {
-            BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f))
-        } else {
-            null
-        },
+        color = cardContainerColor,
+        shape = MaterialTheme.shapes.medium,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)),
+        tonalElevation = 0.dp,
     ) {
         Column(
             modifier = Modifier
@@ -587,9 +559,10 @@ private fun LocalRuntimeCard(
             when {
                 // Termux not installed — show install button
                 !termuxInstalled -> {
-                    OutlinedButton(
-                        onClick = onInstallTermux,
-                        modifier = Modifier.fillMaxWidth(),
+                OutlinedButton(
+                    onClick = onInstallTermux,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = MaterialTheme.shapes.medium,
                         colors = if (isAmoled) {
                             ButtonDefaults.outlinedButtonColors(
                                 containerColor = Color.Black,
@@ -1114,7 +1087,7 @@ private fun LocalLaunchOptionsDialog(
     if (showTimeoutDialog) {
         BasicAlertDialog(onDismissRequest = { showTimeoutDialog = false }) {
             Surface(
-                shape = RoundedCornerShape(20.dp),
+            shape = MaterialTheme.shapes.large,
                 color = if (isAmoled) Color.Black else MaterialTheme.colorScheme.surface,
                 border = if (isAmoled) BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)) else null,
                 tonalElevation = if (isAmoled) 0.dp else 6.dp,
@@ -1212,25 +1185,23 @@ private fun EmptyServersView(
 ) {
     Box(
         modifier = modifier.fillMaxWidth(),
-        contentAlignment = Alignment.Center
+        contentAlignment = Alignment.TopCenter,
     ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Icon(
-                imageVector = Icons.Default.Add,
-                contentDescription = null,
-                modifier = Modifier.size(64.dp),
-                tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
-            )
             Text(
                 text = stringResource(R.string.home_no_servers),
                 style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                textAlign = TextAlign.Center
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
             )
-            Button(onClick = onAddServer) {
+            Button(
+                onClick = onAddServer,
+                modifier = Modifier.heightIn(min = AppDimensions.minTouchTarget),
+                shape = MaterialTheme.shapes.medium,
+            ) {
                 Icon(Icons.Default.Add, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
                 Text(stringResource(R.string.home_add_server))
@@ -1265,16 +1236,6 @@ internal fun ServerCard(
         }
     }
     val isAmoled = MaterialTheme.colorScheme.background == Color.Black && MaterialTheme.colorScheme.surface == Color.Black
-    val cardContainerColor = if (isAmoled) {
-        Color.Black
-    } else {
-        MaterialTheme.colorScheme.surfaceContainerHighest
-    }
-    val cardContentColor = if (isConnected && !isAmoled) {
-        MaterialTheme.colorScheme.onSurfaceVariant
-    } else {
-        MaterialTheme.colorScheme.onSurface
-    }
     val connectLabel = stringResource(R.string.home_connect)
     val retryLabel = stringResource(R.string.retry)
     val retryConnectDescription = "$retryLabel ${server.displayName}"
@@ -1284,20 +1245,20 @@ internal fun ServerCard(
         "$connectLabel ${server.displayName}"
     }
 
-    Card(
+    Surface(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = cardContainerColor
-        ),
-        border = if (isAmoled) {
-            BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f))
+        color = if (isConnected || isConnecting) {
+            MaterialTheme.colorScheme.surfaceContainerLow
         } else {
-            null
-        }
+            MaterialTheme.colorScheme.surface
+        },
+        shape = MaterialTheme.shapes.medium,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f)),
+        tonalElevation = 0.dp,
     ) {
         Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             // Header row: name, URL, status, menu
             Row(
@@ -1309,25 +1270,34 @@ internal fun ServerCard(
                     Text(
                         text = server.displayName,
                         style = MaterialTheme.typography.titleMedium,
-                        color = cardContentColor
+                        color = MaterialTheme.colorScheme.onSurface,
                     )
                     Text(
                         text = server.url,
                         style = MaterialTheme.typography.bodyMedium,
-                        color = cardContentColor.copy(alpha = 0.7f)
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
                     )
                     if (isConnected) {
-                        Text(
+                        StatusLabel(
                             text = stringResource(R.string.home_server_health_good),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = StatusConnected
+                            color = MaterialTheme.colorScheme.tertiary,
+                            emphasized = true,
+                            dynamic = true,
                         )
                     } else if (isConnecting) {
-                        Text(
+                        StatusLabel(
                             text = connectionPhase?.let { stringResource(it.messageRes) }
                                 ?: stringResource(R.string.home_connecting),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.tertiary
+                            color = MaterialTheme.colorScheme.tertiary,
+                            emphasized = true,
+                            dynamic = true,
+                        )
+                    } else {
+                        StatusLabel(
+                            text = stringResource(R.string.home_server_health_bad),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 }
@@ -1400,27 +1370,16 @@ internal fun ServerCard(
             }
 
             // Action buttons row
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                if (isConnected) {
+            if (isConnected || isConnecting) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    if (isConnected) {
                     Button(
                         onClick = onOpenSessions,
                         modifier = Modifier.weight(1f),
-                        colors = if (isAmoled) {
-                            ButtonDefaults.buttonColors(
-                                containerColor = Color.Black,
-                                contentColor = MaterialTheme.colorScheme.primary
-                            )
-                        } else {
-                            ButtonDefaults.buttonColors()
-                        },
-                        border = if (isAmoled) {
-                            BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.75f))
-                        } else {
-                            null
-                        }
+                        shape = MaterialTheme.shapes.medium,
                     ) {
                         Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
@@ -1433,29 +1392,11 @@ internal fun ServerCard(
                             maxLines = 1,
                         )
                     }
-                }
-            }
-            if (shouldShowServerDisconnect(isConnected, isConnecting)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
+                    }
                     OutlinedButton(
                         onClick = onDisconnect,
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = if (isAmoled) {
-                            ButtonDefaults.outlinedButtonColors(
-                                containerColor = Color.Black,
-                                contentColor = MaterialTheme.colorScheme.primary
-                            )
-                        } else {
-                            ButtonDefaults.outlinedButtonColors()
-                        },
-                        border = if (isAmoled) {
-                            BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.75f))
-                        } else {
-                            ButtonDefaults.outlinedButtonBorder
-                        }
+                        modifier = if (isConnected) Modifier else Modifier.weight(1f),
+                        shape = MaterialTheme.shapes.medium,
                     ) {
                         Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))

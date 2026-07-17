@@ -89,7 +89,11 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.TextToolbar
 import androidx.compose.ui.platform.TextToolbarStatus
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
@@ -1870,18 +1874,6 @@ fun ChatScreen(
                     }
                 },
                 actions = {
-                    if (uiState.sessionStatus.isInterruptible) {
-                        IconButton(
-                            onClick = { viewModel.abortSession() },
-                            modifier = Modifier.size(48.dp),
-                        ) {
-                            Icon(
-                                Icons.Default.Stop,
-                                contentDescription = stringResource(R.string.chat_stop),
-                                tint = MaterialTheme.colorScheme.error
-                            )
-                        }
-                    }
                     IconButton(onClick = { isTerminalMode = true }) {
                         Icon(
                             imageVector = Icons.Default.Terminal,
@@ -2265,6 +2257,8 @@ fun ChatScreen(
                         doSend()
                     }
                 },
+                canStop = uiState.sessionStatus.isInterruptible,
+                onStop = viewModel::abortSession,
                 inputMode = if (isShellMode) ChatInputMode.SHELL else ChatInputMode.NORMAL,
                 onInputModeChange = {
                     inputMode = it.name
@@ -3396,7 +3390,7 @@ private fun ModelPickerDialog(
 
     BasicAlertDialog(onDismissRequest = onDismiss) {
         Surface(
-            shape = RoundedCornerShape(20.dp),
+            shape = MaterialTheme.shapes.large,
             color = if (isAmoled) Color.Black else MaterialTheme.colorScheme.surface,
             border = if (isAmoled) BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)) else null,
             tonalElevation = if (isAmoled) 0.dp else 6.dp,
@@ -3432,7 +3426,7 @@ private fun ModelPickerDialog(
                                 text = (provider.name.ifEmpty { provider.id }).uppercase(),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                                letterSpacing = 1.sp
+                                letterSpacing = 0.sp
                             )
                         }
                     }
@@ -3507,7 +3501,7 @@ private fun ChoicePickerDialog(
 
     BasicAlertDialog(onDismissRequest = onDismiss) {
         Surface(
-            shape = RoundedCornerShape(20.dp),
+            shape = MaterialTheme.shapes.large,
             color = if (isAmoled) Color.Black else MaterialTheme.colorScheme.surface,
             border = if (isAmoled) BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)) else null,
             tonalElevation = if (isAmoled) 0.dp else 6.dp,
@@ -4368,17 +4362,8 @@ private fun ChatMessageBubble(
     val assistantMessage = chatMessage.message as? Message.Assistant
     val senderIdentity = piSenderIdentity(assistantMessage)
     val senderAccentColor = senderIdentity?.let(::piSenderAccentColor)
-    val isModeratorMessage = isPiModerator(senderIdentity)
     val alignment = if (isUser) Alignment.End else Alignment.Start
-    val backgroundColor = if (isAmoled) {
-        Color.Black
-    } else if (isUser) {
-        MaterialTheme.colorScheme.primaryContainer
-    } else if (isModeratorMessage) {
-        MaterialTheme.colorScheme.surfaceContainerHighest
-    } else {
-        MaterialTheme.colorScheme.surfaceContainerHigh
-    }
+    val backgroundColor = if (isAmoled) Color.Black else MaterialTheme.colorScheme.primaryContainer
     val textColor = if (isAmoled) {
         MaterialTheme.colorScheme.onSurface
     } else if (isUser) {
@@ -4387,17 +4372,9 @@ private fun ChatMessageBubble(
         MaterialTheme.colorScheme.onSurface
     }
     val bubbleBorder = when {
-        isAmoled -> BorderStroke(
+        isUser && isAmoled -> BorderStroke(
             1.dp,
-            when {
-                isUser -> MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)
-                senderAccentColor != null -> senderAccentColor.copy(alpha = if (isModeratorMessage) 0.85f else 0.65f)
-                else -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.75f)
-            }
-        )
-        senderAccentColor != null -> BorderStroke(
-            1.dp,
-            senderAccentColor.copy(alpha = if (isModeratorMessage) 0.42f else 0.28f)
+            MaterialTheme.colorScheme.primary.copy(alpha = 0.55f),
         )
         else -> null
     }
@@ -4452,14 +4429,12 @@ private fun ChatMessageBubble(
             plannedChunk != null ||
             contentParts.isNotEmpty() ||
             stepParts.isNotEmpty() ||
-            assistantErrorText != null
+            assistantErrorText != null ||
+            shouldShowAssistantPlaceholder(assistantMessage, hasAssistantText = false, hasTool = false)
     if (!hasRenderableUserContent || !hasRenderableAssistantContent) {
         return
     }
 
-    val hasSteps = stepParts.isNotEmpty()
-    val autoExpand = LocalCollapseTools.current
-    var stepsExpanded by remember(autoExpand) { mutableStateOf(autoExpand) }
     val timeFormat = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
     val assistantMetaText = remember(assistantMessage?.modelId, assistantMessage?.time?.created) {
         assistantMessage?.let { message ->
@@ -4468,8 +4443,6 @@ private fun ChatMessageBubble(
         }
     }
 
-    // Check if any tool is currently running (show spinner)
-    val hasRunningTool = stepParts.any { it is Part.Tool && it.state is ToolState.Running }
     val hasAssistantText = plannedChunk != null || contentParts
         .filterIsInstance<Part.Text>()
         .any { part -> part.text.isNotBlank() && part.synthetic != true && part.ignored != true }
@@ -4480,21 +4453,24 @@ private fun ChatMessageBubble(
     }
 
         val bubbleContent: @Composable () -> Unit = {
-        Surface(
-            shape = RoundedCornerShape(
-                topStart = if (!showsTop) 2.dp else if (isUser) 18.dp else 4.dp,
-                topEnd = if (!showsTop) 2.dp else if (isUser) 4.dp else 18.dp,
-                bottomStart = if (showsBottom) 18.dp else 2.dp,
-                bottomEnd = if (showsBottom) 18.dp else 2.dp
-            ),
-            color = backgroundColor,
-            border = bubbleBorder,
-            tonalElevation = if (isAmoled || isUser) 0.dp else 1.dp,
-            modifier = Modifier.fillMaxWidth()
+        val messageShape = RoundedCornerShape(14.dp)
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(if (isUser) 0.92f else 1f)
+                .then(
+                    if (isUser) {
+                        Modifier
+                            .clip(messageShape)
+                            .background(backgroundColor)
+                            .then(bubbleBorder?.let { Modifier.border(it, messageShape) } ?: Modifier)
+                    } else {
+                        Modifier
+                    }
+                )
         ) {
             val compact = LocalCompactMessages.current
-            val horizontalPadding = if (compact) 10.dp else 16.dp
-            val verticalPadding = if (compact) 8.dp else 14.dp
+            val horizontalPadding = if (isUser) 14.dp else 4.dp
+            val verticalPadding = if (isUser) 12.dp else if (compact) 4.dp else 8.dp
             val edgePadding = 2.dp
             Box(modifier = Modifier.fillMaxWidth()) {
                 Column(
@@ -4506,7 +4482,7 @@ private fun ChatMessageBubble(
                     ),
                     verticalArrangement = Arrangement.spacedBy(if (compact) 4.dp else 10.dp)
                 ) {
-                    // "Response" header with provider icon and copy button — assistant messages only
+                    // Pi messages retain sender identity; ordinary assistant prose stays document-like.
                     if (!isUser && showsTop) {
                         val assistantMsg = assistantMessage
                         if (senderIdentity != null && senderAccentColor != null) {
@@ -4525,92 +4501,38 @@ private fun ChatMessageBubble(
                                     { performHaptic(hapticView, hapticOn); copy() }
                                 },
                             )
-                        } else {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(5.dp)
-                                ) {
-                                    if (assistantMsg?.providerId != null) {
-                                        ProviderIcon(
-                                            providerId = assistantMsg.providerId,
-                                            size = 12.dp,
-                                            tint = textColor.copy(alpha = 0.4f)
-                                        )
-                                    }
-                                    Text(
-                                        text = stringResource(R.string.chat_response),
-                                        style = MaterialTheme.typography.labelSmall.copy(
-                                            letterSpacing = 0.8.sp,
-                                            fontWeight = FontWeight.Medium
-                                        ),
-                                        color = textColor.copy(alpha = 0.4f)
-                                    )
-                                }
-                                if (onCopyText != null && segmentPosition == ChatMessageSegmentPosition.Single) {
-                                    Icon(
-                                        Icons.Default.ContentCopy,
-                                        contentDescription = stringResource(R.string.chat_copy),
-                                        modifier = Modifier
-                                            .size(15.dp)
-                                            .clickable { performHaptic(hapticView, hapticOn); onCopyText() },
-                                        tint = textColor.copy(alpha = 0.3f)
-                                    )
-                                }
-                            }
                         }
                     }
 
-                    // Steps toggle (like WebUI "Show/Hide steps")
-                    if (hasSteps) {
-                        val stepsStatus = resolveStepsStatus(stepParts)
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickable { performHaptic(hapticView, hapticOn); stepsExpanded = !stepsExpanded }
-                                .padding(vertical = 4.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            if (hasRunningTool) {
-                                PulsingDotsIndicator(
-                                    dotSize = 5.dp,
-                                    dotSpacing = 3.dp,
-                                    color = MaterialTheme.colorScheme.tertiary
-                                )
-                            } else {
-                                Icon(
-                                    imageVector = if (stepsExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(16.dp),
-                                    tint = textColor.copy(alpha = 0.5f)
-                                )
-                            }
-                            Text(
-                                text = if (stepsExpanded) stringResource(R.string.chat_hide_steps) else stepsStatus,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = textColor.copy(alpha = 0.6f)
-                            )
-                        }
+                    // Every tool owns its disclosure state instead of hiding behind a response-wide toggle.
+                    for (part in stepParts) {
+                        PartContent(
+                            part = part,
+                            textColor = textColor,
+                            isUser = isUser,
+                        )
+                    }
 
-                        // Expanded step parts
-                        AnimatedVisibility(visible = stepsExpanded) {
-                            Column(
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                for (part in stepParts) {
-                                    PartContent(
-                                        part = part,
-                                        textColor = textColor,
-                                        isUser = isUser
-                                    )
-                                }
-                            }
+                    if (senderIdentity == null && shouldShowAssistantPlaceholder(
+                            message = assistantMessage,
+                            hasAssistantText = hasAssistantText,
+                            hasTool = stepParts.any { it is Part.Tool },
+                        )
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            PulsingDotsIndicator(
+                                dotSize = 5.dp,
+                                dotSpacing = 3.dp,
+                                color = MaterialTheme.colorScheme.tertiary,
+                            )
+                            Text(
+                                text = stringResource(R.string.chat_tool_thinking),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = textColor.copy(alpha = 0.7f),
+                            )
                         }
                     }
 
@@ -4711,15 +4633,18 @@ private fun ChatMessageBubble(
                                     modifier = Modifier.weight(1f),
                                 )
                             }
-                            if (segmentPosition == ChatMessageSegmentPosition.Last && onCopyText != null) {
-                                Icon(
-                                    Icons.Default.ContentCopy,
-                                    contentDescription = stringResource(R.string.chat_copy),
-                                    modifier = Modifier
-                                        .size(15.dp)
-                                        .clickable { performHaptic(hapticView, hapticOn); onCopyText() },
-                                    tint = textColor.copy(alpha = 0.3f),
-                                )
+                            if (showsBottom && onCopyText != null) {
+                                IconButton(
+                                    onClick = { performHaptic(hapticView, hapticOn); onCopyText() },
+                                    modifier = Modifier.size(48.dp),
+                                ) {
+                                    Icon(
+                                        Icons.Default.ContentCopy,
+                                        contentDescription = stringResource(R.string.chat_copy),
+                                        modifier = Modifier.size(18.dp),
+                                        tint = textColor.copy(alpha = 0.55f),
+                                    )
+                                }
                             }
                         }
                     }
@@ -4845,6 +4770,12 @@ private fun ChatMessageBubble(
     }
 }
 
+internal fun shouldShowAssistantPlaceholder(
+    message: Message.Assistant?,
+    hasAssistantText: Boolean,
+    hasTool: Boolean,
+): Boolean = message != null && message.finish == null && !hasAssistantText && !hasTool
+
 @Composable
 private fun PiSenderHeader(
     identity: PiSenderIdentity,
@@ -4858,14 +4789,14 @@ private fun PiSenderHeader(
     if (!showSenderHeader) {
         if (onCopyText != null) {
             Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
-                Icon(
-                    Icons.Default.ContentCopy,
-                    contentDescription = stringResource(R.string.chat_copy),
-                    modifier = Modifier
-                        .size(15.dp)
-                        .clickable { onCopyText() },
-                    tint = textColor.copy(alpha = 0.3f),
-                )
+                IconButton(onClick = onCopyText, modifier = Modifier.size(48.dp)) {
+                    Icon(
+                        Icons.Default.ContentCopy,
+                        contentDescription = stringResource(R.string.chat_copy),
+                        modifier = Modifier.size(18.dp),
+                        tint = textColor.copy(alpha = 0.55f),
+                    )
+                }
             }
         }
         return
@@ -4916,14 +4847,14 @@ private fun PiSenderHeader(
                 }
             }
             if (onCopyText != null) {
-                Icon(
-                    Icons.Default.ContentCopy,
-                    contentDescription = stringResource(R.string.chat_copy),
-                    modifier = Modifier
-                        .size(15.dp)
-                        .clickable { onCopyText() },
-                    tint = textColor.copy(alpha = 0.3f),
-                )
+                IconButton(onClick = onCopyText, modifier = Modifier.size(48.dp)) {
+                    Icon(
+                        Icons.Default.ContentCopy,
+                        contentDescription = stringResource(R.string.chat_copy),
+                        modifier = Modifier.size(18.dp),
+                        tint = textColor.copy(alpha = 0.55f),
+                    )
+                }
             }
         }
 
@@ -5429,35 +5360,51 @@ private fun normalizeHtmlForEmbeddedPreview(html: String): String {
 @Composable
 internal fun ReasoningBlock(text: String) {
     val isAmoled = isAmoledTheme()
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    val expandedDescription = if (expanded) {
+        stringResource(R.string.chat_collapse)
+    } else {
+        stringResource(R.string.chat_expand)
+    }
     Surface(
-        shape = RoundedCornerShape(8.dp),
-        color = if (isAmoled) Color.Black else MaterialTheme.colorScheme.surfaceContainer,
+        shape = RoundedCornerShape(10.dp),
+        color = if (isAmoled) Color.Black else MaterialTheme.colorScheme.surfaceContainerLow,
         border = if (isAmoled) BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)) else null,
         modifier = Modifier.fillMaxWidth()
     ) {
-        Row(modifier = Modifier.height(IntrinsicSize.Min)) {
-            // Left accent border
-            Box(
+        Column {
+            Row(
                 modifier = Modifier
-                    .width(3.dp)
-                    .fillMaxHeight()
-                    .background(MaterialTheme.colorScheme.outlineVariant)
-            )
-            
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(horizontal = 12.dp, vertical = 10.dp)
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded }
+                    .semantics {
+                        role = Role.Button
+                        stateDescription = expandedDescription
+                    }
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
+                Icon(
+                    imageVector = Icons.Default.Psychology,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 Text(
                     text = stringResource(R.string.chat_status_thinking),
-                    style = MaterialTheme.typography.labelSmall.copy(
-                        letterSpacing = 0.6.sp,
-                        fontWeight = FontWeight.Medium
-                    ),
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
                 )
-                Spacer(modifier = Modifier.height(6.dp))
+                Icon(
+                    imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = expandedDescription,
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            AnimatedVisibility(visible = expanded) {
                 SelectionContainer {
                     ScrollablePlainText(
                         text = text,
@@ -5465,7 +5412,8 @@ internal fun ReasoningBlock(text: String) {
                             fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
                             lineHeight = 20.sp
                         ),
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f),
+                        modifier = Modifier.padding(start = 36.dp, end = 12.dp, bottom = 12.dp),
                     )
                 }
             }
@@ -7104,7 +7052,7 @@ private fun ImagePreviewDialog(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 8.dp),
-            shape = RoundedCornerShape(24.dp),
+            shape = MaterialTheme.shapes.large,
             color = if (isAmoled) Color.Black else MaterialTheme.colorScheme.surfaceContainerHigh,
             border = if (isAmoled) {
                 BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.75f))
@@ -7236,12 +7184,16 @@ private fun PermissionCard(
     val hapticOn = LocalHapticFeedbackEnabled.current
     val containerColor = if (isAmoled) Color.Black else MaterialTheme.colorScheme.tertiaryContainer
     val contentColor = if (isAmoled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onTertiaryContainer
+    val pendingDescription = "${stringResource(R.string.permission_title)}. ${permission.permission}. ${permission.patterns.joinToString(", ")}. Pending"
     Card(
         colors = CardDefaults.cardColors(
             containerColor = containerColor
         ),
         border = if (isAmoled) BorderStroke(1.dp, MaterialTheme.colorScheme.tertiary.copy(alpha = 0.7f)) else null,
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier.fillMaxWidth().semantics {
+            contentDescription = pendingDescription
+            liveRegion = LiveRegionMode.Assertive
+        }
     ) {
         Column(
             modifier = Modifier.padding(12.dp),
@@ -7309,22 +7261,14 @@ private fun PermissionCard(
     }
 }
 
-/** Rotating placeholder hints for the input bar, similar to the WebUI prompt input. */
-private val placeholderHintResIds = listOf(
-    R.string.chat_hint_ask,
-    R.string.chat_hint_fix,
-    R.string.chat_hint_refactor,
-    R.string.chat_hint_tests,
-    R.string.chat_hint_explain,
-    R.string.chat_hint_help,
-)
-
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ChatInputBar(
     textFieldValue: TextFieldValue,
     onTextFieldValueChange: (TextFieldValue) -> Unit,
     onSend: () -> Unit,
+    canStop: Boolean = false,
+    onStop: () -> Unit = {},
     isSending: Boolean,
     isBusy: Boolean = false,
     sendDisabledReasonResId: Int? = null,
@@ -7357,19 +7301,11 @@ private fun ChatInputBar(
 ) {
     val isAmoled = isAmoledTheme()
     val isShellMode = inputMode == ChatInputMode.SHELL
-    // Rotate placeholder hint every 4 seconds
-    val hintIndex = remember { mutableIntStateOf(0) }
-    LaunchedEffect(Unit) {
-        while (true) {
-            kotlinx.coroutines.delay(4000)
-            hintIndex.intValue = (hintIndex.intValue + 1) % placeholderHintResIds.size
-        }
-    }
     val placeholder = when {
         isShellMode -> stringResource(R.string.chat_shell_placeholder)
         isPiRoundtable && roundtableSupplementMode -> stringResource(R.string.chat_pi_supplement_hint)
         isPiRoundtable -> stringResource(R.string.chat_pi_speak_hint)
-        else -> stringResource(placeholderHintResIds[hintIndex.intValue])
+        else -> stringResource(R.string.chat_hint_ask)
     }
 
     val text = textFieldValue.text
@@ -7380,6 +7316,7 @@ private fun ChatInputBar(
         ?.takeIf { !canSend }
         ?.let { stringResource(it) }
     var previewAttachmentIndex by remember { mutableStateOf(-1) }
+    var controlsExpanded by rememberSaveable { mutableStateOf(false) }
 
     // Build merged slash commands: client commands + server commands (deduplicated)
     val clientCmds = clientCommands()
@@ -7715,18 +7652,61 @@ private fun ChatInputBar(
                 .padding(start = 16.dp, end = 4.dp, top = 2.dp, bottom = 6.dp),
             verticalArrangement = Arrangement.spacedBy(2.dp)
         ) {
-            // Agent + Model + Variant + Attach selector row — small, subtle
-            if (!isPiRoundtable && (modelLabel.isNotEmpty() || agents.size > 1)) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                TextButton(
+                    onClick = { controlsExpanded = !controlsExpanded },
+                    modifier = Modifier.heightIn(min = 48.dp),
                 ) {
-                    // Scrollable area for agent/model/variant so paperclip always stays visible
+                    Icon(
+                        Icons.Default.Tune,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = when {
+                            isShellMode -> stringResource(R.string.tool_shell)
+                            isPiRoundtable -> stringResource(R.string.roundtable_default_name)
+                            modelLabel.isNotEmpty() -> modelLabel
+                            else -> stringResource(R.string.codex_model)
+                        },
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Icon(
+                        imageVector = if (controlsExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                        contentDescription = if (controlsExpanded) stringResource(R.string.chat_collapse) else stringResource(R.string.chat_expand),
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+                IconButton(
+                    onClick = onAttach,
+                    modifier = Modifier.size(48.dp),
+                ) {
+                    Icon(
+                        Icons.Default.AttachFile,
+                        contentDescription = stringResource(R.string.chat_attach),
+                        modifier = Modifier.size(20.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
+            AnimatedVisibility(visible = controlsExpanded && !isPiRoundtable) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     Row(
                         modifier = Modifier
-                            .weight(1f)
+                            .fillMaxWidth()
                             .horizontalScroll(rememberScrollState()),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         // Agent selector — tap to open list picker
                         if (agents.size > 1) {
@@ -7736,7 +7716,8 @@ private fun ChatInputBar(
                                     .clip(RoundedCornerShape(6.dp))
                                     .background(agentColor.copy(alpha = 0.18f))
                                     .clickable(onClick = onAgentClick)
-                                    .padding(horizontal = 6.dp, vertical = 3.dp),
+                                    .heightIn(min = 48.dp)
+                                    .padding(horizontal = 10.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
@@ -7760,7 +7741,8 @@ private fun ChatInputBar(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(6.dp))
                                     .clickable { onModelClick() }
-                                    .padding(horizontal = 3.dp, vertical = 3.dp),
+                                    .heightIn(min = 48.dp)
+                                    .padding(horizontal = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(3.dp)
                             ) {
@@ -7791,7 +7773,8 @@ private fun ChatInputBar(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(6.dp))
                                     .clickable(onClick = onVariantClick)
-                                    .padding(horizontal = 3.dp, vertical = 3.dp),
+                                    .heightIn(min = 48.dp)
+                                    .padding(horizontal = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
@@ -7813,24 +7796,6 @@ private fun ChatInputBar(
                             }
                         }
 
-                    }
-
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(0.dp)
-                    ) {
-                        // Attach button (paperclip) — always visible, pinned right, aligned with Send button
-                        IconButton(
-                            onClick = onAttach,
-                            modifier = Modifier.size(32.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.AttachFile,
-                                contentDescription = stringResource(R.string.chat_attach),
-                                modifier = Modifier.size(16.dp),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                            )
-                        }
                     }
                 }
             }
@@ -7856,23 +7821,21 @@ private fun ChatInputBar(
                                     .clickable { previewAttachmentIndex = index },
                                 contentScale = ContentScale.Crop
                             )
-                            Surface(
+                            IconButton(
+                                onClick = { onRemoveAttachment(index) },
                                 modifier = Modifier
                                     .align(Alignment.TopEnd)
-                                    .padding(2.dp)
-                                    .size(18.dp)
-                                    .clickable { onRemoveAttachment(index) },
-                                shape = RoundedCornerShape(9.dp),
-                                color = MaterialTheme.colorScheme.error.copy(alpha = 0.9f)
+                                    .size(48.dp),
+                                colors = IconButtonDefaults.iconButtonColors(
+                                    containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.9f),
+                                    contentColor = MaterialTheme.colorScheme.onError,
+                                ),
                             ) {
-                                Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                                    Icon(
-                                        Icons.Default.Close,
-                                        contentDescription = stringResource(R.string.chat_remove),
-                                        modifier = Modifier.size(12.dp),
-                                        tint = MaterialTheme.colorScheme.onError
-                                    )
-                                }
+                                Icon(
+                                    Icons.Default.Close,
+                                    contentDescription = stringResource(R.string.chat_remove),
+                                    modifier = Modifier.size(18.dp),
+                                )
                             }
                         }
                     }
@@ -8011,7 +7974,7 @@ private fun ChatInputBar(
                 Box(
                     modifier = Modifier
                         .weight(1f)
-                        .clip(RoundedCornerShape(22.dp))
+                        .clip(MaterialTheme.shapes.large)
                         .background(
                             if (isAmoled) {
                                 Color.Black
@@ -8028,12 +7991,12 @@ private fun ChatInputBar(
                                     } else {
                                         MaterialTheme.colorScheme.primary.copy(alpha = 0.65f)
                                     },
-                                    shape = RoundedCornerShape(22.dp)
+                                    shape = MaterialTheme.shapes.large
                                 )
                                 isAmoled -> Modifier.border(
                                     width = 1.dp,
                                     color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f),
-                                    shape = RoundedCornerShape(22.dp)
+                                    shape = MaterialTheme.shapes.large
                                 )
                                 else -> Modifier
                             }
@@ -8067,11 +8030,11 @@ private fun ChatInputBar(
                     )
                 }
 
-                // Send button — tap to send, long-press toggles shell mode
+                // Stable action slot: stop replaces send without resizing the composer.
                 Box(
                     modifier = Modifier
-                        .size(44.dp)
-                        .clip(RoundedCornerShape(22.dp))
+                        .size(48.dp)
+                        .clip(RoundedCornerShape(10.dp))
                         .background(
                             if (isShellMode && !isSending) {
                                 if (isAmoled) {
@@ -8088,7 +8051,7 @@ private fun ChatInputBar(
                                 Modifier.border(
                                     width = if (isAmoled) 1.2.dp else 1.dp,
                                     color = MaterialTheme.colorScheme.primary.copy(alpha = if (isAmoled) 0.88f else 0.75f),
-                                    shape = RoundedCornerShape(22.dp),
+                                    shape = RoundedCornerShape(10.dp),
                                 )
                             } else {
                                 Modifier
@@ -8096,7 +8059,9 @@ private fun ChatInputBar(
                         )
                         .combinedClickable(
                             onClick = {
-                                if (canSend) {
+                                if (canStop) {
+                                    onStop()
+                                } else if (canSend) {
                                     onSend()
                                 }
                             },
@@ -8108,7 +8073,14 @@ private fun ChatInputBar(
                         ),
                     contentAlignment = Alignment.Center
                 ) {
-                    if (isSending) {
+                    if (canStop) {
+                        Icon(
+                            Icons.Default.Stop,
+                            contentDescription = stringResource(R.string.chat_stop),
+                            modifier = Modifier.size(22.dp),
+                            tint = MaterialTheme.colorScheme.error,
+                        )
+                    } else if (isSending) {
                         BreathingCircleIndicator(
                             size = 20.dp,
                             color = MaterialTheme.colorScheme.primary
@@ -8316,7 +8288,7 @@ private fun RoundtableCompactRosterStrip(
     val activeRole = roleStates.firstOrNull { role -> role.liveState != PiRoleLiveState.Idle }
     Surface(
         modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
+        shape = MaterialTheme.shapes.large,
         color = if (isAmoled) Color.Black else MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.72f),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isAmoled) 0.65f else 0.28f)),
         tonalElevation = if (isAmoled) 0.dp else 1.dp,
@@ -8568,7 +8540,10 @@ private fun QuestionCard(
         colors = CardDefaults.cardColors(containerColor = containerColor),
         border = if (isAmoled) BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)) else null,
         shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier.fillMaxWidth().semantics {
+            contentDescription = "${question.questions.joinToString(". ") { "${it.header}. ${it.question}" }}. Pending"
+            liveRegion = LiveRegionMode.Assertive
+        }
     ) {
         Column(
             modifier = Modifier.padding(12.dp),
@@ -8756,7 +8731,7 @@ private fun QuestionCard(
                                         }
                                     },
                                     enabled = !submitted,
-                                    modifier = Modifier.size(20.dp)
+                                    modifier = Modifier.size(48.dp)
                                 ) {
                                     Icon(
                                         Icons.Default.Close,

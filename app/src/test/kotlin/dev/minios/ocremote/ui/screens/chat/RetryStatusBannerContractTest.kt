@@ -47,9 +47,11 @@ class RetryStatusBannerContractTest {
     @Test
     fun `retry stop descriptions use localized resources`() {
         assertFalse(chatScreenSource.contains("停止重试"))
+        assertTrue(chatScreenSource.contains("canStop = uiState.sessionStatus.isInterruptible"))
+        assertTrue(chatScreenSource.contains("onStop = viewModel::abortSession"))
         assertTrue(
             Regex(
-                """if \(uiState\.sessionStatus\.isInterruptible\)[\s\S]*?Icons\.Default\.Stop,[\s\S]*?contentDescription = stringResource\(R\.string\.chat_stop\)""",
+                """if \(canStop\)[\s\S]*?Icons\.Default\.Stop,[\s\S]*?contentDescription = stringResource\(R\.string\.chat_stop\)""",
             ).containsMatchIn(chatScreenSource),
         )
     }

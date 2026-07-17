@@ -5,6 +5,8 @@ package dev.minios.ocremote.ui.screens.codex
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,6 +21,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -39,6 +42,10 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.TrackChanges
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
@@ -52,6 +59,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -65,6 +73,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -81,6 +90,13 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.hilt.navigation.compose.hiltViewModel
 import dev.minios.ocremote.R
 import androidx.lifecycle.Lifecycle
@@ -88,6 +104,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import dev.minios.ocremote.data.codex.CodexApprovalKind
 import dev.minios.ocremote.data.codex.CodexMemoryMode
 import dev.minios.ocremote.data.codex.CodexServerRequest
+import dev.minios.ocremote.data.codex.CodexToolUserInputQuestion
 import dev.minios.ocremote.ui.screens.chat.chatTextOverflow
 import dev.minios.ocremote.data.codex.CodexThreadItem
 import dev.minios.ocremote.data.codex.requestKey
@@ -133,12 +150,35 @@ fun CodexChatScreen(
     var renameOpen by remember { mutableStateOf(false) }
     var goalOpen by remember { mutableStateOf(false) }
     var memoryOpen by remember { mutableStateOf(false) }
+    var controlsExpanded by rememberSaveable { mutableStateOf(false) }
+    var autoFollowEnabled by rememberSaveable { mutableStateOf(true) }
     val timeline = remember(state.thread) {
         state.thread?.turns.orEmpty().flatMap { turn -> turn.items.map { turn.id to it } }
     }
 
-    LaunchedEffect(timeline.size, timeline.lastOrNull()?.second?.text, timeline.lastOrNull()?.second?.output) {
-        if (timeline.isNotEmpty()) listState.animateScrollToItem(timeline.lastIndex)
+    val isAtBottom by remember {
+        derivedStateOf {
+            val layout = listState.layoutInfo
+            val last = layout.visibleItemsInfo.lastOrNull() ?: return@derivedStateOf true
+            last.index >= layout.totalItemsCount - 1 && last.offset + last.size <= layout.viewportEndOffset + 50
+        }
+    }
+    LaunchedEffect(listState.isScrollInProgress, isAtBottom) {
+        if (listState.isScrollInProgress) autoFollowEnabled = false
+        else if (isAtBottom) autoFollowEnabled = true
+    }
+    val timelineItemCount = timeline.size + state.pendingRequests.size +
+        (if (state.error != null) 1 else 0) +
+        (if (state.activeTurnId != null && timeline.none { it.second.type == "agentMessage" && it.second.text.isNullOrEmpty() }) 1 else 0)
+    LaunchedEffect(
+        timeline.size,
+        timeline.lastOrNull()?.second?.text,
+        timeline.lastOrNull()?.second?.output,
+        state.pendingRequests.size,
+        state.activeTurnId,
+        state.error,
+    ) {
+        if (timelineItemCount > 0 && autoFollowEnabled) listState.scrollToItem(timelineItemCount - 1)
     }
     LaunchedEffect(Unit) {
         viewModel.sendResults.collect { result ->
@@ -189,11 +229,6 @@ fun CodexChatScreen(
                     }
                 },
                 actions = {
-                    if (state.activeTurnId != null) {
-                        IconButton(onClick = viewModel::interruptTurn) {
-                            Icon(Icons.Default.Stop, contentDescription = stringResource(R.string.codex_stop_turn))
-                        }
-                    }
                     Box {
                         IconButton(onClick = { menuExpanded = true }) {
                             Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.codex_thread_actions))
@@ -256,11 +291,37 @@ fun CodexChatScreen(
                         }
                     }
                 }
-                ModelControls(
-                    state = state,
-                    onModel = viewModel::selectModel,
-                    onEffort = viewModel::selectEffort,
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TextButton(
+                        onClick = { controlsExpanded = !controlsExpanded },
+                        modifier = Modifier.heightIn(min = 48.dp),
+                    ) {
+                        Icon(Icons.Default.Tune, contentDescription = null, Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        val selectedModel = state.selectedModel
+                        Text(
+                            selectedModel?.displayName?.ifBlank { selectedModel.model }
+                                ?: stringResource(R.string.codex_model),
+                            maxLines = 1,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                        Icon(
+                            if (controlsExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                            contentDescription = if (controlsExpanded) stringResource(R.string.chat_collapse) else stringResource(R.string.chat_expand),
+                            Modifier.size(18.dp),
+                        )
+                    }
+                }
+                if (controlsExpanded) {
+                    ModelControls(
+                        state = state,
+                        onModel = viewModel::selectModel,
+                        onEffort = viewModel::selectEffort,
+                    )
+                }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.Bottom,
@@ -279,15 +340,16 @@ fun CodexChatScreen(
                         }),
                     )
                     FilledIconButton(
-                        onClick = ::submitDraft,
-                        enabled = draft.isNotBlank() &&
-                            !state.isLoading &&
-                            state.thread != null &&
-                            !state.isSending &&
-                            !state.isAwaitingAuthoritativeTurn &&
-                            !state.isSendConfirmationPending,
+                        onClick = if (state.activeTurnId != null) viewModel::interruptTurn else ::submitDraft,
+                        enabled = state.activeTurnId != null || (draft.isNotBlank() &&
+                            !state.isLoading && state.thread != null && !state.isSending &&
+                            !state.isAwaitingAuthoritativeTurn && !state.isSendConfirmationPending),
+                        modifier = Modifier.size(48.dp),
+                        shape = RoundedCornerShape(10.dp),
                     ) {
-                        if (state.isSending || state.isAwaitingAuthoritativeTurn) {
+                        if (state.activeTurnId != null) {
+                            Icon(Icons.Default.Stop, contentDescription = stringResource(R.string.codex_stop_turn))
+                        } else if (state.isSending || state.isAwaitingAuthoritativeTurn) {
                             CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
                         }
                         else Icon(Icons.AutoMirrored.Filled.Send, contentDescription = stringResource(R.string.chat_send))
@@ -308,8 +370,8 @@ fun CodexChatScreen(
                 else -> LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     state.error?.let { error ->
                         item("error") {
@@ -328,6 +390,7 @@ fun CodexChatScreen(
                         CodexRequestCard(
                             request = request,
                             thread = state.thread,
+                            submitting = request.id.requestKey() in state.submittingRequestKeys,
                             onDecision = { viewModel.answerApproval(request, it) },
                             onAnswer = { viewModel.answerUserInput(request, it) },
                             onElicitation = { action, content ->
@@ -444,13 +507,13 @@ private fun ModelControls(
 
 @Composable
 private fun CodexTimelineItem(item: CodexThreadItem) {
-    when (item.type) {
-        "userMessage" -> {
+    when (codexTimelinePresentation(item)) {
+        CodexTimelinePresentation.USER_PROMPT -> {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 Surface(
                     modifier = Modifier.fillMaxWidth(0.9f),
                     color = MaterialTheme.colorScheme.primaryContainer,
-                    shape = RoundedCornerShape(8.dp),
+                    shape = RoundedCornerShape(14.dp),
                 ) {
                     MessageMarkdownContent(
                         markdown = item.text.orEmpty(),
@@ -461,34 +524,91 @@ private fun CodexTimelineItem(item: CodexThreadItem) {
                 }
             }
         }
-        "agentMessage" -> MessageMarkdownContent(
+        CodexTimelinePresentation.ASSISTANT_PROSE -> MessageMarkdownContent(
             markdown = item.text.orEmpty().ifBlank { "..." },
             textColor = MaterialTheme.colorScheme.onSurface,
             isUser = false,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
         )
-        "reasoning", "plan" -> {
+        CodexTimelinePresentation.REASONING -> {
             val text = item.text.orEmpty().ifBlank {
                 if (item.type == "plan") stringResource(R.string.codex_planning) else stringResource(R.string.codex_thinking)
             }
-            Text(
-                text = text,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .chatTextOverflow(text)
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.bodySmall,
-                fontStyle = FontStyle.Italic,
-            )
+            CodexReasoningUnit(key = item.id ?: item.type, text = text, isPlaceholder = item.text.isNullOrBlank())
         }
-        "contextCompaction" -> Text(
+        CodexTimelinePresentation.CONTEXT_NOTE -> Text(
             stringResource(R.string.codex_context_compacted),
             modifier = Modifier.fillMaxWidth().padding(8.dp),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.labelMedium,
         )
-        else -> CodexToolRow(item)
+        CodexTimelinePresentation.WORK_UNIT -> CodexToolRow(item)
+    }
+}
+
+internal enum class CodexTimelinePresentation { USER_PROMPT, ASSISTANT_PROSE, REASONING, CONTEXT_NOTE, WORK_UNIT }
+
+internal fun codexTimelinePresentation(item: CodexThreadItem): CodexTimelinePresentation = when (item.type) {
+    "userMessage" -> CodexTimelinePresentation.USER_PROMPT
+    "agentMessage" -> CodexTimelinePresentation.ASSISTANT_PROSE
+    "reasoning", "plan" -> CodexTimelinePresentation.REASONING
+    "contextCompaction" -> CodexTimelinePresentation.CONTEXT_NOTE
+    else -> CodexTimelinePresentation.WORK_UNIT
+}
+
+@Composable
+private fun CodexReasoningUnit(key: String, text: String, isPlaceholder: Boolean) {
+    var expanded by rememberSaveable(key) { mutableStateOf(false) }
+    val state = if (expanded) stringResource(R.string.chat_collapse) else stringResource(R.string.chat_expand)
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(10.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+    ) {
+        Column {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .then(
+                        if (isPlaceholder) {
+                            Modifier.semantics(mergeDescendants = true) { stateDescription = text }
+                        } else {
+                            Modifier
+                                .clickable { expanded = !expanded }
+                                .semantics(mergeDescendants = true) {
+                                    role = Role.Button
+                                    stateDescription = state
+                                }
+                        },
+                    )
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Icon(Icons.Default.Psychology, contentDescription = null, Modifier.size(16.dp))
+                Text(
+                    if (isPlaceholder) text else stringResource(R.string.codex_reasoning),
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (isPlaceholder) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                else Icon(
+                    if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+            if (expanded) {
+                Text(
+                    text = text,
+                    modifier = Modifier.fillMaxWidth().chatTextOverflow(text).padding(start = 36.dp, end = 12.dp, bottom = 12.dp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontStyle = FontStyle.Italic,
+                )
+            }
+        }
     }
 }
 
@@ -503,13 +623,21 @@ private fun CodexToolRow(item: CodexThreadItem) {
         "collabAgentToolCall" -> stringResource(R.string.codex_tool_collaboration)
         else -> item.type.replaceFirstChar { it.uppercase() }
     }
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .clickable { expanded = !expanded }
-            .padding(horizontal = 8.dp, vertical = 7.dp),
+    val disclosureState = if (expanded) stringResource(R.string.chat_collapse) else stringResource(R.string.chat_expand)
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(10.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Column {
+        Row(
+            modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded }
+                .semantics(mergeDescendants = true) { role = Role.Button; stateDescription = disclosureState }
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Icon(Icons.Default.Terminal, contentDescription = null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(
                 title,
                 Modifier.weight(1f).chatTextOverflow(title),
@@ -517,17 +645,22 @@ private fun CodexToolRow(item: CodexThreadItem) {
                 maxLines = 1,
             )
             item.status?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            Icon(
+                if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+            )
         }
         if (expanded) {
             val details = item.output ?: item.text ?: item.raw.toString()
-            Spacer(Modifier.height(6.dp))
             Text(
                 details,
-                modifier = Modifier.fillMaxWidth().chatTextOverflow(details),
+                modifier = Modifier.fillMaxWidth().chatTextOverflow(details).padding(start = 36.dp, end = 12.dp, bottom = 12.dp),
                 style = MaterialTheme.typography.bodySmall,
                 fontFamily = if (item.type == "commandExecution") FontFamily.Monospace else FontFamily.Default,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
         }
     }
 }
@@ -536,6 +669,7 @@ private fun CodexToolRow(item: CodexThreadItem) {
 private fun CodexRequestCard(
     request: CodexServerRequest,
     thread: dev.minios.ocremote.data.codex.CodexThread?,
+    submitting: Boolean,
     onDecision: (String) -> Unit,
     onAnswer: (Map<String, List<String>>) -> Unit,
     onElicitation: (String, JsonElement?) -> Unit,
@@ -548,25 +682,37 @@ private fun CodexRequestCard(
     }
     val userInput = request.userInput
     val elicitation = request.takeIf { it.method == "mcpServer/elicitation/request" }
+    val requestTitle = when {
+        approval?.kind == CodexApprovalKind.COMMAND_EXECUTION -> stringResource(R.string.codex_request_run_command)
+        approval?.kind == CodexApprovalKind.FILE_CHANGE -> stringResource(R.string.codex_request_apply_files)
+        approval?.kind == CodexApprovalKind.PERMISSIONS -> stringResource(R.string.codex_request_grant_permissions)
+        userInput != null -> userInput.questions.firstOrNull()?.header ?: stringResource(R.string.codex_request_needs_input)
+        elicitation != null -> stringResource(R.string.codex_request_named_needs_input, request.params.string("serverName") ?: "MCP")
+        else -> stringResource(R.string.codex_request)
+    }
+    val requestScope = buildList {
+        approval?.command?.let(::add)
+        approvalPresentation.details.forEach { add(it.value) }
+    }.joinToString(". ")
+    val requestState = stringResource(
+        if (submitting) R.string.codex_request_submitting else R.string.codex_request_pending,
+    )
     Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(8.dp),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.tertiary),
-        color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.45f),
+        modifier = Modifier.fillMaxWidth().semantics {
+            contentDescription = listOf(
+                requestTitle,
+                requestScope,
+                requestState,
+            ).filter(String::isNotBlank).joinToString(". ")
+            liveRegion = LiveRegionMode.Assertive
+        },
+        shape = RoundedCornerShape(10.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
     ) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(
-                when {
-                    approval?.kind == CodexApprovalKind.COMMAND_EXECUTION -> stringResource(R.string.codex_request_run_command)
-                    approval?.kind == CodexApprovalKind.FILE_CHANGE -> stringResource(R.string.codex_request_apply_files)
-                    approval?.kind == CodexApprovalKind.PERMISSIONS -> stringResource(R.string.codex_request_grant_permissions)
-                    userInput != null -> userInput.questions.firstOrNull()?.header ?: stringResource(R.string.codex_request_needs_input)
-                    elicitation != null -> stringResource(
-                        R.string.codex_request_named_needs_input,
-                        request.params.string("serverName") ?: "MCP",
-                    )
-                    else -> stringResource(R.string.codex_request)
-                },
+                requestTitle,
                 style = MaterialTheme.typography.titleSmall,
             )
             approval?.command?.let {
@@ -601,12 +747,12 @@ private fun CodexRequestCard(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     approvalPresentation.decisions.forEach { decision ->
-                        val enabled = !isCodexApprovalDecision(decision) || approvalPresentation.canApprove
+                        val enabled = !submitting && (!isCodexApprovalDecision(decision) || approvalPresentation.canApprove)
                         when (decision) {
-                            "decline" -> OutlinedButton(onClick = { onDecision(decision) }) {
+                            "decline" -> OutlinedButton(onClick = { onDecision(decision) }, enabled = !submitting) {
                                 Text(stringResource(R.string.codex_deny))
                             }
-                            "cancel" -> OutlinedButton(onClick = { onDecision(decision) }) {
+                            "cancel" -> OutlinedButton(onClick = { onDecision(decision) }, enabled = !submitting) {
                                 Text(stringResource(R.string.codex_cancel_turn))
                             }
                             "accept" -> Button(
@@ -625,12 +771,13 @@ private fun CodexRequestCard(
                     }
                 }
             } else if (userInput != null) {
-                UserInputQuestions(userInput.questions, onAnswer, onCancel)
+                UserInputQuestions(userInput.questions, submitting, onAnswer, onCancel)
             } else if (elicitation != null) {
-                McpElicitationContent(request, onElicitation, onOpenUrl)
+                McpElicitationContent(request, submitting, onElicitation, onOpenUrl)
             } else {
-                OutlinedButton(onClick = onCancel) { Text(stringResource(R.string.cancel)) }
+                OutlinedButton(onClick = onCancel, enabled = !submitting) { Text(stringResource(R.string.cancel)) }
             }
+            if (submitting) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
         }
     }
 }
@@ -638,6 +785,7 @@ private fun CodexRequestCard(
 @Composable
 private fun McpElicitationContent(
     request: CodexServerRequest,
+    submitting: Boolean,
     onReply: (String, JsonElement?) -> Unit,
     onOpenUrl: (String) -> Unit,
 ) {
@@ -650,22 +798,23 @@ private fun McpElicitationContent(
             onSubmit = { onReply("accept", it) },
             onDecline = { onReply("decline", null) },
             onCancel = { onReply("cancel", null) },
+            enabled = !submitting,
         )
         "url" -> {
             val url = request.params.string("url").orEmpty()
-            Button(onClick = { onOpenUrl(url) }, enabled = url.startsWith("https://")) {
+            Button(onClick = { onOpenUrl(url) }, enabled = !submitting && url.startsWith("https://")) {
                 Text(stringResource(R.string.codex_open_link))
             }
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                TextButton(onClick = { onReply("cancel", null) }) { Text(stringResource(R.string.cancel)) }
-                OutlinedButton(onClick = { onReply("decline", null) }) { Text(stringResource(R.string.codex_decline)) }
-                Button(onClick = { onReply("accept", null) }) { Text(stringResource(R.string.codex_continue)) }
+                TextButton(onClick = { onReply("cancel", null) }, enabled = !submitting) { Text(stringResource(R.string.cancel)) }
+                OutlinedButton(onClick = { onReply("decline", null) }, enabled = !submitting) { Text(stringResource(R.string.codex_decline)) }
+                Button(onClick = { onReply("accept", null) }, enabled = !submitting) { Text(stringResource(R.string.codex_continue)) }
             }
         }
-        else -> OutlinedButton(onClick = { onReply("cancel", null) }) { Text(stringResource(R.string.cancel)) }
+        else -> OutlinedButton(onClick = { onReply("cancel", null) }, enabled = !submitting) { Text(stringResource(R.string.cancel)) }
     }
 }
 
@@ -675,6 +824,7 @@ private fun McpForm(
     onSubmit: (JsonObject) -> Unit,
     onDecline: () -> Unit,
     onCancel: () -> Unit,
+    enabled: Boolean = true,
 ) {
     val properties = schema["properties"] as? JsonObject ?: JsonObject(emptyMap())
     val required = (schema["required"] as? JsonArray).orEmpty()
@@ -702,6 +852,7 @@ private fun McpForm(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(
                             checked = value in selected,
+                            enabled = enabled,
                             onCheckedChange = { checked ->
                                 val next = if (checked) selected + value else selected - value
                                 values[name] = JsonArray(next.map(::JsonPrimitive))
@@ -715,7 +866,11 @@ private fun McpForm(
                 val checked = (values[name] as? JsonPrimitive)?.booleanOrNull
                     ?: (field["default"] as? JsonPrimitive)?.booleanOrNull ?: false
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(checked = checked, onCheckedChange = { values[name] = JsonPrimitive(it) })
+                    Checkbox(
+                        checked = checked,
+                        enabled = enabled,
+                        onCheckedChange = { values[name] = JsonPrimitive(it) },
+                    )
                     Text(label)
                 }
             }
@@ -724,6 +879,7 @@ private fun McpForm(
                 enumValues.forEach { (value, title) ->
                     OutlinedButton(
                         onClick = { values[name] = JsonPrimitive(value) },
+                        enabled = enabled,
                         modifier = Modifier.fillMaxWidth(),
                     ) { Text(title) }
                 }
@@ -733,6 +889,7 @@ private fun McpForm(
                     ?: (field["default"] as? JsonPrimitive)?.contentOrNull.orEmpty()
                 OutlinedTextField(
                     value = current,
+                    enabled = enabled,
                     onValueChange = { input ->
                         values[name] = when (type) {
                             "integer" -> input.toLongOrNull()?.let(::JsonPrimitive) ?: JsonPrimitive(input)
@@ -759,8 +916,8 @@ private fun McpForm(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        TextButton(onClick = onCancel) { Text(stringResource(R.string.cancel)) }
-        OutlinedButton(onClick = onDecline) { Text(stringResource(R.string.codex_decline)) }
+        TextButton(onClick = onCancel, enabled = enabled) { Text(stringResource(R.string.cancel)) }
+        OutlinedButton(onClick = onDecline, enabled = enabled) { Text(stringResource(R.string.codex_decline)) }
         Button(
             onClick = {
                 onSubmit(buildJsonObject {
@@ -770,7 +927,7 @@ private fun McpForm(
                     }
                 })
             },
-            enabled = valid,
+            enabled = enabled && valid,
         ) { Text(stringResource(R.string.codex_submit)) }
     }
 }
@@ -834,21 +991,50 @@ internal fun validateMcpFormValue(
 
 @Composable
 private fun UserInputQuestions(
-    questions: List<dev.minios.ocremote.data.codex.CodexToolUserInputQuestion>,
+    questions: List<CodexToolUserInputQuestion>,
+    submitting: Boolean,
     onAnswer: (Map<String, List<String>>) -> Unit,
     onCancel: () -> Unit,
 ) {
-    val values = remember { mutableStateMapOf<String, String>() }
+    val values = remember { mutableStateMapOf<String, List<String>>() }
+    val customValues = remember { mutableStateMapOf<String, String>() }
     questions.forEach { question ->
         Text(question.question, style = MaterialTheme.typography.bodyMedium)
         if (question.options.isNotEmpty()) {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 question.options.forEach { option ->
-                    OutlinedButton(
-                        onClick = { values[question.id] = option.label },
-                        modifier = Modifier.fillMaxWidth(),
+                    val selected = option.label in values[question.id].orEmpty()
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
+                            .then(
+                                if (question.multiSelect) Modifier.toggleable(
+                                    value = selected,
+                                    enabled = !submitting,
+                                    role = Role.Checkbox,
+                                    onValueChange = { checked ->
+                                        val current = values[question.id].orEmpty()
+                                        values[question.id] = if (checked) {
+                                            question.options.map { it.label }.filter { it in current || it == option.label }
+                                        } else {
+                                            current - option.label
+                                        }
+                                    },
+                                ) else Modifier.selectable(
+                                    selected = selected,
+                                    enabled = !submitting,
+                                    role = Role.RadioButton,
+                                    onClick = { values[question.id] = listOf(option.label) },
+                                ),
+                            )
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        Column(Modifier.fillMaxWidth()) {
+                        if (question.multiSelect) Checkbox(selected, null, enabled = !submitting)
+                        else RadioButton(selected, null, enabled = !submitting)
+                        Column(Modifier.weight(1f)) {
                             Text(option.label)
                             if (option.description.isNotBlank()) Text(option.description, style = MaterialTheme.typography.bodySmall)
                         }
@@ -858,8 +1044,9 @@ private fun UserInputQuestions(
         }
         if (question.options.isEmpty() || question.isOther) {
             OutlinedTextField(
-                value = values[question.id].orEmpty(),
-                onValueChange = { values[question.id] = it },
+                value = customValues[question.id].orEmpty(),
+                onValueChange = { customValues[question.id] = it },
+                enabled = !submitting,
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 visualTransformation = if (question.isSecret) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
@@ -874,12 +1061,23 @@ private fun UserInputQuestions(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        TextButton(onClick = onCancel) { Text(stringResource(R.string.cancel)) }
+        TextButton(onClick = onCancel, enabled = !submitting) { Text(stringResource(R.string.cancel)) }
+        val answers = buildCodexUserInputAnswers(questions, values, customValues)
         Button(
-            onClick = { onAnswer(values.mapValues { listOf(it.value) }) },
-            enabled = questions.all { values[it.id].orEmpty().isNotBlank() },
+            onClick = { onAnswer(answers) },
+            enabled = !submitting && questions.all { answers[it.id].orEmpty().any(String::isNotBlank) },
         ) { Text(stringResource(R.string.codex_submit)) }
     }
+}
+
+internal fun buildCodexUserInputAnswers(
+    questions: List<CodexToolUserInputQuestion>,
+    selections: Map<String, List<String>>,
+    customValues: Map<String, String>,
+): Map<String, List<String>> = questions.associate { question ->
+    val selected = question.options.map { it.label }.filter { it in selections[question.id].orEmpty() }
+    val custom = customValues[question.id].orEmpty().trim().takeIf(String::isNotEmpty)
+    question.id to (selected + listOfNotNull(custom))
 }
 
 @Composable
