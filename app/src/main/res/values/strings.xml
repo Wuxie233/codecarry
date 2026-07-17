@@ -151,8 +151,6 @@
     <string name="codex_opening_thread">Opening Codex thread…</string>
     <string name="codex_open_thread_failed">Could not open thread</string>
     <string name="codex_working">Codex is working</string>
-    <string name="codex_request_pending">Pending</string>
-    <string name="codex_request_submitting">Submitting</string>
     <string name="codex_model">Model</string>
     <string name="codex_reasoning">Reasoning</string>
     <string name="codex_planning">Planning…</string>
@@ -195,7 +193,6 @@
     <string name="codex_disable">Disable</string>
     <string name="codex_clear">Clear</string>
     <string name="sessions_loading">Loading sessions…</string>
-    <string name="sessions_load_failed">Could not load sessions</string>
     <string name="sessions_new">New Session</string>
     <string name="sessions_create_folder">Create folder</string>
     <string name="sessions_create_folder_title">Create folder</string>

@@ -3,7 +3,6 @@ package dev.minios.ocremote.ui.screens.sessions.components
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
@@ -22,7 +21,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import dev.minios.ocremote.R
 import dev.minios.ocremote.data.preferences.SessionScope
-import dev.minios.ocremote.ui.theme.AppDimensions
 
 /**
  * Top-level switch between [SessionScope.INBOX] (active sessions) and
@@ -51,7 +49,6 @@ fun SessionScopeSegmentedControl(
         options.forEachIndexed { index, scope ->
             val selected = scope == currentScope
             SegmentedButton(
-                modifier = Modifier.heightIn(min = AppDimensions.minTouchTarget),
                 selected = selected,
                 onClick = { onScopeChange(scope) },
                 shape = SegmentedButtonDefaults.itemShape(index = index, count = options.size),

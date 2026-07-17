@@ -161,7 +161,7 @@ class BuildActiveConversationsTest {
     }
 
     @Test
-    fun `pending decision items sort before unread`() {
+    fun `unread sorts before pending decision items`() {
         val unread = rootSession("unread", updated = 100)
         val question = rootSession("question", updated = 200)
 
@@ -176,34 +176,9 @@ class BuildActiveConversationsTest {
             unreadSessionIds = setOf(unread.id),
         )
 
-        assertEquals(listOf("question", "unread"), items.map { it.sessionId })
-        assertEquals(ConversationStatus.AWAITING_QUESTION, items[0].status)
-        assertEquals(ConversationStatus.UNREAD, items[1].status)
-    }
-
-    @Test
-    fun `question then permission then unread then background work`() {
-        val question = rootSession("question", updated = 100)
-        val permission = rootSession("permission", updated = 200)
-        val unread = rootSession("unread", updated = 300)
-        val busy = rootSession("busy", updated = 400)
-        val retry = rootSession("retry", updated = 500)
-
-        val items = buildActiveConversations(
-            rootSessions = listOf(retry, busy, unread, permission, question),
-            statuses = mapOf(
-                busy.id to SessionStatus.Busy,
-                retry.id to SessionStatus.Retry(1, "x", 0L),
-            ),
-            pendingQuestions = mapOf(question.id to listOf(questionAsked("q"))),
-            pendingPermissions = mapOf(permission.id to listOf(permissionAsked("p"))),
-            unreadSessionIds = setOf(unread.id),
-        )
-
-        assertEquals(
-            listOf("question", "permission", "unread", "busy", "retry"),
-            items.map { it.sessionId },
-        )
+        assertEquals(listOf("unread", "question"), items.map { it.sessionId })
+        assertEquals(ConversationStatus.UNREAD, items[0].status)
+        assertEquals(ConversationStatus.AWAITING_QUESTION, items[1].status)
     }
 
     @Test

@@ -315,7 +315,7 @@ fun ServerProvidersScreen(
                                     style = MaterialTheme.typography.headlineSmall.copy(
                                         fontFamily = FontFamily.Monospace,
                                         fontWeight = FontWeight.SemiBold,
-                                        letterSpacing = 0.sp,
+                                        letterSpacing = 2.sp,
                                     ),
                                     modifier = Modifier.weight(1f),
                                     textAlign = TextAlign.Center,

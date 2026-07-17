@@ -1006,9 +1006,9 @@ internal fun buildActiveConversations(
             val status = statuses[session.id] ?: SessionStatus.Idle
 
             val (conversationStatus, pendingCount) = when {
+                session.id in unreadSessionIds -> ConversationStatus.UNREAD to 0
                 questionCount > 0 -> ConversationStatus.AWAITING_QUESTION to questionCount
                 permissionCount > 0 -> ConversationStatus.AWAITING_PERMISSION to permissionCount
-                session.id in unreadSessionIds -> ConversationStatus.UNREAD to 0
                 status is SessionStatus.Busy -> ConversationStatus.BUSY to 0
                 status is SessionStatus.Retry -> ConversationStatus.RETRY to 0
                 else -> return@mapNotNull null
@@ -1025,16 +1025,11 @@ internal fun buildActiveConversations(
             )
         }
         .sortedWith(
-            // Explicit decisions outrank unread activity, then background work.
-            compareBy<ActiveConversationItem> {
-                when (it.status) {
-                    ConversationStatus.AWAITING_QUESTION -> 0
-                    ConversationStatus.AWAITING_PERMISSION -> 1
-                    ConversationStatus.UNREAD -> 2
-                    ConversationStatus.BUSY -> 3
-                    ConversationStatus.RETRY -> 4
-                }
-            }
+            // Priority follows ConversationStatus declaration order:
+            // UNREAD < AWAITING_QUESTION < AWAITING_PERMISSION < BUSY < RETRY.
+            // Unread/awaiting items demand user attention and outrank background
+            // busy/retry progress. Within the same priority, newer activity wins.
+            compareBy<ActiveConversationItem> { it.status.ordinal }
                 .thenByDescending { it.updatedAt }
         )
         .toList()

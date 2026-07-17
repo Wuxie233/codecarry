@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
@@ -54,7 +55,6 @@ import dev.minios.ocremote.R
 import dev.minios.ocremote.data.preferences.SessionFilter
 import dev.minios.ocremote.data.preferences.SessionScope
 import dev.minios.ocremote.data.preferences.SessionSort
-import dev.minios.ocremote.ui.theme.AppDimensions
 
 @Composable
 fun SessionListTopControls(
@@ -135,7 +135,7 @@ fun SessionListTopControls(
                                     )
                                 }
                             },
-                            shape = MaterialTheme.shapes.medium,
+                            shape = RoundedCornerShape(16.dp),
                         )
                     } else {
                         SearchCollapsedHint(
@@ -222,9 +222,9 @@ private fun SearchCollapsedHint(
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(MaterialTheme.shapes.medium)
+            .clip(RoundedCornerShape(16.dp))
             .clickable(onClick = onExpand),
-        shape = MaterialTheme.shapes.medium,
+        shape = RoundedCornerShape(16.dp),
         color = Color.Transparent,
         border = BorderStroke(
             width = 1.dp,
@@ -234,8 +234,7 @@ private fun SearchCollapsedHint(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(min = AppDimensions.minTouchTarget)
-                .padding(horizontal = 4.dp),
+                .padding(horizontal = 4.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton(onClick = onExpand) {

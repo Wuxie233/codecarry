@@ -4,8 +4,6 @@ import dev.minios.ocremote.data.codex.CodexServerRequest
 import dev.minios.ocremote.data.codex.CodexThread
 import dev.minios.ocremote.data.codex.CodexThreadItem
 import dev.minios.ocremote.data.codex.CodexTurn
-import dev.minios.ocremote.data.codex.CodexToolUserInputOption
-import dev.minios.ocremote.data.codex.CodexToolUserInputQuestion
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -70,63 +68,6 @@ class CodexChatInteractionTest {
         assertTrue(codexChatVisibilityForEvent(Lifecycle.Event.ON_START) == true)
         assertTrue(codexChatVisibilityForEvent(Lifecycle.Event.ON_STOP) == false)
         assertTrue(codexChatVisibilityForEvent(Lifecycle.Event.ON_PAUSE) == null)
-    }
-
-    @Test
-    fun `timeline presentation keeps prose unbounded and technical items independent`() {
-        val user = CodexThreadItem.fromJson(
-            Json.parseToJsonElement("""{"id":"user","type":"userMessage","content":[{"type":"text","text":"ship it"}]}""").jsonObject,
-        )
-        val assistant = CodexThreadItem.fromJson(
-            Json.parseToJsonElement("""{"id":"assistant","type":"agentMessage","text":"Done"}""").jsonObject,
-        )
-        val emptyAssistant = CodexThreadItem.fromJson(
-            Json.parseToJsonElement("""{"id":"stream","type":"agentMessage","text":""}""").jsonObject,
-        )
-        val reasoning = CodexThreadItem.fromJson(
-            Json.parseToJsonElement("""{"id":"reasoning","type":"reasoning","text":"Inspecting"}""").jsonObject,
-        )
-        val tool = CodexThreadItem.fromJson(
-            Json.parseToJsonElement("""{"id":"tool","type":"commandExecution","command":"./gradlew test"}""").jsonObject,
-        )
-
-        assertEquals(CodexTimelinePresentation.USER_PROMPT, codexTimelinePresentation(user))
-        assertEquals(CodexTimelinePresentation.ASSISTANT_PROSE, codexTimelinePresentation(assistant))
-        assertEquals(CodexTimelinePresentation.ASSISTANT_PROSE, codexTimelinePresentation(emptyAssistant))
-        assertEquals(CodexTimelinePresentation.REASONING, codexTimelinePresentation(reasoning))
-        assertEquals(CodexTimelinePresentation.WORK_UNIT, codexTimelinePresentation(tool))
-    }
-
-    @Test
-    fun `pending request submission begins only once`() {
-        val state = CodexChatUiState()
-        val started = requireNotNull(beginCodexRequestSubmission(state, "request-1"))
-
-        assertTrue("request-1" in started.submittingRequestKeys)
-        assertEquals(null, beginCodexRequestSubmission(started, "request-1"))
-    }
-
-    @Test
-    fun `multi-select answers preserve option order and append custom input`() {
-        val question = CodexToolUserInputQuestion(
-            id = "targets",
-            header = "Targets",
-            question = "Where?",
-            options = listOf(
-                CodexToolUserInputOption("Local", ""),
-                CodexToolUserInputOption("Remote", ""),
-            ),
-            multiSelect = true,
-            isOther = true,
-        )
-
-        val answers = buildCodexUserInputAnswers(
-            questions = listOf(question),
-            selections = mapOf("targets" to listOf("Remote", "Local")),
-            customValues = mapOf("targets" to "  Staging  "),
-        )
-
-        assertEquals(listOf("Local", "Remote", "Staging"), answers["targets"])
     }
 
     @Test

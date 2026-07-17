@@ -424,7 +424,6 @@ class CodexAppServerClientTest {
                   "header":"Target",
                   "question":"Where should this run?",
                   "options":[{"label":"Local","description":"Run here"}],
-                  "multiSelect":true,
                   "isOther":true
                 }]
               }
@@ -436,7 +435,6 @@ class CodexAppServerClientTest {
         assertEquals(30_000L, userInput.autoResolutionMs)
         assertEquals("Where should this run?", userInput.questions.single().question)
         assertEquals("Local", userInput.questions.single().options.single().label)
-        assertTrue(userInput.questions.single().multiSelect)
         assertTrue(userInput.questions.single().isOther)
 
         client.replyUserInput(userInput, mapOf("target" to listOf("Local")))

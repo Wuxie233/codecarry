@@ -1,7 +1,6 @@
 package dev.minios.ocremote.ui.screens.sessions
 
 import android.widget.Toast
-import android.animation.ValueAnimator
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -43,11 +42,6 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.role
-import androidx.compose.ui.semantics.stateDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -74,11 +68,6 @@ import dev.minios.ocremote.ui.screens.sessions.components.McpManagementSheet
 import dev.minios.ocremote.ui.screens.sessions.components.ProjectGroupHeader
 import dev.minios.ocremote.ui.screens.sessions.components.SessionListTopControls
 import dev.minios.ocremote.ui.screens.sessions.components.SessionScopeSegmentedControl
-import dev.minios.ocremote.ui.components.EmptyStateCard
-import dev.minios.ocremote.ui.components.ErrorStateCard
-import dev.minios.ocremote.ui.components.LoadingStateCard
-import dev.minios.ocremote.ui.components.StatusLabel
-import dev.minios.ocremote.ui.theme.AppDimensions
 
 @Composable
 private fun isAmoledTheme(): Boolean {
@@ -94,22 +83,6 @@ private fun PulsingDotsIndicator(
     dotSpacing: androidx.compose.ui.unit.Dp = 8.dp,
     color: Color = MaterialTheme.colorScheme.primary
 ) {
-    if (!ValueAnimator.areAnimatorsEnabled()) {
-        Row(
-            modifier = modifier,
-            horizontalArrangement = Arrangement.spacedBy(dotSpacing),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            repeat(3) {
-                Box(
-                    modifier = Modifier
-                        .size(dotSize)
-                        .background(color, CircleShape),
-                )
-            }
-        }
-        return
-    }
     val transition = rememberInfiniteTransition(label = "pulsing_dots")
     val scales2 = (0..2).map { index ->
         transition.animateFloat(
@@ -345,48 +318,75 @@ fun SessionListScreen(
         ) {
             when {
                 uiState.isLoading && !uiState.hasAnySessions -> {
-                    LoadingStateCard(
-                        label = stringResource(R.string.sessions_loading),
-                        modifier = Modifier
-                            .align(Alignment.Center)
-                            .widthIn(max = AppDimensions.contentMaxWidth)
-                            .padding(AppDimensions.space4),
-                    )
+                    Column(
+                        modifier = Modifier.align(Alignment.Center),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        PulsingDotsIndicator(
+                            dotSize = 12.dp,
+                            dotSpacing = 8.dp
+                        )
+                        Text(
+                            text = stringResource(R.string.sessions_loading),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
                 uiState.error != null && !uiState.hasAnySessions -> {
-                    ErrorStateCard(
-                        title = stringResource(R.string.sessions_load_failed),
-                        message = uiState.error ?: stringResource(R.string.session_unknown_error),
-                        onRetry = viewModel::loadSessions,
+                    Column(
                         modifier = Modifier
                             .align(Alignment.Center)
-                            .widthIn(max = AppDimensions.contentMaxWidth)
-                            .padding(AppDimensions.space4),
-                    )
+                            .padding(32.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Warning,
+                            contentDescription = null,
+                            modifier = Modifier.size(48.dp),
+                            tint = MaterialTheme.colorScheme.error
+                        )
+                        Text(
+                            text = uiState.error ?: stringResource(R.string.session_unknown_error),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                        Button(onClick = { viewModel.loadSessions() }) {
+                            Text(stringResource(R.string.retry))
+                        }
+                    }
                 }
                 !uiState.hasAnySessions -> {
-                    EmptyStateCard(
-                        title = stringResource(R.string.sessions_empty),
-                        message = stringResource(R.string.sessions_tap_plus),
-                        action = {
-                            Button(onClick = { showOpenProject = true }) {
-                                Icon(Icons.Default.Add, contentDescription = null)
-                                Spacer(Modifier.width(8.dp))
-                                Text(stringResource(R.string.sessions_new))
-                            }
-                        },
+                    Column(
                         modifier = Modifier
                             .align(Alignment.Center)
-                            .widthIn(max = AppDimensions.contentMaxWidth)
-                            .padding(AppDimensions.space4),
-                    )
+                            .padding(32.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.Chat,
+                            contentDescription = null,
+                            modifier = Modifier.size(64.dp),
+                            tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
+                        )
+                        Text(
+                            text = stringResource(R.string.sessions_empty),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                        )
+                        Text(
+                            text = stringResource(R.string.sessions_tap_plus),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
+                        )
+                    }
                 }
                 else -> {
                     Column(
-                        modifier = Modifier
-                            .align(Alignment.TopCenter)
-                            .widthIn(max = AppDimensions.contentMaxWidth)
-                            .fillMaxSize(),
+                        modifier = Modifier.fillMaxSize(),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         ActiveConversationsBanner(
@@ -464,7 +464,7 @@ fun SessionListScreen(
                             LazyColumn(
                                 modifier = Modifier.fillMaxSize(),
                                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                                verticalArrangement = Arrangement.spacedBy(2.dp)
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
                                 for (group in uiState.groups) {
                         stickyHeader(key = "header_${group.directory}") {
@@ -650,7 +650,7 @@ fun SessionListScreen(
     if (showDeleteSelectedDialog) {
         BasicAlertDialog(onDismissRequest = { showDeleteSelectedDialog = false }) {
             Surface(
-                shape = MaterialTheme.shapes.large,
+                shape = RoundedCornerShape(20.dp),
                 color = if (isAmoled) Color.Black else MaterialTheme.colorScheme.surface,
                 border = if (isAmoled) BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)) else null,
                 tonalElevation = if (isAmoled) 0.dp else 6.dp,
@@ -691,7 +691,7 @@ fun SessionListScreen(
     if (showRenameDialog) {
         BasicAlertDialog(onDismissRequest = { showRenameDialog = false }) {
             Surface(
-                shape = MaterialTheme.shapes.large,
+                shape = RoundedCornerShape(20.dp),
                 color = if (isAmoled) Color.Black else MaterialTheme.colorScheme.surface,
                 border = if (isAmoled) BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)) else null,
                 tonalElevation = if (isAmoled) 0.dp else 6.dp,
@@ -738,7 +738,7 @@ fun SessionListScreen(
     if (showDeleteDialog) {
         BasicAlertDialog(onDismissRequest = { showDeleteDialog = false }) {
             Surface(
-                shape = MaterialTheme.shapes.large,
+                shape = RoundedCornerShape(20.dp),
                 color = if (isAmoled) Color.Black else MaterialTheme.colorScheme.surface,
                 border = if (isAmoled) BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)) else null,
                 tonalElevation = if (isAmoled) 0.dp else 6.dp,
@@ -862,26 +862,20 @@ private fun SubagentDisclosureRow(
     } else {
         colors.primary.copy(alpha = 0.85f)
     }
-    val disclosureState = stringResource(
-        if (expanded) R.string.sessions_subagents_hide else R.string.sessions_subagents_show,
-    )
     Row(
         modifier = Modifier
             .padding(start = if (secondary) 32.dp else 16.dp)
-            .clip(MaterialTheme.shapes.small)
+            .clip(RoundedCornerShape(12.dp))
             .clickable(onClick = onToggle)
-            .heightIn(min = 48.dp)
-            .semantics(mergeDescendants = true) {
-                role = Role.Button
-                stateDescription = disclosureState
-            }
-            .padding(horizontal = 12.dp),
+            .padding(horizontal = 12.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         Icon(
             imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-            contentDescription = null,
+            contentDescription = stringResource(
+                if (expanded) R.string.sessions_subagents_hide else R.string.sessions_subagents_show,
+            ),
             modifier = Modifier.size(16.dp),
             tint = tint,
         )
@@ -927,13 +921,6 @@ private fun SubagentSessionCard(
         is SessionStatus.Retry -> colors.error
         else -> colors.onSurfaceVariant.copy(alpha = 0.45f)
     }
-    val statusText = when (item.status) {
-        is SessionStatus.Busy -> stringResource(R.string.sessions_working)
-        is SessionStatus.Retry -> stringResource(R.string.sessions_retrying)
-        else -> stringResource(R.string.session_status_idle)
-    }
-    val title = item.session.title ?: stringResource(R.string.sessions_child_session_fallback)
-    val updated = dateFormat.format(Date(item.session.time.updated))
 
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -952,12 +939,7 @@ private fun SubagentSessionCard(
         Card(
             modifier = Modifier
                 .weight(1f)
-                .heightIn(min = 48.dp)
-                .clickable(enabled = enabled, onClick = onClick)
-                .semantics(mergeDescendants = true) {
-                    role = Role.Button
-                    contentDescription = "$title. $statusText. $updated"
-                },
+                .clickable(enabled = enabled, onClick = onClick),
             colors = CardDefaults.cardColors(
                 containerColor = if (isAmoled) colors.surfaceContainerLow else colors.surface,
             ),
@@ -968,7 +950,7 @@ private fun SubagentSessionCard(
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 Text(
-                    text = title,
+                    text = item.session.title ?: stringResource(R.string.sessions_child_session_fallback),
                     style = MaterialTheme.typography.bodyMedium,
                     color = colors.onSurface,
                     maxLines = 1,
@@ -994,7 +976,7 @@ private fun SubagentSessionCard(
                     }
 
                     Text(
-                        text = "$statusText · $updated",
+                        text = dateFormat.format(Date(item.session.time.updated)),
                         style = MaterialTheme.typography.labelSmall,
                         color = colors.onSurfaceVariant.copy(alpha = 0.7f),
                     )
@@ -1092,7 +1074,7 @@ private fun OpenProjectDialog(
             modifier = Modifier
                 .fillMaxWidth(0.92f)
                 .fillMaxHeight(0.75f),
-            shape = MaterialTheme.shapes.large,
+            shape = RoundedCornerShape(16.dp),
             color = if (isAmoled) Color.Black else MaterialTheme.colorScheme.surface,
             border = if (isAmoled) BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)) else null,
             tonalElevation = if (isAmoled) 0.dp else 6.dp
@@ -1549,7 +1531,7 @@ private fun NewSessionQuickDialog(
             modifier = Modifier
                 .fillMaxWidth(0.88f)
                 .wrapContentHeight(),
-            shape = MaterialTheme.shapes.large,
+            shape = RoundedCornerShape(16.dp),
             color = if (isAmoled) Color.Black else MaterialTheme.colorScheme.surface,
             border = if (isAmoled) BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)) else null,
             tonalElevation = if (isAmoled) 0.dp else 6.dp
@@ -1716,6 +1698,8 @@ private fun SessionRow(
             if (isAmoled) Color.Black else MaterialTheme.colorScheme.surfaceVariant
         }
 
+        val cardColors = CardDefaults.cardColors(containerColor = containerColor)
+
         val cardBorder = when {
             isSelected -> BorderStroke(
                 1.5.dp,
@@ -1725,23 +1709,20 @@ private fun SessionRow(
             else -> null
         }
 
-        Surface(
+        Card(
             modifier = Modifier
                 .fillMaxWidth()
                 .combinedClickable(
                     onClick = onClick,
                     onLongClick = onLongClick,
                 ),
-            color = containerColor,
-            shape = MaterialTheme.shapes.small,
-            border = cardBorder,
-            tonalElevation = 0.dp,
+            colors = cardColors,
+            border = cardBorder
         ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 64.dp)
-                    .padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 AnimatedVisibility(
@@ -1795,16 +1776,39 @@ private fun SessionRow(
                         // Status indicator
                         when (item.status) {
                             is SessionStatus.Busy -> {
-                                StatusLabel(
-                                    text = stringResource(R.string.sessions_working),
-                                    color = MaterialTheme.colorScheme.tertiary,
-                                )
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    PulsingDotsIndicator(
+                                        dotSize = 4.dp,
+                                        dotSpacing = 2.dp,
+                                        color = MaterialTheme.colorScheme.tertiary
+                                    )
+                                    Text(
+                                        text = stringResource(R.string.sessions_working),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.tertiary
+                                    )
+                                }
                             }
                             is SessionStatus.Retry -> {
-                                StatusLabel(
-                                    text = stringResource(R.string.sessions_retrying),
-                                    color = MaterialTheme.colorScheme.error,
-                                )
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(8.dp)
+                                            .clip(CircleShape)
+                                            .background(MaterialTheme.colorScheme.error)
+                                    )
+                                    Text(
+                                        text = stringResource(R.string.sessions_retrying),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.error
+                                    )
+                                }
                             }
                             else -> { /* Idle - no label */ }
                         }

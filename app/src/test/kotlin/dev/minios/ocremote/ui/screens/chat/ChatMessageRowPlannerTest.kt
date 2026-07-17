@@ -54,15 +54,6 @@ class ChatMessageRowPlannerTest {
     }
 
     @Test
-    fun `assistant placeholder remains visible until text or a tool arrives`() {
-        val streaming = Message.Assistant(id = "stream", sessionId = SessionId, time = TimeInfo(created = 1L))
-
-        assertTrue(shouldShowAssistantPlaceholder(streaming, hasAssistantText = false, hasTool = false))
-        assertTrue(!shouldShowAssistantPlaceholder(streaming, hasAssistantText = true, hasTool = false))
-        assertTrue(!shouldShowAssistantPlaceholder(streaming, hasAssistantText = false, hasTool = true))
-    }
-
-    @Test
     fun `user message remains one whole row`() {
         val message = ChatMessage(
             message = Message.User(id = "user-long", sessionId = SessionId, time = TimeInfo(created = 1L)),

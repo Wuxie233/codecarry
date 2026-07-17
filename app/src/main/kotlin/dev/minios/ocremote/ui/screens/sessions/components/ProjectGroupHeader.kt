@@ -10,7 +10,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -47,7 +47,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.minios.ocremote.R
 import dev.minios.ocremote.domain.model.McpRuntimeState
-import dev.minios.ocremote.ui.theme.AppDimensions
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -93,24 +92,26 @@ fun ProjectGroupHeader(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(top = 8.dp),
+            .padding(vertical = 4.dp),
     ) {
+        HorizontalDivider(color = colors.outlineVariant.copy(alpha = 0.3f), thickness = 1.dp)
+
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(
-                    colors.surface
+                    if (isAmoled) Color.Black else colors.surface.copy(alpha = 0.98f)
                 )
-                .heightIn(min = AppDimensions.minTouchTarget)
+                .height(48.dp)
                 .combinedClickable(
                     onClick = onToggleCollapsed,
                     onLongClick = onTogglePinned,
                 )
-                .padding(start = 8.dp, end = 4.dp)
+                .padding(horizontal = 16.dp)
                 .semantics(mergeDescendants = true) {
                     contentDescription = "$projectName, $tildeDirectory"
                 },
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(
@@ -342,7 +343,7 @@ fun ProjectGroupHeader(
             }
         }
 
-        HorizontalDivider(color = colors.outlineVariant.copy(alpha = 0.55f), thickness = 1.dp)
+        HorizontalDivider(color = colors.outlineVariant.copy(alpha = 0.3f), thickness = 1.dp)
     }
 }
 

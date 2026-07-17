@@ -1,6 +1,5 @@
 package dev.minios.ocremote.ui.screens.sessions.components
 
-import android.animation.ValueAnimator
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -12,13 +11,16 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -26,6 +28,8 @@ import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.filled.MarkChatUnread
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -39,14 +43,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.LiveRegionMode
-import androidx.compose.ui.semantics.liveRegion
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.minios.ocremote.R
-import dev.minios.ocremote.ui.theme.AppDimensions
 
 @Composable
 fun ActiveConversationsBanner(
@@ -61,10 +60,10 @@ fun ActiveConversationsBanner(
 
     Surface(
         modifier = modifier.fillMaxWidth(),
-        color = colors.surfaceContainerLow,
+        color = if (isAmoled) Color.Black else colors.surfaceVariant.copy(alpha = 0.5f),
     ) {
         Column(
-            modifier = Modifier.padding(vertical = AppDimensions.space2)
+            modifier = Modifier.padding(vertical = 8.dp)
         ) {
             if (isAmoled) {
                 HorizontalDivider(color = colors.outlineVariant.copy(alpha = 0.65f), thickness = 1.dp)
@@ -80,11 +79,11 @@ fun ActiveConversationsBanner(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            Column(
-                modifier = Modifier.padding(horizontal = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                items.forEach { item ->
+                items(items, key = { it.sessionId }) { item ->
                     ActiveConversationCard(item = item, isAmoled = isAmoled, onClick = onClick)
                 }
             }
@@ -126,23 +125,20 @@ private fun ActiveConversationCard(
         stringResource(timeRes, timeValue)
     }
 
-    Surface(
+    Card(
         modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onClick(item.sessionId, item.directory) }
-            .semantics(mergeDescendants = true) {
-                stateDescription = statusLabel
-                liveRegion = LiveRegionMode.Polite
-            },
-        shape = MaterialTheme.shapes.small,
-        color = colors.surface,
-        tonalElevation = 0.dp,
+            .width(230.dp)
+            .height(72.dp)
+            .clickable { onClick(item.sessionId, item.directory) },
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isAmoled) colors.surfaceContainerLow else colors.surface
+        )
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(min = 60.dp)
-                .padding(horizontal = 12.dp, vertical = 8.dp),
+                .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             ConversationStatusIcon(
@@ -159,9 +155,9 @@ private fun ActiveConversationCard(
                 Text(
                     text = item.title?.takeIf { it.isNotBlank() }
                         ?: stringResource(R.string.session_untitled),
-                    maxLines = 2,
+                    maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    style = MaterialTheme.typography.bodyMedium
+                    style = MaterialTheme.typography.bodySmall
                 )
 
                 Spacer(modifier = Modifier.height(4.dp))
@@ -178,7 +174,7 @@ private fun ActiveConversationCard(
                             .padding(horizontal = 6.dp, vertical = 2.dp),
                         style = MaterialTheme.typography.labelSmall,
                         color = statusColor,
-                        maxLines = 2,
+                        maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
 
@@ -197,7 +193,7 @@ private fun ActiveConversationCard(
             Text(
                 text = relativeTime,
                 style = MaterialTheme.typography.labelSmall,
-                color = colors.onSurfaceVariant,
+                color = colors.onSurface.copy(alpha = 0.45f)
             )
         }
     }
@@ -257,11 +253,7 @@ private fun relativeTimeString(updated: Long, now: Long = System.currentTimeMill
 
 @Composable
 private fun PulsingStatusDot(color: Color, animate: Boolean, modifier: Modifier = Modifier) {
-    val transition = if (animate && ValueAnimator.areAnimatorsEnabled()) {
-        rememberInfiniteTransition(label = "conversation_status_dot")
-    } else {
-        null
-    }
+    val transition = if (animate) rememberInfiniteTransition(label = "conversation_status_dot") else null
     val scale by if (transition != null) {
         transition.animateFloat(
             initialValue = 0.7f,

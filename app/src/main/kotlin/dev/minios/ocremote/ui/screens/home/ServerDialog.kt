@@ -3,7 +3,6 @@ package dev.minios.ocremote.ui.screens.home
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -18,7 +17,6 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -152,7 +150,7 @@ fun ServerDialog(
 
     BasicAlertDialog(onDismissRequest = onDismiss) {
         Surface(
-            shape = MaterialTheme.shapes.large,
+            shape = RoundedCornerShape(20.dp),
             color = if (isAmoled) Color.Black else MaterialTheme.colorScheme.surface,
             border = if (isAmoled) BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)) else null,
             tonalElevation = if (isAmoled) 0.dp else 6.dp,
@@ -195,41 +193,33 @@ fun ServerDialog(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     val serverTypeOptions = listOf(ServerType.OPENCODE, ServerType.CODEX, ServerType.PI_ROUNDTABLE)
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        serverTypeOptions.forEach { option ->
-                            val selected = serverType == option
-                            val label = stringResource(
-                                when (option) {
-                                    ServerType.OPENCODE -> R.string.server_type_opencode
-                                    ServerType.CODEX -> R.string.server_type_codex
-                                    ServerType.PI_ROUNDTABLE -> R.string.server_type_pi_roundtable
-                                },
-                            )
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .heightIn(min = 48.dp)
-                                    .selectable(
-                                        selected = selected,
-                                        role = Role.RadioButton,
-                                        onClick = {
+                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                        serverTypeOptions.forEachIndexed { index, option ->
+                            SegmentedButton(
+                                selected = serverType == option,
+                                onClick = {
                                     if (server == null && (url == "http://" || url == "ws://" || url == "wss://")) {
                                         url = if (option == ServerType.CODEX) "wss://" else "http://"
                                     }
                                     serverType = option
                                     urlError = null
-                                        },
+                                },
+                                shape = SegmentedButtonDefaults.itemShape(
+                                    index = index,
+                                    count = serverTypeOptions.size,
+                                ),
+                                label = {
+                                    Text(
+                                        text = stringResource(
+                                            when (option) {
+                                                ServerType.OPENCODE -> R.string.server_type_opencode
+                                                ServerType.CODEX -> R.string.server_type_codex
+                                                ServerType.PI_ROUNDTABLE -> R.string.server_type_pi_roundtable
+                                            }
+                                        )
                                     )
-                                    .padding(horizontal = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            ) {
-                                RadioButton(selected = selected, onClick = null)
-                                Text(
-                                    text = label,
-                                    style = MaterialTheme.typography.bodyLarge,
-                                )
-                            }
+                                },
+                            )
                         }
                     }
 
@@ -328,7 +318,7 @@ fun ServerDialog(
                     }
 
                     Surface(
-                        shape = MaterialTheme.shapes.medium,
+                        shape = RoundedCornerShape(12.dp),
                         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.24f),
                         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
                         modifier = Modifier.fillMaxWidth()
