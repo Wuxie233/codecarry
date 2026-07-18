@@ -150,7 +150,7 @@ fun ServerDialog(
 
     BasicAlertDialog(onDismissRequest = onDismiss) {
         Surface(
-            shape = RoundedCornerShape(20.dp),
+            shape = RoundedCornerShape(if (serverType == ServerType.OPENCODE) 14.dp else 20.dp),
             color = if (isAmoled) Color.Black else MaterialTheme.colorScheme.surface,
             border = if (isAmoled) BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)) else null,
             tonalElevation = if (isAmoled) 0.dp else 6.dp,
@@ -175,6 +175,14 @@ fun ServerDialog(
                         style = MaterialTheme.typography.headlineSmall
                     )
 
+                    if (serverType == ServerType.OPENCODE) {
+                        Text(
+                            text = stringResource(R.string.server_connection_section),
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+
                     OutlinedTextField(
                         value = name,
                         onValueChange = { name = it },
@@ -187,12 +195,12 @@ fun ServerDialog(
                             .semantics { contentDescription = nameLabel }
                     )
 
+                    val serverTypeOptions = listOf(ServerType.OPENCODE, ServerType.CODEX, ServerType.PI_ROUNDTABLE)
                     Text(
                         text = stringResource(R.string.server_type),
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    val serverTypeOptions = listOf(ServerType.OPENCODE, ServerType.CODEX, ServerType.PI_ROUNDTABLE)
                     SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
                         serverTypeOptions.forEachIndexed { index, option ->
                             SegmentedButton(
@@ -204,20 +212,13 @@ fun ServerDialog(
                                     serverType = option
                                     urlError = null
                                 },
-                                shape = SegmentedButtonDefaults.itemShape(
-                                    index = index,
-                                    count = serverTypeOptions.size,
-                                ),
+                                shape = SegmentedButtonDefaults.itemShape(index = index, count = serverTypeOptions.size),
                                 label = {
-                                    Text(
-                                        text = stringResource(
-                                            when (option) {
-                                                ServerType.OPENCODE -> R.string.server_type_opencode
-                                                ServerType.CODEX -> R.string.server_type_codex
-                                                ServerType.PI_ROUNDTABLE -> R.string.server_type_pi_roundtable
-                                            }
-                                        )
-                                    )
+                                    Text(stringResource(when (option) {
+                                            ServerType.OPENCODE -> R.string.server_type_opencode
+                                            ServerType.CODEX -> R.string.server_type_codex
+                                            ServerType.PI_ROUNDTABLE -> R.string.server_type_pi_roundtable
+                                    }))
                                 },
                             )
                         }
@@ -252,6 +253,11 @@ fun ServerDialog(
                     )
 
                     if (serverType == ServerType.OPENCODE) {
+                        Text(
+                            text = stringResource(R.string.server_authentication_section),
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                         OutlinedTextField(
                             value = username,
                             onValueChange = { username = it },
@@ -318,9 +324,17 @@ fun ServerDialog(
                     }
 
                     Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.24f),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
+                        shape = RoundedCornerShape(if (serverType == ServerType.OPENCODE) 8.dp else 12.dp),
+                        color = if (serverType == ServerType.OPENCODE) {
+                            MaterialTheme.colorScheme.surfaceContainerLow
+                        } else {
+                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.24f)
+                        },
+                        border = if (serverType == ServerType.OPENCODE) {
+                            null
+                        } else {
+                            BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                        },
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Row(

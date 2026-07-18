@@ -18,11 +18,14 @@ import dev.minios.ocremote.data.api.ProviderCatalogResponse
 import dev.minios.ocremote.data.api.ProvidersResponse
 import dev.minios.ocremote.data.api.ServerConnection
 import dev.minios.ocremote.data.repository.LocalServerManager
+import dev.minios.ocremote.data.repository.EventReducer
 import dev.minios.ocremote.data.repository.ServerRepository
 import dev.minios.ocremote.data.repository.SettingsRepository
 import dev.minios.ocremote.domain.model.ServerConfig
 import dev.minios.ocremote.domain.model.ServerType
 import dev.minios.ocremote.domain.model.ConnectionPhase
+import dev.minios.ocremote.domain.model.Session
+import dev.minios.ocremote.domain.model.SessionStatus
 import dev.minios.ocremote.service.OpenCodeConnectionService
 import dev.minios.ocremote.service.mergeCodexConnectionErrors
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -31,6 +34,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -76,8 +80,69 @@ enum class LocalRuntimeStatus {
     Error,
 }
 
+data class HomeRecentWorkItem(
+    val sessionId: String,
+    val serverId: String,
+    val serverName: String,
+    val title: String?,
+    val directory: String,
+    val updatedAt: Long,
+    val status: SessionStatus,
+)
+
+internal fun buildHomeRecentWork(
+    servers: List<ServerConfig>,
+    sessions: List<Session>,
+    serverSessions: Map<String, Set<String>>,
+    statuses: Map<String, SessionStatus>,
+    limit: Int = 6,
+): List<HomeRecentWorkItem> {
+    val openCodeServers = servers
+        .filter { it.type == ServerType.OPENCODE }
+        .associateBy(ServerConfig::id)
+
+    val childrenByParent = sessions.filter { it.parentId != null }.groupBy { it.parentId }
+
+    return serverSessions.entries
+        .asSequence()
+        .mapNotNull { (serverId, sessionIds) ->
+            openCodeServers[serverId]?.let { server -> server to sessionIds }
+        }
+        .flatMap { (server, sessionIds) ->
+            sessions.asSequence()
+                .filter { session ->
+                    session.id in sessionIds && session.parentId == null && !session.isArchived
+                }
+                .map { session ->
+                    val childStatuses = childrenByParent[session.id]
+                        .orEmpty()
+                        .mapNotNull { statuses[it.id] }
+                    val effectiveStatus = when {
+                        statuses[session.id] is SessionStatus.Busy || childStatuses.any { it is SessionStatus.Busy } -> {
+                            SessionStatus.Busy
+                        }
+                        statuses[session.id] is SessionStatus.Retry -> statuses.getValue(session.id)
+                        else -> childStatuses.firstOrNull { it is SessionStatus.Retry } ?: SessionStatus.Idle
+                    }
+                    HomeRecentWorkItem(
+                        sessionId = session.id,
+                        serverId = server.id,
+                        serverName = server.displayName,
+                        title = session.title,
+                        directory = session.directory,
+                        updatedAt = session.time.updated,
+                        status = effectiveStatus,
+                    )
+                }
+        }
+        .sortedByDescending(HomeRecentWorkItem::updatedAt)
+        .take(limit)
+        .toList()
+}
+
 data class HomeUiState(
     val servers: List<ServerConfig> = emptyList(),
+    val recentWork: List<HomeRecentWorkItem> = emptyList(),
     val connectedServerIds: Set<String> = emptySet(),
     val serverSettingsReadyIds: Set<String> = emptySet(),
     val connectingServerIds: Set<String> = emptySet(),
@@ -118,6 +183,7 @@ class HomeViewModel @Inject constructor(
     private val api: OpenCodeApi,
     private val localServerManager: LocalServerManager,
     private val settingsRepository: SettingsRepository,
+    private val eventReducer: EventReducer,
 ) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow(HomeUiState())
@@ -291,10 +357,23 @@ class HomeViewModel @Inject constructor(
 
     private fun loadServers() {
         viewModelScope.launch {
-            serverRepository.getAllServers().collect { servers ->
+            combine(
+                serverRepository.getAllServers(),
+                eventReducer.sessions,
+                eventReducer.serverSessions,
+                eventReducer.sessionStatuses,
+            ) { servers, sessions, serverSessions, statuses ->
+                servers to buildHomeRecentWork(
+                    servers = servers,
+                    sessions = sessions,
+                    serverSessions = serverSessions,
+                    statuses = statuses,
+                )
+            }.collect { (servers, recentWork) ->
                 _uiState.update { 
                     it.copy(
                         servers = servers,
+                        recentWork = recentWork,
                         isLoading = false
                     )
                 }

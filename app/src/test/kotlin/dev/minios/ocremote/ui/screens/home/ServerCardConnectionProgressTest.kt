@@ -7,6 +7,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import dev.minios.ocremote.domain.model.ConnectionPhase
 import dev.minios.ocremote.domain.model.ServerConfig
+import dev.minios.ocremote.domain.model.ServerType
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -46,5 +47,35 @@ class ServerCardConnectionProgressTest {
         compose.waitForIdle()
         compose.onNodeWithText("Still working. Large workspaces or many sessions can take longer.")
             .assertExists()
+    }
+
+    @Test
+    fun `compact OpenCode row shows one real connection phase and disconnect`() {
+        compose.setContent {
+            MaterialTheme {
+                OpenCodeServerRow(
+                    server = ServerConfig(
+                        id = "server",
+                        type = ServerType.OPENCODE,
+                        url = "http://example.test:4096",
+                        name = "Build server",
+                    ),
+                    isConnected = false,
+                    isConnecting = true,
+                    connectionPhase = ConnectionPhase.RestoringActivity,
+                    connectionError = null,
+                    showServerSettings = false,
+                    onConnect = {},
+                    onDisconnect = {},
+                    onOpenSessions = {},
+                    onServerSettings = {},
+                    onEdit = {},
+                    onDelete = {},
+                )
+            }
+        }
+
+        compose.onAllNodesWithText("Restoring task status…").assertCountEquals(1)
+        compose.onNodeWithText("Build server").assertExists()
     }
 }

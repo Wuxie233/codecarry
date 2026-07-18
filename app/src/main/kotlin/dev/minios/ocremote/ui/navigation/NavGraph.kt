@@ -89,6 +89,7 @@ fun NavGraph(
     eventReducer: EventReducer
 ) {
     val navController = rememberNavController()
+    val configuredServers by serverRepository.servers.collectAsState(initial = emptyList())
     
     // Use native UI by default (WebView is legacy)
     val useNativeUi = true
@@ -303,6 +304,26 @@ fun NavGraph(
                 },
                 onNavigateToAbout = {
                     navController.navigate(Screen.About.route)
+                },
+                onNavigateToRecentWork = { serverId, sessionId, directory ->
+                    val sessionIds = eventReducer.serverSessions.value
+                    val session = eventReducer.sessions.value.firstOrNull {
+                        it.id == sessionId && it.id in sessionIds[serverId].orEmpty()
+                    }
+                    val server = configuredServers.firstOrNull { it.id == serverId }
+                    if (server != null && session != null) {
+                        navController.navigate(
+                            Screen.Chat.createRoute(
+                                serverUrl = server.url,
+                                username = server.username,
+                                password = server.password.orEmpty(),
+                                serverName = server.displayName,
+                                serverId = server.id,
+                                sessionId = sessionId,
+                                directory = directory,
+                            )
+                        ) { launchSingleTop = true }
+                    }
                 }
             )
         }

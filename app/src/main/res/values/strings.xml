@@ -18,6 +18,11 @@
     <string name="home_connection_waiting_to_retry">Waiting to retry…</string>
     <string name="home_connection_taking_longer">Still working. Large workspaces or many sessions can take longer.</string>
     <string name="home_loading_servers">Loading servers…</string>
+    <string name="home_recent_work">Recent work</string>
+    <string name="home_servers">Servers</string>
+    <string name="home_recent_status_retry">Retrying (%1$d)</string>
+    <string name="server_connection_section">Connection</string>
+    <string name="server_authentication_section">Authentication</string>
     <string name="home_disconnect">Disconnect</string>
     <string name="home_edit">Edit</string>
     <string name="home_fix">Fix</string>

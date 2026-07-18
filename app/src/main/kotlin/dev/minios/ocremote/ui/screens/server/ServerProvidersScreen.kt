@@ -20,8 +20,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material3.BasicAlertDialog
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -34,6 +32,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Button
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -445,6 +444,7 @@ fun ServerProvidersScreen(
                         isAmoled = isAmoled,
                         showSource = true
                     )
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
                 }
             }
 
@@ -468,6 +468,7 @@ fun ServerProvidersScreen(
                         isAmoled = isAmoled,
                         showSource = false
                     )
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
                 }
             }
         }
@@ -517,17 +518,13 @@ private fun ProviderRow(
     isAmoled: Boolean,
     showSource: Boolean
 ) {
-    Card(
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = if (isAmoled) Color.Black else MaterialTheme.colorScheme.surfaceContainerHigh
-        ),
-        border = if (isAmoled) BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)) else null
+    Surface(
+        color = if (isAmoled) Color.Black else MaterialTheme.colorScheme.surface,
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 12.dp),
+                .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(modifier = Modifier.weight(1f)) {
@@ -538,7 +535,7 @@ private fun ProviderRow(
                 Text(
                     text = provider.providerId,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f)
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 if (showSource) {
                     provider.source?.let { src ->
@@ -551,7 +548,7 @@ private fun ProviderRow(
                                 else -> stringResource(R.string.server_settings_provider_source_other)
                             },
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
@@ -569,7 +566,7 @@ private fun ProviderRow(
                     Text(
                         text = stringResource(R.string.server_settings_provider_env_connected),
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }

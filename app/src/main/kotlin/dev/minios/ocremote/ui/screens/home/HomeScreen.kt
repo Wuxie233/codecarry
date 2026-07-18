@@ -47,6 +47,7 @@ import dev.minios.ocremote.data.repository.LocalServerManager
 import dev.minios.ocremote.domain.model.ServerConfig
 import dev.minios.ocremote.domain.model.ServerType
 import dev.minios.ocremote.domain.model.ConnectionPhase
+import dev.minios.ocremote.domain.model.SessionStatus
 import dev.minios.ocremote.ui.theme.StatusConnected
 import androidx.compose.animation.core.*
 import kotlinx.coroutines.delay
@@ -61,6 +62,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import java.text.DateFormat
+import java.util.Date
 
 /** Pulsing dots loading indicator — 3 dots that scale up/down in sequence. */
 @Composable
@@ -127,6 +130,7 @@ fun HomeScreen(
     onNavigateToServerSettings: (serverUrl: String, username: String, password: String, serverName: String, serverId: String) -> Unit = { _, _, _, _, _ -> },
     onNavigateToSettings: () -> Unit = {},
     onNavigateToAbout: () -> Unit = {},
+    onNavigateToRecentWork: (serverId: String, sessionId: String, directory: String) -> Unit = { _, _, _ -> },
     viewModel: HomeViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -261,6 +265,20 @@ fun HomeScreen(
                             }
                         }
 
+                        if (uiState.recentWork.isNotEmpty()) {
+                            item(key = "__recent_work_header") {
+                                HomeSectionHeader(stringResource(R.string.home_recent_work))
+                            }
+                            items(uiState.recentWork, key = { "${it.serverId}/${it.sessionId}" }) { item ->
+                                RecentWorkRow(
+                                    item = item,
+                                    onClick = {
+                                        onNavigateToRecentWork(item.serverId, item.sessionId, item.directory)
+                                    },
+                                )
+                            }
+                        }
+
                         if (uiState.showLocalRuntime) {
                             item(key = "__local_runtime") {
                                 LocalRuntimeCard(
@@ -328,6 +346,12 @@ fun HomeScreen(
                             }
                         }
 
+                        if (remoteServers.isNotEmpty()) {
+                            item(key = "__servers_header") {
+                                HomeSectionHeader(stringResource(R.string.home_servers))
+                            }
+                        }
+
                         if (remoteServers.isEmpty()) {
                             item(key = "__empty_servers") {
                                 val hasLocalCard = uiState.showLocalRuntime
@@ -343,7 +367,38 @@ fun HomeScreen(
                         }
 
                         items(remoteServers, key = { it.id }) { server ->
-                            ServerCard(
+                            if (server.type == ServerType.OPENCODE) {
+                                OpenCodeServerRow(
+                                    server = server,
+                                    isConnected = server.id in uiState.connectedServerIds,
+                                    isConnecting = server.id in uiState.connectingServerIds,
+                                    connectionPhase = uiState.connectionPhases[server.id],
+                                    connectionError = uiState.connectionErrors[server.id],
+                                    showServerSettings = server.id in uiState.serverSettingsReadyIds,
+                                    onConnect = { requestNotificationPermissionAndConnect(server.id) },
+                                    onDisconnect = { viewModel.disconnectFromServer(server.id) },
+                                    onOpenSessions = {
+                                        onNavigateToSessions(
+                                            server.url,
+                                            server.username,
+                                            server.password ?: "",
+                                            server.displayName,
+                                            server.id,
+                                        )
+                                    },
+                                    onServerSettings = {
+                                        onNavigateToServerSettings(
+                                            server.url,
+                                            server.username,
+                                            server.password ?: "",
+                                            server.displayName,
+                                            server.id,
+                                        )
+                                    },
+                                    onEdit = { viewModel.showEditServerDialog(server) },
+                                    onDelete = { viewModel.deleteServer(server.id) },
+                                )
+                            } else ServerCard(
                                 server = server,
                                 isConnected = server.id in uiState.connectedServerIds,
                                 isConnecting = server.id in uiState.connectingServerIds,
@@ -427,6 +482,87 @@ fun HomeScreen(
 }
 
 @Composable
+private fun HomeSectionHeader(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(start = 4.dp, top = 4.dp, bottom = 2.dp),
+    )
+}
+
+internal fun shortHomeDirectory(directory: String): String {
+    val normalized = directory.trimEnd('/')
+    if (normalized.isBlank()) return directory
+    val parts = normalized.split('/').filter(String::isNotBlank)
+    return when {
+        parts.isEmpty() -> normalized
+        parts.size == 1 -> parts.single()
+        else -> ".../${parts.takeLast(2).joinToString("/")}"
+    }
+}
+
+@Composable
+private fun RecentWorkRow(
+    item: HomeRecentWorkItem,
+    onClick: () -> Unit,
+) {
+    val statusText = when (val status = item.status) {
+        SessionStatus.Idle -> stringResource(R.string.session_status_idle)
+        SessionStatus.Busy -> stringResource(R.string.session_status_busy)
+        is SessionStatus.Retry -> stringResource(R.string.home_recent_status_retry, status.attempt)
+    }
+    val statusColor = when (item.status) {
+        SessionStatus.Idle -> MaterialTheme.colorScheme.onSurfaceVariant
+        SessionStatus.Busy -> MaterialTheme.colorScheme.primary
+        is SessionStatus.Retry -> MaterialTheme.colorScheme.error
+    }
+    val updated = remember(item.updatedAt) {
+        DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(item.updatedAt))
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                text = item.title ?: stringResource(R.string.session_untitled),
+                style = MaterialTheme.typography.titleSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = "${item.serverName} · ${shortHomeDirectory(item.directory)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                text = statusText,
+                style = MaterialTheme.typography.labelSmall,
+                color = statusColor,
+                maxLines = 1,
+            )
+            Text(
+                text = updated,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+            )
+        }
+    }
+}
+
+@Composable
 private fun LocalRuntimeCard(
     termuxInstalled: Boolean,
     runtimeStatus: LocalRuntimeStatus,
@@ -462,6 +598,7 @@ private fun LocalRuntimeCard(
 
     Card(
         modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
         colors = CardDefaults.cardColors(
             containerColor = cardContainerColor,
         ),
@@ -474,7 +611,7 @@ private fun LocalRuntimeCard(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp),
+                .padding(horizontal = 14.dp, vertical = 10.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             val compactActive = runtimeStatus == LocalRuntimeStatus.Running &&
@@ -1234,6 +1371,164 @@ private fun EmptyServersView(
                 Icon(Icons.Default.Add, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
                 Text(stringResource(R.string.home_add_server))
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun OpenCodeServerRow(
+    server: ServerConfig,
+    isConnected: Boolean,
+    isConnecting: Boolean,
+    connectionPhase: ConnectionPhase?,
+    connectionError: String?,
+    showServerSettings: Boolean,
+    onConnect: () -> Unit,
+    onDisconnect: () -> Unit,
+    onOpenSessions: () -> Unit,
+    onServerSettings: () -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    var showMenu by remember { mutableStateOf(false) }
+    var showSlowConnectionHint by remember { mutableStateOf(false) }
+    LaunchedEffect(isConnecting) {
+        showSlowConnectionHint = false
+        if (isConnecting) {
+            delay(8_000)
+            showSlowConnectionHint = true
+        }
+    }
+    val isAmoled = MaterialTheme.colorScheme.background == Color.Black && MaterialTheme.colorScheme.surface == Color.Black
+    val retryLabel = stringResource(R.string.retry)
+    val connectLabel = stringResource(R.string.home_connect)
+    val retryConnectDescription = "$retryLabel ${server.displayName}"
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        color = if (isConnected || isConnecting) {
+            MaterialTheme.colorScheme.surfaceContainerLow
+        } else {
+            MaterialTheme.colorScheme.surface
+        },
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f)),
+    ) {
+        Column(
+            modifier = Modifier.padding(start = 14.dp, end = 4.dp, top = 10.dp, bottom = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        text = server.displayName,
+                        style = MaterialTheme.typography.titleSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = server.url,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    val stateText = when {
+                        isConnecting -> connectionPhase?.let { stringResource(it.messageRes) }
+                            ?: stringResource(R.string.home_connecting)
+                        isConnected -> stringResource(R.string.home_server_health_good)
+                        else -> stringResource(R.string.home_server_health_bad)
+                    }
+                    Text(
+                        text = stateText,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = when {
+                            isConnecting -> MaterialTheme.colorScheme.tertiary
+                            isConnected -> StatusConnected
+                            else -> MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+
+                if (isConnected) {
+                    IconButton(onClick = onOpenSessions) {
+                        Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = stringResource(R.string.sessions_title))
+                    }
+                } else if (!isConnecting) {
+                    IconButton(
+                        onClick = onConnect,
+                        modifier = Modifier.semantics { contentDescription = "$connectLabel ${server.displayName}" },
+                    ) {
+                        Icon(Icons.Default.PlayArrow, contentDescription = null)
+                    }
+                }
+                if (shouldShowServerDisconnect(isConnected, isConnecting)) {
+                    IconButton(onClick = onDisconnect) {
+                        Icon(Icons.Default.Close, contentDescription = stringResource(R.string.home_disconnect))
+                    }
+                }
+                Box {
+                    IconButton(onClick = { showMenu = true }) {
+                        Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.more_options))
+                    }
+                    DropdownMenu(
+                        expanded = showMenu,
+                        onDismissRequest = { showMenu = false },
+                        containerColor = if (isAmoled) Color.Black else MaterialTheme.colorScheme.surface,
+                        border = if (isAmoled) BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)) else null,
+                    ) {
+                        if (showServerSettings) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.server_settings_title)) },
+                                onClick = { showMenu = false; onServerSettings() },
+                                leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) },
+                            )
+                        }
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.home_edit)) },
+                            onClick = { showMenu = false; onEdit() },
+                            leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                        )
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.server_delete)) },
+                            onClick = { showMenu = false; onDelete() },
+                            leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) },
+                        )
+                    }
+                }
+            }
+
+            if (showSlowConnectionHint) {
+                Text(
+                    text = stringResource(R.string.home_connection_taking_longer),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(end = 10.dp),
+                )
+            }
+            if (!connectionError.isNullOrBlank()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(end = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = connectionError,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(
+                        onClick = onConnect,
+                        enabled = !isConnecting,
+                        modifier = Modifier.semantics { contentDescription = retryConnectDescription },
+                    ) {
+                        Text(retryLabel)
+                    }
+                }
             }
         }
     }
