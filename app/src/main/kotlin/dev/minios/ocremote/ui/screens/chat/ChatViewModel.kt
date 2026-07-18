@@ -320,7 +320,9 @@ class ChatViewModel @Inject constructor(
     private var piEventStreamJob: Job? = null
 
     val uiState: StateFlow<ChatUiState> = combine(
-        eventReducer.sessions,
+        combine(eventReducer.sessions, eventReducer.serverSessions) { sessions, serverSessions ->
+            sessions to serverSessions
+        },
         eventReducer.messages,
         eventReducer.parts,
         eventReducer.sessionStatuses,
@@ -349,7 +351,9 @@ class ChatViewModel @Inject constructor(
         _isLoadingOlder,
     ) { args ->
         @Suppress("UNCHECKED_CAST")
-        val allSessions = args[0] as List<Session>
+        val sessionState = args[0] as Pair<List<Session>, Map<String, Set<String>>>
+        val (allSessions, serverSessions) = sessionState
+        val currentServerSessionIds = serverSessions[serverId].orEmpty()
         val allMessages = args[1] as Map<String, List<Message>>
         val allParts = args[2] as Map<String, List<Part>>
         val statuses = args[3] as Map<String, SessionStatus>
@@ -384,13 +388,14 @@ class ChatViewModel @Inject constructor(
         val isLoadingOlder = args[24] as Boolean
         val piPersonas = catalogState.personaLibrary
 
-        val session = allSessions.find { it.id == sessionId }
+        val session = allSessions.find { it.id == sessionId && it.id in currentServerSessionIds }
         val subagents = if (isPiRoundtable) {
             emptyList()
         } else {
             buildDirectChatSubagents(
                 parentSessionId = sessionId,
                 sessions = allSessions,
+                allowedSessionIds = currentServerSessionIds,
                 statuses = statuses,
                 questions = questions,
                 permissions = permissions,

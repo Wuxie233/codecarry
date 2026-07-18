@@ -101,14 +101,15 @@ internal fun buildHomeRecentWork(
         .filter { it.type == ServerType.OPENCODE }
         .associateBy(ServerConfig::id)
 
-    val childrenByParent = sessions.filter { it.parentId != null }.groupBy { it.parentId }
-
     return serverSessions.entries
         .asSequence()
         .mapNotNull { (serverId, sessionIds) ->
             openCodeServers[serverId]?.let { server -> server to sessionIds }
         }
         .flatMap { (server, sessionIds) ->
+            val childrenByParent = sessions
+                .filter { it.id in sessionIds && it.parentId != null }
+                .groupBy { it.parentId }
             sessions.asSequence()
                 .filter { session ->
                     session.id in sessionIds && session.parentId == null && !session.isArchived

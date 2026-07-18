@@ -8,9 +8,11 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -48,7 +50,7 @@ import androidx.compose.ui.unit.sp
 import dev.minios.ocremote.R
 import dev.minios.ocremote.domain.model.McpRuntimeState
 
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
 fun ProjectGroupHeader(
     projectName: String,
@@ -96,13 +98,13 @@ fun ProjectGroupHeader(
     ) {
         HorizontalDivider(color = colors.outlineVariant.copy(alpha = 0.3f), thickness = 1.dp)
 
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(
                     if (isAmoled) Color.Black else colors.surface.copy(alpha = 0.98f)
                 )
-                .height(48.dp)
+                .heightIn(min = 48.dp)
                 .combinedClickable(
                     onClick = onToggleCollapsed,
                     onLongClick = onTogglePinned,
@@ -111,136 +113,73 @@ fun ProjectGroupHeader(
                 .semantics(mergeDescendants = true) {
                     contentDescription = "$projectName, $tildeDirectory"
                 },
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            Icon(
-                imageVector = Icons.Default.KeyboardArrowDown,
-                contentDescription = stringResource(
-                    if (isCollapsed) R.string.sessions_project_expand else R.string.sessions_project_collapse,
-                ),
-                tint = arrowTint,
-                modifier = Modifier
-                    .size(16.dp)
-                    .rotate(arrowRotation),
-            )
-
-            if (isHidden) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Icon(
-                    imageVector = Icons.Default.VisibilityOff,
-                    contentDescription = null,
-                    modifier = Modifier.size(14.dp),
-                    tint = colors.onSurface.copy(alpha = 0.35f),
+                    imageVector = Icons.Default.KeyboardArrowDown,
+                    contentDescription = stringResource(
+                        if (isCollapsed) R.string.sessions_project_expand else R.string.sessions_project_collapse,
+                    ),
+                    tint = arrowTint,
+                    modifier = Modifier
+                        .size(16.dp)
+                        .rotate(arrowRotation),
                 )
-            } else {
-                Icon(
-                    imageVector = Icons.Default.Folder,
-                    contentDescription = null,
-                    modifier = Modifier.size(16.dp),
-                    tint = colors.primary.copy(alpha = 0.7f),
-                )
-            }
 
-            Text(
-                text = projectName,
-                style = MaterialTheme.typography.titleSmall,
-                color = colors.primary.copy(alpha = 0.85f * contentAlpha),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
-
-            Text(
-                text = sessionCount.toString(),
-                style = MaterialTheme.typography.labelSmall,
-                color = colors.onSurface.copy(alpha = 0.5f),
-            )
-
-            if (activeCount > 0) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(3.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(6.dp)
-                            .background(colors.tertiary, CircleShape),
-                    )
-                    Text(
-                        text = activeCount.toString(),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = colors.tertiary,
-                    )
-                }
-            }
-
-            if (unreadCount > 0) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(3.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(6.dp)
-                            .background(unreadColor, CircleShape),
-                    )
-                    Text(
-                        text = unreadCount.toString(),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = unreadColor,
-                    )
-                }
-            }
-
-            if (additions > 0 || deletions > 0) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.widthIn(min = 0.dp),
-                ) {
-                    if (additions > 0) {
-                        Text(
-                            text = "+$additions",
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 11.sp,
-                            color = Color(0xFF4CAF50),
-                        )
-                    }
-                    if (deletions > 0) {
-                        Text(
-                            text = "-$deletions",
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 11.sp,
-                            color = Color(0xFFE53935),
-                        )
-                    }
-                }
-            }
-
-            if (isPinned) {
-                Icon(
-                    imageVector = Icons.Default.PushPin,
-                    contentDescription = null,
-                    tint = colors.primary.copy(alpha = 0.85f),
-                    modifier = Modifier.size(14.dp),
-                )
-            }
-
-            Box {
-                IconButton(
-                    onClick = { menuExpanded = true },
-                ) {
+                if (isHidden) {
                     Icon(
-                        imageVector = Icons.Default.MoreVert,
-                        contentDescription = stringResource(R.string.sessions_project_actions),
-                        modifier = Modifier.size(20.dp),
+                        imageVector = Icons.Default.VisibilityOff,
+                        contentDescription = null,
+                        modifier = Modifier.size(14.dp),
+                        tint = colors.onSurface.copy(alpha = 0.35f),
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.Folder,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                        tint = colors.primary.copy(alpha = 0.7f),
                     )
                 }
 
-                DropdownMenu(
-                    expanded = menuExpanded,
-                    onDismissRequest = { menuExpanded = false },
-                ) {
+                Text(
+                    text = projectName,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = colors.primary.copy(alpha = 0.85f * contentAlpha),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+
+                if (isPinned) {
+                    Icon(
+                        imageVector = Icons.Default.PushPin,
+                        contentDescription = null,
+                        tint = colors.primary.copy(alpha = 0.85f),
+                        modifier = Modifier.size(14.dp),
+                    )
+                }
+
+                Box {
+                    IconButton(
+                        onClick = { menuExpanded = true },
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.MoreVert,
+                            contentDescription = stringResource(R.string.sessions_project_actions),
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+
+                    DropdownMenu(
+                        expanded = menuExpanded,
+                        onDismissRequest = { menuExpanded = false },
+                    ) {
                     DropdownMenuItem(
                         text = { Text(stringResource(R.string.sessions_project_new_here)) },
                         onClick = {
@@ -338,6 +277,72 @@ fun ProjectGroupHeader(
                             menuExpanded = false
                             onArchiveAll()
                         },
+                    )
+                    }
+                }
+            }
+
+            FlowRow(
+                modifier = Modifier.padding(start = 40.dp, end = 48.dp, bottom = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(
+                    text = sessionCount.toString(),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.onSurface.copy(alpha = 0.5f),
+                )
+
+                if (activeCount > 0) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(3.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(6.dp)
+                                .background(colors.tertiary, CircleShape),
+                        )
+                        Text(
+                            text = activeCount.toString(),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colors.tertiary,
+                        )
+                    }
+                }
+
+                if (unreadCount > 0) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(3.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(6.dp)
+                                .background(unreadColor, CircleShape),
+                        )
+                        Text(
+                            text = unreadCount.toString(),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = unreadColor,
+                        )
+                    }
+                }
+
+                if (additions > 0) {
+                    Text(
+                        text = "+$additions",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        color = Color(0xFF4CAF50),
+                    )
+                }
+                if (deletions > 0) {
+                    Text(
+                        text = "-$deletions",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        color = Color(0xFFE53935),
                     )
                 }
             }

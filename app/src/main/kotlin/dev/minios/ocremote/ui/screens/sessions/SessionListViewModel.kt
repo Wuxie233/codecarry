@@ -164,6 +164,7 @@ data class SessionActivityQueue(
     val items: List<SessionActivityItem>,
     val groups: List<SessionActivityGroup>,
     val totalSessionCount: Int,
+    val pendingSessionCount: Int,
     val sessionCountsByKind: Map<SessionActivityKind, Int>,
     val signalCountsByKind: Map<SessionActivityKind, Int>,
 ) {
@@ -172,6 +173,7 @@ data class SessionActivityQueue(
             items = emptyList(),
             groups = emptyList(),
             totalSessionCount = 0,
+            pendingSessionCount = 0,
             sessionCountsByKind = emptyMap(),
             signalCountsByKind = emptyMap(),
         )
@@ -1195,6 +1197,9 @@ internal fun buildSessionActivityQueue(
         items = filteredItems,
         groups = groups,
         totalSessionCount = allItems.size,
+        pendingSessionCount = allItems.count {
+            it.signals.questionCount > 0 || it.signals.permissionCount > 0
+        },
         sessionCountsByKind = sessionCountsByKind,
         signalCountsByKind = signalCountsByKind,
     )

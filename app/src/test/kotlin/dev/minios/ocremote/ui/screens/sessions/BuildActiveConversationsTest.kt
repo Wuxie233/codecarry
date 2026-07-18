@@ -250,6 +250,7 @@ class BuildActiveConversationsTest {
             queue.groups.map { it.kind },
         )
         assertEquals(2, queue.sessionCountsByKind.getValue(SessionActivityKind.PERMISSION))
+        assertEquals(2, queue.pendingSessionCount)
     }
 
     @Test

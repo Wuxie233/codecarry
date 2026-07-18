@@ -16,6 +16,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -388,6 +389,8 @@ fun SessionListScreen(
                     }
                 }
                 else -> {
+                    val activityListState = rememberLazyListState()
+                    val projectListState = rememberLazyListState()
                     Column(
                         modifier = Modifier.fillMaxSize(),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -409,6 +412,7 @@ fun SessionListScreen(
                                 onSessionClick = { sessionId, directory ->
                                     onNavigateToChat(sessionId, false, directory)
                                 },
+                                listState = activityListState,
                             )
                         } else {
                         if (!uiState.isSelectionMode) {
@@ -478,7 +482,10 @@ fun SessionListScreen(
                                 }
                             }
                         } else {
-                            SessionProjectsViewport(modifier = Modifier.fillMaxSize()) {
+                            SessionProjectsViewport(
+                                modifier = Modifier.fillMaxSize(),
+                                listState = projectListState,
+                            ) {
                                 for (group in uiState.groups) {
                         stickyHeader(key = "header_${group.directory}") {
                                 val activeProjectMcpServerCount = if (mcpSheetProjectDir == group.directory) {

@@ -14,7 +14,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -38,6 +40,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.minios.ocremote.R
@@ -59,6 +63,7 @@ fun SessionActivityQueueView(
     onFilterChange: (SessionActivityFilter) -> Unit,
     onSessionClick: (sessionId: String, directory: String) -> Unit,
     modifier: Modifier = Modifier,
+    listState: LazyListState = rememberLazyListState(),
 ) {
     Column(modifier = modifier.fillMaxSize()) {
         Row(
@@ -88,6 +93,7 @@ fun SessionActivityQueueView(
             }
         } else {
             LazyColumn(
+                state = listState,
                 modifier = Modifier
                     .fillMaxSize()
                     .testTag("session_activity_queue"),
@@ -176,15 +182,23 @@ private fun ActivityQueueRow(
                 )
             }
         }
-        if (item.signals.totalCount > 1) {
-            Text(
-                text = item.signals.totalCount.toString(),
-                style = MaterialTheme.typography.labelMedium,
-                color = visual.color,
-                modifier = Modifier
-                    .background(visual.color.copy(alpha = 0.12f), CircleShape)
-                    .padding(horizontal = 7.dp, vertical = 3.dp),
-            )
+        val secondaryLabels = item.secondarySignalLabels()
+        if (secondaryLabels.isNotEmpty()) {
+            Column(
+                horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+                modifier = Modifier.semantics {
+                    stateDescription = secondaryLabels.joinToString()
+                },
+            ) {
+                secondaryLabels.forEach { label ->
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
         }
     }
     HorizontalDivider(
@@ -193,8 +207,24 @@ private fun ActivityQueueRow(
     )
 }
 
-private val dev.minios.ocremote.ui.screens.sessions.SessionActivitySignals.totalCount: Int
-    get() = questionCount + permissionCount + if (hasRetry) 1 else 0 + if (isBusy) 1 else 0 + if (isUnread) 1 else 0
+@Composable
+private fun SessionActivityItem.secondarySignalLabels(): List<String> = buildList {
+    if (primaryKind != SessionActivityKind.QUESTION && signals.questionCount > 0) {
+        add("${stringResource(R.string.sessions_activity_status_question)} ${signals.questionCount}")
+    }
+    if (primaryKind != SessionActivityKind.PERMISSION && signals.permissionCount > 0) {
+        add("${stringResource(R.string.sessions_activity_status_permission)} ${signals.permissionCount}")
+    }
+    if (primaryKind != SessionActivityKind.RETRY && signals.hasRetry) {
+        add(stringResource(R.string.sessions_activity_status_retry))
+    }
+    if (primaryKind != SessionActivityKind.BUSY && signals.isBusy) {
+        add(stringResource(R.string.sessions_activity_status_running))
+    }
+    if (primaryKind != SessionActivityKind.UNREAD && signals.isUnread) {
+        add(stringResource(R.string.sessions_activity_status_unread))
+    }
+}
 
 private data class ActivityVisual(val label: String, val icon: ImageVector, val color: Color)
 
@@ -225,9 +255,7 @@ private fun SessionActivityFilter.label(): String = when (this) {
 
 private fun SessionActivityFilter.countIn(queue: SessionActivityQueue): Int = when (this) {
     SessionActivityFilter.ALL -> queue.totalSessionCount
-    SessionActivityFilter.PENDING ->
-        queue.sessionCountsByKind[SessionActivityKind.QUESTION].orZero() +
-            queue.sessionCountsByKind[SessionActivityKind.PERMISSION].orZero()
+    SessionActivityFilter.PENDING -> queue.pendingSessionCount
     SessionActivityFilter.BUSY -> queue.sessionCountsByKind[SessionActivityKind.BUSY].orZero()
     SessionActivityFilter.UNREAD -> queue.sessionCountsByKind[SessionActivityKind.UNREAD].orZero()
     SessionActivityFilter.RETRY -> queue.sessionCountsByKind[SessionActivityKind.RETRY].orZero()

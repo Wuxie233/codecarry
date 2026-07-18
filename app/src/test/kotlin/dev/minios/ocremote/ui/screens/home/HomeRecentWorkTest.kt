@@ -55,6 +55,33 @@ class HomeRecentWorkTest {
         assertEquals("project", shortHomeDirectory("project"))
     }
 
+    @Test
+    fun `child status aggregation stays inside each server session set`() {
+        val local = ServerConfig(id = "local", url = "https://local.test", name = "Local")
+        val foreign = ServerConfig(
+            id = "foreign",
+            type = ServerType.CODEX,
+            url = "wss://foreign.test",
+        )
+        val sessions = listOf(
+            session("root", 10),
+            session("foreign-child", 20, parentId = "root"),
+        )
+
+        val result = buildHomeRecentWork(
+            servers = listOf(local, foreign),
+            sessions = sessions,
+            serverSessions = mapOf(
+                local.id to setOf("root"),
+                foreign.id to setOf("foreign-child"),
+            ),
+            statuses = mapOf("foreign-child" to SessionStatus.Busy),
+        )
+
+        assertEquals(listOf("root"), result.map(HomeRecentWorkItem::sessionId))
+        assertEquals(SessionStatus.Idle, result.single().status)
+    }
+
     private fun session(
         id: String,
         updated: Long,

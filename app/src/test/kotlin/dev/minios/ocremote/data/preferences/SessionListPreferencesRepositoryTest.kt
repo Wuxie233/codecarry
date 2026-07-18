@@ -4,8 +4,6 @@ import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.edit
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.test.TestScope
-import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -20,35 +18,32 @@ class SessionListPreferencesRepositoryTest {
     @get:Rule
     val tmpFolder = TemporaryFolder()
 
-    private val testDispatcher = UnconfinedTestDispatcher()
-    private val testScope = TestScope(testDispatcher)
-
-    private fun createRepo(): SessionListPreferencesRepository {
+    private fun createRepo(scope: kotlinx.coroutines.CoroutineScope): SessionListPreferencesRepository {
         val dataStore = PreferenceDataStoreFactory.create(
-            scope = testScope.backgroundScope,
+            scope = scope,
             produceFile = { tmpFolder.newFile("test_session_list_prefs.preferences_pb") },
         )
         return SessionListPreferencesRepository(dataStore = dataStore)
     }
 
     @Test
-    fun `default preferences match DEFAULT constant`() = testScope.runTest {
-        val repo = createRepo()
+    fun `default preferences match DEFAULT constant`() = runTest {
+        val repo = createRepo(backgroundScope)
         val prefs = repo.preferences.first()
         assertEquals(SessionListPreferences.DEFAULT, prefs)
     }
 
     @Test
-    fun `view mode defaults to projects independently for each server`() = testScope.runTest {
-        val repo = createRepo()
+    fun `view mode defaults to projects independently for each server`() = runTest {
+        val repo = createRepo(backgroundScope)
 
         assertEquals(SessionListViewMode.PROJECTS, repo.viewMode("server-a").first())
         assertEquals(SessionListViewMode.PROJECTS, repo.viewMode("server-b").first())
     }
 
     @Test
-    fun `view mode is remembered per server`() = testScope.runTest {
-        val repo = createRepo()
+    fun `view mode is remembered per server`() = runTest {
+        val repo = createRepo(backgroundScope)
 
         repo.setViewMode("server-a", SessionListViewMode.ACTIVITY)
 
@@ -57,8 +52,8 @@ class SessionListPreferencesRepositoryTest {
     }
 
     @Test
-    fun `setCollapsed true then false returns correct state`() = testScope.runTest {
-        val repo = createRepo()
+    fun `setCollapsed true then false returns correct state`() = runTest {
+        val repo = createRepo(backgroundScope)
         repo.setCollapsed("/home/user/project", collapsed = true)
         val afterCollapse = repo.preferences.first()
         assertTrue(afterCollapse.collapsedDirs.contains("/home/user/project"))
@@ -69,8 +64,8 @@ class SessionListPreferencesRepositoryTest {
     }
 
     @Test
-    fun `togglePinned twice returns to empty pinnedDirs`() = testScope.runTest {
-        val repo = createRepo()
+    fun `togglePinned twice returns to empty pinnedDirs`() = runTest {
+        val repo = createRepo(backgroundScope)
         repo.togglePinned("/home/user/project")
         val afterFirst = repo.preferences.first()
         assertEquals(listOf("/home/user/project"), afterFirst.pinnedDirs)
@@ -81,8 +76,8 @@ class SessionListPreferencesRepositoryTest {
     }
 
     @Test
-    fun `addPinned emits pinned directory for ViewModel refresh`() = testScope.runTest {
-        val repo = createRepo()
+    fun `addPinned emits pinned directory for ViewModel refresh`() = runTest {
+        val repo = createRepo(backgroundScope)
 
         val firstAddChanged = repo.addPinned("/home/user/empty-project")
         val duplicateAddChanged = repo.addPinned("/home/user/empty-project")
@@ -94,8 +89,8 @@ class SessionListPreferencesRepositoryTest {
     }
 
     @Test
-    fun `setSort and setFilter are persisted correctly`() = testScope.runTest {
-        val repo = createRepo()
+    fun `setSort and setFilter are persisted correctly`() = runTest {
+        val repo = createRepo(backgroundScope)
         repo.setSort(SessionSort.TITLE_ALPHA)
         repo.setFilter(SessionFilter.HAS_ERRORS)
         val prefs = repo.preferences.first()
@@ -104,8 +99,8 @@ class SessionListPreferencesRepositoryTest {
     }
 
     @Test
-    fun `setScope persists value to ARCHIVED then INBOX`() = testScope.runTest {
-        val repo = createRepo()
+    fun `setScope persists value to ARCHIVED then INBOX`() = runTest {
+        val repo = createRepo(backgroundScope)
 
         repo.setScope(SessionScope.ARCHIVED)
         assertEquals(SessionScope.ARCHIVED, repo.preferences.first().scope)
@@ -115,18 +110,18 @@ class SessionListPreferencesRepositoryTest {
     }
 
     @Test
-    fun `default scope is INBOX`() = testScope.runTest {
-        val repo = createRepo()
+    fun `default scope is INBOX`() = runTest {
+        val repo = createRepo(backgroundScope)
         assertEquals(SessionScope.INBOX, repo.preferences.first().scope)
     }
 
     @Test
-    fun `legacy filter ARCHIVED migrates to scope ARCHIVED and filter ALL`() = testScope.runTest {
+    fun `legacy filter ARCHIVED migrates to scope ARCHIVED and filter ALL`() = runTest {
         // Seed the underlying DataStore directly with the legacy persisted string
         // before constructing the repository instance under test.
         val file = tmpFolder.newFile("legacy_session_list_prefs.preferences_pb")
         val seedDataStore = androidx.datastore.preferences.core.PreferenceDataStoreFactory.create(
-            scope = testScope.backgroundScope,
+            scope = backgroundScope,
             produceFile = { file },
         )
         seedDataStore.edit { mutable ->
@@ -145,8 +140,8 @@ class SessionListPreferencesRepositoryTest {
     }
 
     @Test
-    fun `markMainSessionUnread adds session to unread set`() = testScope.runTest {
-        val repo = createRepo()
+    fun `markMainSessionUnread adds session to unread set`() = runTest {
+        val repo = createRepo(backgroundScope)
 
         repo.markMainSessionUnread("session-1")
 
@@ -155,8 +150,8 @@ class SessionListPreferencesRepositoryTest {
     }
 
     @Test
-    fun `markMainSessionRead removes session from unread set`() = testScope.runTest {
-        val repo = createRepo()
+    fun `markMainSessionRead removes session from unread set`() = runTest {
+        val repo = createRepo(backgroundScope)
         repo.markMainSessionUnread("session-1")
 
         repo.markMainSessionRead("session-1")
@@ -166,8 +161,8 @@ class SessionListPreferencesRepositoryTest {
     }
 
     @Test
-    fun `markMainSessionsRead removes only requested sessions`() = testScope.runTest {
-        val repo = createRepo()
+    fun `markMainSessionsRead removes only requested sessions`() = runTest {
+        val repo = createRepo(backgroundScope)
         repo.markMainSessionUnread("session-1")
         repo.markMainSessionUnread("session-2")
         repo.markMainSessionUnread("session-3")

@@ -53,6 +53,25 @@ class ChatSubagentModelTest {
         assertTrue(filterChatSubagentHistory(items, "work").isEmpty())
     }
 
+    @Test
+    fun `children outside the current server are excluded even with matching parent id`() {
+        val sessions = listOf(
+            session("local-child", "root", "Local", updated = 20),
+            session("foreign-child", "root", "Foreign", updated = 30),
+        )
+
+        val result = buildDirectChatSubagents(
+            parentSessionId = "root",
+            sessions = sessions,
+            statuses = mapOf("foreign-child" to SessionStatus.Busy),
+            questions = emptyMap(),
+            permissions = emptyMap(),
+            allowedSessionIds = setOf("root", "local-child"),
+        )
+
+        assertEquals(listOf("local-child"), result.map { it.id })
+    }
+
     private fun session(id: String, parentId: String, title: String, updated: Long) = Session(
         id = id,
         parentId = parentId,

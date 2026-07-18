@@ -25,9 +25,10 @@ internal fun buildDirectChatSubagents(
     statuses: Map<String, SessionStatus>,
     questions: Map<String, List<SseEvent.QuestionAsked>>,
     permissions: Map<String, List<SseEvent.PermissionAsked>>,
+    allowedSessionIds: Set<String> = sessions.mapTo(mutableSetOf(), Session::id),
 ): List<ChatSubagentItem> = sessions
     .asSequence()
-    .filter { session -> session.parentId == parentSessionId }
+    .filter { session -> session.id in allowedSessionIds && session.parentId == parentSessionId }
     .map { session ->
         val status = statuses[session.id] ?: SessionStatus.Idle
         val activity = when {
