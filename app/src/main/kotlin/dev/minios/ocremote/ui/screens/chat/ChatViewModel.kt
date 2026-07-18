@@ -120,6 +120,7 @@ data class ChatUiState(
     val activeRoster: List<Roundtable.RoleSummary> = emptyList(),
     val personaLibrary: List<PiPersonaDto> = emptyList(),
     val runState: RoundtableRunState = RoundtableRunState(),
+    val subagents: List<ChatSubagentItem> = emptyList(),
 )
 
 data class RoundtableRunState(
@@ -384,6 +385,17 @@ class ChatViewModel @Inject constructor(
         val piPersonas = catalogState.personaLibrary
 
         val session = allSessions.find { it.id == sessionId }
+        val subagents = if (isPiRoundtable) {
+            emptyList()
+        } else {
+            buildDirectChatSubagents(
+                parentSessionId = sessionId,
+                sessions = allSessions,
+                statuses = statuses,
+                questions = questions,
+                permissions = permissions,
+            )
+        }
         val roundtable = roundtables[sessionId]
         val piEvents = roundtableEvents[sessionId].orEmpty()
         val sessionMessages = if (isPiRoundtable) {
@@ -532,6 +544,7 @@ class ChatViewModel @Inject constructor(
             activeRoster = resolveActiveRoster(roundtable, chatMessages, piEvents),
             personaLibrary = piPersonas,
             runState = buildRoundtableRunState(roundtable, chatMessages, piEvents),
+            subagents = subagents,
         )
     }.stateIn(
         viewModelScope,
@@ -676,6 +689,12 @@ class ChatViewModel @Inject constructor(
                 sessionDirectory = session.directory
                 if (BuildConfig.DEBUG) Log.d(TAG, "Session directory: ${session.directory}")
             }
+            val projectSessions = api.listSessions(
+                conn = conn,
+                directory = sessionDirectory,
+                rootsOnly = false,
+            )
+            eventReducer.setSessions(serverId, projectSessions)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to load session info", e)
         } finally {

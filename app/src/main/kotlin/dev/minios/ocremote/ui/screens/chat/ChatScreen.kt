@@ -1246,6 +1246,7 @@ fun ChatScreen(
     var showVariantPicker by remember { mutableStateOf(false) }
     var showRenameDialog by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
+    var showSubagentDrawer by rememberSaveable { mutableStateOf(false) }
     var actionMenuMessage by remember { mutableStateOf<ChatMessage?>(null) }
     var restoreConfirmMessage by remember { mutableStateOf<ChatMessage?>(null) }
     var forkFromMessageInFlight by remember { mutableStateOf(false) }
@@ -1323,6 +1324,10 @@ fun ChatScreen(
         } else {
             isTerminalMode = false
         }
+    }
+
+    BackHandler(enabled = showSubagentDrawer && !isTerminalMode) {
+        showSubagentDrawer = false
     }
 
     LaunchedEffect(isTerminalMode) {
@@ -1831,6 +1836,11 @@ fun ChatScreen(
         LocalHapticFeedbackEnabled provides hapticEnabled,
         LocalImageSaveRequest provides requestSaveImage,
     ) {
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+    val usePersistentSubagentPane = maxWidth >= 840.dp
+    val runningSubagentCount = uiState.subagents.count(ChatSubagentItem::isRunning)
+    Row(modifier = Modifier.fillMaxSize()) {
+    Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
@@ -1880,6 +1890,25 @@ fun ChatScreen(
                                 contentDescription = stringResource(R.string.chat_stop),
                                 tint = MaterialTheme.colorScheme.error
                             )
+                        }
+                    }
+                    if (!uiState.isPiRoundtable) {
+                        IconButton(onClick = { showSubagentDrawer = !showSubagentDrawer }) {
+                            BadgedBox(
+                                badge = {
+                                    if (runningSubagentCount > 0) {
+                                        Badge { Text(runningSubagentCount.toString()) }
+                                    }
+                                },
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.SmartToy,
+                                    contentDescription = stringResource(
+                                        R.string.chat_subagents_open_count,
+                                        runningSubagentCount,
+                                    ),
+                                )
+                            }
                         }
                     }
                     IconButton(onClick = { isTerminalMode = true }) {
@@ -3101,6 +3130,61 @@ fun ChatScreen(
                 }
             }
         }
+    }
+    }
+    if (usePersistentSubagentPane && showSubagentDrawer && !isTerminalMode && !uiState.isPiRoundtable) {
+        ChatSubagentDrawer(
+            items = uiState.subagents,
+            onDismiss = { showSubagentDrawer = false },
+            onOpenSession = { item ->
+                showSubagentDrawer = false
+                onNavigateToSession(item.id, item.directory)
+            },
+            modifier = Modifier.width(360.dp),
+        )
+    }
+    }
+
+    if (!usePersistentSubagentPane && showSubagentDrawer && !isTerminalMode && !uiState.isPiRoundtable) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.34f))
+                .clickable { showSubagentDrawer = false },
+        )
+        ChatSubagentDrawer(
+            items = uiState.subagents,
+            onDismiss = { showSubagentDrawer = false },
+            onOpenSession = { item ->
+                showSubagentDrawer = false
+                onNavigateToSession(item.id, item.directory)
+            },
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .fillMaxWidth(0.86f),
+        )
+    } else if (!showSubagentDrawer && !isTerminalMode && !uiState.isPiRoundtable) {
+        Box(
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .fillMaxHeight()
+                .width(20.dp)
+                .pointerInput(Unit) {
+                    var horizontalDrag = 0f
+                    detectHorizontalDragGestures(
+                        onHorizontalDrag = { _, amount ->
+                            horizontalDrag += amount
+                            if (horizontalDrag < -32.dp.toPx()) {
+                                showSubagentDrawer = true
+                                horizontalDrag = 0f
+                            }
+                        },
+                        onDragEnd = { horizontalDrag = 0f },
+                        onDragCancel = { horizontalDrag = 0f },
+                    )
+                },
+        )
+    }
     }
 
     // Model picker dialog

@@ -426,6 +426,20 @@
     <string name="sessions_clear_filter">Show all</string>
     <string name="chat_type_answer">Type your answer…</string>
     <string name="chat_image">Image</string>
+    <string name="chat_subagents_title">Subagents</string>
+    <string name="chat_subagents_open_count">Open subagents, %1$d running</string>
+    <string name="chat_subagents_close">Close subagents</string>
+    <string name="chat_subagents_running">Running (%1$d)</string>
+    <string name="chat_subagents_history">History</string>
+    <string name="chat_subagents_search_history">Search history by title</string>
+    <string name="chat_subagents_running_empty">No subagents are running</string>
+    <string name="chat_subagents_history_empty">No matching history</string>
+    <string name="chat_subagents_directory_unknown">Directory unavailable</string>
+    <string name="chat_subagents_open">Open child session</string>
+    <string name="chat_subagents_status_running">Running</string>
+    <string name="chat_subagents_status_awaiting">Awaiting reply</string>
+    <string name="chat_subagents_status_retrying">Retrying</string>
+    <string name="chat_subagents_status_completed">Completed</string>
     
     <!-- Slash Commands -->
     <string name="cmd_new">Create a new session</string>
