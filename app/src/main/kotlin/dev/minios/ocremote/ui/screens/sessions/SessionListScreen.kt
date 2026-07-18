@@ -52,6 +52,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import dev.minios.ocremote.R
 import dev.minios.ocremote.data.api.FileNode
 import dev.minios.ocremote.data.preferences.SessionScope
+import dev.minios.ocremote.data.preferences.SessionListViewMode
 import dev.minios.ocremote.domain.model.McpRuntimeState
 import dev.minios.ocremote.domain.model.Project
 import dev.minios.ocremote.domain.model.SessionStatus
@@ -63,11 +64,13 @@ import java.text.SimpleDateFormat
 import java.util.*
 import androidx.compose.animation.core.*
 import androidx.compose.ui.graphics.graphicsLayer
-import dev.minios.ocremote.ui.screens.sessions.components.ActiveConversationsBanner
 import dev.minios.ocremote.ui.screens.sessions.components.McpManagementSheet
 import dev.minios.ocremote.ui.screens.sessions.components.ProjectGroupHeader
+import dev.minios.ocremote.ui.screens.sessions.components.SessionActivityQueueView
 import dev.minios.ocremote.ui.screens.sessions.components.SessionListTopControls
+import dev.minios.ocremote.ui.screens.sessions.components.SessionProjectsViewport
 import dev.minios.ocremote.ui.screens.sessions.components.SessionScopeSegmentedControl
+import dev.minios.ocremote.ui.screens.sessions.components.SessionWorkspaceViewControl
 
 @Composable
 private fun isAmoledTheme(): Boolean {
@@ -389,11 +392,25 @@ fun SessionListScreen(
                         modifier = Modifier.fillMaxSize(),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        ActiveConversationsBanner(
-                            items = uiState.activeConversations,
-                            onClick = { sessionId, directory -> onNavigateToChat(sessionId, false, directory) },
-                        )
+                        if (!uiState.isSelectionMode) {
+                            SessionWorkspaceViewControl(
+                                currentView = uiState.viewMode,
+                                activityCount = uiState.activityQueue.items.size,
+                                onViewChange = viewModel::setViewMode,
+                                modifier = Modifier.padding(top = 4.dp),
+                            )
+                        }
 
+                        if (uiState.viewMode == SessionListViewMode.ACTIVITY) {
+                            SessionActivityQueueView(
+                                queue = uiState.activityQueue,
+                                filter = uiState.activityFilter,
+                                onFilterChange = viewModel::setActivityFilter,
+                                onSessionClick = { sessionId, directory ->
+                                    onNavigateToChat(sessionId, false, directory)
+                                },
+                            )
+                        } else {
                         if (!uiState.isSelectionMode) {
                             SessionScopeSegmentedControl(
                                 currentScope = uiState.scope,
@@ -461,11 +478,7 @@ fun SessionListScreen(
                                 }
                             }
                         } else {
-                            LazyColumn(
-                                modifier = Modifier.fillMaxSize(),
-                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                                verticalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
+                            SessionProjectsViewport(modifier = Modifier.fillMaxSize()) {
                                 for (group in uiState.groups) {
                         stickyHeader(key = "header_${group.directory}") {
                                 val activeProjectMcpServerCount = if (mcpSheetProjectDir == group.directory) {
@@ -551,14 +564,12 @@ fun SessionListScreen(
                                              }
                                          }
                                          items(group.sessions, key = { it.session.id }) { item ->
-                                            val untitledLabel = stringResource(R.string.session_untitled)
-                                            val dirLabel = group.sessionDirLabels[item.session.id]
-                                                ?: group.tildeDirectory.ifEmpty { group.projectName }
-                                        SessionRowWithSubagents(
+                                             val untitledLabel = stringResource(R.string.session_untitled)
+                                         SessionRowWithSubagents(
                                             item = item,
                                             subagents = group.subagentRowsByParent[item.session.id]
                                                 ?: SubagentRow.EMPTY,
-                                            projectName = dirLabel,
+                                            projectName = null,
                                             isSelectionMode = uiState.isSelectionMode,
                                             isSelected = item.session.id in uiState.selectedIds,
                                             currentScope = uiState.scope,
@@ -590,9 +601,10 @@ fun SessionListScreen(
                                                 onNavigateToChat(sessionId, false, directory)
                                             },
                                         )
-                                        }
-                                    }
-                                }
+                             }
+                         }
+                        }
+                     }
                             }
                         }
                     }
