@@ -126,7 +126,7 @@ class BuildActiveConversationsTest {
 
         // AWAITING_QUESTION demands user attention and outranks background BUSY/RETRY work.
         // Within the same priority, updated desc wins, so q2 precedes q1.
-        assertEquals(listOf("q2", "q1", "b1", "r1"), items.map { it.sessionId })
+        assertEquals(listOf("q2", "q1", "r1", "b1"), items.map { it.sessionId })
     }
 
     @Test
@@ -161,7 +161,7 @@ class BuildActiveConversationsTest {
     }
 
     @Test
-    fun `unread sorts before pending decision items`() {
+    fun `pending question sorts before unread`() {
         val unread = rootSession("unread", updated = 100)
         val question = rootSession("question", updated = 200)
 
@@ -176,13 +176,13 @@ class BuildActiveConversationsTest {
             unreadSessionIds = setOf(unread.id),
         )
 
-        assertEquals(listOf("unread", "question"), items.map { it.sessionId })
-        assertEquals(ConversationStatus.UNREAD, items[0].status)
-        assertEquals(ConversationStatus.AWAITING_QUESTION, items[1].status)
+        assertEquals(listOf("question", "unread"), items.map { it.sessionId })
+        assertEquals(ConversationStatus.AWAITING_QUESTION, items[0].status)
+        assertEquals(ConversationStatus.UNREAD, items[1].status)
     }
 
     @Test
-    fun `unread sorts before busy and retry sessions`() {
+    fun `retry and busy sort before unread`() {
         val unread = rootSession("unread", updated = 100)
         val busy = rootSession("busy", updated = 300)
         val retry = rootSession("retry", updated = 200)
@@ -199,10 +199,88 @@ class BuildActiveConversationsTest {
             unreadSessionIds = setOf(unread.id),
         )
 
-        assertEquals(listOf("unread", "busy", "retry"), items.map { it.sessionId })
-        assertEquals(ConversationStatus.UNREAD, items[0].status)
+        assertEquals(listOf("retry", "busy", "unread"), items.map { it.sessionId })
+        assertEquals(ConversationStatus.RETRY, items[0].status)
         assertEquals(ConversationStatus.BUSY, items[1].status)
-        assertEquals(ConversationStatus.RETRY, items[2].status)
+        assertEquals(ConversationStatus.UNREAD, items[2].status)
+    }
+
+    @Test
+    fun `primary kind follows contract and secondary signals are preserved`() {
+        val root = rootSession("root", updated = 100)
+
+        val queue = buildSessionActivityQueue(
+            rootSessions = listOf(root),
+            statuses = mapOf(root.id to SessionStatus.Retry(1, "retrying", 0L)),
+            pendingQuestions = mapOf(root.id to listOf(questionAsked("q1"), questionAsked("q2"))),
+            pendingPermissions = mapOf(root.id to listOf(permissionAsked("p1"))),
+            unreadSessionIds = setOf(root.id),
+        )
+
+        val item = queue.items.single()
+        assertEquals(SessionActivityKind.QUESTION, item.primaryKind)
+        assertEquals(2, item.signals.questionCount)
+        assertEquals(1, item.signals.permissionCount)
+        assertTrue(item.signals.hasRetry)
+        assertTrue(item.signals.isUnread)
+        assertEquals(1, queue.sessionCountsByKind.getValue(SessionActivityKind.PERMISSION))
+        assertEquals(2, queue.signalCountsByKind.getValue(SessionActivityKind.QUESTION))
+    }
+
+    @Test
+    fun `filter matches secondary signal while groups retain primary kind`() {
+        val questionAndPermission = rootSession("both", updated = 100)
+        val permissionOnly = rootSession("permission", updated = 90)
+
+        val queue = buildSessionActivityQueue(
+            rootSessions = listOf(questionAndPermission, permissionOnly),
+            statuses = emptyMap(),
+            pendingQuestions = mapOf(questionAndPermission.id to listOf(questionAsked("q"))),
+            pendingPermissions = mapOf(
+                questionAndPermission.id to listOf(permissionAsked("p1")),
+                permissionOnly.id to listOf(permissionAsked("p2")),
+            ),
+            unreadSessionIds = emptySet(),
+            filter = SessionActivityFilter.PENDING,
+        )
+
+        assertEquals(listOf("both", "permission"), queue.items.map { it.sessionId })
+        assertEquals(
+            listOf(SessionActivityGroupKind.PENDING_ACTION),
+            queue.groups.map { it.kind },
+        )
+        assertEquals(2, queue.sessionCountsByKind.getValue(SessionActivityKind.PERMISSION))
+    }
+
+    @Test
+    fun `queue groups primary kinds into pending running and unread completed`() {
+        val question = rootSession("question", updated = 500)
+        val permission = rootSession("permission", updated = 400)
+        val retry = rootSession("retry", updated = 300)
+        val busy = rootSession("busy", updated = 200)
+        val unread = rootSession("unread", updated = 100)
+
+        val queue = buildSessionActivityQueue(
+            rootSessions = listOf(question, permission, retry, busy, unread),
+            statuses = mapOf(
+                retry.id to SessionStatus.Retry(1, "retry", 0L),
+                busy.id to SessionStatus.Busy,
+            ),
+            pendingQuestions = mapOf(question.id to listOf(questionAsked("q"))),
+            pendingPermissions = mapOf(permission.id to listOf(permissionAsked("p"))),
+            unreadSessionIds = setOf(unread.id),
+        )
+
+        assertEquals(
+            listOf(
+                SessionActivityGroupKind.PENDING_ACTION,
+                SessionActivityGroupKind.RUNNING,
+                SessionActivityGroupKind.UNREAD_COMPLETED,
+            ),
+            queue.groups.map { it.kind },
+        )
+        assertEquals(listOf("question", "permission", "retry"), queue.groups[0].items.map { it.sessionId })
+        assertEquals(listOf("busy"), queue.groups[1].items.map { it.sessionId })
     }
 
     private fun rootSession(id: String, updated: Long, archivedAt: Long? = null) = Session(

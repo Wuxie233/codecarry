@@ -28,6 +28,7 @@ class SessionListPreferencesRepository @Inject constructor(
         private val FILTER_KEY = stringPreferencesKey("filter")
         private val SCOPE_KEY = stringPreferencesKey("scope")
         private val UNREAD_MAIN_SESSION_IDS_KEY = stringSetPreferencesKey("unread_main_session_ids")
+        private const val VIEW_MODE_KEY_PREFIX = "view_mode:"
 
         // Old filter constant that no longer exists in the SessionFilter enum.
         private const val LEGACY_FILTER_ARCHIVED = "ARCHIVED"
@@ -99,6 +100,22 @@ class SessionListPreferencesRepository @Inject constructor(
             scope = scope,
             unreadMainSessionIds = unreadMainSessionIds,
         )
+    }
+
+    fun viewMode(serverId: String): Flow<SessionListViewMode> {
+        val key = stringPreferencesKey("$VIEW_MODE_KEY_PREFIX$serverId")
+        return dataStore.data.map { prefs ->
+            prefs[key]
+                ?.let { runCatching { SessionListViewMode.valueOf(it) }.getOrNull() }
+                ?: SessionListViewMode.PROJECTS
+        }
+    }
+
+    suspend fun setViewMode(serverId: String, viewMode: SessionListViewMode) {
+        val key = stringPreferencesKey("$VIEW_MODE_KEY_PREFIX$serverId")
+        dataStore.edit { prefs ->
+            prefs[key] = viewMode.name
+        }
     }
 
     suspend fun setCollapsed(dir: String, collapsed: Boolean) {

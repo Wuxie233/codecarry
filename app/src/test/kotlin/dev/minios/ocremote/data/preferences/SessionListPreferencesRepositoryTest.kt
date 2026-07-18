@@ -39,6 +39,24 @@ class SessionListPreferencesRepositoryTest {
     }
 
     @Test
+    fun `view mode defaults to projects independently for each server`() = testScope.runTest {
+        val repo = createRepo()
+
+        assertEquals(SessionListViewMode.PROJECTS, repo.viewMode("server-a").first())
+        assertEquals(SessionListViewMode.PROJECTS, repo.viewMode("server-b").first())
+    }
+
+    @Test
+    fun `view mode is remembered per server`() = testScope.runTest {
+        val repo = createRepo()
+
+        repo.setViewMode("server-a", SessionListViewMode.ACTIVITY)
+
+        assertEquals(SessionListViewMode.ACTIVITY, repo.viewMode("server-a").first())
+        assertEquals(SessionListViewMode.PROJECTS, repo.viewMode("server-b").first())
+    }
+
+    @Test
     fun `setCollapsed true then false returns correct state`() = testScope.runTest {
         val repo = createRepo()
         repo.setCollapsed("/home/user/project", collapsed = true)

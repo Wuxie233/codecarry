@@ -6,6 +6,11 @@ enum class SessionSort {
     TITLE_ALPHA,
 }
 
+enum class SessionListViewMode {
+    PROJECTS,
+    ACTIVITY,
+}
+
 /**
  * Status-based filter chips applied within a single scope (Inbox).
  * The historical `ARCHIVED` value has been replaced by [SessionScope.ARCHIVED];

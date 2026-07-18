@@ -16,6 +16,7 @@ import dev.minios.ocremote.data.diagnostics.AppEventName
 import dev.minios.ocremote.data.preferences.SessionFilter
 import dev.minios.ocremote.data.preferences.SessionListPreferences
 import dev.minios.ocremote.data.preferences.SessionListPreferencesRepository
+import dev.minios.ocremote.data.preferences.SessionListViewMode
 import dev.minios.ocremote.data.preferences.SessionSort
 import dev.minios.ocremote.data.preferences.SessionScope
 import dev.minios.ocremote.data.repository.EventReducer
@@ -80,6 +81,9 @@ data class SessionListUiState(
     val error: String? = null,
 
     val activeConversations: List<ActiveConversationItem> = emptyList(),
+    val viewMode: SessionListViewMode = SessionListViewMode.PROJECTS,
+    val activityFilter: SessionActivityFilter = SessionActivityFilter.ALL,
+    val activityQueue: SessionActivityQueue = SessionActivityQueue.EMPTY,
     val groups: List<ProjectGroup> = emptyList(),
     val sessionGroups: List<ProjectSessionGroup> = emptyList(),
 
@@ -99,6 +103,78 @@ data class SessionListUiState(
     val hiddenProjectCount: Int = 0,
     val showHiddenProjects: Boolean = false,
 )
+
+enum class SessionActivityKind {
+    QUESTION,
+    PERMISSION,
+    RETRY,
+    BUSY,
+    UNREAD,
+}
+
+enum class SessionActivityFilter {
+    ALL,
+    PENDING,
+    BUSY,
+    UNREAD,
+    RETRY,
+}
+
+data class SessionActivitySignals(
+    val questionCount: Int = 0,
+    val permissionCount: Int = 0,
+    val hasRetry: Boolean = false,
+    val isBusy: Boolean = false,
+    val isUnread: Boolean = false,
+) {
+    fun contains(kind: SessionActivityKind): Boolean = signalCount(kind) > 0
+
+    fun signalCount(kind: SessionActivityKind): Int = when (kind) {
+        SessionActivityKind.QUESTION -> questionCount
+        SessionActivityKind.PERMISSION -> permissionCount
+        SessionActivityKind.RETRY -> if (hasRetry) 1 else 0
+        SessionActivityKind.BUSY -> if (isBusy) 1 else 0
+        SessionActivityKind.UNREAD -> if (isUnread) 1 else 0
+    }
+}
+
+data class SessionActivityItem(
+    val sessionId: String,
+    val directory: String,
+    val title: String?,
+    val projectName: String,
+    val primaryKind: SessionActivityKind,
+    val signals: SessionActivitySignals,
+    val updatedAt: Long,
+)
+
+enum class SessionActivityGroupKind {
+    PENDING_ACTION,
+    RUNNING,
+    UNREAD_COMPLETED,
+}
+
+data class SessionActivityGroup(
+    val kind: SessionActivityGroupKind,
+    val items: List<SessionActivityItem>,
+    val signalCount: Int,
+)
+
+data class SessionActivityQueue(
+    val items: List<SessionActivityItem>,
+    val groups: List<SessionActivityGroup>,
+    val sessionCountsByKind: Map<SessionActivityKind, Int>,
+    val signalCountsByKind: Map<SessionActivityKind, Int>,
+) {
+    companion object {
+        val EMPTY = SessionActivityQueue(
+            items = emptyList(),
+            groups = emptyList(),
+            sessionCountsByKind = emptyMap(),
+            signalCountsByKind = emptyMap(),
+        )
+    }
+}
 
 /** A group of sessions belonging to a project. */
 data class ProjectSessionGroup(
@@ -243,6 +319,7 @@ class SessionListViewModel @Inject constructor(
     private val _filter = MutableStateFlow(SessionFilter.ALL)
     private val _scopeOverride = MutableStateFlow<SessionScope?>(null)
     private val _showHiddenProjects = MutableStateFlow(false)
+    private val _activityFilter = MutableStateFlow(SessionActivityFilter.ALL)
     private val _navigateToSession = MutableSharedFlow<Session>(extraBufferCapacity = 1)
     val navigateToSession: SharedFlow<Session> = _navigateToSession.asSharedFlow()
     private val _undoState = Channel<UndoAction>(Channel.BUFFERED)
@@ -252,6 +329,11 @@ class SessionListViewModel @Inject constructor(
         viewModelScope,
         SharingStarted.Eagerly,
         SessionListPreferences.DEFAULT,
+    )
+    private val viewModeFlow = preferencesRepo.viewMode(serverId).stateIn(
+        viewModelScope,
+        SharingStarted.Eagerly,
+        SessionListViewMode.PROJECTS,
     )
 
     @Suppress("UNCHECKED_CAST")
@@ -272,6 +354,8 @@ class SessionListViewModel @Inject constructor(
             eventReducer.questions,
             eventReducer.permissions,
             _showHiddenProjects,
+            viewModeFlow,
+            _activityFilter,
         )
     ) { values ->
         val allSessions = values[0] as List<Session>
@@ -289,6 +373,8 @@ class SessionListViewModel @Inject constructor(
         val pendingQuestions = values[12] as Map<String, List<SseEvent.QuestionAsked>>
         val pendingPermissions = values[13] as Map<String, List<SseEvent.PermissionAsked>>
         val showHiddenProjects = values[14] as Boolean
+        val viewMode = values[15] as SessionListViewMode
+        val activityFilter = values[16] as SessionActivityFilter
         val unreadMainSessionIds = prefs.unreadMainSessionIds
 
         val serverSessionIds = serverSessions[serverId] ?: emptySet()
@@ -317,13 +403,15 @@ class SessionListViewModel @Inject constructor(
             )
         }
 
-        val activeConversations = buildActiveConversations(
+        val activityQueue = buildSessionActivityQueue(
             rootSessions = rootSessions,
             statuses = effectiveStatuses,
             pendingQuestions = pendingQuestions,
             pendingPermissions = pendingPermissions,
             unreadSessionIds = unreadMainSessionIds,
+            filter = activityFilter,
         )
+        val activeConversations = activityQueue.items.map(SessionActivityItem::toActiveConversationItem)
         val projectByDirectory = projects.associateBy { normalizeDirectory(it.worktree) }
         val allDirectories = deriveAllDirectories(
             projectDirectories = projects.map { normalizeDirectory(it.worktree) },
@@ -421,6 +509,9 @@ class SessionListViewModel @Inject constructor(
             isLoading = loading,
             error = error,
             activeConversations = activeConversations,
+            viewMode = viewMode,
+            activityFilter = activityFilter,
+            activityQueue = activityQueue,
             groups = groups,
             sessionGroups = legacySessionGroups,
             sort = prefs.sort,
@@ -629,6 +720,16 @@ class SessionListViewModel @Inject constructor(
 
     fun setSearchQuery(q: String) {
         _searchQuery.value = q
+    }
+
+    fun setViewMode(viewMode: SessionListViewMode) {
+        viewModelScope.launch {
+            preferencesRepo.setViewMode(serverId, viewMode)
+        }
+    }
+
+    fun setActivityFilter(filter: SessionActivityFilter) {
+        _activityFilter.value = filter
     }
 
     fun setSort(s: SessionSort) {
@@ -994,43 +1095,132 @@ internal fun buildActiveConversations(
     pendingPermissions: Map<String, List<SseEvent.PermissionAsked>>,
     unreadSessionIds: Set<String>,
 ): List<ActiveConversationItem> {
+    return buildSessionActivityQueue(
+        rootSessions = rootSessions,
+        statuses = statuses,
+        pendingQuestions = pendingQuestions,
+        pendingPermissions = pendingPermissions,
+        unreadSessionIds = unreadSessionIds,
+    ).items.map(SessionActivityItem::toActiveConversationItem)
+}
+
+internal fun buildSessionActivityQueue(
+    rootSessions: List<Session>,
+    statuses: Map<String, SessionStatus>,
+    pendingQuestions: Map<String, List<SseEvent.QuestionAsked>>,
+    pendingPermissions: Map<String, List<SseEvent.PermissionAsked>>,
+    unreadSessionIds: Set<String>,
+    filter: SessionActivityFilter = SessionActivityFilter.ALL,
+): SessionActivityQueue {
     fun normalizeDir(directory: String): String = directory.trimEnd('/').ifEmpty { "/" }
     fun displayName(directory: String): String = if (directory == "/") "/" else directory.substringAfterLast('/').ifEmpty { directory }
 
-    return rootSessions
+    val allItems = rootSessions
         .asSequence()
         .filter { !it.isArchived }
         .mapNotNull { session ->
             val questionCount = pendingQuestions[session.id]?.size ?: 0
             val permissionCount = pendingPermissions[session.id]?.size ?: 0
             val status = statuses[session.id] ?: SessionStatus.Idle
+            val signals = SessionActivitySignals(
+                questionCount = questionCount,
+                permissionCount = permissionCount,
+                hasRetry = status is SessionStatus.Retry,
+                isBusy = status is SessionStatus.Busy,
+                isUnread = session.id in unreadSessionIds,
+            )
 
-            val (conversationStatus, pendingCount) = when {
-                session.id in unreadSessionIds -> ConversationStatus.UNREAD to 0
-                questionCount > 0 -> ConversationStatus.AWAITING_QUESTION to questionCount
-                permissionCount > 0 -> ConversationStatus.AWAITING_PERMISSION to permissionCount
-                status is SessionStatus.Busy -> ConversationStatus.BUSY to 0
-                status is SessionStatus.Retry -> ConversationStatus.RETRY to 0
+            val primaryKind = when {
+                questionCount > 0 -> SessionActivityKind.QUESTION
+                permissionCount > 0 -> SessionActivityKind.PERMISSION
+                status is SessionStatus.Retry -> SessionActivityKind.RETRY
+                status is SessionStatus.Busy -> SessionActivityKind.BUSY
+                session.id in unreadSessionIds -> SessionActivityKind.UNREAD
                 else -> return@mapNotNull null
             }
 
-            ActiveConversationItem(
+            SessionActivityItem(
                 sessionId = session.id,
                 directory = session.directory,
                 title = session.title,
                 projectName = displayName(normalizeDir(session.directory)),
-                status = conversationStatus,
-                pendingCount = pendingCount,
+                primaryKind = primaryKind,
+                signals = signals,
                 updatedAt = session.time.updated,
             )
         }
         .sortedWith(
-            // Priority follows ConversationStatus declaration order:
-            // UNREAD < AWAITING_QUESTION < AWAITING_PERMISSION < BUSY < RETRY.
-            // Unread/awaiting items demand user attention and outrank background
-            // busy/retry progress. Within the same priority, newer activity wins.
-            compareBy<ActiveConversationItem> { it.status.ordinal }
+            compareBy<SessionActivityItem> { it.primaryKind.ordinal }
                 .thenByDescending { it.updatedAt }
         )
         .toList()
+
+    val sessionCountsByKind = SessionActivityKind.entries.associateWith { kind ->
+        allItems.count { it.signals.contains(kind) }
+    }
+    val signalCountsByKind = SessionActivityKind.entries.associateWith { kind ->
+        allItems.sumOf { it.signals.signalCount(kind) }
+    }
+    val filteredItems = when (filter) {
+        SessionActivityFilter.ALL -> allItems
+        SessionActivityFilter.PENDING -> allItems.filter {
+            it.signals.questionCount > 0 || it.signals.permissionCount > 0
+        }
+        SessionActivityFilter.BUSY -> allItems.filter { it.signals.isBusy }
+        SessionActivityFilter.UNREAD -> allItems.filter { it.signals.isUnread }
+        SessionActivityFilter.RETRY -> allItems.filter { it.signals.hasRetry }
+    }
+    val groups = SessionActivityGroupKind.entries.mapNotNull { kind ->
+        val items = filteredItems.filter { item -> item.primaryKind.groupKind == kind }
+        if (items.isEmpty()) null else SessionActivityGroup(
+            kind = kind,
+            items = items,
+            signalCount = items.sumOf { item ->
+                when (kind) {
+                    SessionActivityGroupKind.PENDING_ACTION ->
+                        item.signals.questionCount + item.signals.permissionCount +
+                            item.signals.signalCount(SessionActivityKind.RETRY)
+                    SessionActivityGroupKind.RUNNING ->
+                        item.signals.signalCount(SessionActivityKind.BUSY)
+                    SessionActivityGroupKind.UNREAD_COMPLETED ->
+                        item.signals.signalCount(SessionActivityKind.UNREAD)
+                }
+            },
+        )
+    }
+
+    return SessionActivityQueue(
+        items = filteredItems,
+        groups = groups,
+        sessionCountsByKind = sessionCountsByKind,
+        signalCountsByKind = signalCountsByKind,
+    )
 }
+
+private val SessionActivityKind.groupKind: SessionActivityGroupKind
+    get() = when (this) {
+        SessionActivityKind.QUESTION, SessionActivityKind.PERMISSION, SessionActivityKind.RETRY ->
+            SessionActivityGroupKind.PENDING_ACTION
+        SessionActivityKind.BUSY -> SessionActivityGroupKind.RUNNING
+        SessionActivityKind.UNREAD -> SessionActivityGroupKind.UNREAD_COMPLETED
+    }
+
+private fun SessionActivityItem.toActiveConversationItem(): ActiveConversationItem = ActiveConversationItem(
+    sessionId = sessionId,
+    directory = directory,
+    title = title,
+    projectName = projectName,
+    status = when (primaryKind) {
+        SessionActivityKind.QUESTION -> ConversationStatus.AWAITING_QUESTION
+        SessionActivityKind.PERMISSION -> ConversationStatus.AWAITING_PERMISSION
+        SessionActivityKind.RETRY -> ConversationStatus.RETRY
+        SessionActivityKind.BUSY -> ConversationStatus.BUSY
+        SessionActivityKind.UNREAD -> ConversationStatus.UNREAD
+    },
+    pendingCount = when (primaryKind) {
+        SessionActivityKind.QUESTION -> signals.questionCount
+        SessionActivityKind.PERMISSION -> signals.permissionCount
+        else -> 0
+    },
+    updatedAt = updatedAt,
+)
