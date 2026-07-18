@@ -283,6 +283,28 @@ class BuildActiveConversationsTest {
         assertEquals(listOf("busy"), queue.groups[1].items.map { it.sessionId })
     }
 
+    @Test
+    fun `filtered queue retains total activity counts`() {
+        val pending = rootSession("pending", updated = 300)
+        val busy = rootSession("busy", updated = 200)
+        val unread = rootSession("unread", updated = 100)
+
+        val queue = buildSessionActivityQueue(
+            rootSessions = listOf(pending, busy, unread),
+            statuses = mapOf(busy.id to SessionStatus.Busy),
+            pendingQuestions = mapOf(pending.id to listOf(questionAsked("q"))),
+            pendingPermissions = emptyMap(),
+            unreadSessionIds = setOf(unread.id),
+            filter = SessionActivityFilter.BUSY,
+        )
+
+        assertEquals(listOf("busy"), queue.items.map { it.sessionId })
+        assertEquals(3, queue.totalSessionCount)
+        assertEquals(1, queue.sessionCountsByKind.getValue(SessionActivityKind.QUESTION))
+        assertEquals(1, queue.sessionCountsByKind.getValue(SessionActivityKind.BUSY))
+        assertEquals(1, queue.sessionCountsByKind.getValue(SessionActivityKind.UNREAD))
+    }
+
     private fun rootSession(id: String, updated: Long, archivedAt: Long? = null) = Session(
         id = id,
         slug = id,

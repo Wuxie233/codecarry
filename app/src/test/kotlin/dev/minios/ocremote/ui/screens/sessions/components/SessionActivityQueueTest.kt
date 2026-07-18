@@ -36,6 +36,7 @@ class SessionActivityQueueTest {
                     signalCount = items.size,
                 ),
             ),
+            totalSessionCount = items.size,
             sessionCountsByKind = mapOf(SessionActivityKind.BUSY to items.size),
             signalCountsByKind = mapOf(SessionActivityKind.BUSY to items.size),
         )

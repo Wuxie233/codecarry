@@ -13,7 +13,9 @@ import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import dev.minios.ocremote.R
 import dev.minios.ocremote.data.preferences.SessionListViewMode
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -24,7 +26,7 @@ fun SessionWorkspaceViewControl(
     onViewChange: (SessionListViewMode) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val options = listOf(SessionListViewMode.PROJECTS, SessionListViewMode.ACTIVITY)
+    val options = listOf(SessionListViewMode.ACTIVITY, SessionListViewMode.PROJECTS)
     SingleChoiceSegmentedButtonRow(
         modifier = modifier
             .fillMaxWidth()
@@ -44,8 +46,12 @@ fun SessionWorkspaceViewControl(
                 label = {
                     Text(
                         when (view) {
-                            SessionListViewMode.PROJECTS -> "Projects"
-                            SessionListViewMode.ACTIVITY -> if (activityCount > 0) "Activity ($activityCount)" else "Activity"
+                            SessionListViewMode.PROJECTS -> stringResource(R.string.sessions_view_projects)
+                            SessionListViewMode.ACTIVITY -> if (activityCount > 0) {
+                                stringResource(R.string.sessions_view_activity_count, activityCount)
+                            } else {
+                                stringResource(R.string.sessions_view_activity)
+                            }
                         },
                     )
                 },

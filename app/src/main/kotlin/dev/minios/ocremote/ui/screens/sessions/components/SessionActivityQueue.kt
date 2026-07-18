@@ -37,8 +37,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.minios.ocremote.R
 import dev.minios.ocremote.ui.screens.sessions.SessionActivityFilter
 import dev.minios.ocremote.ui.screens.sessions.SessionActivityGroup
 import dev.minios.ocremote.ui.screens.sessions.SessionActivityGroupKind
@@ -79,7 +81,7 @@ fun SessionActivityQueueView(
         if (queue.items.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
-                    text = "No activity needs attention",
+                    text = stringResource(R.string.sessions_activity_empty),
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -152,7 +154,8 @@ private fun ActivityQueueRow(
         }
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(
-                text = item.title?.takeIf(String::isNotBlank) ?: "Untitled session",
+                text = item.title?.takeIf(String::isNotBlank)
+                    ?: stringResource(R.string.session_untitled),
                 style = MaterialTheme.typography.bodyMedium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -197,33 +200,34 @@ private data class ActivityVisual(val label: String, val icon: ImageVector, val 
 
 @Composable
 private fun SessionActivityGroupKind.visual(): ActivityVisual = when (this) {
-    SessionActivityGroupKind.PENDING_ACTION -> ActivityVisual("Pending Action", Icons.AutoMirrored.Filled.HelpOutline, MaterialTheme.colorScheme.error)
-    SessionActivityGroupKind.RUNNING -> ActivityVisual("Running", Icons.Default.Sync, MaterialTheme.colorScheme.primary)
-    SessionActivityGroupKind.UNREAD_COMPLETED -> ActivityVisual("Unread Completed", Icons.Default.MarkChatUnread, Color(0xFF1976D2))
+    SessionActivityGroupKind.PENDING_ACTION -> ActivityVisual(stringResource(R.string.sessions_activity_group_pending), Icons.AutoMirrored.Filled.HelpOutline, MaterialTheme.colorScheme.error)
+    SessionActivityGroupKind.RUNNING -> ActivityVisual(stringResource(R.string.sessions_activity_group_running), Icons.Default.Sync, MaterialTheme.colorScheme.primary)
+    SessionActivityGroupKind.UNREAD_COMPLETED -> ActivityVisual(stringResource(R.string.sessions_activity_group_unread), Icons.Default.MarkChatUnread, Color(0xFF1976D2))
 }
 
 @Composable
 private fun SessionActivityKind.visual(): ActivityVisual = when (this) {
-    SessionActivityKind.QUESTION -> ActivityVisual("Questions", Icons.AutoMirrored.Filled.HelpOutline, MaterialTheme.colorScheme.tertiary)
-    SessionActivityKind.PERMISSION -> ActivityVisual("Permissions", Icons.Default.Lock, MaterialTheme.colorScheme.secondary)
-    SessionActivityKind.RETRY -> ActivityVisual("Errors", Icons.Default.ErrorOutline, MaterialTheme.colorScheme.error)
-    SessionActivityKind.BUSY -> ActivityVisual("Running", Icons.Default.Sync, MaterialTheme.colorScheme.primary)
-    SessionActivityKind.UNREAD -> ActivityVisual("Unread", Icons.Default.MarkChatUnread, Color(0xFF1976D2))
+    SessionActivityKind.QUESTION -> ActivityVisual(stringResource(R.string.sessions_activity_status_question), Icons.AutoMirrored.Filled.HelpOutline, MaterialTheme.colorScheme.tertiary)
+    SessionActivityKind.PERMISSION -> ActivityVisual(stringResource(R.string.sessions_activity_status_permission), Icons.Default.Lock, MaterialTheme.colorScheme.secondary)
+    SessionActivityKind.RETRY -> ActivityVisual(stringResource(R.string.sessions_activity_status_retry), Icons.Default.ErrorOutline, MaterialTheme.colorScheme.error)
+    SessionActivityKind.BUSY -> ActivityVisual(stringResource(R.string.sessions_activity_status_running), Icons.Default.Sync, MaterialTheme.colorScheme.primary)
+    SessionActivityKind.UNREAD -> ActivityVisual(stringResource(R.string.sessions_activity_status_unread), Icons.Default.MarkChatUnread, Color(0xFF1976D2))
 }
 
+@Composable
 private fun SessionActivityFilter.label(): String = when (this) {
-    SessionActivityFilter.ALL -> "All"
-    SessionActivityFilter.PENDING -> "Pending"
-    SessionActivityFilter.BUSY -> "Running"
-    SessionActivityFilter.UNREAD -> "Unread"
-    SessionActivityFilter.RETRY -> "Retry"
+    SessionActivityFilter.ALL -> stringResource(R.string.sessions_activity_filter_all)
+    SessionActivityFilter.PENDING -> stringResource(R.string.sessions_activity_filter_pending)
+    SessionActivityFilter.BUSY -> stringResource(R.string.sessions_activity_filter_running)
+    SessionActivityFilter.UNREAD -> stringResource(R.string.sessions_activity_filter_unread)
+    SessionActivityFilter.RETRY -> stringResource(R.string.sessions_activity_filter_retry)
 }
 
 private fun SessionActivityFilter.countIn(queue: SessionActivityQueue): Int = when (this) {
-    SessionActivityFilter.ALL -> queue.items.size
-    SessionActivityFilter.PENDING -> queue.items.count {
-        it.signals.questionCount > 0 || it.signals.permissionCount > 0
-    }
+    SessionActivityFilter.ALL -> queue.totalSessionCount
+    SessionActivityFilter.PENDING ->
+        queue.sessionCountsByKind[SessionActivityKind.QUESTION].orZero() +
+            queue.sessionCountsByKind[SessionActivityKind.PERMISSION].orZero()
     SessionActivityFilter.BUSY -> queue.sessionCountsByKind[SessionActivityKind.BUSY].orZero()
     SessionActivityFilter.UNREAD -> queue.sessionCountsByKind[SessionActivityKind.UNREAD].orZero()
     SessionActivityFilter.RETRY -> queue.sessionCountsByKind[SessionActivityKind.RETRY].orZero()
