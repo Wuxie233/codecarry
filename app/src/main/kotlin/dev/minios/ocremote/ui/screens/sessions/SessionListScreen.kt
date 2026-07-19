@@ -70,6 +70,7 @@ import dev.minios.ocremote.ui.screens.sessions.components.ProjectGroupHeader
 import dev.minios.ocremote.ui.screens.sessions.components.SessionActivityQueueView
 import dev.minios.ocremote.ui.screens.sessions.components.SessionListTopControls
 import dev.minios.ocremote.ui.screens.sessions.components.SessionProjectsViewport
+import dev.minios.ocremote.ui.screens.sessions.components.SessionRecentWork
 import dev.minios.ocremote.ui.screens.sessions.components.SessionScopeSegmentedControl
 import dev.minios.ocremote.ui.screens.sessions.components.SessionWorkspaceViewControl
 
@@ -395,6 +396,14 @@ fun SessionListScreen(
                         modifier = Modifier.fillMaxSize(),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
+                        if (!uiState.isSelectionMode) {
+                            SessionRecentWork(
+                                items = uiState.recentWork,
+                                onSessionClick = { sessionId, directory ->
+                                    onNavigateToChat(sessionId, false, directory)
+                                },
+                            )
+                        }
                         if (!uiState.isSelectionMode) {
                             SessionWorkspaceViewControl(
                                 currentView = uiState.viewMode,

@@ -84,6 +84,7 @@ data class SessionListUiState(
     val viewMode: SessionListViewMode = SessionListViewMode.PROJECTS,
     val activityFilter: SessionActivityFilter = SessionActivityFilter.ALL,
     val activityQueue: SessionActivityQueue = SessionActivityQueue.EMPTY,
+    val recentWork: List<SessionRecentWorkItem> = emptyList(),
     val groups: List<ProjectGroup> = emptyList(),
     val sessionGroups: List<ProjectSessionGroup> = emptyList(),
 
@@ -103,6 +104,34 @@ data class SessionListUiState(
     val hiddenProjectCount: Int = 0,
     val showHiddenProjects: Boolean = false,
 )
+
+data class SessionRecentWorkItem(
+    val sessionId: String,
+    val title: String?,
+    val directory: String,
+    val updatedAt: Long,
+    val status: SessionStatus,
+)
+
+internal fun buildSessionRecentWork(
+    rootSessions: List<Session>,
+    effectiveStatuses: Map<String, SessionStatus>,
+    limit: Int = 6,
+): List<SessionRecentWorkItem> = rootSessions
+    .asSequence()
+    .filterNot(Session::isArchived)
+    .sortedByDescending { it.time.updated }
+    .take(limit)
+    .map { session ->
+        SessionRecentWorkItem(
+            sessionId = session.id,
+            title = session.title,
+            directory = session.directory,
+            updatedAt = session.time.updated,
+            status = effectiveStatuses[session.id] ?: SessionStatus.Idle,
+        )
+    }
+    .toList()
 
 enum class SessionActivityKind {
     QUESTION,
@@ -415,6 +444,7 @@ class SessionListViewModel @Inject constructor(
             unreadSessionIds = unreadMainSessionIds,
             filter = activityFilter,
         )
+        val recentWork = buildSessionRecentWork(rootSessions, effectiveStatuses)
         val activeConversations = activityQueue.items.map(SessionActivityItem::toActiveConversationItem)
         val projectByDirectory = projects.associateBy { normalizeDirectory(it.worktree) }
         val allDirectories = deriveAllDirectories(
@@ -516,6 +546,7 @@ class SessionListViewModel @Inject constructor(
             viewMode = viewMode,
             activityFilter = activityFilter,
             activityQueue = activityQueue,
+            recentWork = recentWork,
             groups = groups,
             sessionGroups = legacySessionGroups,
             sort = prefs.sort,

@@ -293,6 +293,23 @@ class EventReducerTest {
     }
 
     @Test
+    fun clearForServerKeepsSessionStillOwnedByAnotherServer() {
+        val reducer = EventReducer()
+        val shared = testSession("shared")
+        reducer.setSessions("server-1", listOf(shared))
+        reducer.setSessions("server-2", listOf(shared))
+        processStatusEvent(reducer, shared.id, SessionStatus.Busy, "server-2")
+        reducer.setActiveSessionId(shared.id)
+
+        clearForServer(reducer, "server-1")
+
+        assertEquals(setOf(shared.id), reducer.serverSessions.value["server-2"])
+        assertEquals(SessionStatus.Busy, reducer.sessionStatuses.value[shared.id])
+        assertTrue(reducer.sessions.value.any { it.id == shared.id })
+        assertEquals(shared.id, reducer.activeSessionId.value)
+    }
+
+    @Test
     fun permissionAskedIsIdempotentByRequestId() {
         val reducer = EventReducer()
         val asked = SseEvent.PermissionAsked(id = "perm-1", sessionId = "ses-1", permission = "p")

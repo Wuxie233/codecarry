@@ -9,6 +9,9 @@ import android.os.IBinder
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.ProcessLifecycleOwner
 import dev.minios.ocremote.BuildConfig
 import dev.minios.ocremote.MainActivity
 import dev.minios.ocremote.R
@@ -73,8 +76,54 @@ private data class ServerConnectionState(
     val config: ServerConfig,
     val transport: AgentTransport,
     val sseJob: Job,
-    val isConnected: Boolean = false
+    val isConnected: Boolean = false,
+    val projectDirectories: List<String>? = null,
 )
+
+internal class ForegroundStatusRefreshObserver(
+    private val onForeground: () -> Unit,
+) : DefaultLifecycleObserver {
+    override fun onStart(owner: LifecycleOwner) = onForeground()
+}
+
+internal fun shouldReconcileForegroundStatus(serverType: ServerType, isConnected: Boolean): Boolean =
+    isConnected && serverType == ServerType.OPENCODE
+
+internal fun openCodeNotificationDedupKey(serverId: String, id: String): String = "$serverId\u0000$id"
+
+internal suspend fun <T> reconcileConnectedOpenCodeTargets(
+    targets: Collection<T>,
+    serverType: (T) -> ServerType,
+    isConnected: (T) -> Boolean,
+    reconcile: suspend (T) -> Unit,
+): List<Throwable> = supervisorScope {
+    targets.filter { target -> shouldReconcileForegroundStatus(serverType(target), isConnected(target)) }
+        .map { target ->
+            async {
+                try {
+                    reconcile(target)
+                    null
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Throwable) {
+                    error
+                }
+            }
+        }
+        .awaitAll()
+        .filterNotNull()
+}
+
+internal suspend fun resolveStatusProjectDirectories(
+    cachedDirectories: List<String>?,
+    discover: suspend () -> List<String>,
+): List<String>? = try {
+    discover().distinct()
+} catch (error: CancellationException) {
+    throw error
+} catch (_: Exception) {
+    cachedDirectories
+}
 
 internal suspend fun loadSessionStatusSnapshot(
     transport: AgentTransport,
@@ -92,8 +141,9 @@ internal suspend fun EventReducer.reconcileSessionStatusSnapshot(
     transport: AgentTransport,
     projectDirectories: List<String>,
 ): Int {
+    val baseline = captureSessionStatusBaseline(serverId)
     val statuses = loadSessionStatusSnapshot(transport, projectDirectories)
-    setSessionStatuses(serverId, statuses)
+    reconcileSessionStatuses(statuses, baseline)
     return statuses.size
 }
 
@@ -164,10 +214,14 @@ class OpenCodeConnectionService : Service() {
     private val codexConnectionErrors = ConcurrentHashMap<String, String>()
 
     private var notificationWatchdogJob: Job? = null
+    private var foregroundStatusRefreshJob: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
 
     private lateinit var notificationManager: NotificationManager
     private var foregroundStarted: Boolean = false
+    private val foregroundStatusRefreshObserver = ForegroundStatusRefreshObserver {
+        reconcileConnectedOpenCodeStatuses()
+    }
 
     /** Observable set of server IDs that are actually connected (SSE stream active). */
     private val _connectedServerIds = MutableStateFlow<Set<String>>(emptySet())
@@ -182,11 +236,11 @@ class OpenCodeConnectionService : Service() {
     private val _connectionErrors = MutableStateFlow<Map<String, String>>(emptyMap())
     val connectionErrors: StateFlow<Map<String, String>> = _connectionErrors.asStateFlow()
 
-    /** Dedup response-ready notifications per session by last assistant message ID. */
+    /** Dedup response-ready notifications per server/session by last assistant message ID. */
     private val lastNotifiedAssistantMessageBySession = ConcurrentHashMap<String, String>()
     private val postedPiNotificationKeys = ConcurrentHashMap.newKeySet<String>()
 
-    /** Dedup permission notifications fired from the connect-time bootstrap, keyed by request ID. */
+    /** Dedup permission notifications fired from the connect-time bootstrap, keyed by server/request. */
     private val postedPermissionRequestIds = ConcurrentHashMap.newKeySet<String>()
     private val handledCodexTurns = BoundedNotificationKeys(capacity = 512)
     private val postedCodexRequestIds = ConcurrentHashMap<String, Int>()
@@ -202,6 +256,7 @@ class OpenCodeConnectionService : Service() {
 
         notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         createNotificationChannels()
+        ProcessLifecycleOwner.get().lifecycle.addObserver(foregroundStatusRefreshObserver)
 
         serviceScope.launch { observeCodexConnections() }
         serviceScope.launch { observeCodexNotifications() }
@@ -261,6 +316,7 @@ class OpenCodeConnectionService : Service() {
     }
 
     override fun onDestroy() {
+        ProcessLifecycleOwner.get().lifecycle.removeObserver(foregroundStatusRefreshObserver)
         super.onDestroy()
         if (BuildConfig.DEBUG) Log.d(TAG, "Service destroyed")
         disconnectAllInternal(stopService = false)
@@ -332,6 +388,7 @@ class OpenCodeConnectionService : Service() {
 
         val state = connections.remove(serverId) ?: return
         state.sseJob.cancel()
+        clearOpenCodeNotificationDedup(serverId)
 
         _connectedServerIds.update { it - serverId }
         _connectingServerIds.update { it - serverId }
@@ -385,6 +442,8 @@ class OpenCodeConnectionService : Service() {
         val codexOwners = codexConnections.clear()
         val serverIds = connections.keys.toList() + codexOwners.map { it.config.id }
         connections.clear()
+        lastNotifiedAssistantMessageBySession.clear()
+        postedPermissionRequestIds.clear()
         codexOwners.forEach { owner ->
             owner.connectJob.cancel()
             codexConnectionManager.releasePersistent(owner.config.id)
@@ -741,7 +800,14 @@ class OpenCodeConnectionService : Service() {
                 Log.i(TAG, "[${server.displayName}] SSE connection attempt #$attempt")
 
                 updateConnectionPhase(server.id, ConnectionPhase.LoadingWorkspace)
-                val projects = try { transport.listRoomScopes() } catch (_: Exception) { emptyList() }
+                val projects = try {
+                    transport.listRoomScopes().also { scopes ->
+                        updateProjectDirectories(server.id, scopes.map { it.directory })
+                    }
+                } catch (error: Exception) {
+                    Log.w(TAG, "[${server.displayName}] Failed to list projects: ${error.message}")
+                    emptyList()
+                }
                 try {
                     updateConnectionPhase(server.id, ConnectionPhase.SyncingSessions)
                     val roots = transport.listRooms(rootsOnly = true).openCodeSessions()
@@ -766,16 +832,10 @@ class OpenCodeConnectionService : Service() {
                     Log.w(TAG, "[${server.displayName}] Failed to pre-load sessions: ${e.message}")
                 }
 
-                updateConnectionPhase(server.id, ConnectionPhase.RestoringActivity)
-                bootstrapSessionStatuses(
-                    server = server,
-                    transport = transport,
-                    projectDirectories = projects.map { it.directory },
-                )
-
                 // Capture which permissions are carried over from a previous connection BEFORE
                 // subscribing, so the permission reconcile can tell stale (replied while away)
                 // from live (arriving on this fresh stream) apart.
+                updateConnectionPhase(server.id, ConnectionPhase.RestoringActivity)
                 val prePermissionIds = currentServerPermissionIds(server.id)
 
                 try {
@@ -789,23 +849,29 @@ class OpenCodeConnectionService : Service() {
                                 throw error
                             }
                             .collect { transportEvent ->
-                                if (connections[server.id]?.isConnected != true) {
+                                val streamJustOpened = connections[server.id]?.isConnected != true
+                                if (streamJustOpened) {
                                     updateServerConnected(server.id, true)
                                     attempt = 0
                                     updatePersistentNotification()
-                                    // Fetch the permission snapshot only once the stream is confirmed
-                                    // open (first event received). Any permission asked after this point
-                                    // arrives on the live stream, so fetching now closes the no-replay
-                                    // gap a fetch-before-subscribe order would leave open.
-                                    streamScope.launch {
-                                        bootstrapPendingPermissions(server, transport, prePermissionIds)
-                                    }
                                 }
                                 when (transportEvent) {
                                     is TransportEvent.OpenCode -> processEvent(server, transportEvent.event)
                                     is TransportEvent.Pi -> {
                                         eventReducer.processEvent(transportEvent, server.id)
                                         maybeShowPiNotification(server, transportEvent.event)
+                                    }
+                                }
+                                if (streamJustOpened) {
+                                    // Start snapshots only after the stream is live and its first event
+                                    // has been reduced. Revision guards preserve any subsequent deltas.
+                                    connections[server.id]?.projectDirectories?.let { directories ->
+                                        streamScope.launch {
+                                            bootstrapSessionStatuses(server, transport, directories)
+                                        }
+                                    } ?: Log.w(TAG, "[${server.displayName}] Skipping status snapshot without a complete project scope list")
+                                    streamScope.launch {
+                                        bootstrapPendingPermissions(server, transport, prePermissionIds)
                                     }
                                 }
                             }
@@ -843,11 +909,16 @@ class OpenCodeConnectionService : Service() {
             .mapTo(mutableSetOf()) { it.id }
     }
 
+    private fun clearOpenCodeNotificationDedup(serverId: String) {
+        val prefix = "$serverId\u0000"
+        lastNotifiedAssistantMessageBySession.keys.removeAll { it.startsWith(prefix) }
+        postedPermissionRequestIds.removeAll { it.startsWith(prefix) }
+    }
+
     /**
      * Pull current session statuses (retry/cooldown/busy) on (re)connect so they show
-     * immediately instead of waiting for the next pushed SSE event. Runs before subscribing:
-     * no SSE deltas exist yet, so the status reconcile (absent-from-snapshot -> idle) is safe,
-     * and a status missed in the tiny window self-heals from the session's ongoing status events.
+     * immediately instead of waiting for the next pushed SSE event. Runs after the live stream
+     * opens; revision guards prevent the snapshot from overwriting newer SSE deltas.
      */
     private suspend fun bootstrapSessionStatuses(
         server: ServerConfig,
@@ -869,6 +940,56 @@ class OpenCodeConnectionService : Service() {
     }
 
     /**
+     * Reconcile all live OpenCode connections when the app returns to the foreground. The SSE
+     * jobs remain active in the background; this one-shot snapshot only repairs events missed by
+     * the network or OS and is never scheduled as polling.
+     */
+    private fun reconcileConnectedOpenCodeStatuses() {
+        foregroundStatusRefreshJob?.cancel()
+        foregroundStatusRefreshJob = serviceScope.launch {
+            reconcileConnectedOpenCodeTargets(
+                targets = connections.values.toList(),
+                serverType = { state -> state.config.type },
+                isConnected = ServerConnectionState::isConnected,
+                reconcile = ::reconcileConnectedOpenCodeStatus,
+            )
+        }
+    }
+
+    private suspend fun reconcileConnectedOpenCodeStatus(state: ServerConnectionState) {
+        val server = state.config
+        val discoveredDirectories = resolveStatusProjectDirectories(state.projectDirectories) {
+            state.transport.listRoomScopes().map { it.directory }
+        } ?: run {
+            Log.w(TAG, "[${server.displayName}] Skipping foreground reconcile without a complete project scope list")
+            return
+        }
+        updateProjectDirectories(server.id, discoveredDirectories)
+        val trackedDirectories = eventReducer.serverSessions.value[server.id].orEmpty()
+            .let { ids -> eventReducer.sessions.value.filter { it.id in ids }.map { it.directory } }
+            .filter { it.isNotBlank() }
+        val projectDirectories = (discoveredDirectories + trackedDirectories).distinct()
+
+        try {
+            val baseline = eventReducer.captureSessionStatusBaseline(server.id)
+            val statuses = loadSessionStatusSnapshot(state.transport, projectDirectories)
+            val current = connections[server.id]
+            if (current?.transport !== state.transport || current.isConnected.not()) return
+            eventReducer.reconcileSessionStatuses(statuses, baseline)
+            Log.i(TAG, "[${server.displayName}] Reconciled ${statuses.size} foreground session status(es)")
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            Log.w(TAG, "[${server.displayName}] Foreground status reconcile failed: ${error.message}")
+        }
+    }
+
+    private fun updateProjectDirectories(serverId: String, directories: List<String>) {
+        val state = connections[serverId] ?: return
+        connections[serverId] = state.copy(projectDirectories = directories.distinct())
+    }
+
+    /**
      * Pull pending permission requests on (re)connect and reconcile them, firing a deduped
      * notification for each genuinely new one. Called concurrently with the live SSE stream so
      * permissions asked during the fetch are not lost.
@@ -884,7 +1005,7 @@ class OpenCodeConnectionService : Service() {
             if (pending.isNotEmpty() && settingsRepository.notificationsEnabled.first()) {
                 for (perm in pending) {
                     if (isChildSession(perm.sessionId)) continue
-                    if (!postedPermissionRequestIds.add(perm.id)) continue
+                    if (!postedPermissionRequestIds.add(openCodeNotificationDedupKey(server.id, perm.id))) continue
                     showPermissionNotification(
                         server = server,
                         sessionId = perm.sessionId,
@@ -960,11 +1081,14 @@ class OpenCodeConnectionService : Service() {
             is SseEvent.SessionIdle -> {
                 maybeMarkSessionUnread(event.sessionId, previousStatus)
                 if (isChildSession(event.sessionId)) return
+                val sourceTransport = connections[server.id]?.transport ?: return
                 serviceScope.launch {
                     if (!settingsRepository.notificationsEnabled.first()) return@launch
 
                     // Give reducer a brief moment to receive trailing message/part events.
                     delay(250)
+                    val current = connections[server.id]
+                    if (current?.transport !== sourceTransport || !current.isConnected) return@launch
                     if (eventReducer.activeSessionId.value == event.sessionId) return@launch
 
                     val assistantMessageId = latestNotifiableAssistantMessageId(event.sessionId)
@@ -975,7 +1099,8 @@ class OpenCodeConnectionService : Service() {
                         return@launch
                     }
 
-                    val previousNotified = lastNotifiedAssistantMessageBySession[event.sessionId]
+                    val dedupKey = openCodeNotificationDedupKey(server.id, event.sessionId)
+                    val previousNotified = lastNotifiedAssistantMessageBySession[dedupKey]
                     if (previousNotified == assistantMessageId) {
                         if (BuildConfig.DEBUG) {
                             Log.d(TAG, "[${server.displayName}] Skip duplicate response-ready (${event.sessionId}, msg=$assistantMessageId)")
@@ -983,14 +1108,14 @@ class OpenCodeConnectionService : Service() {
                         return@launch
                     }
 
-                    lastNotifiedAssistantMessageBySession[event.sessionId] = assistantMessageId
+                    lastNotifiedAssistantMessageBySession[dedupKey] = assistantMessageId
                     Log.i(TAG, "[${server.displayName}] Session idle -> Response ready for ${event.sessionId}")
                         showTaskCompleteNotification(server, event.sessionId)
                 }
             }
             is SseEvent.PermissionAsked -> {
                 if (isChildSession(event.sessionId)) return
-                if (!postedPermissionRequestIds.add(event.id)) return
+                if (!postedPermissionRequestIds.add(openCodeNotificationDedupKey(server.id, event.id))) return
                 Log.i(TAG, "[${server.displayName}] Permission asked: ${event.permission} (id=${event.id})")
                 showPermissionNotification(
                     server = server,

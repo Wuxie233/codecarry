@@ -6,6 +6,7 @@ import dev.minios.ocremote.domain.model.SessionStatus
 import dev.minios.ocremote.domain.model.SseEvent
 import dev.minios.ocremote.domain.transport.AgentTransport
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 import java.io.IOException
 
@@ -82,6 +83,105 @@ class SessionStatusSnapshotTest {
 
         assertEquals("status snapshot failed", failure?.message)
         assertEquals(SessionStatus.Busy, reducer.sessionStatuses.value[child.id])
+    }
+
+    @Test
+    fun `snapshot cannot overwrite a newer live status event`() = kotlinx.coroutines.test.runTest {
+        val reducer = EventReducer()
+        val session = Session(id = "session")
+        reducer.setSessions("server", listOf(session))
+        reducer.processEvent(SseEvent.SessionStatus(session.id, SessionStatus.Busy), "server")
+        val baseline = reducer.captureSessionStatusBaseline("server")
+
+        reducer.processEvent(SseEvent.SessionIdle(session.id), "server")
+        reducer.reconcileSessionStatuses(mapOf(session.id to SessionStatus.Busy), baseline)
+
+        assertEquals(SessionStatus.Idle, reducer.sessionStatuses.value[session.id])
+    }
+
+    @Test
+    fun `snapshot revision detects live ABA status changes`() = kotlinx.coroutines.test.runTest {
+        val reducer = EventReducer()
+        val session = Session(id = "session")
+        reducer.setSessions("server", listOf(session))
+        reducer.processEvent(SseEvent.SessionStatus(session.id, SessionStatus.Busy), "server")
+        val baseline = reducer.captureSessionStatusBaseline("server")
+
+        reducer.processEvent(SseEvent.SessionIdle(session.id), "server")
+        reducer.processEvent(SseEvent.SessionStatus(session.id, SessionStatus.Busy), "server")
+        reducer.reconcileSessionStatuses(emptyMap(), baseline)
+
+        assertEquals(SessionStatus.Busy, reducer.sessionStatuses.value[session.id])
+    }
+
+    @Test
+    fun `reconciling one server leaves another server unchanged`() = kotlinx.coroutines.test.runTest {
+        val reducer = EventReducer()
+        reducer.setSessions("server-a", listOf(Session(id = "a")))
+        reducer.setSessions("server-b", listOf(Session(id = "b")))
+        reducer.processEvent(SseEvent.SessionStatus("a", SessionStatus.Busy), "server-a")
+        reducer.processEvent(SseEvent.SessionStatus("b", SessionStatus.Busy), "server-b")
+        val baseline = reducer.captureSessionStatusBaseline("server-a")
+
+        reducer.reconcileSessionStatuses(emptyMap(), baseline)
+
+        assertEquals(SessionStatus.Idle, reducer.sessionStatuses.value["a"])
+        assertEquals(SessionStatus.Busy, reducer.sessionStatuses.value["b"])
+    }
+
+    @Test
+    fun `snapshot cannot restore a session deleted while request was in flight`() = kotlinx.coroutines.test.runTest {
+        val reducer = EventReducer()
+        val session = Session(id = "session")
+        reducer.setSessions("server", listOf(session))
+        val baseline = reducer.captureSessionStatusBaseline("server")
+
+        reducer.processEvent(SseEvent.SessionDeleted(session), "server")
+        reducer.reconcileSessionStatuses(mapOf(session.id to SessionStatus.Busy), baseline)
+
+        assertNull(reducer.sessionStatuses.value[session.id])
+    }
+
+    @Test
+    fun `session deleted before a new snapshot stays absent`() = kotlinx.coroutines.test.runTest {
+        val reducer = EventReducer()
+        val session = Session(id = "session")
+        reducer.setSessions("server", listOf(session))
+        reducer.processEvent(SseEvent.SessionStatus(session.id, SessionStatus.Busy), "server")
+
+        reducer.processEvent(SseEvent.SessionDeleted(session), "server")
+        val baseline = reducer.captureSessionStatusBaseline("server")
+        reducer.reconcileSessionStatuses(emptyMap(), baseline)
+
+        assertNull(reducer.sessionStatuses.value[session.id])
+        assertEquals(emptySet<String>(), reducer.serverSessions.value["server"].orEmpty())
+    }
+
+    @Test
+    fun `same session id on two servers is excluded from snapshot reconciliation`() = kotlinx.coroutines.test.runTest {
+        val reducer = EventReducer()
+        val shared = Session(id = "shared")
+        reducer.setSessions("server-a", listOf(shared))
+        reducer.setSessions("server-b", listOf(shared))
+        reducer.processEvent(SseEvent.SessionStatus(shared.id, SessionStatus.Busy), "server-b")
+        val baseline = reducer.captureSessionStatusBaseline("server-a")
+
+        reducer.reconcileSessionStatuses(emptyMap(), baseline)
+
+        assertEquals(SessionStatus.Busy, reducer.sessionStatuses.value[shared.id])
+    }
+
+    @Test
+    fun `snapshot captured before server clear cannot restore orphaned session`() = kotlinx.coroutines.test.runTest {
+        val reducer = EventReducer()
+        val session = Session(id = "session")
+        reducer.setSessions("server", listOf(session))
+        val baseline = reducer.captureSessionStatusBaseline("server")
+
+        reducer.clearForServer("server")
+        reducer.reconcileSessionStatuses(mapOf(session.id to SessionStatus.Busy), baseline)
+
+        assertNull(reducer.sessionStatuses.value[session.id])
     }
 
     private class StatusSnapshotTransport(

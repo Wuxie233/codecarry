@@ -14,6 +14,13 @@ import javax.inject.Singleton
 
 private const val TAG = "EventReducer"
 
+data class SessionStatusBaseline(
+    val serverId: String,
+    val sessionIds: Set<String>,
+    val conflictingSessionIds: Set<String>,
+    val revisions: Map<String, Long?>,
+)
+
 /**
  * Event Reducer - processes SSE events and updates app state
  * 
@@ -28,6 +35,10 @@ private const val TAG = "EventReducer"
  */
 @Singleton
 class EventReducer @Inject constructor() {
+
+    private val sessionStatusRevisions = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val nextSessionStatusRevision = java.util.concurrent.atomic.AtomicLong()
+    private val sessionStatusLock = Any()
     
     // ============ State ============
     
@@ -100,7 +111,7 @@ class EventReducer @Inject constructor() {
             
             is SseEvent.SessionCreated -> handleSessionCreated(event, serverId)
             is SseEvent.SessionUpdated -> handleSessionUpdated(event, serverId)
-            is SseEvent.SessionDeleted -> handleSessionDeleted(event)
+            is SseEvent.SessionDeleted -> handleSessionDeleted(event, serverId)
             is SseEvent.SessionStatus -> handleSessionStatus(event, serverId)
             is SseEvent.SessionIdle -> handleSessionIdle(event, serverId)
             is SseEvent.SessionDiff -> handleSessionDiff(event)
@@ -344,8 +355,11 @@ class EventReducer @Inject constructor() {
                 (current + event.info).sortedByDescending { it.time.updated }
             }
         }
-        _sessionStatuses.update { current ->
-            if (event.info.id in current) current else current + (event.info.id to SessionStatus.Idle)
+        synchronized(sessionStatusLock) {
+            recordSessionStatusChange(event.info.id)
+            _sessionStatuses.update { current ->
+                if (event.info.id in current) current else current + (event.info.id to SessionStatus.Idle)
+            }
         }
     }
     
@@ -374,10 +388,21 @@ class EventReducer @Inject constructor() {
         }
     }
     
-    private fun handleSessionDeleted(event: SseEvent.SessionDeleted) {
+    private fun handleSessionDeleted(event: SseEvent.SessionDeleted, serverId: String) {
         val sessionId = event.info.id
+        _serverSessions.update { current ->
+            val remaining = current[serverId].orEmpty() - sessionId
+            if (remaining.isEmpty()) current - serverId else current + (serverId to remaining)
+        }
+        val ownedByAnotherServer = _serverSessions.value.any { (ownerId, ids) ->
+            ownerId != serverId && sessionId in ids
+        }
+        if (ownedByAnotherServer) return
         _sessions.update { it.filter { session -> session.id != sessionId } }
-        _sessionStatuses.update { it - sessionId }
+        synchronized(sessionStatusLock) {
+            recordSessionStatusChange(sessionId)
+            _sessionStatuses.update { it - sessionId }
+        }
         _messages.update { it - sessionId }
         _sessionDiffs.update { it - sessionId }
         _permissions.update { it - sessionId }
@@ -386,13 +411,19 @@ class EventReducer @Inject constructor() {
     
     private fun handleSessionStatus(event: SseEvent.SessionStatus, serverId: String) {
         trackSession(serverId, event.sessionId)
-        _sessionStatuses.update { it + (event.sessionId to event.status) }
+        synchronized(sessionStatusLock) {
+            recordSessionStatusChange(event.sessionId)
+            _sessionStatuses.update { it + (event.sessionId to event.status) }
+        }
         if (BuildConfig.DEBUG) Log.d(TAG, "Session ${event.sessionId} status: ${event.status}")
     }
     
     private fun handleSessionIdle(event: SseEvent.SessionIdle, serverId: String) {
         trackSession(serverId, event.sessionId)
-        _sessionStatuses.update { it + (event.sessionId to SessionStatus.Idle) }
+        synchronized(sessionStatusLock) {
+            recordSessionStatusChange(event.sessionId)
+            _sessionStatuses.update { it + (event.sessionId to SessionStatus.Idle) }
+        }
     }
     
     private fun handleSessionDiff(event: SseEvent.SessionDiff) {
@@ -679,7 +710,10 @@ class EventReducer @Inject constructor() {
      * Useful for optimistic updates (e.g. aborting a session).
      */
     fun updateSessionStatus(sessionId: String, status: SessionStatus) {
-        _sessionStatuses.update { it + (sessionId to status) }
+        synchronized(sessionStatusLock) {
+            recordSessionStatusChange(sessionId)
+            _sessionStatuses.update { it + (sessionId to status) }
+        }
         if (BuildConfig.DEBUG) Log.d(TAG, "Manually updated session $sessionId status to $status")
     }
 
@@ -690,19 +724,52 @@ class EventReducer @Inject constructor() {
      * Other servers' sessions are left untouched.
      */
     fun setSessionStatuses(serverId: String, statuses: Map<String, SessionStatus>) {
+        reconcileSessionStatuses(
+            statuses = statuses,
+            baseline = captureSessionStatusBaseline(serverId),
+        )
+    }
+
+    fun captureSessionStatusBaseline(serverId: String): SessionStatusBaseline {
         val serverSessionIds = _serverSessions.value[serverId] ?: emptySet()
-        _sessionStatuses.update { current ->
-            val next = current.toMutableMap()
-            for ((sessionId, status) in statuses) {
-                next[sessionId] = status
-            }
-            for (sessionId in serverSessionIds) {
-                if (sessionId !in statuses) {
-                    next[sessionId] = SessionStatus.Idle
-                }
-            }
-            next
+        val conflictingSessionIds = _serverSessions.value
+            .filterKeys { it != serverId }
+            .values
+            .flatten()
+            .toSet()
+            .intersect(serverSessionIds)
+        return synchronized(sessionStatusLock) {
+            SessionStatusBaseline(
+                serverId = serverId,
+                sessionIds = serverSessionIds,
+                conflictingSessionIds = conflictingSessionIds,
+                revisions = serverSessionIds.associateWith { sessionStatusRevisions[it] },
+            )
         }
+    }
+
+    fun reconcileSessionStatuses(
+        statuses: Map<String, SessionStatus>,
+        baseline: SessionStatusBaseline,
+    ) {
+        val targetSessionIds = baseline.sessionIds + statuses.keys
+        synchronized(sessionStatusLock) {
+            _sessionStatuses.update { current ->
+                val next = current.toMutableMap()
+                for (sessionId in targetSessionIds) {
+                    if (sessionId in baseline.conflictingSessionIds) continue
+                    val owners = _serverSessions.value.filterValues { sessionId in it }.keys
+                    if (owners.any { it != baseline.serverId }) continue
+                    if (sessionStatusRevisions[sessionId] != baseline.revisions[sessionId]) continue
+                    next[sessionId] = statuses[sessionId] ?: SessionStatus.Idle
+                }
+                next
+            }
+        }
+    }
+
+    private fun recordSessionStatusChange(sessionId: String) {
+        sessionStatusRevisions[sessionId] = nextSessionStatusRevision.incrementAndGet()
     }
 
     fun setRoundtables(serverId: String, roundtables: List<Roundtable>) {
@@ -772,7 +839,10 @@ class EventReducer @Inject constructor() {
     fun clearAll() {
         _serverSessions.value = emptyMap()
         _sessions.value = emptyList()
-        _sessionStatuses.value = emptyMap()
+        synchronized(sessionStatusLock) {
+            _sessionStatuses.value = emptyMap()
+            sessionStatusRevisions.clear()
+        }
         _activeSessionId.value = null
         _messages.value = emptyMap()
         _parts.value = emptyMap()
@@ -807,23 +877,28 @@ class EventReducer @Inject constructor() {
         // Remove the server's session tracking
         _serverSessions.update { it - serverId }
         _serverRoundtables.update { it - serverId }
+        val sessionIdsOwnedElsewhere = _serverSessions.value.values.flatten().toSet()
+        val orphanedSessionIds = sessionIds - sessionIdsOwnedElsewhere
         
         // Remove sessions
-        _sessions.update { it.filter { s -> s.id !in sessionIds } }
-        _sessionStatuses.update { it - sessionIds }
-        _sessionDiffs.update { it - sessionIds }
-        _permissions.update { it - sessionIds }
-        _questions.update { it - sessionIds }
-        _todos.update { it - sessionIds }
+        _sessions.update { it.filter { s -> s.id !in orphanedSessionIds } }
+        synchronized(sessionStatusLock) {
+            orphanedSessionIds.forEach(::recordSessionStatusChange)
+            _sessionStatuses.update { it - orphanedSessionIds }
+        }
+        _sessionDiffs.update { it - orphanedSessionIds }
+        _permissions.update { it - orphanedSessionIds }
+        _questions.update { it - orphanedSessionIds }
+        _todos.update { it - orphanedSessionIds }
         
         // Remove messages and their parts
         val messageIds = _messages.value
-            .filterKeys { it in sessionIds }
+            .filterKeys { it in orphanedSessionIds }
             .values
             .flatten()
             .map { it.id }
             .toSet()
-        _messages.update { it - sessionIds }
+        _messages.update { it - orphanedSessionIds }
         _parts.update { it - messageIds }
 
         val roundtableMessageIds = _roundtableMessages.value
@@ -839,7 +914,7 @@ class EventReducer @Inject constructor() {
         piTurnInfo.keys.removeAll(roundtableMessageIds)
         processedPiEvents.removeAll { event -> event.roundtableId in roundtableIds }
 
-        if (_activeSessionId.value in sessionIds) {
+        if (_activeSessionId.value in orphanedSessionIds) {
             _activeSessionId.value = null
         }
 

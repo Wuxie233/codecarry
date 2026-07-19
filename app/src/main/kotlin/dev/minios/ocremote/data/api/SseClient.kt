@@ -10,12 +10,21 @@ import io.ktor.client.statement.*
 import io.ktor.utils.io.*
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.*
 import javax.inject.Inject
 import javax.inject.Singleton
 
 private const val TAG = "SseClient"
-private const val HEARTBEAT_TIMEOUT_MS = 40_000L
+internal const val HEARTBEAT_TIMEOUT_MS = 40_000L
+internal const val SSE_SOCKET_TIMEOUT_MS = HEARTBEAT_TIMEOUT_MS + 5_000L
+
+internal suspend fun readSseLine(channel: ByteReadChannel, timeoutMs: Long): String? = try {
+    withTimeout(timeoutMs) { channel.readUTF8Line() }
+} catch (_: TimeoutCancellationException) {
+    throw SseConnectionException("SSE read timed out after ${timeoutMs}ms")
+}
 
 /**
  * SSE (Server-Sent Events) Client
@@ -47,7 +56,9 @@ class SseClient @Inject constructor(
             timeout {
                 requestTimeoutMillis = HttpTimeout.INFINITE_TIMEOUT_MS
                 connectTimeoutMillis = 10_000
-                socketTimeoutMillis = HttpTimeout.INFINITE_TIMEOUT_MS
+                // A finite read timeout turns silent half-open sockets into failures so the
+                // owning service can enter its existing reconnect/backoff loop.
+                socketTimeoutMillis = SSE_SOCKET_TIMEOUT_MS
             }
         }
 
@@ -78,7 +89,7 @@ class SseClient @Inject constructor(
                     break
                 }
 
-                val line = channel.readUTF8Line() ?: break
+                val line = readSseLine(channel, SSE_SOCKET_TIMEOUT_MS) ?: break
 
                 if (line.isEmpty()) {
                     if (buffer.isNotEmpty()) {

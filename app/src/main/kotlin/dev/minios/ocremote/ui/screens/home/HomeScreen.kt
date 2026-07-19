@@ -47,7 +47,6 @@ import dev.minios.ocremote.data.repository.LocalServerManager
 import dev.minios.ocremote.domain.model.ServerConfig
 import dev.minios.ocremote.domain.model.ServerType
 import dev.minios.ocremote.domain.model.ConnectionPhase
-import dev.minios.ocremote.domain.model.SessionStatus
 import dev.minios.ocremote.ui.theme.StatusConnected
 import androidx.compose.animation.core.*
 import kotlinx.coroutines.delay
@@ -62,8 +61,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import java.text.DateFormat
-import java.util.Date
 
 /** Pulsing dots loading indicator — 3 dots that scale up/down in sequence. */
 @Composable
@@ -130,7 +127,6 @@ fun HomeScreen(
     onNavigateToServerSettings: (serverUrl: String, username: String, password: String, serverName: String, serverId: String) -> Unit = { _, _, _, _, _ -> },
     onNavigateToSettings: () -> Unit = {},
     onNavigateToAbout: () -> Unit = {},
-    onNavigateToRecentWork: (serverId: String, sessionId: String, directory: String) -> Unit = { _, _, _ -> },
     viewModel: HomeViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -261,20 +257,6 @@ fun HomeScreen(
                                         )
                                         context.startActivity(intent)
                                     }
-                                )
-                            }
-                        }
-
-                        if (uiState.recentWork.isNotEmpty()) {
-                            item(key = "__recent_work_header") {
-                                HomeSectionHeader(stringResource(R.string.home_recent_work))
-                            }
-                            items(uiState.recentWork, key = { "${it.serverId}/${it.sessionId}" }) { item ->
-                                RecentWorkRow(
-                                    item = item,
-                                    onClick = {
-                                        onNavigateToRecentWork(item.serverId, item.sessionId, item.directory)
-                                    },
                                 )
                             }
                         }
@@ -489,77 +471,6 @@ private fun HomeSectionHeader(text: String) {
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.padding(start = 4.dp, top = 4.dp, bottom = 2.dp),
     )
-}
-
-internal fun shortHomeDirectory(directory: String): String {
-    val normalized = directory.trimEnd('/')
-    if (normalized.isBlank()) return directory
-    val parts = normalized.split('/').filter(String::isNotBlank)
-    return when {
-        parts.isEmpty() -> normalized
-        parts.size == 1 -> parts.single()
-        else -> ".../${parts.takeLast(2).joinToString("/")}"
-    }
-}
-
-@Composable
-private fun RecentWorkRow(
-    item: HomeRecentWorkItem,
-    onClick: () -> Unit,
-) {
-    val statusText = when (val status = item.status) {
-        SessionStatus.Idle -> stringResource(R.string.session_status_idle)
-        SessionStatus.Busy -> stringResource(R.string.session_status_busy)
-        is SessionStatus.Retry -> stringResource(R.string.home_recent_status_retry, status.attempt)
-    }
-    val statusColor = when (item.status) {
-        SessionStatus.Idle -> MaterialTheme.colorScheme.onSurfaceVariant
-        SessionStatus.Busy -> MaterialTheme.colorScheme.primary
-        is SessionStatus.Retry -> MaterialTheme.colorScheme.error
-    }
-    val updated = remember(item.updatedAt) {
-        DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(item.updatedAt))
-    }
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(
-                text = item.title ?: stringResource(R.string.session_untitled),
-                style = MaterialTheme.typography.titleSmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                text = "${item.serverName} · ${shortHomeDirectory(item.directory)}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(
-                text = statusText,
-                style = MaterialTheme.typography.labelSmall,
-                color = statusColor,
-                maxLines = 1,
-            )
-            Text(
-                text = updated,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-            )
-        }
-    }
 }
 
 @Composable
