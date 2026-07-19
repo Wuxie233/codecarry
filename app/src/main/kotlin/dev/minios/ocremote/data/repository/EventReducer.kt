@@ -27,9 +27,9 @@ data class SessionStatusBaseline(
  * This is the central state management for the app.
  * All SSE events flow through here and mutate the reactive state.
  * 
- * Supports multiple servers simultaneously. Session UUIDs are globally unique,
- * so all data maps are keyed by sessionId. A separate serverId→sessionIds map
- * tracks which sessions belong to which server for per-server cleanup.
+ * Supports multiple servers simultaneously. Most session state is keyed by sessionId,
+ * while pending user actions retain server ownership because server-local session IDs
+ * are not safe cross-server join keys.
  * 
  * Similar to the event-reducer.ts in the WebUI.
  */
@@ -64,11 +64,13 @@ class EventReducer @Inject constructor() {
     private val _sessionDiffs = MutableStateFlow<Map<String, List<FileDiff>>>(emptyMap())
     val sessionDiffs: StateFlow<Map<String, List<FileDiff>>> = _sessionDiffs.asStateFlow()
     
-    private val _permissions = MutableStateFlow<Map<String, List<SseEvent.PermissionAsked>>>(emptyMap())
-    val permissions: StateFlow<Map<String, List<SseEvent.PermissionAsked>>> = _permissions.asStateFlow()
+    private val _permissionsByServer = MutableStateFlow<Map<String, Map<String, List<SseEvent.PermissionAsked>>>>(emptyMap())
+    val permissionsByServer: StateFlow<Map<String, Map<String, List<SseEvent.PermissionAsked>>>> =
+        _permissionsByServer.asStateFlow()
     
-    private val _questions = MutableStateFlow<Map<String, List<SseEvent.QuestionAsked>>>(emptyMap())
-    val questions: StateFlow<Map<String, List<SseEvent.QuestionAsked>>> = _questions.asStateFlow()
+    private val _questionsByServer = MutableStateFlow<Map<String, Map<String, List<SseEvent.QuestionAsked>>>>(emptyMap())
+    val questionsByServer: StateFlow<Map<String, Map<String, List<SseEvent.QuestionAsked>>>> =
+        _questionsByServer.asStateFlow()
     
     private val _todos = MutableStateFlow<Map<String, List<SseEvent.TodoUpdated.Todo>>>(emptyMap())
     val todos: StateFlow<Map<String, List<SseEvent.TodoUpdated.Todo>>> = _todos.asStateFlow()
@@ -124,12 +126,12 @@ class EventReducer @Inject constructor() {
             is SseEvent.MessagePartDelta -> handleMessagePartDelta(event)
             is SseEvent.MessagePartRemoved -> handleMessagePartRemoved(event)
             
-            is SseEvent.PermissionAsked -> handlePermissionAsked(event)
-            is SseEvent.PermissionReplied -> handlePermissionReplied(event)
+            is SseEvent.PermissionAsked -> handlePermissionAsked(event, serverId)
+            is SseEvent.PermissionReplied -> handlePermissionReplied(event, serverId)
             
-            is SseEvent.QuestionAsked -> handleQuestionAsked(event)
-            is SseEvent.QuestionReplied -> handleQuestionReplied(event)
-            is SseEvent.QuestionRejected -> handleQuestionRejected(event)
+            is SseEvent.QuestionAsked -> handleQuestionAsked(event, serverId)
+            is SseEvent.QuestionReplied -> handleQuestionReplied(event, serverId)
+            is SseEvent.QuestionRejected -> handleQuestionRejected(event, serverId)
             
             is SseEvent.TodoUpdated -> handleTodoUpdated(event)
             is SseEvent.VcsBranchUpdated -> handleVcsBranchUpdated(event)
@@ -390,6 +392,8 @@ class EventReducer @Inject constructor() {
     
     private fun handleSessionDeleted(event: SseEvent.SessionDeleted, serverId: String) {
         val sessionId = event.info.id
+        _permissionsByServer.update { current -> removeServerSessionRequests(current, serverId, sessionId) }
+        _questionsByServer.update { current -> removeServerSessionRequests(current, serverId, sessionId) }
         _serverSessions.update { current ->
             val remaining = current[serverId].orEmpty() - sessionId
             if (remaining.isEmpty()) current - serverId else current + (serverId to remaining)
@@ -405,8 +409,6 @@ class EventReducer @Inject constructor() {
         }
         _messages.update { it - sessionId }
         _sessionDiffs.update { it - sessionId }
-        _permissions.update { it - sessionId }
-        _questions.update { it - sessionId }
     }
     
     private fun handleSessionStatus(event: SseEvent.SessionStatus, serverId: String) {
@@ -537,22 +539,20 @@ class EventReducer @Inject constructor() {
     
     // ============ Permission Events ============
     
-    private fun handlePermissionAsked(event: SseEvent.PermissionAsked) {
-        _permissions.update { current ->
-            val sessionPermissions = current[event.sessionId]?.toMutableList() ?: mutableListOf()
+    private fun handlePermissionAsked(event: SseEvent.PermissionAsked, serverId: String) {
+        _permissionsByServer.update { current ->
+            val serverPermissions = current[serverId].orEmpty()
+            val sessionPermissions = serverPermissions[event.sessionId]?.toMutableList() ?: mutableListOf()
             if (sessionPermissions.any { it.id == event.id }) return@update current
             sessionPermissions.add(event)
-            current + (event.sessionId to sessionPermissions)
+            current + (serverId to (serverPermissions + (event.sessionId to sessionPermissions)))
         }
     }
     
-    private fun handlePermissionReplied(event: SseEvent.PermissionReplied) {
-        _permissions.update { current ->
-            val sessionPermissions = current[event.sessionId]?.filter { it.id != event.requestId }
-            if (sessionPermissions != null) {
-                current + (event.sessionId to sessionPermissions)
-            } else {
-                current
+    private fun handlePermissionReplied(event: SseEvent.PermissionReplied, serverId: String) {
+        _permissionsByServer.update { current ->
+            updateServerSessionRequests(current, serverId, event.sessionId) { permissions ->
+                permissions.filter { it.id != event.requestId }
             }
         }
     }
@@ -566,11 +566,13 @@ class EventReducer @Inject constructor() {
      *
      * Idempotent: removing an already-removed request is a no-op.
      */
-    fun removePermission(requestId: String) {
-        _permissions.update { current ->
-            current.mapValues { (_, permissions) ->
+    fun removePermission(serverId: String, requestId: String) {
+        _permissionsByServer.update { current ->
+            val serverPermissions = current[serverId] ?: return@update current
+            val updated = serverPermissions.mapValues { (_, permissions) ->
                 permissions.filter { it.id != requestId }
-            }
+            }.filterValues { it.isNotEmpty() }
+            if (updated.isEmpty()) current - serverId else current + (serverId to updated)
         }
     }
 
@@ -579,15 +581,16 @@ class EventReducer @Inject constructor() {
      * request ID. Used when opening a session: it surfaces permissions asked before open without
      * ever wiping a permission that arrived concurrently via SSE.
      */
-    fun mergePermissions(sessionId: String, permissions: List<SseEvent.PermissionAsked>) {
+    fun mergePermissions(serverId: String, sessionId: String, permissions: List<SseEvent.PermissionAsked>) {
         if (permissions.isEmpty()) return
-        _permissions.update { current ->
-            val existing = current[sessionId]?.toMutableList() ?: mutableListOf()
+        _permissionsByServer.update { current ->
+            val serverPermissions = current[serverId].orEmpty()
+            val existing = serverPermissions[sessionId]?.toMutableList() ?: mutableListOf()
             val existingIds = existing.mapTo(mutableSetOf()) { it.id }
             for (permission in permissions) {
                 if (existingIds.add(permission.id)) existing.add(permission)
             }
-            current + (sessionId to existing)
+            current + (serverId to (serverPermissions + (sessionId to existing)))
         }
     }
 
@@ -607,8 +610,8 @@ class EventReducer @Inject constructor() {
         val snapshotBySession = snapshot.groupBy { it.sessionId }
         val serverSessionIds = _serverSessions.value[serverId] ?: emptySet()
         val sessionsToReconcile = serverSessionIds + snapshotBySession.keys
-        _permissions.update { current ->
-            val next = current.toMutableMap()
+        _permissionsByServer.update { current ->
+            val next = current[serverId].orEmpty().toMutableMap()
             for (sessionId in sessionsToReconcile) {
                 val existing = next[sessionId].orEmpty()
                 val keptIds = mutableSetOf<String>()
@@ -617,38 +620,34 @@ class EventReducer @Inject constructor() {
                 val merged = kept + additions
                 if (merged.isEmpty()) next.remove(sessionId) else next[sessionId] = merged
             }
-            next
+            if (next.isEmpty()) current - serverId else current + (serverId to next)
         }
     }
     
     // ============ Question Events ============
     
-    private fun handleQuestionAsked(event: SseEvent.QuestionAsked) {
-        _questions.update { current ->
-            val sessionQuestions = current[event.sessionId]?.toMutableList() ?: mutableListOf()
+    private fun handleQuestionAsked(event: SseEvent.QuestionAsked, serverId: String) {
+        _questionsByServer.update { current ->
+            val serverQuestions = current[serverId].orEmpty()
+            val sessionQuestions = serverQuestions[event.sessionId]?.toMutableList() ?: mutableListOf()
+            if (sessionQuestions.any { it.id == event.id }) return@update current
             sessionQuestions.add(event)
-            current + (event.sessionId to sessionQuestions)
+            current + (serverId to (serverQuestions + (event.sessionId to sessionQuestions)))
         }
     }
     
-    private fun handleQuestionReplied(event: SseEvent.QuestionReplied) {
-        _questions.update { current ->
-            val sessionQuestions = current[event.sessionId]?.filter { it.id != event.requestId }
-            if (sessionQuestions != null) {
-                current + (event.sessionId to sessionQuestions)
-            } else {
-                current
+    private fun handleQuestionReplied(event: SseEvent.QuestionReplied, serverId: String) {
+        _questionsByServer.update { current ->
+            updateServerSessionRequests(current, serverId, event.sessionId) { questions ->
+                questions.filter { it.id != event.requestId }
             }
         }
     }
     
-    private fun handleQuestionRejected(event: SseEvent.QuestionRejected) {
-        _questions.update { current ->
-            val sessionQuestions = current[event.sessionId]?.filter { it.id != event.requestId }
-            if (sessionQuestions != null) {
-                current + (event.sessionId to sessionQuestions)
-            } else {
-                current
+    private fun handleQuestionRejected(event: SseEvent.QuestionRejected, serverId: String) {
+        _questionsByServer.update { current ->
+            updateServerSessionRequests(current, serverId, event.sessionId) { questions ->
+                questions.filter { it.id != event.requestId }
             }
         }
     }
@@ -657,25 +656,51 @@ class EventReducer @Inject constructor() {
      * Optimistically remove a question from the pending list.
      * Called after a successful API reply/reject, in case the SSE event doesn't arrive.
      */
-    fun removeQuestion(questionId: String) {
-        _questions.update { current ->
-            current.mapValues { (_, questions) ->
+    fun removeQuestion(serverId: String, questionId: String) {
+        _questionsByServer.update { current ->
+            val serverQuestions = current[serverId] ?: return@update current
+            val updated = serverQuestions.mapValues { (_, questions) ->
                 questions.filter { it.id != questionId }
-            }
+            }.filterValues { it.isNotEmpty() }
+            if (updated.isEmpty()) current - serverId else current + (serverId to updated)
         }
     }
 
     /**
      * Set pending questions for a session (loaded from REST API on session open).
      */
-    fun setQuestions(sessionId: String, questions: List<SseEvent.QuestionAsked>) {
-        _questions.update { current ->
-            if (questions.isEmpty()) {
-                current - sessionId
-            } else {
-                current + (sessionId to questions)
-            }
+    fun setQuestions(serverId: String, sessionId: String, questions: List<SseEvent.QuestionAsked>) {
+        _questionsByServer.update { current ->
+            val serverQuestions = current[serverId].orEmpty()
+            val updated = if (questions.isEmpty()) serverQuestions - sessionId else serverQuestions + (sessionId to questions)
+            if (updated.isEmpty()) current - serverId else current + (serverId to updated)
         }
+    }
+
+    private fun <T> updateServerSessionRequests(
+        current: Map<String, Map<String, List<T>>>,
+        serverId: String,
+        sessionId: String,
+        transform: (List<T>) -> List<T>,
+    ): Map<String, Map<String, List<T>>> {
+        val serverRequests = current[serverId] ?: return current
+        val sessionRequests = serverRequests[sessionId] ?: return current
+        val updatedSession = transform(sessionRequests)
+        val updatedServer = if (updatedSession.isEmpty()) {
+            serverRequests - sessionId
+        } else {
+            serverRequests + (sessionId to updatedSession)
+        }
+        return if (updatedServer.isEmpty()) current - serverId else current + (serverId to updatedServer)
+    }
+
+    private fun <T> removeServerSessionRequests(
+        current: Map<String, Map<String, List<T>>>,
+        serverId: String,
+        sessionId: String,
+    ): Map<String, Map<String, List<T>>> {
+        val updatedServer = current[serverId].orEmpty() - sessionId
+        return if (updatedServer.isEmpty()) current - serverId else current + (serverId to updatedServer)
     }
     
     // ============ Batch Updates ============
@@ -847,8 +872,8 @@ class EventReducer @Inject constructor() {
         _messages.value = emptyMap()
         _parts.value = emptyMap()
         _sessionDiffs.value = emptyMap()
-        _permissions.value = emptyMap()
-        _questions.value = emptyMap()
+        _permissionsByServer.value = emptyMap()
+        _questionsByServer.value = emptyMap()
         _todos.value = emptyMap()
         _vcsBranch.value = null
         _projectInfo.value = null
@@ -868,6 +893,8 @@ class EventReducer @Inject constructor() {
     fun clearForServer(serverId: String) {
         val sessionIds = _serverSessions.value[serverId] ?: emptySet()
         val roundtableIds = _serverRoundtables.value[serverId] ?: emptySet()
+        _permissionsByServer.update { it - serverId }
+        _questionsByServer.update { it - serverId }
         if (sessionIds.isEmpty() && roundtableIds.isEmpty()) {
             _serverSessions.update { it - serverId }
             _serverRoundtables.update { it - serverId }
@@ -887,8 +914,6 @@ class EventReducer @Inject constructor() {
             _sessionStatuses.update { it - orphanedSessionIds }
         }
         _sessionDiffs.update { it - orphanedSessionIds }
-        _permissions.update { it - orphanedSessionIds }
-        _questions.update { it - orphanedSessionIds }
         _todos.update { it - orphanedSessionIds }
         
         // Remove messages and their parts

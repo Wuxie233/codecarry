@@ -63,12 +63,12 @@ class OpenCodeConnectionServicePermissionActionTest {
             SseEvent.PermissionAsked(id = "perm-1", sessionId = "ses-1", permission = "p1"),
             serverId = "server-1",
         )
-        assertFalse(reducer.permissions.value["ses-1"].orEmpty().isEmpty())
+        assertFalse(reducer.permissionsByServer.value["server-1"]?.get("ses-1").orEmpty().isEmpty())
 
         // This is exactly what handlePermissionAction does on a successful reply.
-        reducer.removePermission("perm-1")
+        reducer.removePermission("server-1", "perm-1")
 
-        assertTrue(reducer.permissions.value["ses-1"].orEmpty().isEmpty())
+        assertTrue(reducer.permissionsByServer.value["server-1"]?.get("ses-1").orEmpty().isEmpty())
     }
 
     @Test
@@ -79,13 +79,13 @@ class OpenCodeConnectionServicePermissionActionTest {
             serverId = "server-1",
         )
 
-        reducer.removePermission("perm-1")
+        reducer.removePermission("server-1", "perm-1")
         // Late-arriving SSE reply — must not crash or resurrect the entry.
         reducer.processEvent(
             SseEvent.PermissionReplied(sessionId = "ses-1", requestId = "perm-1"),
             serverId = "server-1",
         )
 
-        assertTrue(reducer.permissions.value["ses-1"].orEmpty().isEmpty())
+        assertTrue(reducer.permissionsByServer.value["server-1"]?.get("ses-1").orEmpty().isEmpty())
     }
 }

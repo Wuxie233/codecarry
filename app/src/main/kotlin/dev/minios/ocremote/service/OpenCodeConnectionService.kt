@@ -901,9 +901,8 @@ class OpenCodeConnectionService : Service() {
     }
 
     private fun currentServerPermissionIds(serverId: String): Set<String> {
-        val sessionIds = eventReducer.serverSessions.value[serverId] ?: emptySet()
-        return eventReducer.permissions.value
-            .filterKeys { it in sessionIds }
+        return eventReducer.permissionsByServer.value[serverId]
+            .orEmpty()
             .values
             .flatten()
             .mapTo(mutableSetOf()) { it.id }
@@ -1205,7 +1204,7 @@ class OpenCodeConnectionService : Service() {
             }
 
             if (success) {
-                eventReducer.removePermission(requestId)
+                eventReducer.removePermission(serverId, requestId)
                 notificationManager.cancel(eventNotificationId(state.config.id, sessionId, 1000))
                 Log.i(TAG, "Permission reply sent for $requestId: $replyValue")
             } else {

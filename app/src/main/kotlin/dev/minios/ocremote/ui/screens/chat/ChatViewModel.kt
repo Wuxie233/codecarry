@@ -325,8 +325,8 @@ class ChatViewModel @Inject constructor(
         eventReducer.messages,
         eventReducer.parts,
         eventReducer.sessionStatuses,
-        eventReducer.permissions,
-        eventReducer.questions,
+        eventReducer.permissionsByServer,
+        eventReducer.questionsByServer,
         eventReducer.roundtables,
         eventReducer.roundtableMessages,
         eventReducer.roundtableParts,
@@ -356,8 +356,10 @@ class ChatViewModel @Inject constructor(
         val allMessages = args[1] as Map<String, List<Message>>
         val allParts = args[2] as Map<String, List<Part>>
         val statuses = args[3] as Map<String, SessionStatus>
-        val permissions = args[4] as Map<String, List<SseEvent.PermissionAsked>>
-        val questions = args[5] as Map<String, List<SseEvent.QuestionAsked>>
+        val permissionsByServer = args[4] as Map<String, Map<String, List<SseEvent.PermissionAsked>>>
+        val questionsByServer = args[5] as Map<String, Map<String, List<SseEvent.QuestionAsked>>>
+        val permissions = permissionsByServer[serverId].orEmpty()
+        val questions = questionsByServer[serverId].orEmpty()
         @Suppress("UNCHECKED_CAST")
         val roundtables = args[6] as Map<String, Roundtable>
         @Suppress("UNCHECKED_CAST")
@@ -803,7 +805,7 @@ class ChatViewModel @Inject constructor(
                     )
                 }
             if (sessionQuestions.isNotEmpty()) {
-                eventReducer.setQuestions(sessionId, sessionQuestions)
+                eventReducer.setQuestions(serverId, sessionId, sessionQuestions)
                 if (BuildConfig.DEBUG) Log.d(TAG, "Loaded ${sessionQuestions.size} pending questions for session $sessionId")
             } else {
                 if (BuildConfig.DEBUG) Log.d(TAG, "No pending questions for session $sessionId")
@@ -824,7 +826,7 @@ class ChatViewModel @Inject constructor(
             val sessionPermissions = api.listPendingPermissions(conn, directory = sessionDirectory)
                 .filter { it.sessionId == sessionId }
                 .map { it.toPermissionAsked() }
-            eventReducer.mergePermissions(sessionId, sessionPermissions)
+            eventReducer.mergePermissions(serverId, sessionId, sessionPermissions)
             if (BuildConfig.DEBUG) Log.d(TAG, "Loaded ${sessionPermissions.size} pending permission(s) for session $sessionId")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to load pending permissions: ${e.javaClass.simpleName}: ${e.message}", e)
@@ -1330,7 +1332,7 @@ class ChatViewModel @Inject constructor(
                 )
                 if (success) {
                     // Optimistically remove the question card — SSE event may arrive late or not at all
-                    eventReducer.removeQuestion(requestId)
+                    eventReducer.removeQuestion(serverId, requestId)
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to reply to question $requestId: ${e.javaClass.simpleName}: ${e.message}", e)
@@ -1347,7 +1349,7 @@ class ChatViewModel @Inject constructor(
                 val success = api.rejectQuestion(conn = conn, requestId = requestId, directory = sessionDirectory)
                 if (success) {
                     // Optimistically remove the question card
-                    eventReducer.removeQuestion(requestId)
+                    eventReducer.removeQuestion(serverId, requestId)
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to reject question $requestId: ${e.javaClass.simpleName}: ${e.message}", e)

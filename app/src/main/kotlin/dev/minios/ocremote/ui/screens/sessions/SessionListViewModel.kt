@@ -384,8 +384,8 @@ class SessionListViewModel @Inject constructor(
             _searchQuery,
             _filter,
             _scopeOverride,
-            eventReducer.questions,
-            eventReducer.permissions,
+            eventReducer.questionsByServer,
+            eventReducer.permissionsByServer,
             _showHiddenProjects,
             viewModeFlow,
             _activityFilter,
@@ -403,8 +403,10 @@ class SessionListViewModel @Inject constructor(
         val searchQuery = values[9] as String
         val filter = values[10] as SessionFilter
         val scope = (values[11] as SessionScope?) ?: prefs.scope
-        val pendingQuestions = values[12] as Map<String, List<SseEvent.QuestionAsked>>
-        val pendingPermissions = values[13] as Map<String, List<SseEvent.PermissionAsked>>
+        val questionsByServer = values[12] as Map<String, Map<String, List<SseEvent.QuestionAsked>>>
+        val permissionsByServer = values[13] as Map<String, Map<String, List<SseEvent.PermissionAsked>>>
+        val pendingQuestions = questionsByServer[serverId].orEmpty()
+        val pendingPermissions = permissionsByServer[serverId].orEmpty()
         val showHiddenProjects = values[14] as Boolean
         val viewMode = values[15] as SessionListViewMode
         val activityFilter = values[16] as SessionActivityFilter

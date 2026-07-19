@@ -172,7 +172,7 @@ class EventReducerTest {
 
         reducer.processEvent(asked, serverId = "server-1")
 
-        val pending = reducer.permissions.value["ses-1"].orEmpty()
+        val pending = reducer.permissionsByServer.value["server-1"]?.get("ses-1").orEmpty()
         assertEquals(1, pending.size)
         assertEquals("perm-1", pending.single().id)
     }
@@ -194,7 +194,7 @@ class EventReducerTest {
             serverId = "server-1",
         )
 
-        val remaining = reducer.permissions.value["ses-1"].orEmpty().map { it.id }
+        val remaining = reducer.permissionsByServer.value["server-1"]?.get("ses-1").orEmpty().map { it.id }
         assertEquals(listOf("perm-2"), remaining)
     }
 
@@ -206,9 +206,9 @@ class EventReducerTest {
             serverId = "server-1",
         )
 
-        reducer.removePermission("perm-1")
+        reducer.removePermission("server-1", "perm-1")
 
-        assertTrue(reducer.permissions.value["ses-1"].orEmpty().isEmpty())
+        assertTrue(reducer.permissionsByServer.value["server-1"]?.get("ses-1").orEmpty().isEmpty())
     }
 
     @Test
@@ -219,11 +219,11 @@ class EventReducerTest {
             serverId = "server-1",
         )
 
-        reducer.removePermission("perm-unknown")
-        reducer.removePermission("perm-1")
-        reducer.removePermission("perm-1") // second call: no-op
+        reducer.removePermission("server-1", "perm-unknown")
+        reducer.removePermission("server-1", "perm-1")
+        reducer.removePermission("server-1", "perm-1") // second call: no-op
 
-        assertTrue(reducer.permissions.value["ses-1"].orEmpty().isEmpty())
+        assertTrue(reducer.permissionsByServer.value["server-1"]?.get("ses-1").orEmpty().isEmpty())
     }
 
     @Test
@@ -233,7 +233,7 @@ class EventReducerTest {
             SseEvent.PermissionAsked(id = "perm-1", sessionId = "ses-1", permission = "p1"),
             serverId = "server-1",
         )
-        reducer.removePermission("perm-1")
+        reducer.removePermission("server-1", "perm-1")
 
         // Late-arriving SSE event must not crash, duplicate, or resurrect state.
         reducer.processEvent(
@@ -241,7 +241,7 @@ class EventReducerTest {
             serverId = "server-1",
         )
 
-        assertTrue(reducer.permissions.value["ses-1"].orEmpty().isEmpty())
+        assertTrue(reducer.permissionsByServer.value["server-1"]?.get("ses-1").orEmpty().isEmpty())
     }
 
     // ============ Bootstrap hydration (proactive REST snapshot on connect/open) ============
@@ -317,7 +317,7 @@ class EventReducerTest {
         reducer.processEvent(asked, serverId = "server-1")
         reducer.processEvent(asked, serverId = "server-1")
 
-        assertEquals(listOf("perm-1"), reducer.permissions.value["ses-1"].orEmpty().map { it.id })
+        assertEquals(listOf("perm-1"), reducer.permissionsByServer.value["server-1"]?.get("ses-1").orEmpty().map { it.id })
     }
 
     @Test
@@ -329,6 +329,7 @@ class EventReducerTest {
         )
 
         reducer.mergePermissions(
+            "server-1",
             "ses-1",
             listOf(
                 SseEvent.PermissionAsked(id = "live-1", sessionId = "ses-1", permission = "live"),
@@ -336,7 +337,7 @@ class EventReducerTest {
             ),
         )
 
-        assertEquals(setOf("live-1", "snap-1"), reducer.permissions.value["ses-1"].orEmpty().map { it.id }.toSet())
+        assertEquals(setOf("live-1", "snap-1"), reducer.permissionsByServer.value["server-1"]?.get("ses-1").orEmpty().map { it.id }.toSet())
     }
 
     @Test
@@ -347,9 +348,9 @@ class EventReducerTest {
             serverId = "server-1",
         )
 
-        reducer.mergePermissions("ses-1", emptyList())
+        reducer.mergePermissions("server-1", "ses-1", emptyList())
 
-        assertEquals(listOf("live-1"), reducer.permissions.value["ses-1"].orEmpty().map { it.id })
+        assertEquals(listOf("live-1"), reducer.permissionsByServer.value["server-1"]?.get("ses-1").orEmpty().map { it.id })
     }
 
     @Test
@@ -364,7 +365,7 @@ class EventReducerTest {
 
         reducer.reconcilePermissions("server-1", snapshot = emptyList(), preExistingIds = setOf("stale-1"))
 
-        assertTrue(reducer.permissions.value["ses-1"].orEmpty().isEmpty())
+        assertTrue(reducer.permissionsByServer.value["server-1"]?.get("ses-1").orEmpty().isEmpty())
     }
 
     @Test
@@ -379,7 +380,7 @@ class EventReducerTest {
 
         reducer.reconcilePermissions("server-1", snapshot = emptyList(), preExistingIds = emptySet())
 
-        assertEquals(listOf("live-1"), reducer.permissions.value["ses-1"].orEmpty().map { it.id })
+        assertEquals(listOf("live-1"), reducer.permissionsByServer.value["server-1"]?.get("ses-1").orEmpty().map { it.id })
     }
 
     @Test
@@ -400,7 +401,78 @@ class EventReducerTest {
             preExistingIds = setOf("keep-1"),
         )
 
-        assertEquals(setOf("keep-1", "new-1"), reducer.permissions.value["ses-1"].orEmpty().map { it.id }.toSet())
+        assertEquals(setOf("keep-1", "new-1"), reducer.permissionsByServer.value["server-1"]?.get("ses-1").orEmpty().map { it.id }.toSet())
+    }
+
+    @Test
+    fun pendingRequestsWithSameSessionIdRemainOwnedByTheirServer() {
+        val reducer = EventReducer()
+        val sessionId = "shared-session"
+        reducer.setSessions("server-1", listOf(testSession(sessionId)))
+        reducer.setSessions("server-2", listOf(testSession(sessionId)))
+
+        reducer.processEvent(
+            SseEvent.PermissionAsked(id = "perm-1", sessionId = sessionId, permission = "one"),
+            serverId = "server-1",
+        )
+        reducer.processEvent(
+            SseEvent.PermissionAsked(id = "perm-2", sessionId = sessionId, permission = "two"),
+            serverId = "server-2",
+        )
+        reducer.processEvent(
+            SseEvent.QuestionAsked(id = "question-1", sessionId = sessionId, questions = emptyList()),
+            serverId = "server-1",
+        )
+        reducer.processEvent(
+            SseEvent.QuestionAsked(id = "question-2", sessionId = sessionId, questions = emptyList()),
+            serverId = "server-2",
+        )
+
+        reducer.processEvent(
+            SseEvent.PermissionReplied(sessionId = sessionId, requestId = "perm-1"),
+            serverId = "server-1",
+        )
+        reducer.processEvent(
+            SseEvent.QuestionReplied(sessionId = sessionId, requestId = "question-1"),
+            serverId = "server-1",
+        )
+
+        assertEquals(listOf("perm-2"), reducer.permissionsByServer.value["server-2"]?.get(sessionId).orEmpty().map { it.id })
+        assertEquals(listOf("question-2"), reducer.questionsByServer.value["server-2"]?.get(sessionId).orEmpty().map { it.id })
+    }
+
+    @Test
+    fun clearForServerKeepsOtherServersPendingRequestsForSameSessionId() {
+        val reducer = EventReducer()
+        val sessionId = "shared-session"
+        reducer.setSessions("server-1", listOf(testSession(sessionId)))
+        reducer.setSessions("server-2", listOf(testSession(sessionId)))
+        reducer.processEvent(
+            SseEvent.PermissionAsked(id = "perm-1", sessionId = sessionId, permission = "one"),
+            serverId = "server-1",
+        )
+        reducer.processEvent(
+            SseEvent.PermissionAsked(id = "perm-2", sessionId = sessionId, permission = "two"),
+            serverId = "server-2",
+        )
+
+        clearForServer(reducer, "server-1")
+
+        assertNull(reducer.permissionsByServer.value["server-1"])
+        assertEquals(listOf("perm-2"), reducer.permissionsByServer.value["server-2"]?.get(sessionId).orEmpty().map { it.id })
+    }
+
+    @Test
+    fun clearForServerRemovesPendingRequestsReceivedBeforeSessionTracking() {
+        val reducer = EventReducer()
+        reducer.processEvent(
+            SseEvent.QuestionAsked(id = "question-1", sessionId = "not-tracked-yet", questions = emptyList()),
+            serverId = "server-1",
+        )
+
+        clearForServer(reducer, "server-1")
+
+        assertNull(reducer.questionsByServer.value["server-1"])
     }
 
     private fun testSession(id: String, updated: Long = 1L, archived: Long? = null) = Session(

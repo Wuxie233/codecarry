@@ -284,12 +284,38 @@ class SessionListViewModelTest {
         eventReducer.updateSessionStatus(child.id, SessionStatus.Busy)
 
         eventReducer.setQuestions(
+            "srv-session-list",
             parent.id,
             listOf(SseEvent.QuestionAsked(id = "question", sessionId = parent.id, questions = emptyList())),
         )
         advanceUntilIdle()
 
         assertEquals(ConversationStatus.AWAITING_QUESTION, vm.uiState.value.activeConversations.single().status)
+    }
+
+    @Test
+    fun `pending activity is scoped to the selected server when session ids collide`() = runTest(dispatcher) {
+        val eventReducer = EventReducer()
+        val shared = testSession(id = "shared")
+        val vm = newSessionListViewModel(eventReducer = eventReducer)
+        collectUiState(vm)
+        eventReducer.setSessions("srv-session-list", listOf(shared))
+        eventReducer.setSessions("other-server", listOf(shared))
+        eventReducer.processEvent(
+            SseEvent.QuestionAsked(id = "other-question", sessionId = shared.id, questions = emptyList()),
+            serverId = "other-server",
+        )
+        advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.activeConversations.isEmpty())
+
+        eventReducer.processEvent(
+            SseEvent.PermissionAsked(id = "local-permission", sessionId = shared.id, permission = "write"),
+            serverId = "srv-session-list",
+        )
+        advanceUntilIdle()
+
+        assertEquals(ConversationStatus.AWAITING_PERMISSION, vm.uiState.value.activeConversations.single().status)
     }
 
     @Test
