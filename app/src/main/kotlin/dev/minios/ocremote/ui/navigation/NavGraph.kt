@@ -665,7 +665,7 @@ fun NavGraph(
                         directory = newSessionDirectory,
                     )
                     navController.navigate(route) {
-                        launchSingleTop = true
+                        launchSingleTop = shouldLaunchSingleTopChat(sessionId, newSessionId)
                     }
                 },
                 onCopyWebLink = {
@@ -683,6 +683,9 @@ fun NavGraph(
         }
     }
 }
+
+internal fun shouldLaunchSingleTopChat(currentSessionId: String, targetSessionId: String): Boolean =
+    currentSessionId == targetSessionId
 
 private fun directoryFromSessionPath(sessionPath: String): String {
     val encodedDirectory = sessionPath

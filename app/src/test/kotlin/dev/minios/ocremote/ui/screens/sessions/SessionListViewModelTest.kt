@@ -294,6 +294,79 @@ class SessionListViewModelTest {
     }
 
     @Test
+    fun `child questions and permissions make the parent conversation pending`() = runTest(dispatcher) {
+        val eventReducer = EventReducer()
+        val parent = testSession(id = "parent")
+        val child = testSession(id = "child", parentId = parent.id)
+        val vm = newSessionListViewModel(eventReducer = eventReducer)
+        collectUiState(vm)
+        eventReducer.setSessions("srv-session-list", listOf(parent, child))
+
+        eventReducer.processEvent(
+            SseEvent.PermissionAsked(id = "child-permission", sessionId = child.id, permission = "write"),
+            serverId = "srv-session-list",
+        )
+        eventReducer.processEvent(
+            SseEvent.QuestionAsked(id = "child-question", sessionId = child.id, questions = emptyList()),
+            serverId = "srv-session-list",
+        )
+        advanceUntilIdle()
+
+        val active = vm.uiState.value.activeConversations.single()
+        assertEquals(parent.id, active.sessionId)
+        assertEquals(ConversationStatus.AWAITING_QUESTION, active.status)
+        assertEquals(1, vm.uiState.value.activityQueue.pendingSessionCount)
+        assertEquals(1, vm.uiState.value.activityQueue.signalCountsByKind[SessionActivityKind.QUESTION])
+        assertEquals(1, vm.uiState.value.activityQueue.signalCountsByKind[SessionActivityKind.PERMISSION])
+    }
+
+    @Test
+    fun `pending child uses selected server topology when session ids collide`() = runTest(dispatcher) {
+        val eventReducer = EventReducer()
+        val localRoot = testSession(id = "local-root")
+        val localChild = testSession(id = "shared-child", parentId = localRoot.id)
+        val otherRoot = testSession(id = "other-root")
+        val otherChild = testSession(id = localChild.id, parentId = otherRoot.id)
+        val vm = newSessionListViewModel(eventReducer = eventReducer)
+        collectUiState(vm)
+        eventReducer.setSessions("srv-session-list", listOf(localRoot, localChild))
+        eventReducer.setSessions("other-server", listOf(otherRoot, otherChild))
+
+        eventReducer.processEvent(
+            SseEvent.QuestionAsked(id = "shared-request", sessionId = localChild.id, questions = emptyList()),
+            serverId = "srv-session-list",
+        )
+        advanceUntilIdle()
+
+        val active = vm.uiState.value.activeConversations.single()
+        assertEquals(localRoot.id, active.sessionId)
+        assertEquals(ConversationStatus.AWAITING_QUESTION, active.status)
+    }
+
+    @Test
+    fun `pending child becomes visible when its session topology arrives later`() = runTest(dispatcher) {
+        val eventReducer = EventReducer()
+        val parent = testSession(id = "parent")
+        val child = testSession(id = "child", parentId = parent.id)
+        val vm = newSessionListViewModel(eventReducer = eventReducer)
+        collectUiState(vm)
+
+        eventReducer.processEvent(
+            SseEvent.PermissionAsked(id = "early-permission", sessionId = child.id, permission = "write"),
+            serverId = "srv-session-list",
+        )
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.activeConversations.isEmpty())
+
+        eventReducer.setSessions("srv-session-list", listOf(parent, child))
+        advanceUntilIdle()
+
+        val active = vm.uiState.value.activeConversations.single()
+        assertEquals(parent.id, active.sessionId)
+        assertEquals(ConversationStatus.AWAITING_PERMISSION, active.status)
+    }
+
+    @Test
     fun `pending activity is scoped to the selected server when session ids collide`() = runTest(dispatcher) {
         val eventReducer = EventReducer()
         val shared = testSession(id = "shared")

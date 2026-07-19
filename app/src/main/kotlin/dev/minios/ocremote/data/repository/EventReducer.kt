@@ -45,6 +45,9 @@ class EventReducer @Inject constructor() {
     /** Maps serverId → set of sessionIds belonging to that server */
     private val _serverSessions = MutableStateFlow<Map<String, Set<String>>>(emptyMap())
     val serverSessions: StateFlow<Map<String, Set<String>>> = _serverSessions.asStateFlow()
+
+    private val _serverSessionDetails = MutableStateFlow<Map<String, Map<String, Session>>>(emptyMap())
+    val serverSessionDetails: StateFlow<Map<String, Map<String, Session>>> = _serverSessionDetails.asStateFlow()
     
     private val _sessions = MutableStateFlow<List<Session>>(emptyList())
     val sessions: StateFlow<List<Session>> = _sessions.asStateFlow()
@@ -347,6 +350,7 @@ class EventReducer @Inject constructor() {
     
     private fun handleSessionCreated(event: SseEvent.SessionCreated, serverId: String) {
         trackSession(serverId, event.info.id)
+        upsertServerSession(serverId, event.info)
         _sessions.update { current ->
             val existingIndex = current.indexOfFirst { it.id == event.info.id }
             if (existingIndex >= 0) {
@@ -367,6 +371,7 @@ class EventReducer @Inject constructor() {
     
     private fun handleSessionUpdated(event: SseEvent.SessionUpdated, serverId: String) {
         trackSession(serverId, event.info.id)
+        upsertServerSession(serverId, event.info)
         _sessions.update { current ->
             val existingIndex = current.indexOfFirst { it.id == event.info.id }
             if (existingIndex >= 0) {
@@ -389,12 +394,22 @@ class EventReducer @Inject constructor() {
             current + (serverId to (existing + sessionId))
         }
     }
+
+    private fun upsertServerSession(serverId: String, session: Session) {
+        _serverSessionDetails.update { current ->
+            current + (serverId to (current[serverId].orEmpty() + (session.id to session)))
+        }
+    }
     
     private fun handleSessionDeleted(event: SseEvent.SessionDeleted, serverId: String) {
         val sessionId = event.info.id
         _permissionsByServer.update { current -> removeServerSessionRequests(current, serverId, sessionId) }
         _questionsByServer.update { current -> removeServerSessionRequests(current, serverId, sessionId) }
         _serverSessions.update { current ->
+            val remaining = current[serverId].orEmpty() - sessionId
+            if (remaining.isEmpty()) current - serverId else current + (serverId to remaining)
+        }
+        _serverSessionDetails.update { current ->
             val remaining = current[serverId].orEmpty() - sessionId
             if (remaining.isEmpty()) current - serverId else current + (serverId to remaining)
         }
@@ -715,6 +730,9 @@ class EventReducer @Inject constructor() {
             val existing = current[serverId] ?: emptySet()
             current + (serverId to (existing + sessionIds))
         }
+        _serverSessionDetails.update { current ->
+            current + (serverId to (current[serverId].orEmpty() + sessions.associateBy(Session::id)))
+        }
         _sessions.update { current ->
             // Merge: replace existing sessions by ID, add new ones
             val updated = current.toMutableList()
@@ -863,6 +881,7 @@ class EventReducer @Inject constructor() {
      */
     fun clearAll() {
         _serverSessions.value = emptyMap()
+        _serverSessionDetails.value = emptyMap()
         _sessions.value = emptyList()
         synchronized(sessionStatusLock) {
             _sessionStatuses.value = emptyMap()
@@ -895,6 +914,7 @@ class EventReducer @Inject constructor() {
         val roundtableIds = _serverRoundtables.value[serverId] ?: emptySet()
         _permissionsByServer.update { it - serverId }
         _questionsByServer.update { it - serverId }
+        _serverSessionDetails.update { it - serverId }
         if (sessionIds.isEmpty() && roundtableIds.isEmpty()) {
             _serverSessions.update { it - serverId }
             _serverRoundtables.update { it - serverId }

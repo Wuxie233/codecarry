@@ -209,6 +209,30 @@ data class SessionActivityQueue(
     }
 }
 
+internal fun <T> aggregateSessionRequestsByRoot(
+    sessions: List<Session>,
+    requestsBySession: Map<String, List<T>>,
+): Map<String, List<T>> {
+    val sessionsById = sessions.associateBy(Session::id)
+
+    fun rootId(sessionId: String): String? {
+        var session = sessionsById[sessionId] ?: return null
+        val visited = mutableSetOf<String>()
+        while (session.parentId != null && visited.add(session.id)) {
+            session = sessionsById[session.parentId] ?: return null
+        }
+        return session.id
+    }
+
+    return buildMap {
+        for ((sessionId, requests) in requestsBySession) {
+            if (requests.isEmpty()) continue
+            val rootId = rootId(sessionId) ?: continue
+            put(rootId, get(rootId).orEmpty() + requests)
+        }
+    }
+}
+
 /** A group of sessions belonging to a project. */
 data class ProjectSessionGroup(
     val projectId: String,
@@ -372,9 +396,8 @@ class SessionListViewModel @Inject constructor(
     @Suppress("UNCHECKED_CAST")
     val uiState: StateFlow<SessionListUiState> = combine(
         listOf(
-            eventReducer.sessions,
+            eventReducer.serverSessionDetails,
             eventReducer.sessionStatuses,
-            eventReducer.serverSessions,
             _isLoading,
             _error,
             _projects,
@@ -391,29 +414,29 @@ class SessionListViewModel @Inject constructor(
             _activityFilter,
         )
     ) { values ->
-        val allSessions = values[0] as List<Session>
+        val sessionsByServer = values[0] as Map<String, Map<String, Session>>
         val statuses = values[1] as Map<String, SessionStatus>
-        val serverSessions = values[2] as Map<String, Set<String>>
-        val loading = values[3] as Boolean
-        val error = values[4] as String?
-        val projects = values[5] as List<Project>
-        val homeDir = values[6] as String?
-        val selectedIds = values[7] as Set<String>
-        val prefs = values[8] as SessionListPreferences
-        val searchQuery = values[9] as String
-        val filter = values[10] as SessionFilter
-        val scope = (values[11] as SessionScope?) ?: prefs.scope
-        val questionsByServer = values[12] as Map<String, Map<String, List<SseEvent.QuestionAsked>>>
-        val permissionsByServer = values[13] as Map<String, Map<String, List<SseEvent.PermissionAsked>>>
+        val loading = values[2] as Boolean
+        val error = values[3] as String?
+        val projects = values[4] as List<Project>
+        val homeDir = values[5] as String?
+        val selectedIds = values[6] as Set<String>
+        val prefs = values[7] as SessionListPreferences
+        val searchQuery = values[8] as String
+        val filter = values[9] as SessionFilter
+        val scope = (values[10] as SessionScope?) ?: prefs.scope
+        val questionsByServer = values[11] as Map<String, Map<String, List<SseEvent.QuestionAsked>>>
+        val permissionsByServer = values[12] as Map<String, Map<String, List<SseEvent.PermissionAsked>>>
         val pendingQuestions = questionsByServer[serverId].orEmpty()
         val pendingPermissions = permissionsByServer[serverId].orEmpty()
-        val showHiddenProjects = values[14] as Boolean
-        val viewMode = values[15] as SessionListViewMode
-        val activityFilter = values[16] as SessionActivityFilter
+        val showHiddenProjects = values[13] as Boolean
+        val viewMode = values[14] as SessionListViewMode
+        val activityFilter = values[15] as SessionActivityFilter
         val unreadMainSessionIds = prefs.unreadMainSessionIds
 
-        val serverSessionIds = serverSessions[serverId] ?: emptySet()
-        val serverScopedSessions = allSessions.filter { it.id in serverSessionIds }
+        val serverScopedSessions = sessionsByServer[serverId].orEmpty().values.toList()
+        val rootPendingQuestions = aggregateSessionRequestsByRoot(serverScopedSessions, pendingQuestions)
+        val rootPendingPermissions = aggregateSessionRequestsByRoot(serverScopedSessions, pendingPermissions)
         val archivedCount = serverScopedSessions.count { it.parentId == null && it.isArchived }
         val sessionsById = serverScopedSessions.associateBy { it.id }
         val (rootSessions, childSessions) = serverScopedSessions.partition { it.parentId == null }
@@ -441,8 +464,8 @@ class SessionListViewModel @Inject constructor(
         val activityQueue = buildSessionActivityQueue(
             rootSessions = rootSessions,
             statuses = effectiveStatuses,
-            pendingQuestions = pendingQuestions,
-            pendingPermissions = pendingPermissions,
+            pendingQuestions = rootPendingQuestions,
+            pendingPermissions = rootPendingPermissions,
             unreadSessionIds = unreadMainSessionIds,
             filter = activityFilter,
         )

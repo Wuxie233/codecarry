@@ -319,9 +319,7 @@ class ChatViewModel @Inject constructor(
     private var piEventStreamJob: Job? = null
 
     val uiState: StateFlow<ChatUiState> = combine(
-        combine(eventReducer.sessions, eventReducer.serverSessions) { sessions, serverSessions ->
-            sessions to serverSessions
-        },
+        eventReducer.serverSessionDetails,
         eventReducer.messages,
         eventReducer.parts,
         eventReducer.sessionStatuses,
@@ -350,9 +348,10 @@ class ChatViewModel @Inject constructor(
         _isLoadingOlder,
     ) { args ->
         @Suppress("UNCHECKED_CAST")
-        val sessionState = args[0] as Pair<List<Session>, Map<String, Set<String>>>
-        val (allSessions, serverSessions) = sessionState
-        val currentServerSessionIds = serverSessions[serverId].orEmpty()
+        val sessionsByServer = args[0] as Map<String, Map<String, Session>>
+        val currentServerSessions = sessionsByServer[serverId].orEmpty()
+        val allSessions = currentServerSessions.values.toList()
+        val currentServerSessionIds = currentServerSessions.keys
         val allMessages = args[1] as Map<String, List<Message>>
         val allParts = args[2] as Map<String, List<Part>>
         val statuses = args[3] as Map<String, SessionStatus>
