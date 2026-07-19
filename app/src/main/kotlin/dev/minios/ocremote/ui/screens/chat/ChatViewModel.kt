@@ -228,7 +228,6 @@ class ChatViewModel @Inject constructor(
     private val _isRetryingNow = MutableStateFlow(false)
     private val _retryNowFailureEvent = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val retryNowFailureEvent: SharedFlow<Unit> = _retryNowFailureEvent
-    private var retryNowAwaitingStatus = false
     private val _allProviders = MutableStateFlow<List<ProviderInfo>>(emptyList())
     private val _providers = MutableStateFlow<List<ProviderInfo>>(emptyList())
     private val _hiddenModels = MutableStateFlow<Set<String>>(emptySet())
@@ -559,14 +558,6 @@ class ChatViewModel @Inject constructor(
 
     init {
         eventReducer.setActiveSessionId(sessionId)
-
-        viewModelScope.launch {
-            eventReducer.sessionStatuses.collect { statuses ->
-                if (!retryNowAwaitingStatus || statuses[sessionId] is SessionStatus.Retry) return@collect
-                retryNowAwaitingStatus = false
-                _isRetryingNow.value = false
-            }
-        }
 
         // Route guard (issue #27): if sessionId is missing after URL decode,
         // surface an error state instead of triggering REST calls with an empty sessionId.
@@ -1309,17 +1300,16 @@ class ChatViewModel @Inject constructor(
                     _retryNowFailureEvent.tryEmit(Unit)
                     return@launch
                 }
-                retryNowAwaitingStatus = true
-                if (eventReducer.sessionStatuses.value[sessionId] is SessionStatus.Retry) return@launch
-                retryNowAwaitingStatus = false
-                _isRetryingNow.value = false
+                eventReducer.sessionStatuses.first { statuses ->
+                    statuses[sessionId] !is SessionStatus.Retry
+                }
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
                 Log.e(TAG, "Failed to retry session now", error)
                 _retryNowFailureEvent.tryEmit(Unit)
             } finally {
-                if (!retryNowAwaitingStatus) _isRetryingNow.value = false
+                _isRetryingNow.value = false
             }
         }
     }
