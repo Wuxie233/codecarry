@@ -1250,7 +1250,7 @@ fun ChatScreen(
     var actionMenuMessage by remember { mutableStateOf<ChatMessage?>(null) }
     var restoreConfirmMessage by remember { mutableStateOf<ChatMessage?>(null) }
     var forkFromMessageInFlight by remember { mutableStateOf(false) }
-    var isTerminalMode by rememberSaveable { mutableStateOf(startInTerminalMode) }
+    var isTerminalMode by rememberSaveable { mutableStateOf(startInTerminalMode && !uiState.isPiStack) }
     var terminalCtrlLatched by rememberSaveable { mutableStateOf(false) }
     var terminalAltLatched by rememberSaveable { mutableStateOf(false) }
     var terminalVirtualCtrlDown by remember { mutableStateOf(false) }
@@ -1303,7 +1303,7 @@ fun ChatScreen(
     // Pending send action: stored so the confirm dialog can trigger it
     var pendingSendAction by remember { mutableStateOf<(() -> Unit)?>(null) }
     var inputMode by rememberSaveable { mutableStateOf(ChatInputMode.NORMAL.name) }
-    val isShellMode = inputMode == ChatInputMode.SHELL.name
+    val isShellMode = !uiState.isPiStack && inputMode == ChatInputMode.SHELL.name
     var roundtablePendingCommand by remember { mutableStateOf<String?>(null) }
     var roundtableSupplementMode by remember { mutableStateOf(false) }
 
@@ -1311,6 +1311,14 @@ fun ChatScreen(
         if (roundtablePendingCommand != null) return
         roundtablePendingCommand = key
         block { roundtablePendingCommand = null }
+    }
+
+    LaunchedEffect(uiState.isPiStack) {
+        if (uiState.isPiStack) {
+            isTerminalMode = false
+            inputMode = ChatInputMode.NORMAL.name
+            showSubagentDrawer = false
+        }
     }
 
 
@@ -1792,7 +1800,10 @@ fun ChatScreen(
     val pendingCount = uiState.pendingPermissions.size + uiState.pendingQuestions.size
     val isBusy = uiState.sessionStatus is SessionStatus.Busy
     val sessionBusyForMessageActions = uiState.sessionStatus !is SessionStatus.Idle || uiState.isSending || forkFromMessageInFlight
-    val sessionReadyForMessageActions = !uiState.isLoading && (uiState.isPiRoundtable || uiState.error == null) && viewModel.sessionId.isNotBlank()
+    val sessionReadyForMessageActions = !uiState.isPiStack &&
+        !uiState.isLoading &&
+        (uiState.isPiRoundtable || uiState.error == null) &&
+        viewModel.sessionId.isNotBlank()
     LaunchedEffect(messageCount, autoFollowTarget, pendingCount, isBusy) {
         if (messageCount > 0 && autoScrollEnabled) {
             val lastIndex = listState.layoutInfo.totalItemsCount.coerceAtLeast(1) - 1
@@ -1892,7 +1903,7 @@ fun ChatScreen(
                             )
                         }
                     }
-                    if (!uiState.isPiRoundtable) {
+                    if (!uiState.isPiRoundtable && !uiState.isPiStack) {
                         IconButton(onClick = { showSubagentDrawer = !showSubagentDrawer }) {
                             BadgedBox(
                                 badge = {
@@ -1911,13 +1922,15 @@ fun ChatScreen(
                             }
                         }
                     }
-                    IconButton(onClick = { isTerminalMode = true }) {
-                        Icon(
-                            imageVector = Icons.Default.Terminal,
-                            contentDescription = stringResource(R.string.tool_terminal)
-                        )
+                    if (!uiState.isPiStack) {
+                        IconButton(onClick = { isTerminalMode = true }) {
+                            Icon(
+                                imageVector = Icons.Default.Terminal,
+                                contentDescription = stringResource(R.string.tool_terminal)
+                            )
+                        }
                     }
-                    Box {
+                    if (!uiState.isPiStack) Box {
                         val isAmoled = isAmoledTheme()
                         IconButton(onClick = { showMenu = true }) {
                             Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.more_options))
@@ -2143,7 +2156,7 @@ fun ChatScreen(
             ChatInputBar(
                 textFieldValue = inputText,
                 onTextFieldValueChange = { newValue ->
-                    val shouldAutoShell = !isShellMode && newValue.text.startsWith("!")
+                    val shouldAutoShell = !uiState.isPiStack && !isShellMode && newValue.text.startsWith("!")
                     val normalizedValue = if (shouldAutoShell) {
                         val stripped = newValue.text.drop(1).trimStart()
                         val newCursor = (newValue.selection.start - 1).coerceAtLeast(0)
@@ -2168,7 +2181,7 @@ fun ChatScreen(
                     val cursorPos = normalizedValue.selection.start
                     val textBefore = normalizedValue.text.substring(0, cursorPos)
                     val atMatch = Regex("@(\\S*)$").find(textBefore)
-                    if (atMatch != null && !uiState.isPiRoundtable) {
+                    if (atMatch != null && !uiState.isPiRoundtable && !uiState.isPiStack) {
                         val query = atMatch.groupValues[1]
                         viewModel.searchFilesForMention(query)
                     } else {
@@ -2264,13 +2277,17 @@ fun ChatScreen(
                         // Build prompt parts: split text around confirmed @file mentions
                         val allParts = buildPromptParts(rawText, confirmedFilePaths, viewModel.getSessionDirectory())
                         // Add image attachments
-                        val attachmentParts = attachments.map { att ->
-                            PromptPart(
-                                type = "file",
-                                mime = att.mime,
-                                url = att.dataUrl,
-                                filename = att.filename
-                            )
+                        val attachmentParts = if (uiState.isPiStack) {
+                            emptyList()
+                        } else {
+                            attachments.map { att ->
+                                PromptPart(
+                                    type = "file",
+                                    mime = att.mime,
+                                    url = att.dataUrl,
+                                    filename = att.filename
+                                )
+                            }
                         }
                         viewModel.sendMessage(allParts, attachmentParts) { ok ->
                             if (ok) {
@@ -2305,8 +2322,9 @@ fun ChatScreen(
                 isBusy = uiState.sessionStatus is SessionStatus.Busy,
                 sendDisabledReasonResId = sendDisabledReasonResId,
                 messages = uiState.messages,
-                attachments = attachments,
+                attachments = if (uiState.isPiStack) emptyList() else attachments,
                 onAttach = { imagePickerLauncher.launch("image/*") },
+                supportsAttachments = !uiState.isPiStack,
                 onRemoveAttachment = { index ->
                     if (index in attachments.indices) {
                         attachments.removeAt(index)
@@ -2448,6 +2466,7 @@ fun ChatScreen(
                     }
                 },
                 isPiRoundtable = uiState.isPiRoundtable,
+                isPiStack = uiState.isPiStack,
                 activeRoster = uiState.activeRoster,
                 roundtableSupplementMode = roundtableSupplementMode,
                 contextWindow = uiState.contextWindow,
@@ -3132,7 +3151,7 @@ fun ChatScreen(
         }
     }
     }
-    if (usePersistentSubagentPane && showSubagentDrawer && !isTerminalMode && !uiState.isPiRoundtable) {
+    if (usePersistentSubagentPane && showSubagentDrawer && !isTerminalMode && !uiState.isPiRoundtable && !uiState.isPiStack) {
         ChatSubagentDrawer(
             items = uiState.subagents,
             onDismiss = { showSubagentDrawer = false },
@@ -3145,7 +3164,7 @@ fun ChatScreen(
     }
     }
 
-    if (!usePersistentSubagentPane && showSubagentDrawer && !isTerminalMode && !uiState.isPiRoundtable) {
+    if (!usePersistentSubagentPane && showSubagentDrawer && !isTerminalMode && !uiState.isPiRoundtable && !uiState.isPiStack) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -3163,7 +3182,7 @@ fun ChatScreen(
                 .align(Alignment.CenterEnd)
                 .fillMaxWidth(0.86f),
         )
-    } else if (!showSubagentDrawer && !isTerminalMode && !uiState.isPiRoundtable) {
+    } else if (!showSubagentDrawer && !isTerminalMode && !uiState.isPiRoundtable && !uiState.isPiStack) {
         Box(
             modifier = Modifier
                 .align(Alignment.CenterEnd)
@@ -7415,6 +7434,7 @@ private fun ChatInputBar(
     messages: List<ChatMessage> = emptyList(),
     attachments: List<ImageAttachment> = emptyList(),
     onAttach: () -> Unit = {},
+    supportsAttachments: Boolean = true,
     onRemoveAttachment: (Int) -> Unit = {},
     onSaveAttachment: (bytes: ByteArray, mime: String, filename: String?) -> Unit = { _, _, _ -> },
     modelLabel: String = "",
@@ -7434,6 +7454,7 @@ private fun ChatInputBar(
     inputMode: ChatInputMode = ChatInputMode.NORMAL,
     onInputModeChange: (ChatInputMode) -> Unit = {},
     isPiRoundtable: Boolean = false,
+    isPiStack: Boolean = false,
     roundtableSupplementMode: Boolean = false,
     activeRoster: List<Roundtable.RoleSummary> = emptyList(),
     contextWindow: Int = 0,
@@ -7467,8 +7488,8 @@ private fun ChatInputBar(
 
     // Build merged slash commands: client commands + server commands (deduplicated)
     val clientCmds = clientCommands()
-    val allCommands = remember(commands, clientCmds) {
-        mergeSlashCommands(clientCmds, commands)
+    val allCommands = remember(commands, clientCmds, isPiStack) {
+        if (isPiStack) emptyList() else mergeSlashCommands(clientCmds, commands)
     }
 
     // Slash command suggestions
@@ -7800,7 +7821,7 @@ private fun ChatInputBar(
             verticalArrangement = Arrangement.spacedBy(2.dp)
         ) {
             // Agent + Model + Variant + Attach selector row — small, subtle
-            if (!isPiRoundtable && (modelLabel.isNotEmpty() || agents.size > 1)) {
+            if (!isPiRoundtable && !isPiStack && (modelLabel.isNotEmpty() || agents.size > 1)) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -7904,16 +7925,18 @@ private fun ChatInputBar(
                         horizontalArrangement = Arrangement.spacedBy(0.dp)
                     ) {
                         // Attach button (paperclip) — always visible, pinned right, aligned with Send button
-                        IconButton(
-                            onClick = onAttach,
-                            modifier = Modifier.size(32.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.AttachFile,
-                                contentDescription = stringResource(R.string.chat_attach),
-                                modifier = Modifier.size(16.dp),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                            )
+                        if (supportsAttachments) {
+                            IconButton(
+                                onClick = onAttach,
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.AttachFile,
+                                    contentDescription = stringResource(R.string.chat_attach),
+                                    modifier = Modifier.size(16.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                )
+                            }
                         }
                     }
                 }
