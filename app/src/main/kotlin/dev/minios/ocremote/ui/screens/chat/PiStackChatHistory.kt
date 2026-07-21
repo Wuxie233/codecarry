@@ -92,13 +92,45 @@ private fun mergePiStackMessages(
     historical: List<MessageWithParts>,
     authoritativeCurrent: List<MessageWithParts>,
 ): List<MessageWithParts> {
+    val historicalIds = historical.mapTo(mutableSetOf()) { it.info.id }
+    val liveIds = authoritativeCurrent.mapTo(mutableSetOf()) { it.info.id }
+    val liveSignatures = authoritativeCurrent
+        .filterNot { it.info.id in historicalIds }
+        .groupingBy(::messageContentSignature)
+        .eachCount()
+        .toMutableMap()
+    val replacedHistoryIds = mutableSetOf<String>()
+    historical.asReversed().forEach { message ->
+        if (message.info.id in liveIds) return@forEach
+        val signature = messageContentSignature(message)
+        val matches = liveSignatures[signature] ?: 0
+        if (matches > 0) {
+            replacedHistoryIds += message.info.id
+            if (matches == 1) liveSignatures.remove(signature) else liveSignatures[signature] = matches - 1
+        }
+    }
     val byId = LinkedHashMap<String, MessageWithParts>(historical.size + authoritativeCurrent.size)
-    historical.forEach { message -> byId[message.info.id] = message }
+    historical.forEach { message ->
+        if (message.info.id in replacedHistoryIds) return@forEach
+        byId[message.info.id] = message
+    }
     authoritativeCurrent.forEach { message -> byId[message.info.id] = message }
     return byId.values.sortedWith(
         compareBy<MessageWithParts> { it.info.time.created }
             .thenBy { it.info.id },
     )
+}
+
+private fun messageContentSignature(message: MessageWithParts): String = buildString {
+    append(if (message.info is Message.User) "user" else "assistant")
+    message.parts.forEach { part ->
+        append('\u0000')
+        when (part) {
+            is Part.Text -> append("text:").append(part.text)
+            is Part.Tool -> append("tool:").append(part.callId).append(':').append(part.tool).append(':').append(part.state)
+            else -> append(part::class.qualifiedName)
+        }
+    }
 }
 
 private fun JsonElement?.asObject(): Map<String, JsonElement> = (this as? JsonObject).orEmpty()

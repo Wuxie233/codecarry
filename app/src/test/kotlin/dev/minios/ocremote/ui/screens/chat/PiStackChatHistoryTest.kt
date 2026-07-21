@@ -58,6 +58,20 @@ class PiStackChatHistoryTest {
     }
 
     @Test
+    fun `latest history reconciles fallback id with matching live content once`() {
+        val historicalDuplicate = message("message-1", 20, "same answer")
+        val historicalEarlier = message("message-0", 10, "same answer")
+        val live = message("message-prompt-1", 30, "same answer")
+
+        val result = mergePiStackLatestHistory(
+            page = PiStackChatHistoryPage(listOf(historicalEarlier, historicalDuplicate), null, false),
+            liveMessages = listOf(live),
+        )
+
+        assertEquals(listOf("message-0", "message-prompt-1"), result.messages.map { it.info.id })
+    }
+
+    @Test
     fun `structured history maps text and completed tool to existing cards`() {
         val page = PiStackMessagePageDto(
             items = listOf(
