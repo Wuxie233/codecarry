@@ -1099,8 +1099,7 @@ private fun OpenProjectDialog(
 
     /** Shorten an absolute path by replacing home prefix with ~ */
     fun tildeReplace(path: String): String {
-        val home = homeDir ?: return path
-        return if (path.startsWith(home)) "~" + path.removePrefix(home) else path
+        return directoryDisplayPath(path, homeDir, useTilde = !viewModel.isPiStack)
     }
 
     Dialog(

@@ -386,6 +386,16 @@ internal fun pinDirectoryRefreshTargets(changed: Boolean): Set<PinDirectoryRefre
     }
 }
 
+internal fun directoryDisplayPath(path: String, homeDirectory: String?, useTilde: Boolean): String {
+    if (!useTilde) return path
+    val home = homeDirectory ?: return path
+    return if (path == home || path.startsWith("${home.trimEnd('/')}/")) {
+        "~" + path.removePrefix(home)
+    } else {
+        path
+    }
+}
+
 @HiltViewModel
 class SessionListViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,

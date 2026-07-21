@@ -181,6 +181,19 @@ class SessionListViewModelTest {
     }
 
     @Test
+    fun `Pi Stack directory browser keeps server paths absolute`() {
+        assertEquals("/root/CODE", directoryDisplayPath("/root/CODE", "/root/CODE", useTilde = false))
+        assertEquals("/root/CODE/oc-remote", directoryDisplayPath("/root/CODE/oc-remote", "/root/CODE", useTilde = false))
+    }
+
+    @Test
+    fun `OpenCode directory browser abbreviates only paths inside home`() {
+        assertEquals("~", directoryDisplayPath("/root", "/root", useTilde = true))
+        assertEquals("~/CODE", directoryDisplayPath("/root/CODE", "/root", useTilde = true))
+        assertEquals("/rooted/project", directoryDisplayPath("/rooted/project", "/root", useTilde = true))
+    }
+
+    @Test
     fun `pinned empty project group stays visible`() {
         val pinnedEmptyGroup = ProjectGroup(
             directory = "/workspace/empty-project",
