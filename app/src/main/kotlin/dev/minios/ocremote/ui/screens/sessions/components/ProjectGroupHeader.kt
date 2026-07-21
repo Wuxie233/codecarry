@@ -72,6 +72,7 @@ fun ProjectGroupHeader(
     onManageMcp: (() -> Unit)? = null,
     mcpServerCount: Int? = null,
     mcpSupportsRuntimeControl: Boolean = false,
+    supportsManagement: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
@@ -265,8 +266,8 @@ fun ProjectGroupHeader(
                             },
                         )
                     }
-                    HorizontalDivider()
-                    DropdownMenuItem(
+                    if (supportsManagement) HorizontalDivider()
+                    if (supportsManagement) DropdownMenuItem(
                         text = {
                             Text(
                                 text = stringResource(R.string.sessions_project_archive_all),

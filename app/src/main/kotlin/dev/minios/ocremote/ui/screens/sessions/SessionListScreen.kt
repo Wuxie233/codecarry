@@ -51,7 +51,6 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.activity.compose.BackHandler
 import androidx.hilt.navigation.compose.hiltViewModel
 import dev.minios.ocremote.R
-import dev.minios.ocremote.data.api.FileNode
 import dev.minios.ocremote.data.preferences.SessionScope
 import dev.minios.ocremote.data.preferences.SessionListViewMode
 import dev.minios.ocremote.domain.model.McpRuntimeState
@@ -425,7 +424,7 @@ fun SessionListScreen(
                             )
                         } else {
                         if (!uiState.isSelectionMode) {
-                            SessionScopeSegmentedControl(
+                            if (!uiState.isPiStack) SessionScopeSegmentedControl(
                                 currentScope = uiState.scope,
                                 archivedCount = uiState.archivedCount,
                                 onScopeChange = viewModel::setScope,
@@ -540,14 +539,17 @@ fun SessionListScreen(
                                     onArchiveAll = { viewModel.archiveProjectSessions(group.directory) },
                                     mcpServerCount = activeProjectMcpServerCount,
                                     mcpSupportsRuntimeControl = activeProjectMcpSupportsRuntimeControl,
-                                    onManageMcp = {
-                                        mcpSheetProjectName = group.projectName
-                                        mcpSheetProjectDir = group.directory
-                                        mcpViewModel.load(
-                                            conn = viewModel.currentConnection,
-                                            projectDir = group.directory,
-                                        )
-                                    },
+                                    supportsManagement = uiState.supportsSessionManagement,
+                                    onManageMcp = if (uiState.supportsMcp) {
+                                        {
+                                            mcpSheetProjectName = group.projectName
+                                            mcpSheetProjectDir = group.directory
+                                            mcpViewModel.load(
+                                                conn = viewModel.currentConnection,
+                                                projectDir = group.directory,
+                                            )
+                                        }
+                                    } else null,
                                 )
                             }
 
@@ -596,7 +598,9 @@ fun SessionListScreen(
                                                     onNavigateToChat(item.session.id, false, item.session.directory)
                                                 }
                                             },
-                                            onLongClick = { viewModel.toggleSelection(item.session.id) },
+                                            onLongClick = {
+                                                if (uiState.supportsSessionManagement) viewModel.toggleSelection(item.session.id)
+                                            },
                                             onRename = {
                                                 renameSessionId = item.session.id
                                                 renameText = item.session.title ?: ""
@@ -616,6 +620,7 @@ fun SessionListScreen(
                                             onSubagentClick = { sessionId, directory ->
                                                 onNavigateToChat(sessionId, false, directory)
                                             },
+                                            supportsManagement = uiState.supportsSessionManagement,
                                         )
                              }
                          }
@@ -820,6 +825,7 @@ private fun SessionRowWithSubagents(
     onRestore: () -> Unit,
     onDelete: () -> Unit,
     onSubagentClick: (sessionId: String, directory: String) -> Unit,
+    supportsManagement: Boolean = true,
 ) {
     val hasRunning = subagents.running.isNotEmpty()
     val hasHistorical = subagents.historical.isNotEmpty()
@@ -842,6 +848,7 @@ private fun SessionRowWithSubagents(
             onArchive = onArchive,
             onRestore = onRestore,
             onDelete = onDelete,
+            supportsManagement = supportsManagement,
         )
 
         if (hasRunning) {
@@ -1032,7 +1039,7 @@ private fun OpenProjectDialog(
     var searchQuery by remember { mutableStateOf("") }
     var currentDir by remember { mutableStateOf<String?>(null) }
     var homeDir by remember { mutableStateOf<String?>(null) }
-    var directories by remember { mutableStateOf<List<FileNode>>(emptyList()) }
+    var listing by remember { mutableStateOf<ServerDirectoryListing?>(null) }
     var searchResults by remember { mutableStateOf<List<String>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var showCreateFolderDialog by remember { mutableStateOf(false) }
@@ -1049,7 +1056,8 @@ private fun OpenProjectDialog(
         homeDir = home
         currentDir = home
         isLoading = true
-        directories = viewModel.listDirectories(home)
+        listing = viewModel.browseDirectories(if (viewModel.isPiStack) null else home)
+        currentDir = listing?.path ?: home
         isLoading = false
     }
 
@@ -1058,7 +1066,8 @@ private fun OpenProjectDialog(
         val dir = currentDir ?: return@LaunchedEffect
         if (searchQuery.isBlank()) {
             isLoading = true
-            directories = viewModel.listDirectories(dir)
+            listing = viewModel.browseDirectories(dir)
+            currentDir = listing?.path ?: dir
             isLoading = false
         }
     }
@@ -1070,7 +1079,7 @@ private fun OpenProjectDialog(
             // Re-list current dir
             currentDir?.let {
                 isLoading = true
-                directories = viewModel.listDirectories(it)
+                listing = viewModel.browseDirectories(it)
                 isLoading = false
             }
             return@LaunchedEffect
@@ -1125,7 +1134,8 @@ private fun OpenProjectDialog(
                     }
                 }
 
-                // Search field
+                // Search field (OpenCode only; Pi Stack has canonical browse but no search capability).
+                if (!viewModel.isPiStack) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1192,10 +1202,12 @@ private fun OpenProjectDialog(
                             )
                         }
                 }
+                }
 
                 // Breadcrumb / current path (when not searching)
                 if (!isSearching && currentDir != null) {
-                    val canGoUp = currentDir != "/" && currentDir != homeDir
+                    val parent = if (listing != null) listing?.parent else parentDirectory(currentDir ?: "/")
+                    val canGoUp = parent != null
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1205,8 +1217,7 @@ private fun OpenProjectDialog(
                                     .clip(RoundedCornerShape(4.dp))
                                     .clickable {
                                         // Navigate up
-                                        val parent = currentDir!!.trimEnd('/').substringBeforeLast('/')
-                                        currentDir = parent.ifEmpty { "/" }
+                                        currentDir = parent
                                     } else Modifier
                             ),
                         verticalAlignment = Alignment.CenterVertically,
@@ -1285,6 +1296,7 @@ private fun OpenProjectDialog(
                         }
                         else -> {
                             // Directory listing
+                            val directories = listing?.entries.orEmpty()
                             val showKnownProjects = currentDir == homeDir && projects.isNotEmpty()
 
                             if (directories.isEmpty() && !showKnownProjects) {
@@ -1303,8 +1315,8 @@ private fun OpenProjectDialog(
                                     modifier = Modifier.fillMaxSize(),
                                     contentPadding = PaddingValues(vertical = 4.dp)
                                 ) {
-                                    items(directories, key = { it.name }) { node ->
-                                        val absPath = node.absolute ?: "${currentDir?.trimEnd('/')}/${node.name}"
+                                    items(directories, key = { it.path }) { node ->
+                                        val absPath = node.path
                                         DirectoryRow(
                                             displayPath = tildeReplace(absPath) + "/",
                                             onNavigate = {
@@ -1319,7 +1331,7 @@ private fun OpenProjectDialog(
                         }
                     }
 
-                    if (isAmoled) {
+                    if (!viewModel.isPiStack && isAmoled) {
                         Surface(
                             modifier = Modifier
                                 .align(Alignment.BottomEnd)
@@ -1345,7 +1357,7 @@ private fun OpenProjectDialog(
                                 )
                             }
                         }
-                    } else {
+                    } else if (!viewModel.isPiStack) {
                         FloatingActionButton(
                             onClick = {
                                 showCreateFolderDialog = true
@@ -1416,7 +1428,7 @@ private fun OpenProjectDialog(
                                 createFolderError = null
                                 searchQuery = ""
                                 currentDir = parent
-                                directories = viewModel.listDirectories(parent)
+                                listing = viewModel.browseDirectories(parent)
                                 Toast
                                     .makeText(
                                         context,
@@ -1688,6 +1700,7 @@ private fun SessionRow(
     onArchive: () -> Unit,
     onRestore: () -> Unit,
     onDelete: () -> Unit,
+    supportsManagement: Boolean = true,
 ) {
     val isAmoled = isAmoledTheme()
     val dateFormat = remember { SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()) }
@@ -1700,6 +1713,7 @@ private fun SessionRow(
 
     val dismissState = rememberSwipeToDismissBoxState(
         confirmValueChange = { dismissValue ->
+            if (!supportsManagement) return@rememberSwipeToDismissBoxState false
             when (dismissValue) {
                 SwipeToDismissBoxValue.StartToEnd -> {
                     onRename()
@@ -1801,8 +1815,25 @@ private fun SessionRow(
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
                         )
 
-                        // Status indicator
-                        when (item.status) {
+                        // Pi Stack has richer server states than OpenCode's shared status model.
+                        when (item.backendState) {
+                            BackendSessionState.AWAITING_COMMAND -> SessionStateLabel(
+                                text = stringResource(R.string.sessions_status_awaiting_command),
+                                color = MaterialTheme.colorScheme.secondary,
+                            )
+                            BackendSessionState.AWAITING_SKIP -> SessionStateLabel(
+                                text = stringResource(R.string.sessions_status_awaiting_skip),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            BackendSessionState.ENDED -> SessionStateLabel(
+                                text = stringResource(R.string.sessions_status_ended),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            BackendSessionState.ERROR -> SessionStateLabel(
+                                text = stringResource(R.string.sessions_status_error),
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                            else -> when (item.status) {
                             is SessionStatus.Busy -> {
                                 Row(
                                     horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -1838,7 +1869,8 @@ private fun SessionRow(
                                     )
                                 }
                             }
-                            else -> { /* Idle - no label */ }
+                                else -> { /* Idle - no label */ }
+                            }
                         }
 
                         // Diff summary (+N/-N)
@@ -1880,7 +1912,7 @@ private fun SessionRow(
                     )
                 }
 
-                if (!isSelectionMode) {
+                if (!isSelectionMode && supportsManagement) {
                     Box {
                         IconButton(onClick = { menuExpanded = true }) {
                             Icon(
@@ -1932,7 +1964,9 @@ private fun SessionRow(
         }
     }
 
-    SwipeToDismissBox(
+    if (!supportsManagement) {
+        cardContent()
+    } else SwipeToDismissBox(
         state = dismissState,
         backgroundContent = {
             val direction = dismissState.dismissDirection
@@ -2024,6 +2058,22 @@ private fun SessionRow(
     enableDismissFromEndToStart = !isSelectionMode
     ) {
         cardContent()
+    }
+}
+
+@Composable
+private fun SessionStateLabel(text: String, color: Color) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(8.dp)
+                .clip(CircleShape)
+                .background(color),
+        )
+        Text(text = text, style = MaterialTheme.typography.labelSmall, color = color)
     }
 }
 

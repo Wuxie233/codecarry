@@ -5,6 +5,8 @@ import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import dev.minios.ocremote.data.api.OpenCodeApi
+import dev.minios.ocremote.data.api.PiStackApi
+import dev.minios.ocremote.data.transport.PiStackTransportFactory
 import dev.minios.ocremote.data.diagnostics.AppEventDiagnosticsGenerator
 import dev.minios.ocremote.data.diagnostics.DiagnosticsLogRepository
 import dev.minios.ocremote.data.preferences.SessionFilter
@@ -198,6 +200,43 @@ class SessionListViewModelTest {
 
         assertTrue(isProjectGroupVisible(pinnedEmptyGroup, showHiddenProjects = false))
         assertFalse(isProjectGroupVisible(unpinnedEmptyGroup, showHiddenProjects = false))
+    }
+
+    @Test
+    fun `registered Pi Stack project stays visible without sessions or local pin`() {
+        val group = ProjectGroup(
+            projectId = "opaque-project-id",
+            directory = "/srv/projects/empty",
+            projectName = "empty",
+            tildeDirectory = "/srv/projects/empty",
+            isPinned = false,
+            isCollapsed = false,
+            isHidden = false,
+            sessionCount = 0,
+            activeCount = 0,
+            additionsSum = 0,
+            deletionsSum = 0,
+            sessions = emptyList(),
+            subagentRowsByParent = emptyMap(),
+            isRegistered = true,
+        )
+
+        assertTrue(isProjectGroupVisible(group, showHiddenProjects = false))
+        assertTrue(computeSessionListEmptyState(0, 1, registeredProjectCount = 1).hasAnySessions)
+    }
+
+    @Test
+    fun `server directory parent fallback handles root and canonical paths`() {
+        assertEquals(null, parentDirectory("/"))
+        assertEquals("/srv/projects", parentDirectory("/srv/projects/app/"))
+    }
+
+    @Test
+    fun `Pi Stack status mapping preserves active and terminal presentation`() {
+        assertEquals(SessionStatus.Busy, BackendSessionState.BUSY.toSessionStatus())
+        assertTrue(BackendSessionState.ERROR.toSessionStatus() is SessionStatus.Retry)
+        assertEquals(SessionStatus.Idle, BackendSessionState.ENDED.toSessionStatus())
+        assertEquals(SessionStatus.Idle, BackendSessionState.AWAITING_SKIP.toSessionStatus())
     }
 
     @Test
@@ -579,7 +618,15 @@ class SessionListViewModelTest {
             preferencesRepo = sessionListPreferencesRepository(),
             settingsRepository = settingsRepository(),
             appEventDiagnosticsGenerator = AppEventDiagnosticsGenerator(diagnosticsRepository),
+            piStackTransportFactory = piStackTransportFactory(),
         ).also { viewModels.add(it) }
+    }
+
+    private fun piStackTransportFactory(): PiStackTransportFactory {
+        val client = HttpClient(MockEngine { respond("{}") }) {
+            install(ContentNegotiation) { json(json) }
+        }
+        return PiStackTransportFactory(PiStackApi(client, json))
     }
 
     private fun sessionListApi(

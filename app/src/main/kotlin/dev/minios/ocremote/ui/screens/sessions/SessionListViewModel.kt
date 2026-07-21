@@ -9,7 +9,13 @@ import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.minios.ocremote.data.api.FileNode
 import dev.minios.ocremote.data.api.OpenCodeApi
+import dev.minios.ocremote.data.api.PiStackDirectoryListingDto
+import dev.minios.ocremote.data.api.PiStackProjectDto
+import dev.minios.ocremote.data.api.PiStackSessionDto
+import dev.minios.ocremote.data.api.PiStackSessionState
 import dev.minios.ocremote.data.api.ServerConnection
+import dev.minios.ocremote.data.transport.PiStackTransport
+import dev.minios.ocremote.data.transport.PiStackTransportFactory
 import dev.minios.ocremote.data.diagnostics.AppEventBreadcrumb
 import dev.minios.ocremote.data.diagnostics.AppEventDiagnosticsGenerator
 import dev.minios.ocremote.data.diagnostics.AppEventName
@@ -24,6 +30,8 @@ import dev.minios.ocremote.data.repository.SettingsRepository
 import dev.minios.ocremote.domain.model.Project
 import dev.minios.ocremote.domain.model.Session
 import dev.minios.ocremote.domain.model.SessionStatus
+import dev.minios.ocremote.domain.model.ServerConfig
+import dev.minios.ocremote.domain.model.ServerType
 import dev.minios.ocremote.domain.model.SseEvent
 import dev.minios.ocremote.ui.screens.sessions.components.ActiveConversationItem
 import dev.minios.ocremote.ui.screens.sessions.components.ConversationStatus
@@ -45,6 +53,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.yield
 import java.net.URLDecoder
+import java.time.Instant
+import java.util.UUID
 import javax.inject.Inject
 
 private const val TAG = "SessionListViewModel"
@@ -103,6 +113,31 @@ data class SessionListUiState(
 
     val hiddenProjectCount: Int = 0,
     val showHiddenProjects: Boolean = false,
+    val isPiStack: Boolean = false,
+    val supportsSessionManagement: Boolean = true,
+    val supportsDirectorySearch: Boolean = true,
+    val supportsDirectoryCreation: Boolean = true,
+    val supportsMcp: Boolean = true,
+)
+
+enum class BackendSessionState {
+    IDLE,
+    BUSY,
+    RETRY,
+    AWAITING_COMMAND,
+    AWAITING_SKIP,
+    ENDED,
+    ERROR,
+    UNKNOWN,
+}
+
+data class ServerDirectoryEntry(val name: String, val path: String)
+
+data class ServerDirectoryListing(
+    val path: String,
+    val parent: String?,
+    val entries: List<ServerDirectoryEntry>,
+    val truncated: Boolean = false,
 )
 
 data class SessionRecentWorkItem(
@@ -244,6 +279,7 @@ data class ProjectSessionGroup(
 )
 
 data class ProjectGroup(
+    val projectId: String = "",
     val directory: String,
     val projectName: String,
     val tildeDirectory: String,
@@ -258,6 +294,7 @@ data class ProjectGroup(
     val subagentRowsByParent: Map<String, SubagentRow>,
     val sessionDirLabels: Map<String, String> = emptyMap(),
     val unreadCount: Int = 0,
+    val isRegistered: Boolean = false,
 )
 
 internal fun deriveAllDirectories(
@@ -270,7 +307,7 @@ internal fun isProjectGroupVisible(
     group: ProjectGroup,
     showHiddenProjects: Boolean,
 ): Boolean {
-    val visibleByDefault = group.sessionCount > 0 || group.isPinned
+    val visibleByDefault = group.sessionCount > 0 || group.isPinned || group.isRegistered
     val hiddenFilter = if (group.isHidden) showHiddenProjects else true
     return visibleByDefault && hiddenFilter
 }
@@ -290,6 +327,7 @@ data class SessionItem(
     val session: Session,
     val status: SessionStatus = SessionStatus.Idle,
     val isUnread: Boolean = false,
+    val backendState: BackendSessionState = BackendSessionState.IDLE,
 )
 
 internal fun matchesSessionFilter(item: SessionItem, filter: SessionFilter): Boolean {
@@ -356,6 +394,7 @@ class SessionListViewModel @Inject constructor(
     private val preferencesRepo: SessionListPreferencesRepository,
     private val settingsRepository: SettingsRepository,
     private val appEventDiagnosticsGenerator: AppEventDiagnosticsGenerator,
+    private val piStackTransportFactory: PiStackTransportFactory,
 ) : ViewModel() {
 
     val serverUrl: String = decodeRouteArg(savedStateHandle.get<String>("serverUrl"))
@@ -363,13 +402,31 @@ class SessionListViewModel @Inject constructor(
     private val password: String = decodeRouteArg(savedStateHandle.get<String>("password"))
     val serverName: String = decodeRouteArg(savedStateHandle.get<String>("serverName"))
     val serverId: String = decodeRouteArg(savedStateHandle.get<String>("serverId"))
+    val serverType: ServerType = runCatching {
+        ServerType.valueOf(decodeRouteArg(savedStateHandle.get<String>("serverType")).ifBlank { ServerType.OPENCODE.name })
+    }.getOrDefault(ServerType.OPENCODE)
+    val isPiStack: Boolean = serverType == ServerType.PI_STACK
 
     private val conn = ServerConnection.from(serverUrl, username, password.ifEmpty { null })
     val currentConnection: ServerConnection = conn
+    private val piStackTransport: PiStackTransport? = if (isPiStack) {
+        piStackTransportFactory.create(
+            ServerConfig(
+                id = serverId,
+                type = ServerType.PI_STACK,
+                url = serverUrl,
+                token = password.takeIf { it.isNotBlank() },
+                name = serverName,
+            )
+        )
+    } else {
+        null
+    }
 
     private val _error = MutableStateFlow<String?>(null)
     private val _isLoading = MutableStateFlow(true)
     private val _projects = MutableStateFlow<List<Project>>(emptyList())
+    private val _backendStates = MutableStateFlow<Map<String, BackendSessionState>>(emptyMap())
     private val _homeDir = MutableStateFlow<String?>(null)
     private val _selectedIds = MutableStateFlow<Set<String>>(emptySet())
     private val _searchQuery = MutableStateFlow("")
@@ -382,6 +439,7 @@ class SessionListViewModel @Inject constructor(
     private val _undoState = Channel<UndoAction>(Channel.BUFFERED)
     internal val undoState: kotlinx.coroutines.flow.Flow<UndoAction> = _undoState.receiveAsFlow()
     private var isCreatingSession = false
+    private var piStackGeneration: String? = null
     private val prefsFlow = preferencesRepo.preferences.stateIn(
         viewModelScope,
         SharingStarted.Eagerly,
@@ -412,6 +470,7 @@ class SessionListViewModel @Inject constructor(
             _showHiddenProjects,
             viewModeFlow,
             _activityFilter,
+            _backendStates,
         )
     ) { values ->
         val sessionsByServer = values[0] as Map<String, Map<String, Session>>
@@ -432,6 +491,7 @@ class SessionListViewModel @Inject constructor(
         val showHiddenProjects = values[13] as Boolean
         val viewMode = values[14] as SessionListViewMode
         val activityFilter = values[15] as SessionActivityFilter
+        val backendStates = values[16] as Map<String, BackendSessionState>
         val unreadMainSessionIds = prefs.unreadMainSessionIds
 
         val serverScopedSessions = sessionsByServer[serverId].orEmpty().values.toList()
@@ -441,14 +501,21 @@ class SessionListViewModel @Inject constructor(
         val sessionsById = serverScopedSessions.associateBy { it.id }
         val (rootSessions, childSessions) = serverScopedSessions.partition { it.parentId == null }
         val childBuckets = childSessions.groupBy { it.parentId!! }
-        val effectiveStatuses = statuses.toMutableMap().apply {
+        val baseStatuses = if (isPiStack) {
+            serverScopedSessions.associate { session ->
+                session.id to (backendStates[session.id] ?: BackendSessionState.UNKNOWN).toSessionStatus()
+            }
+        } else {
+            statuses
+        }
+        val effectiveStatuses = baseStatuses.toMutableMap().apply {
             for (root in rootSessions) {
                 val childStatuses = childBuckets[root.id]
                     .orEmpty()
-                    .map { child -> statuses[child.id] ?: SessionStatus.Idle }
+                    .map { child -> baseStatuses[child.id] ?: SessionStatus.Idle }
                 this[root.id] = when {
-                    statuses[root.id] is SessionStatus.Busy || childStatuses.any { it is SessionStatus.Busy } -> SessionStatus.Busy
-                    statuses[root.id] is SessionStatus.Retry -> statuses.getValue(root.id)
+                    baseStatuses[root.id] is SessionStatus.Busy || childStatuses.any { it is SessionStatus.Busy } -> SessionStatus.Busy
+                    baseStatuses[root.id] is SessionStatus.Retry -> baseStatuses.getValue(root.id)
                     else -> childStatuses.firstOrNull { it is SessionStatus.Retry } ?: SessionStatus.Idle
                 }
             }
@@ -458,6 +525,11 @@ class SessionListViewModel @Inject constructor(
                 session = session,
                 status = effectiveStatuses[session.id] ?: SessionStatus.Idle,
                 isUnread = session.parentId == null && session.id in unreadMainSessionIds,
+                backendState = backendStates[session.id] ?: when (effectiveStatuses[session.id]) {
+                    is SessionStatus.Busy -> BackendSessionState.BUSY
+                    is SessionStatus.Retry -> BackendSessionState.RETRY
+                    else -> BackendSessionState.IDLE
+                },
             )
         }
 
@@ -484,7 +556,13 @@ class SessionListViewModel @Inject constructor(
             val tildeDirectory = toTildePath(directory, homeDir)
             val isPinned = directory in prefs.pinnedDirs
             val isCollapsed = directory in prefs.collapsedDirs
-            val groupedRoots = rootSessions.filter { normalizeDirectory(it.directory) == directory }
+            val groupedRoots = rootSessions.filter { session ->
+                if (isPiStack && project != null) {
+                    session.projectId == project.id
+                } else {
+                    normalizeDirectory(session.directory) == directory
+                }
+            }
 
             val filteredRoots = groupedRoots
                 .filter { session ->
@@ -510,6 +588,7 @@ class SessionListViewModel @Inject constructor(
             }
 
             ProjectGroup(
+                projectId = project?.id ?: directory,
                 directory = directory,
                 projectName = projectName,
                 tildeDirectory = tildeDirectory,
@@ -524,6 +603,7 @@ class SessionListViewModel @Inject constructor(
                 sessions = filteredRootItems,
                 subagentRowsByParent = subagentRowsByParent,
                 sessionDirLabels = filteredRootItems.associate { it.session.id to tildeDirectory },
+                isRegistered = isPiStack && project != null,
             )
         }
 
@@ -561,6 +641,7 @@ class SessionListViewModel @Inject constructor(
         val emptyState = computeSessionListEmptyState(
             rootSessionCount = rootSessions.size,
             visibleGroupCount = groups.size,
+            registeredProjectCount = if (isPiStack) projects.size else 0,
         )
 
         SessionListUiState(
@@ -586,6 +667,11 @@ class SessionListViewModel @Inject constructor(
             projects = projects,
             hiddenProjectCount = hiddenProjectCount,
             showHiddenProjects = showHiddenProjects,
+            isPiStack = isPiStack,
+            supportsSessionManagement = !isPiStack,
+            supportsDirectorySearch = !isPiStack,
+            supportsDirectoryCreation = !isPiStack,
+            supportsMcp = !isPiStack,
         )
     }.stateIn(
         viewModelScope,
@@ -606,6 +692,10 @@ class SessionListViewModel @Inject constructor(
             _isLoading.value = true
             _error.value = null
             try {
+                if (isPiStack) {
+                    loadPiStackSessions()
+                    return@launch
+                }
                 val projects = api.listProjects(conn)
                 _projects.value = projects
 
@@ -641,6 +731,19 @@ class SessionListViewModel @Inject constructor(
         }
     }
 
+    private suspend fun loadPiStackSessions() {
+        val transport = requireNotNull(piStackTransport)
+        val projectsEnvelope = transport.listProjects()
+        piStackGeneration = projectsEnvelope.worker.generation
+        _projects.value = projectsEnvelope.data.map(PiStackProjectDto::toDomainProject)
+
+        val sessionsEnvelope = transport.listSessions()
+        piStackGeneration = sessionsEnvelope.worker.generation
+        val sessions = sessionsEnvelope.data.map(PiStackSessionDto::toDomainSession)
+        _backendStates.value = sessionsEnvelope.data.associate { it.id to it.toBackendState() }
+        eventReducer.setSessions(serverId, sessions)
+    }
+
     private fun loadProjects() {
         viewModelScope.launch {
             try {
@@ -660,6 +763,11 @@ class SessionListViewModel @Inject constructor(
     }
 
     fun createNewSession(directory: String? = null) {
+        val project = if (isPiStack) {
+            _projects.value.firstOrNull { it.id == directory || normalizeDirectory(it.worktree) == directory?.let(::normalizeDirectory) }
+        } else {
+            null
+        }
         if (isCreatingSession) return
         isCreatingSession = true
         viewModelScope.launch {
@@ -672,7 +780,21 @@ class SessionListViewModel @Inject constructor(
                 )
                 _filter.value = SessionFilter.ALL
                 _scopeOverride.value = SessionScope.INBOX
-                val session = api.createSession(conn, directory = directory)
+                val session = if (isPiStack) {
+                    val target = project ?: error("Choose a registered project before creating a session")
+                    val generation = piStackGeneration ?: loadPiStackGeneration()
+                    val created = requireNotNull(piStackTransport).createSession(
+                        projectId = target.id,
+                        title = null,
+                        model = null,
+                        generation = generation,
+                        idempotencyKey = UUID.randomUUID().toString(),
+                    ).data
+                    _backendStates.update { it + (created.id to created.toBackendState()) }
+                    created.toDomainSession()
+                } else {
+                    api.createSession(conn, directory = directory)
+                }
                 if (session.id.isBlank()) {
                     throw IllegalStateException("Failed to create session: blank session id")
                 }
@@ -707,6 +829,12 @@ class SessionListViewModel @Inject constructor(
                 isCreatingSession = false
             }
         }
+    }
+
+    private suspend fun loadPiStackGeneration(): String {
+        val generation = requireNotNull(piStackTransport).listProjects().worker.generation
+        piStackGeneration = generation
+        return generation
     }
 
     private fun persistCreateNewEvent(
@@ -822,6 +950,23 @@ class SessionListViewModel @Inject constructor(
     fun pinDirectory(dir: String) {
         viewModelScope.launch {
             val normalizedDirectory = normalizeDirectory(dir)
+            if (isPiStack) {
+                try {
+                    val generation = piStackGeneration ?: loadPiStackGeneration()
+                    val registered = requireNotNull(piStackTransport).registerProject(
+                        directory = normalizedDirectory,
+                        name = null,
+                        generation = generation,
+                        idempotencyKey = UUID.randomUUID().toString(),
+                    )
+                    piStackGeneration = registered.worker.generation
+                    loadPiStackSessions()
+                } catch (e: Exception) {
+                    logErrorCompat(TAG, "Failed to register Pi Stack project", e)
+                    _error.value = e.message ?: "Failed to register project"
+                }
+                return@launch
+            }
             val refreshTargets = pinDirectoryRefreshTargets(
                 changed = preferencesRepo.addPinned(normalizedDirectory),
             )
@@ -956,6 +1101,11 @@ class SessionListViewModel @Inject constructor(
     suspend fun getHomeDirectory(): String {
         _homeDir.value?.let { return it }
         return try {
+            if (isPiStack) {
+                val listing = requireNotNull(piStackTransport).listDirectories().data
+                _homeDir.value = listing.path
+                return listing.path
+            }
             val paths = api.getServerPaths(conn)
             val home = paths.home
             _homeDir.value = home
@@ -976,6 +1126,23 @@ class SessionListViewModel @Inject constructor(
             Log.e(TAG, "Failed to list directory: $directory", e)
             emptyList()
         }
+    }
+
+    suspend fun browseDirectories(directory: String? = null): ServerDirectoryListing {
+        if (isPiStack) {
+            return requireNotNull(piStackTransport).listDirectories(directory).data.toUiListing()
+        }
+        val path = directory ?: getHomeDirectory()
+        return ServerDirectoryListing(
+            path = path,
+            parent = parentDirectory(path),
+            entries = listDirectories(path).map { node ->
+                ServerDirectoryEntry(
+                    name = node.name,
+                    path = node.absolute ?: "${path.trimEnd('/')}/${node.name}",
+                )
+            },
+        )
     }
 
     /** Search for directories matching a query, scoped to a base directory. */
@@ -1127,8 +1294,9 @@ internal data class SessionListEmptyState(
 internal fun computeSessionListEmptyState(
     rootSessionCount: Int,
     visibleGroupCount: Int,
+    registeredProjectCount: Int = 0,
 ): SessionListEmptyState {
-    val hasAny = rootSessionCount > 0
+    val hasAny = rootSessionCount > 0 || registeredProjectCount > 0
     return SessionListEmptyState(
         hasAnySessions = hasAny,
         isFilteredEmpty = hasAny && visibleGroupCount == 0,
@@ -1288,3 +1456,58 @@ private fun SessionActivityItem.toActiveConversationItem(): ActiveConversationIt
     },
     updatedAt = updatedAt,
 )
+
+private fun PiStackProjectDto.toDomainProject(): Project = Project(
+    id = id,
+    worktree = directory,
+    name = name,
+    directory = directory,
+)
+
+private fun PiStackSessionDto.toDomainSession(): Session = Session(
+    id = id,
+    projectId = projectId,
+    directory = cwd,
+    parentId = parentId,
+    title = title,
+    time = Session.Time(
+        created = createdAt.toEpochMillis(),
+        updated = updatedAt.toEpochMillis(),
+    ),
+)
+
+private fun PiStackSessionDto.toBackendState(): BackendSessionState = when (stateKind) {
+    PiStackSessionState.Idle -> BackendSessionState.IDLE
+    PiStackSessionState.Busy -> BackendSessionState.BUSY
+    PiStackSessionState.Retry -> BackendSessionState.RETRY
+    PiStackSessionState.AwaitingCommand -> BackendSessionState.AWAITING_COMMAND
+    PiStackSessionState.AwaitingSkip -> BackendSessionState.AWAITING_SKIP
+    PiStackSessionState.Ended -> BackendSessionState.ENDED
+    PiStackSessionState.Error -> BackendSessionState.ERROR
+    PiStackSessionState.Unknown -> BackendSessionState.UNKNOWN
+}
+
+private fun PiStackDirectoryListingDto.toUiListing(): ServerDirectoryListing = ServerDirectoryListing(
+    path = path,
+    parent = parent,
+    entries = entries.map { ServerDirectoryEntry(name = it.name, path = it.path) },
+    truncated = truncated,
+)
+
+private fun String.toEpochMillis(): Long = runCatching { Instant.parse(this).toEpochMilli() }.getOrDefault(0L)
+
+internal fun parentDirectory(path: String): String? {
+    val normalized = path.trimEnd('/').ifEmpty { "/" }
+    if (normalized == "/") return null
+    return normalized.substringBeforeLast('/').ifEmpty { "/" }
+}
+
+internal fun BackendSessionState.toSessionStatus(): SessionStatus = when (this) {
+    BackendSessionState.BUSY -> SessionStatus.Busy
+    BackendSessionState.RETRY, BackendSessionState.ERROR -> SessionStatus.Retry(
+        attempt = 1,
+        message = name.lowercase(),
+        next = 0L,
+    )
+    else -> SessionStatus.Idle
+}

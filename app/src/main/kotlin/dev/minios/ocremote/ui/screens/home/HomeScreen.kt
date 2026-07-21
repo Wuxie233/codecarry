@@ -121,7 +121,7 @@ internal fun shouldShowServerDisconnect(isConnected: Boolean, isConnecting: Bool
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
-    onNavigateToSessions: (serverUrl: String, username: String, password: String, serverName: String, serverId: String) -> Unit = { _, _, _, _, _ -> },
+    onNavigateToSessions: (serverUrl: String, username: String, password: String, serverName: String, serverId: String, serverType: ServerType) -> Unit = { _, _, _, _, _, _ -> },
     onNavigateToCodexThreads: (serverId: String) -> Unit = {},
     onNavigateToRoundtables: (serverUrl: String, token: String, serverName: String, serverId: String) -> Unit = { _, _, _, _ -> },
     onNavigateToServerSettings: (serverUrl: String, username: String, password: String, serverName: String, serverId: String) -> Unit = { _, _, _, _, _ -> },
@@ -300,6 +300,7 @@ fun HomeScreen(
                                                 server.password ?: "",
                                                 server.displayName,
                                                 server.id,
+                                                server.type,
                                             )
                                         }
                                     },
@@ -366,6 +367,7 @@ fun HomeScreen(
                                             server.password ?: "",
                                             server.displayName,
                                             server.id,
+                                            server.type,
                                         )
                                     },
                                     onServerSettings = {
@@ -396,7 +398,16 @@ fun HomeScreen(
                                             server.username,
                                             server.password ?: "",
                                             server.displayName,
-                                            server.id
+                                            server.id,
+                                            server.type,
+                                        )
+                                        ServerType.PI_STACK -> onNavigateToSessions(
+                                            server.url,
+                                            "",
+                                            server.token.orEmpty(),
+                                            server.displayName,
+                                            server.id,
+                                            server.type,
                                         )
                                         ServerType.CODEX -> onNavigateToCodexThreads(server.id)
                                         ServerType.PI_ROUNDTABLE -> onNavigateToRoundtables(
@@ -1635,6 +1646,7 @@ internal fun ServerCard(
                                 ServerType.OPENCODE -> stringResource(R.string.sessions_title)
                                 ServerType.CODEX -> stringResource(R.string.codex_threads_title)
                                 ServerType.PI_ROUNDTABLE -> stringResource(R.string.roundtable_center_title)
+                                ServerType.PI_STACK -> stringResource(R.string.sessions_title)
                             },
                             maxLines = 1,
                         )

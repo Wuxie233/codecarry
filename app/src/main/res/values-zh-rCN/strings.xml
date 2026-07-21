@@ -22,6 +22,10 @@
     <!-- Session Screen -->
     <string name="sessions_title">会话</string>
     <string name="sessions_loading">正在加载会话…</string>
+    <string name="sessions_status_awaiting_command">等待回复</string>
+    <string name="sessions_status_awaiting_skip">等待中</string>
+    <string name="sessions_status_ended">已结束</string>
+    <string name="sessions_status_error">错误</string>
     <string name="sessions_new">新建会话</string>
     <string name="sessions_empty">尚无会话</string>
     <string name="session_status_idle">空闲</string>
@@ -702,6 +706,7 @@
 
     <!-- Pi Roundtable -->
     <string name="server_type_pi_roundtable">Pi 圆桌</string>
+    <string name="server_type_pi_stack">Pi Stack</string>
     <string name="chat_pi_speak_hint">对全桌发言…</string>
     <string name="chat_pi_steering_open">打开圆桌调度</string>
     <string name="chat_pi_continue_short">继续</string>

@@ -195,7 +195,12 @@ fun ServerDialog(
                             .semantics { contentDescription = nameLabel }
                     )
 
-                    val serverTypeOptions = listOf(ServerType.OPENCODE, ServerType.CODEX, ServerType.PI_ROUNDTABLE)
+                    val serverTypeOptions = listOf(
+                        ServerType.OPENCODE,
+                        ServerType.CODEX,
+                        ServerType.PI_ROUNDTABLE,
+                        ServerType.PI_STACK,
+                    )
                     Text(
                         text = stringResource(R.string.server_type),
                         style = MaterialTheme.typography.labelLarge,
@@ -218,6 +223,7 @@ fun ServerDialog(
                                             ServerType.OPENCODE -> R.string.server_type_opencode
                                             ServerType.CODEX -> R.string.server_type_codex
                                             ServerType.PI_ROUNDTABLE -> R.string.server_type_pi_roundtable
+                                            ServerType.PI_STACK -> R.string.server_type_pi_stack
                                     }))
                                 },
                             )

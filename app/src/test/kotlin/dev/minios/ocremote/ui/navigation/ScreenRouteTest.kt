@@ -1,5 +1,6 @@
 package dev.minios.ocremote.ui.navigation
 
+import dev.minios.ocremote.domain.model.ServerType
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 import org.junit.Assert.assertEquals
@@ -63,5 +64,20 @@ class ScreenRouteTest {
     fun `opening a child session does not reuse the parent chat entry`() {
         assertFalse(shouldLaunchSingleTopChat("parent-session", "child-session"))
         assertTrue(shouldLaunchSingleTopChat("child-session", "child-session"))
+    }
+
+    @Test
+    fun `Pi Stack session list route preserves backend type without exposing token metadata`() {
+        val route = Screen.SessionList.createRoute(
+            serverUrl = "https://pi.example.test",
+            username = "",
+            password = "secret",
+            serverName = "Pi Stack",
+            serverId = "pi-server",
+            serverType = ServerType.PI_STACK.name,
+        )
+
+        assertTrue(route.contains("serverType=PI_STACK"))
+        assertFalse(route.contains("token=", ignoreCase = true))
     }
 }

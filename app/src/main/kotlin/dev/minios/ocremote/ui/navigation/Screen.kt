@@ -1,6 +1,7 @@
 package dev.minios.ocremote.ui.navigation
 
 import java.net.URLEncoder
+import dev.minios.ocremote.domain.model.ServerType
 
 /**
  * Navigation routes for the app
@@ -31,14 +32,16 @@ sealed class Screen(val route: String) {
             username: String,
             password: String,
             serverName: String,
-            serverId: String
+            serverId: String,
+            serverType: String = ServerType.OPENCODE.name,
         ): String {
             val encodedUrl = URLEncoder.encode(serverUrl, "UTF-8")
             val encodedUsername = URLEncoder.encode(username, "UTF-8")
             val encodedPassword = URLEncoder.encode(password, "UTF-8")
             val encodedName = URLEncoder.encode(serverName, "UTF-8")
             val encodedServerId = URLEncoder.encode(serverId, "UTF-8")
-            return "sessions?serverUrl=$encodedUrl&username=$encodedUsername&password=$encodedPassword&serverName=$encodedName&serverId=$encodedServerId"
+            val encodedServerType = URLEncoder.encode(serverType, "UTF-8")
+            return "sessions?serverUrl=$encodedUrl&username=$encodedUsername&password=$encodedPassword&serverName=$encodedName&serverId=$encodedServerId&serverType=$encodedServerType"
         }
     }
 

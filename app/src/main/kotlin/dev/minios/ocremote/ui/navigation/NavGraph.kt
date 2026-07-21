@@ -280,9 +280,9 @@ fun NavGraph(
         // ============ Home Screen ============
         composable(Screen.Home.route) {
             HomeScreen(
-                onNavigateToSessions = { serverUrl, username, password, serverName, serverId ->
+                onNavigateToSessions = { serverUrl, username, password, serverName, serverId, serverType ->
                     navController.navigate(
-                        Screen.SessionList.createRoute(serverUrl, username, password, serverName, serverId)
+                        Screen.SessionList.createRoute(serverUrl, username, password, serverName, serverId, serverType.name)
                     )
                 },
                 onNavigateToCodexThreads = { serverId ->
@@ -455,13 +455,14 @@ fun NavGraph(
         
         // ============ Session List Screen (native) ============
         composable(
-            route = "sessions?serverUrl={serverUrl}&username={username}&password={password}&serverName={serverName}&serverId={serverId}",
+            route = "sessions?serverUrl={serverUrl}&username={username}&password={password}&serverName={serverName}&serverId={serverId}&serverType={serverType}",
             arguments = listOf(
                 navArgument("serverUrl") { type = NavType.StringType },
                 navArgument("username") { type = NavType.StringType },
                 navArgument("password") { type = NavType.StringType },
                 navArgument("serverName") { type = NavType.StringType },
-                navArgument("serverId") { type = NavType.StringType }
+                navArgument("serverId") { type = NavType.StringType },
+                navArgument("serverType") { type = NavType.StringType; defaultValue = ServerType.OPENCODE.name },
             )
         ) { backStackEntry ->
             val serverUrl = decodeRouteArg(backStackEntry.arguments?.getString("serverUrl"))
@@ -469,6 +470,7 @@ fun NavGraph(
             val password = decodeRouteArg(backStackEntry.arguments?.getString("password"))
             val serverName = decodeRouteArg(backStackEntry.arguments?.getString("serverName"))
             val serverId = decodeRouteArg(backStackEntry.arguments?.getString("serverId"))
+            val serverType = decodeRouteArg(backStackEntry.arguments?.getString("serverType"))
 
             SessionListScreen(
                 onNavigateToChat = { sessionId, openTerminal, directory ->
@@ -482,6 +484,7 @@ fun NavGraph(
                             sessionId = sessionId,
                             openTerminal = openTerminal,
                             directory = directory,
+                            serverType = serverType,
                         )
                     )
                 },
