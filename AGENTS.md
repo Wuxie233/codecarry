@@ -31,6 +31,17 @@
 
 ## Gotchas & Decisions
 
+- Pi Stack is a separate `PI_STACK` backend, not an OpenCode-compatible API.
+  Android connects to the native Bearer-authenticated Control v1 endpoint and
+  keeps Pi Stack transport models under `data/api/PiStackApi.kt`.
+- Pi Stack project selection is server-authoritative. The client browses only
+  server-allowed absolute directories, registers a project, and then creates
+  or resumes sessions within that project. Do not relabel an allowlist root as
+  `~` or let the client supply an unchecked session working directory.
+- Pi Stack history is the recovery authority and SSE supplies live deltas. When
+  live and restored messages lack a shared stable ID, merge the nearest
+  unmatched message with the same role and complete parts content one-to-one;
+  preserve legitimate repeated turns.
 - Codex is a separate backend from OpenCode. Connect Android to `codex app-server --listen ws://...`, not the daemon's local Unix control socket, and keep its bidirectional request/approval lifecycle in `data/codex` rather than adapting it to OpenCode REST/SSE models.
 - Codex app-server wire messages omit the `jsonrpc` field. Each connection must send `initialize`, wait for its response, send `initialized`, then `thread/resume` any opened thread before relying on streaming notifications. Preserve unknown fields/types and regenerate the experimental schema when upgrading compatibility.
 - Keep Codex sockets in the shared `CodexConnectionManager`: reconnect persistent or leased connections with backoff, and track leased chat thread IDs so a new handshake resumes every still-open thread.
