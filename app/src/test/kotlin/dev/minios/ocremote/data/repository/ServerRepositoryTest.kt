@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import dev.minios.ocremote.data.api.OpenCodeApi
 import dev.minios.ocremote.data.api.OpenCodeFileNotFoundException
 import dev.minios.ocremote.data.api.PiApi
+import dev.minios.ocremote.data.api.PiStackApi
 import dev.minios.ocremote.data.api.ServerConnection
 import dev.minios.ocremote.domain.model.McpConfigLoadState
 import dev.minios.ocremote.domain.model.ServerType
@@ -316,6 +317,41 @@ class ServerRepositoryTest {
     }
 
     @Test
+    fun piStackHealthUsesAuthenticatedCapabilityProbeAndPreservesBasePath() = runTest {
+        val captured = mutableListOf<HttpRequestData>()
+        val repository = healthRepository(captured) { request ->
+            when (request.url.encodedPath) {
+                "/control/v1/capabilities" -> respondJson(
+                    """
+                    {"protocolVersion":1,"worker":{"generation":"generation-1","epoch":1,"startedAt":"now","active":true},
+                     "data":{"protocolVersion":1,"permissions":{"supported":false,"pending":[]},
+                     "runtime":{"prompt":true,"abort":true,"retry":false,"sessionPatch":[]},
+                     "questions":{"reply":true,"reject":true},
+                     "ensemble":{"projections":true,"commands":true,"tools":[]}}}
+                    """.trimIndent()
+                )
+                else -> error("Unexpected request: ${request.method.value} ${request.url}")
+            }
+        }
+        val server = repository.addServer(
+            url = "https://pi.example.test/control/",
+            type = ServerType.PI_STACK,
+            token = "control-token",
+            name = "Pi Stack",
+        )
+
+        val health = repository.checkHealth(server).getOrThrow()
+        val reread = repository.getServer(server.id)!!
+
+        assertTrue(health.healthy)
+        assertEquals("1", health.version)
+        assertEquals("/control/v1/capabilities", captured.single().url.encodedPath)
+        assertEquals("Bearer control-token", captured.single().headers[HttpHeaders.Authorization])
+        assertTrue(reread.isHealthy)
+        assertTrue(reread.lastConnected != null)
+    }
+
+    @Test
     fun resolveMcpConfigLoadStateProjectEmptyFallsThroughToGlobalLoaded() = runTest {
         val captured = mutableListOf<HttpRequestData>()
         val repository = newRepository(
@@ -507,6 +543,7 @@ class ServerRepositoryTest {
             api = OpenCodeApi(client, json),
             piApi = PiApi(client, json),
             json = json,
+            piStackApi = PiStackApi(client, json),
         )
     }
 

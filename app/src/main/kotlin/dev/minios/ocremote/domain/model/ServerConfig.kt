@@ -7,6 +7,7 @@ enum class ServerType {
     OPENCODE,
     CODEX,
     PI_ROUNDTABLE,
+    PI_STACK,
 }
 
 /**

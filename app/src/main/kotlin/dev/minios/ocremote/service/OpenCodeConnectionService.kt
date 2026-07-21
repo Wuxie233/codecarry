@@ -32,6 +32,10 @@ import dev.minios.ocremote.data.repository.ServerRepository
 import dev.minios.ocremote.data.repository.SettingsRepository
 import dev.minios.ocremote.data.transport.OpenCodeTransport
 import dev.minios.ocremote.data.transport.PiRoundtableTransport
+import dev.minios.ocremote.data.transport.PiStackTransport
+import dev.minios.ocremote.data.transport.PiStackTransportFactory
+import dev.minios.ocremote.data.api.PiStackSseFrame
+import dev.minios.ocremote.data.repository.PiStackEventResult
 import dev.minios.ocremote.domain.model.Message
 import dev.minios.ocremote.domain.model.Part
 import dev.minios.ocremote.domain.model.ConnectionPhase
@@ -78,6 +82,14 @@ private data class ServerConnectionState(
     val sseJob: Job,
     val isConnected: Boolean = false,
     val projectDirectories: List<String>? = null,
+)
+
+private data class PiStackConnectionState(
+    val config: ServerConfig,
+    val transport: PiStackTransport,
+    val connectionId: Long,
+    val job: Job,
+    val isConnected: Boolean = false,
 )
 
 internal class ForegroundStatusRefreshObserver(
@@ -205,11 +217,16 @@ class OpenCodeConnectionService : Service() {
     @Inject
     lateinit var codexConnectionManager: CodexConnectionManager
 
+    @Inject
+    lateinit var piStackTransportFactory: PiStackTransportFactory
+
     private val binder = LocalBinder()
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /** All active/pending server connections keyed by serverId. */
     private val connections = mutableMapOf<String, ServerConnectionState>()
+    private val piStackConnections = mutableMapOf<String, PiStackConnectionState>()
+    private var nextPiStackConnectionId = 0L
     private val codexConnections = CodexOwnershipRegistry()
     private val codexConnectionErrors = ConcurrentHashMap<String, String>()
 
@@ -239,6 +256,8 @@ class OpenCodeConnectionService : Service() {
     /** Dedup response-ready notifications per server/session by last assistant message ID. */
     private val lastNotifiedAssistantMessageBySession = ConcurrentHashMap<String, String>()
     private val postedPiNotificationKeys = ConcurrentHashMap.newKeySet<String>()
+    private val postedPiStackCompletionKeys = ConcurrentHashMap.newKeySet<String>()
+    private val postedPiStackQuestionKeys = ConcurrentHashMap.newKeySet<String>()
 
     /** Dedup permission notifications fired from the connect-time bootstrap, keyed by server/request. */
     private val postedPermissionRequestIds = ConcurrentHashMap.newKeySet<String>()
@@ -339,6 +358,10 @@ class OpenCodeConnectionService : Service() {
             connectCodex(server)
             return
         }
+        if (server.type == ServerType.PI_STACK) {
+            connectPiStack(server)
+            return
+        }
         if (connections.containsKey(server.id)) {
             if (BuildConfig.DEBUG) Log.d(TAG, "Already connected to server ${server.id}, skipping")
             return
@@ -386,6 +409,18 @@ class OpenCodeConnectionService : Service() {
             return
         }
 
+        piStackConnections.remove(serverId)?.let { state ->
+            state.job.cancel()
+            clearPiStackNotificationDedup(serverId)
+            _connectedServerIds.update { it - serverId }
+            _connectingServerIds.update { it - serverId }
+            _connectionPhases.update { it - serverId }
+            _connectionErrors.update { it - serverId }
+            eventReducer.clearForServer(serverId)
+            finishDisconnect()
+            return
+        }
+
         val state = connections.remove(serverId) ?: return
         state.sseJob.cancel()
         clearOpenCodeNotificationDedup(serverId)
@@ -422,6 +457,7 @@ class OpenCodeConnectionService : Service() {
             .filterNot { isLocalServer(it.config) }
             .map { it.config.id }
             .plus(codexConnections.snapshot().keys)
+            .plus(piStackConnections.keys)
 
         if (visibleServerIds.isEmpty()) {
             updatePersistentNotification()
@@ -439,11 +475,15 @@ class OpenCodeConnectionService : Service() {
         for ((_, state) in connections) {
             state.sseJob.cancel()
         }
+        piStackConnections.values.forEach { it.job.cancel() }
         val codexOwners = codexConnections.clear()
-        val serverIds = connections.keys.toList() + codexOwners.map { it.config.id }
+        val serverIds = connections.keys.toList() + codexOwners.map { it.config.id } + piStackConnections.keys
         connections.clear()
+        piStackConnections.clear()
         lastNotifiedAssistantMessageBySession.clear()
         postedPermissionRequestIds.clear()
+        postedPiStackCompletionKeys.clear()
+        postedPiStackQuestionKeys.clear()
         codexOwners.forEach { owner ->
             owner.connectJob.cancel()
             codexConnectionManager.releasePersistent(owner.config.id)
@@ -521,6 +561,34 @@ class OpenCodeConnectionService : Service() {
         owner.connectJob.start()
         updatePersistentNotification()
         startNotificationWatchdog()
+    }
+
+    private fun connectPiStack(server: ServerConfig) {
+        if (piStackConnections.containsKey(server.id)) return
+        ensureForegroundStarted()
+        acquireWakeLock()
+        val transport = piStackTransportFactory.create(server)
+        val connectionId = ++nextPiStackConnectionId
+        val job = startPiStackConnection(server, transport, connectionId)
+        piStackConnections[server.id] = PiStackConnectionState(server, transport, connectionId, job)
+        _connectingServerIds.update { it + server.id }
+        updateConnectionPhase(server.id, ConnectionPhase.RestoringActivity)
+        job.start()
+        updatePersistentNotification()
+        startNotificationWatchdog()
+    }
+
+    private fun finishDisconnect() {
+        if (!hasManagedConnections()) {
+            releaseWakeLock()
+            notificationWatchdogJob?.cancel()
+            notificationWatchdogJob = null
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            foregroundStarted = false
+            stopSelf()
+        } else {
+            updatePersistentNotification()
+        }
     }
 
     private fun disconnectCodex(serverId: String) {
@@ -747,7 +815,8 @@ class OpenCodeConnectionService : Service() {
         if (cancelSummary) notificationManager.cancel(SessionNotificationIdentity.serverSummaryId(serverId))
     }
 
-    private fun hasManagedConnections(): Boolean = connections.isNotEmpty() || !codexConnections.isEmpty()
+    private fun hasManagedConnections(): Boolean =
+        connections.isNotEmpty() || piStackConnections.isNotEmpty() || !codexConnections.isEmpty()
 
     // ============ Notification Watchdog ============
 
@@ -898,6 +967,128 @@ class OpenCodeConnectionService : Service() {
                 delay(delayMs)
             }
         }
+    }
+
+    private fun startPiStackConnection(
+        server: ServerConfig,
+        transport: PiStackTransport,
+        connectionId: Long,
+    ): Job = serviceScope.launch(start = CoroutineStart.LAZY) {
+        var attempt = 0
+        var repairRequired = eventReducer.piStackCursor(server.id) == null
+        while (isActive && isCurrentPiStackConnection(server.id, connectionId, transport)) {
+            attempt++
+            try {
+                if (repairRequired) {
+                    updateConnectionPhase(server.id, ConnectionPhase.RestoringActivity)
+                    repairPiStackSnapshot(server, transport, connectionId)
+                    repairRequired = false
+                }
+                val cursor = eventReducer.piStackCursor(server.id)
+                    ?: throw PiStackResyncRequired("Pi Stack snapshot did not install a cursor")
+                updateConnectionPhase(server.id, ConnectionPhase.OpeningLiveUpdates)
+                transport.events(cursor.eventId).collect { frame ->
+                    if (!isCurrentPiStackConnection(server.id, connectionId, transport)) return@collect
+                    when (frame) {
+                        is PiStackSseFrame.Connected -> {
+                            if (frame.generation != eventReducer.piStackCursor(server.id)?.generation) {
+                                throw PiStackResyncRequired("Pi Stack generation changed")
+                            }
+                            updatePiStackConnected(server.id, connectionId, true)
+                            attempt = 0
+                        }
+                        is PiStackSseFrame.ResyncRequired -> throw PiStackResyncRequired("Pi Stack requested snapshot repair")
+                        is PiStackSseFrame.Event -> when (eventReducer.applyPiStackEvent(frame.event, server.id)) {
+                            is PiStackEventResult.Applied -> processPiStackEvent(server, frame.event, connectionId)
+                            PiStackEventResult.IgnoredDuplicate -> Unit
+                            is PiStackEventResult.ResyncRequired -> throw PiStackResyncRequired("Pi Stack cursor gap or generation mismatch")
+                        }
+                    }
+                }
+                updatePiStackConnected(server.id, connectionId, false)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: PiStackResyncRequired) {
+                repairRequired = true
+                Log.w(TAG, "[${server.displayName}] Pi Stack snapshot repair required: ${error.message}")
+                updatePiStackConnected(server.id, connectionId, false)
+            } catch (error: Exception) {
+                Log.w(TAG, "[${server.displayName}] Pi Stack live connection needs retry: ${error.message}")
+                updatePiStackConnected(server.id, connectionId, false)
+            }
+            if (!isCurrentPiStackConnection(server.id, connectionId, transport)) break
+            updateConnectionPhase(server.id, ConnectionPhase.WaitingToRetry)
+            delay(calculateBackoff(attempt))
+        }
+    }
+
+    private suspend fun repairPiStackSnapshot(
+        server: ServerConfig,
+        transport: PiStackTransport,
+        connectionId: Long,
+    ) {
+        val snapshot = transport.snapshot()
+        if (!isCurrentPiStackConnection(server.id, connectionId, transport)) return
+        eventReducer.applyPiStackSnapshot(
+            serverId = server.id,
+            cursor = snapshot.cursor,
+            sessions = snapshot.data.sessions,
+            questions = snapshot.data.questions,
+            notifications = snapshot.data.notifications,
+        )
+    }
+
+    private fun isCurrentPiStackConnection(serverId: String, connectionId: Long, transport: PiStackTransport): Boolean {
+        val current = piStackConnections[serverId]
+        return current?.connectionId == connectionId && current.transport === transport
+    }
+
+    private fun updatePiStackConnected(serverId: String, connectionId: Long, connected: Boolean) {
+        val state = piStackConnections[serverId] ?: return
+        if (state.connectionId != connectionId) return
+        piStackConnections[serverId] = state.copy(isConnected = connected)
+        if (connected) {
+            _connectingServerIds.update { it - serverId }
+            _connectedServerIds.update { it + serverId }
+            _connectionPhases.update { it - serverId }
+            _connectionErrors.update { it - serverId }
+        } else {
+            _connectedServerIds.update { it - serverId }
+            _connectingServerIds.update { it + serverId }
+        }
+        updatePersistentNotification()
+    }
+
+    private fun processPiStackEvent(server: ServerConfig, event: dev.minios.ocremote.data.api.PiStackEventDto, connectionId: Long) {
+        if (event.type == "question.created") {
+            val questionId = event.scope.questionId ?: return
+            val sessionId = event.scope.sessionId ?: return
+            val key = "${server.id}:${event.generation}:$questionId"
+            if (postedPiStackQuestionKeys.add(key) && !isChildSession(sessionId)) {
+                val question = eventReducer.questionsByServer.value[server.id]
+                    .orEmpty()[sessionId].orEmpty().firstOrNull { it.id == questionId }
+                showQuestionNotification(server, sessionId, question?.questions?.firstOrNull()?.question.orEmpty())
+            }
+        }
+        if (event.type in setOf("question.replied", "question.rejected", "question.expired")) {
+            event.scope.sessionId?.let { sessionId ->
+                notificationManager.cancel(eventNotificationId(server.id, sessionId, 2000))
+            }
+        }
+        val decision = decidePiStackCompletion(json, event) ?: return
+        if (eventReducer.activeSessionId.value == decision.sessionId || isChildSession(decision.sessionId)) return
+        val key = "${server.id}:${decision.eventKey}"
+        if (!postedPiStackCompletionKeys.add(key)) return
+        serviceScope.launch {
+            if (!settingsRepository.notificationsEnabled.first()) return@launch
+            if (!isCurrentPiStackConnection(server.id, connectionId, piStackConnections[server.id]?.transport ?: return@launch)) return@launch
+            showTaskCompleteNotification(server, decision.sessionId)
+        }
+    }
+
+    private fun clearPiStackNotificationDedup(serverId: String) {
+        postedPiStackCompletionKeys.removeAll { it.startsWith("$serverId:") }
+        postedPiStackQuestionKeys.removeAll { it.startsWith("$serverId:") }
     }
 
     private fun currentServerPermissionIds(serverId: String): Set<String> {
@@ -1172,6 +1363,7 @@ class OpenCodeConnectionService : Service() {
         ServerType.OPENCODE -> OpenCodeTransport(server, api, sseClient)
         ServerType.CODEX -> error("Codex app-server connections are owned by CodexConnectionManager")
         ServerType.PI_ROUNDTABLE -> PiRoundtableTransport(server, piApi, json)
+        ServerType.PI_STACK -> error("Pi Stack connections use PiStackTransport")
     }
 
     private fun List<TransportRoom>.openCodeSessions(): List<dev.minios.ocremote.domain.model.Session> =
@@ -1430,7 +1622,7 @@ class OpenCodeConnectionService : Service() {
             .map { it.config to it.isConnected } +
             codexConnections.snapshot().values.map { owned ->
                 owned.config to (owned.config.id in _connectedServerIds.value)
-            }
+            } + piStackConnections.values.map { state -> state.config to state.isConnected }
         val serverCount = visibleConnections.size
         val connectedCount = visibleConnections.count { it.second }
 

@@ -9,6 +9,8 @@ import dev.minios.ocremote.data.api.OpenCodeApi
 import dev.minios.ocremote.data.api.OpenCodeFileNotFoundException
 import dev.minios.ocremote.data.api.PiApi
 import dev.minios.ocremote.data.api.PiConnection
+import dev.minios.ocremote.data.api.PiStackApi
+import dev.minios.ocremote.data.api.PiStackConnection
 import dev.minios.ocremote.data.api.McpRuntimeStatusResult
 import dev.minios.ocremote.data.api.ServerConnection
 import dev.minios.ocremote.domain.model.McpConfig
@@ -45,6 +47,7 @@ class ServerRepository @Inject constructor(
     private val api: OpenCodeApi,
     private val piApi: PiApi,
     private val json: Json,
+    private val piStackApi: PiStackApi? = null,
 ) {
 
     private val serversKey = stringPreferencesKey(SERVERS_KEY)
@@ -146,6 +149,12 @@ class ServerRepository @Inject constructor(
                     val conn = PiConnection.from(server.url, server.token)
                     piApi.listRoundtables(conn)
                     ServerHealth(healthy = true)
+                }
+
+                ServerType.PI_STACK -> {
+                    val conn = PiStackConnection.from(server.url, server.token)
+                    requireNotNull(piStackApi) { "Pi Stack API is unavailable" }.getCapabilities(conn)
+                    ServerHealth(healthy = true, version = "1")
                 }
             }
 

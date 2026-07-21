@@ -5,12 +5,24 @@ import dev.minios.ocremote.BuildConfig
 import dev.minios.ocremote.domain.model.*
 import dev.minios.ocremote.domain.transport.PiTransportEvent
 import dev.minios.ocremote.domain.transport.TransportEvent
+import dev.minios.ocremote.data.api.PiStackEventCursorDto
+import dev.minios.ocremote.data.api.PiStackEventDto
+import dev.minios.ocremote.data.api.PiStackNotificationDto
+import dev.minios.ocremote.data.api.PiStackQuestionDto
+import dev.minios.ocremote.data.api.PiStackQuestionResolutionDto
+import dev.minios.ocremote.data.api.PiStackSessionDto
+import dev.minios.ocremote.data.api.PiStackSessionState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 private const val TAG = "EventReducer"
 
@@ -100,6 +112,24 @@ class EventReducer @Inject constructor() {
 
     private val piTurnInfo = mutableMapOf<String, PiTurnInfo>()
     private val processedPiEvents = mutableSetOf<PiEventKey>()
+    private val piStackCursorGuard = PiStackCursorGuard()
+    private val piStackJson = Json { ignoreUnknownKeys = true }
+
+    private val _piStackSessionStatesByServer = MutableStateFlow<Map<String, Map<String, PiStackSessionState>>>(emptyMap())
+    val piStackSessionStatesByServer: StateFlow<Map<String, Map<String, PiStackSessionState>>> =
+        _piStackSessionStatesByServer.asStateFlow()
+
+    private val _piStackNotificationsByServer = MutableStateFlow<Map<String, Map<String, PiStackNotificationDto>>>(emptyMap())
+    val piStackNotificationsByServer: StateFlow<Map<String, Map<String, PiStackNotificationDto>>> =
+        _piStackNotificationsByServer.asStateFlow()
+
+    private val _piStackMessagesByServer = MutableStateFlow<Map<String, Map<String, List<Message>>>>(emptyMap())
+    val piStackMessagesByServer: StateFlow<Map<String, Map<String, List<Message>>>> =
+        _piStackMessagesByServer.asStateFlow()
+
+    private val _piStackPartsByServer = MutableStateFlow<Map<String, Map<String, List<Part>>>>(emptyMap())
+    val piStackPartsByServer: StateFlow<Map<String, Map<String, List<Part>>>> =
+        _piStackPartsByServer.asStateFlow()
     
     // ============ Event Processing ============
     
@@ -147,6 +177,151 @@ class EventReducer @Inject constructor() {
         when (event) {
             is TransportEvent.OpenCode -> processEvent(event.event, serverId)
             is TransportEvent.Pi -> processPiEvent(event.event, serverId)
+        }
+    }
+
+    internal fun piStackCursor(serverId: String): PiStackCursor? = piStackCursorGuard.cursor(serverId)
+
+    internal fun applyPiStackEvent(event: PiStackEventDto, serverId: String): PiStackEventResult {
+        val result = piStackCursorGuard.evaluate(serverId, event)
+        if (result !is PiStackEventResult.Applied) return result
+
+        when (event.type) {
+            "session.created", "session.adopted" -> {
+                val session = piStackJson.decodeFromJsonElement(PiStackSessionDto.serializer(), event.payload)
+                applyPiStackSession(serverId, session)
+            }
+            "session.updated" -> applyPiStackSessionPatch(serverId, event)
+            "operation.accepted" -> event.scope.sessionId?.let { sessionId ->
+                applyPiStackSessionState(serverId, sessionId, PiStackSessionState.Busy)
+            }
+            "operation.settled" -> event.scope.sessionId?.let { sessionId ->
+                val outcome = event.payload.jsonObject["outcome"]?.jsonPrimitive?.contentOrNull
+                applyPiStackSessionState(
+                    serverId,
+                    sessionId,
+                    if (outcome == "failed") PiStackSessionState.Error else PiStackSessionState.Idle,
+                )
+            }
+            "message.started", "message.completed" -> mergePiStackMessage(serverId, decodePiStackMessage(piStackJson, event))
+            "message.delta" -> decodePiStackMessageDelta(piStackJson, event).let { (messageId, partId, delta) ->
+                _parts.update { current -> appendPartDelta(current, messageId, partId, delta) }
+                _piStackPartsByServer.update { current ->
+                    val serverParts = current[serverId].orEmpty()
+                    current + (serverId to appendPartDelta(serverParts, messageId, partId, delta))
+                }
+            }
+            "tool.started", "tool.updated", "tool.completed" -> decodePiStackTool(piStackJson, event).let { (_, part) ->
+                _parts.update { current -> upsertPart(current, part) }
+                _piStackPartsByServer.update { current ->
+                    val serverParts = current[serverId].orEmpty()
+                    current + (serverId to upsertPart(serverParts, part))
+                }
+            }
+            "question.created" -> {
+                val question = piStackJson.decodeFromJsonElement(PiStackQuestionDto.serializer(), event.payload)
+                handleQuestionAsked(question.toQuestionAsked(), serverId)
+            }
+            "question.replied", "question.rejected", "question.expired" -> {
+                val questionId = event.payload.jsonObject["questionId"]?.jsonPrimitive?.contentOrNull
+                    ?: event.scope.questionId
+                if (questionId != null) removeQuestion(serverId, questionId)
+            }
+            "notification.created" -> {
+                val notification = piStackJson.decodeFromJsonElement(PiStackNotificationDto.serializer(), event.payload)
+                _piStackNotificationsByServer.update { current ->
+                    current + (serverId to (current[serverId].orEmpty() + (notification.id to notification)))
+                }
+            }
+            "notification.read" -> event.scope.notificationId?.let { notificationId ->
+                _piStackNotificationsByServer.update { current ->
+                    val remaining = current[serverId].orEmpty() - notificationId
+                    if (remaining.isEmpty()) current - serverId else current + (serverId to remaining)
+                }
+            }
+        }
+        piStackCursorGuard.advance(serverId, event)
+        return result
+    }
+
+    internal fun applyPiStackSnapshot(
+        serverId: String,
+        cursor: PiStackEventCursorDto,
+        sessions: List<PiStackSessionDto>,
+        questions: List<PiStackQuestionDto>,
+        notifications: List<PiStackNotificationDto>,
+    ) {
+        val previousIds = _serverSessions.value[serverId].orEmpty()
+        val nextIds = sessions.mapTo(mutableSetOf(), PiStackSessionDto::id)
+        (previousIds - nextIds).forEach { sessionId -> removeSessionForServer(serverId, sessionId) }
+        sessions.forEach { applyPiStackSession(serverId, it) }
+        _questionsByServer.update { current ->
+            val pending = questions
+                .filter { it.status == "pending" || it.status == "resolution_pending_delivery" }
+                .map(PiStackQuestionDto::toQuestionAsked)
+                .groupBy(SseEvent.QuestionAsked::sessionId)
+            if (pending.isEmpty()) current - serverId else current + (serverId to pending)
+        }
+        _piStackNotificationsByServer.update { current ->
+            val unread = notifications.filterNot(PiStackNotificationDto::read).associateBy(PiStackNotificationDto::id)
+            if (unread.isEmpty()) current - serverId else current + (serverId to unread)
+        }
+        piStackCursorGuard.installSnapshot(serverId, cursor)
+    }
+
+    fun applyPiStackQuestionResolution(serverId: String, result: PiStackQuestionResolutionDto) {
+        if (dev.minios.ocremote.service.shouldRemovePiStackQuestion(result)) {
+            removeQuestion(serverId, result.question.id)
+        }
+    }
+
+    private fun applyPiStackSession(serverId: String, session: PiStackSessionDto) {
+        handleSessionUpdated(SseEvent.SessionUpdated(session.toSession()), serverId)
+        _piStackSessionStatesByServer.update { current ->
+            current + (serverId to (current[serverId].orEmpty() + (session.id to session.stateKind)))
+        }
+        handleSessionStatus(SseEvent.SessionStatus(session.id, session.stateKind.toSessionStatus()), serverId)
+    }
+
+    private fun applyPiStackSessionPatch(serverId: String, event: PiStackEventDto) {
+        val sessionId = event.scope.sessionId ?: return
+        val state = event.payload.jsonObject["state"]?.jsonPrimitive?.contentOrNull
+        val current = _serverSessionDetails.value[serverId]?.get(sessionId)
+        val title = event.payload.jsonObject["title"]?.let { value ->
+            if (value is JsonNull) null else value.jsonPrimitive.contentOrNull
+        } ?: current?.title
+        if (current != null) handleSessionUpdated(SseEvent.SessionUpdated(current.copy(title = title)), serverId)
+        state?.toPiStackSessionState()?.let { sessionState ->
+            applyPiStackSessionState(serverId, sessionId, sessionState)
+        }
+    }
+
+    private fun applyPiStackSessionState(serverId: String, sessionId: String, state: PiStackSessionState) {
+        _piStackSessionStatesByServer.update { states ->
+            states + (serverId to (states[serverId].orEmpty() + (sessionId to state)))
+        }
+        handleSessionStatus(SseEvent.SessionStatus(sessionId, state.toSessionStatus()), serverId)
+    }
+
+    private fun mergePiStackMessage(serverId: String, message: MessageWithParts) {
+        _messages.update { current -> upsertMessage(current, message.info.sessionId, message.info) }
+        _parts.update { current -> message.parts.fold(current, ::upsertPart) }
+        _piStackMessagesByServer.update { current ->
+            val serverMessages = current[serverId].orEmpty()
+            current + (serverId to upsertMessage(serverMessages, message.info.sessionId, message.info))
+        }
+        _piStackPartsByServer.update { current ->
+            val serverParts = current[serverId].orEmpty()
+            current + (serverId to message.parts.fold(serverParts, ::upsertPart))
+        }
+    }
+
+    private fun removeSessionForServer(serverId: String, sessionId: String) {
+        val session = _serverSessionDetails.value[serverId]?.get(sessionId) ?: return
+        handleSessionDeleted(SseEvent.SessionDeleted(session), serverId)
+        _piStackSessionStatesByServer.update { current ->
+            val remaining = current[serverId].orEmpty() - sessionId
+            if (remaining.isEmpty()) current - serverId else current + (serverId to remaining)
         }
     }
 
@@ -903,6 +1078,11 @@ class EventReducer @Inject constructor() {
         _roundtableEvents.value = emptyMap()
         piTurnInfo.clear()
         processedPiEvents.clear()
+        piStackCursorGuard.clearAll()
+        _piStackSessionStatesByServer.value = emptyMap()
+        _piStackNotificationsByServer.value = emptyMap()
+        _piStackMessagesByServer.value = emptyMap()
+        _piStackPartsByServer.value = emptyMap()
     }
     
     /**
@@ -914,6 +1094,11 @@ class EventReducer @Inject constructor() {
         val roundtableIds = _serverRoundtables.value[serverId] ?: emptySet()
         _permissionsByServer.update { it - serverId }
         _questionsByServer.update { it - serverId }
+        _piStackSessionStatesByServer.update { it - serverId }
+        _piStackNotificationsByServer.update { it - serverId }
+        _piStackMessagesByServer.update { it - serverId }
+        _piStackPartsByServer.update { it - serverId }
+        piStackCursorGuard.clear(serverId)
         _serverSessionDetails.update { it - serverId }
         if (sessionIds.isEmpty() && roundtableIds.isEmpty()) {
             _serverSessions.update { it - serverId }
@@ -999,3 +1184,14 @@ private data class PiEventKey(
     val roundtableId: String,
     val eventId: Long,
 )
+
+private fun String.toPiStackSessionState(): PiStackSessionState = when (this) {
+    "idle" -> PiStackSessionState.Idle
+    "busy" -> PiStackSessionState.Busy
+    "retry" -> PiStackSessionState.Retry
+    "awaiting_command" -> PiStackSessionState.AwaitingCommand
+    "awaiting_skip" -> PiStackSessionState.AwaitingSkip
+    "ended" -> PiStackSessionState.Ended
+    "error" -> PiStackSessionState.Error
+    else -> PiStackSessionState.Unknown
+}
