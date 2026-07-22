@@ -133,6 +133,27 @@ class ServerRepositoryTest {
     }
 
     @Test
+    fun piStackServerPersistsNormalizedControlUrl() = runTest {
+        val repository = newRepository(
+            api = OpenCodeApi(HttpClient(OkHttp), json),
+            scope = backgroundScope,
+        )
+
+        val saved = repository.addServer(
+            url = "https://pi.example.test/",
+            type = ServerType.PI_STACK,
+            token = "pi-token-123",
+        )
+
+        assertEquals("https://pi.example.test/control", saved.url)
+        assertEquals("https://pi.example.test/control", repository.getServer(saved.id)!!.url)
+
+        repository.updateServer(saved.copy(url = "https://pi.example.test/custom-control/"))
+
+        assertEquals("https://pi.example.test/custom-control", repository.getServer(saved.id)!!.url)
+    }
+
+    @Test
     fun resolveMcpConfigLoadStateStopsAfterLoadedCandidateInPriorityOrder() = runTest {
         val captured = mutableListOf<HttpRequestData>()
         val repository = newRepository(

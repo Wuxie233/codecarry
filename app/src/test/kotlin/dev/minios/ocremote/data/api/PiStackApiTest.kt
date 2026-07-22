@@ -33,6 +33,16 @@ class PiStackApiTest {
     private val conn = PiStackConnection.from("https://pi.example.test/control/", " secret-token ")
 
     @Test
+    fun `connection normalizes origin and trailing slashes without replacing custom paths`() {
+        assertEquals("https://pi.example.test/control", PiStackConnection.from("https://pi.example.test/", null).baseUrl)
+        assertEquals("https://pi.example.test/control", PiStackConnection.from("https://pi.example.test/control///", null).baseUrl)
+        assertEquals(
+            "https://pi.example.test/custom-control",
+            PiStackConnection.from("https://pi.example.test/custom-control/", null).baseUrl,
+        )
+    }
+
+    @Test
     fun `capability probe preserves base path and sends bearer auth`() = runTest {
         val captured = mutableListOf<HttpRequestData>()
         val api = api(captured) { respondJson(envelope(capabilities())) }

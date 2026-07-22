@@ -23,6 +23,7 @@ import dev.minios.ocremote.domain.model.McpSource
 import dev.minios.ocremote.domain.model.ServerConfig
 import dev.minios.ocremote.domain.model.ServerHealth
 import dev.minios.ocremote.domain.model.ServerType
+import dev.minios.ocremote.domain.model.normalizePiStackControlUrl
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.map
@@ -85,7 +86,7 @@ class ServerRepository @Inject constructor(
         val server = ServerConfig(
             id = UUID.randomUUID().toString(),
             type = type,
-            url = url.trimEnd('/'),
+            url = if (type == ServerType.PI_STACK) normalizePiStackControlUrl(url) else url.trimEnd('/'),
             username = username,
             password = password,
             token = token,
@@ -108,8 +109,13 @@ class ServerRepository @Inject constructor(
      */
     suspend fun updateServer(server: ServerConfig) {
         val currentServers = servers.firstOrNull() ?: emptyList()
+        val normalizedServer = if (server.type == ServerType.PI_STACK) {
+            server.copy(url = normalizePiStackControlUrl(server.url))
+        } else {
+            server
+        }
         val updatedServers = currentServers.map {
-            if (it.id == server.id) server else it
+            if (it.id == server.id) normalizedServer else it
         }
 
         saveServers(updatedServers)

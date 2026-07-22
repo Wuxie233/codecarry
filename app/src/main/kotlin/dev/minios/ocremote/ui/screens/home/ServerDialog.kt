@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import dev.minios.ocremote.R
 import dev.minios.ocremote.domain.model.ServerConfig
 import dev.minios.ocremote.domain.model.ServerType
+import dev.minios.ocremote.domain.model.normalizePiStackControlUrl
 
 /**
  * Parse and validate a server URL string.
@@ -59,7 +60,7 @@ internal fun validateAndNormalizeUrl(input: String, serverType: ServerType): Str
         if (serverType == ServerType.CODEX && uri.scheme == "ws" && !uri.host.isCodexLoopbackHost()) return null
         if (uri.port != -1 && uri.port !in 1..65535) return null
         if (uri.userInfo != null || uri.query != null || uri.fragment != null) return null
-        java.net.URI(
+        val normalizedUrl = java.net.URI(
             uri.scheme,
             null,
             uri.host,
@@ -68,6 +69,7 @@ internal fun validateAndNormalizeUrl(input: String, serverType: ServerType): Str
             null,
             null,
         ).toString().trimEnd('/')
+        if (serverType == ServerType.PI_STACK) normalizePiStackControlUrl(normalizedUrl) else normalizedUrl
     } catch (e: Exception) {
         null
     }

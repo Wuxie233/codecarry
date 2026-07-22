@@ -1,5 +1,6 @@
 package dev.minios.ocremote.data.api
 
+import dev.minios.ocremote.domain.model.normalizePiStackControlUrl
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.timeout
@@ -49,7 +50,7 @@ data class PiStackConnection(
 ) {
     companion object {
         fun from(url: String, token: String?): PiStackConnection = PiStackConnection(
-            baseUrl = url.trimEnd('/'),
+            baseUrl = normalizePiStackControlUrl(url),
             authHeader = token?.trim()?.takeIf(String::isNotEmpty)?.let { "Bearer $it" },
         )
     }

@@ -1,6 +1,7 @@
 package dev.minios.ocremote.domain.model
 
 import kotlinx.serialization.Serializable
+import java.net.URI
 
 @Serializable
 enum class ServerType {
@@ -8,6 +9,22 @@ enum class ServerType {
     CODEX,
     PI_ROUNDTABLE,
     PI_STACK,
+}
+
+internal fun normalizePiStackControlUrl(url: String): String {
+    val trimmed = url.trim().trimEnd('/')
+    return runCatching {
+        val uri = URI(trimmed)
+        val path = uri.rawPath.orEmpty().trimEnd('/')
+        buildString {
+            append(uri.scheme)
+            append("://")
+            append(uri.rawAuthority)
+            append(path.ifEmpty { "/control" })
+            uri.rawQuery?.let { append('?').append(it) }
+            uri.rawFragment?.let { append('#').append(it) }
+        }
+    }.getOrDefault(trimmed)
 }
 
 /**

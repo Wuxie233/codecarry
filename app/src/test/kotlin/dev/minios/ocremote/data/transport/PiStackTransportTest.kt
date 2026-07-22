@@ -38,7 +38,7 @@ class PiStackTransportTest {
         val factory = PiStackTransportFactory(PiStackApi(client, json))
 
         val result = factory.create(
-            ServerConfig(id = "pi-stack", type = ServerType.PI_STACK, url = "https://pi.test/control/", token = "token")
+            ServerConfig(id = "pi-stack", type = ServerType.PI_STACK, url = "https://pi.test", token = "token")
         ).probe()
 
         assertEquals("g", result.worker.generation)

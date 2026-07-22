@@ -33,6 +33,18 @@ class HomeViewModelTest {
     }
 
     @Test
+    fun `Pi Stack origin URLs use control endpoint while custom paths are preserved`() {
+        assertEquals(
+            "https://pi.example.test/control",
+            validateAndNormalizeUrl("https://pi.example.test/", ServerType.PI_STACK),
+        )
+        assertEquals(
+            "https://pi.example.test/custom-control",
+            validateAndNormalizeUrl("https://pi.example.test/custom-control/", ServerType.PI_STACK),
+        )
+    }
+
+    @Test
     fun `returns true when provider response already has models`() {
         val response = ProvidersResponse(
             providers = listOf(
