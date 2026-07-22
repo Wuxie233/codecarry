@@ -15,15 +15,17 @@ internal fun normalizePiStackControlUrl(url: String): String {
     val trimmed = url.trim().trimEnd('/')
     return runCatching {
         val uri = URI(trimmed)
+        require(uri.scheme in setOf("http", "https") && uri.host != null)
         val path = uri.rawPath.orEmpty().trimEnd('/')
-        buildString {
-            append(uri.scheme)
-            append("://")
-            append(uri.rawAuthority)
-            append(path.ifEmpty { "/control" })
-            uri.rawQuery?.let { append('?').append(it) }
-            uri.rawFragment?.let { append('#').append(it) }
-        }
+        URI(
+            uri.scheme,
+            null,
+            uri.host,
+            uri.port,
+            path.ifEmpty { "/control" },
+            null,
+            null,
+        ).toString()
     }.getOrDefault(trimmed)
 }
 

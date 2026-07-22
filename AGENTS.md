@@ -33,7 +33,8 @@
 
 - Pi Stack is a separate `PI_STACK` backend, not an OpenCode-compatible API.
   Android connects to the native Bearer-authenticated Control v1 endpoint and
-  keeps Pi Stack transport models under `data/api/PiStackApi.kt`.
+  keeps Pi Stack transport models under `data/api/PiStackApi.kt`. Origin-only
+  URLs resolve to `/control`; explicit custom Control paths remain unchanged.
 - Pi Stack project selection is server-authoritative. The client browses only
   server-allowed absolute directories, registers a project, and then creates
   or resumes sessions within that project. Do not relabel an allowlist root as

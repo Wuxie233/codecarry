@@ -43,6 +43,19 @@ class PiStackApiTest {
     }
 
     @Test
+    fun `connection rebuilds safe base URL from legacy URI components`() {
+        assertEquals(
+            "https://pi.example.test/control",
+            PiStackConnection.from("https://user:secret@pi.example.test?legacy=1#fragment", null).baseUrl,
+        )
+        assertEquals(
+            "http://[::1]:8787/control",
+            PiStackConnection.from("http://[::1]:8787/", null).baseUrl,
+        )
+        assertEquals("not a url", PiStackConnection.from(" not a url/ ", null).baseUrl)
+    }
+
+    @Test
     fun `capability probe preserves base path and sends bearer auth`() = runTest {
         val captured = mutableListOf<HttpRequestData>()
         val api = api(captured) { respondJson(envelope(capabilities())) }
