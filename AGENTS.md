@@ -35,6 +35,11 @@
   Android connects to the native Bearer-authenticated Control v1 endpoint and
   keeps Pi Stack transport models under `data/api/PiStackApi.kt`. Origin-only
   URLs resolve to `/control`; explicit custom Control paths remain unchanged.
+- The Pi Stack control server enforces a bearer secret of at least 32
+  characters (`PI_CONTROL_BEARER_SECRET`); the app token must match it exactly.
+  Health-check failures must keep their `PiStackApiErrorKind` classification:
+  `healthCheckErrorMessage` in `HomeViewModel.kt` maps Auth/Protocol failures
+  to actionable messages instead of a generic "Server is not responding".
 - Pi Stack project selection is server-authoritative. The client browses only
   server-allowed absolute directories, registers a project, and then creates
   or resumes sessions within that project. Do not relabel an allowlist root as

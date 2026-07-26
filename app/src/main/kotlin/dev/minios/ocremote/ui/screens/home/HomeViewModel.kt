@@ -14,6 +14,8 @@ import dev.minios.ocremote.R
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.minios.ocremote.data.api.OpenCodeApi
+import dev.minios.ocremote.data.api.PiStackApiErrorKind
+import dev.minios.ocremote.data.api.PiStackApiException
 import dev.minios.ocremote.data.api.ProviderCatalogResponse
 import dev.minios.ocremote.data.api.ProvidersResponse
 import dev.minios.ocremote.data.api.ServerConnection
@@ -61,6 +63,21 @@ internal fun serverConnectionIntent(context: Context, serverId: String): Intent 
     Intent(context, OpenCodeConnectionService::class.java).apply {
         putExtra(OpenCodeConnectionService.EXTRA_SERVER_ID, serverId)
     }
+
+/**
+ * Map a health-check failure to an actionable user-facing message instead of
+ * flattening every failure (including 401 auth errors) into a generic
+ * "Server is not responding".
+ */
+internal fun healthCheckErrorMessage(error: Throwable?): String = when {
+    error is PiStackApiException && error.kind == PiStackApiErrorKind.Auth ->
+        "Authentication failed. Check the access token."
+
+    error is PiStackApiException && error.kind == PiStackApiErrorKind.Protocol ->
+        error.message ?: "Server protocol mismatch"
+
+    else -> "Server is not responding"
+}
 
 internal val serverConnectionIntentExtraKeys: Set<String> = setOf(
     OpenCodeConnectionService.EXTRA_SERVER_ID,
@@ -448,13 +465,18 @@ class HomeViewModel @Inject constructor(
 
         viewModelScope.launch {
             try {
-                val isHealthy = server.type == ServerType.CODEX || serverRepository.checkServerHealth(server)
-                if (!isHealthy) {
+                val healthResult = if (server.type == ServerType.CODEX) {
+                    null
+                } else {
+                    serverRepository.checkHealth(server)
+                }
+                if (healthResult != null && healthResult.isFailure) {
+                    val message = healthCheckErrorMessage(healthResult.exceptionOrNull())
                     _uiState.update {
                         it.copy(
                             connectingServerIds = it.connectingServerIds - serverId,
                             connectionPhases = it.connectionPhases - serverId,
-                            connectionErrors = it.connectionErrors + (serverId to "Server is not responding")
+                            connectionErrors = it.connectionErrors + (serverId to message)
                         )
                     }
                     return@launch

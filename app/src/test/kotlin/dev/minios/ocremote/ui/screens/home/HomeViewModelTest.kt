@@ -1,10 +1,13 @@
 package dev.minios.ocremote.ui.screens.home
 
+import dev.minios.ocremote.data.api.PiStackApiErrorKind
+import dev.minios.ocremote.data.api.PiStackApiException
 import dev.minios.ocremote.data.api.ProviderCatalogResponse
 import dev.minios.ocremote.data.api.ProviderInfo
 import dev.minios.ocremote.data.api.ProviderModel
 import dev.minios.ocremote.data.api.ProvidersResponse
 import dev.minios.ocremote.domain.model.ServerType
+import java.io.IOException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -42,6 +45,40 @@ class HomeViewModelTest {
             "https://pi.example.test/custom-control",
             validateAndNormalizeUrl("https://pi.example.test/custom-control/", ServerType.PI_STACK),
         )
+    }
+
+    @Test
+    fun `health check auth failure surfaces authentication error instead of generic not responding`() {
+        val authError = PiStackApiException(
+            kind = PiStackApiErrorKind.Auth,
+            message = "Bearer authentication failed.",
+            status = 401,
+            code = "auth_invalid",
+        )
+
+        assertEquals(
+            "Authentication failed. Check the access token.",
+            healthCheckErrorMessage(authError),
+        )
+    }
+
+    @Test
+    fun `health check protocol failure surfaces protocol message`() {
+        val protocolError = PiStackApiException(
+            kind = PiStackApiErrorKind.Protocol,
+            message = "capabilities protocolVersion is not 1",
+        )
+
+        assertEquals(
+            "capabilities protocolVersion is not 1",
+            healthCheckErrorMessage(protocolError),
+        )
+    }
+
+    @Test
+    fun `health check transport failure keeps generic not responding message`() {
+        assertEquals("Server is not responding", healthCheckErrorMessage(IOException("timeout")))
+        assertEquals("Server is not responding", healthCheckErrorMessage(null))
     }
 
     @Test
