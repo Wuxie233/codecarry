@@ -2,6 +2,7 @@ package dev.minios.ocremote.data.transport
 
 import dev.minios.ocremote.data.api.PiStackApi
 import dev.minios.ocremote.data.api.PiStackConnection
+import dev.minios.ocremote.data.api.PiStackAttachmentDto
 import dev.minios.ocremote.data.api.PiStackDirectoryListingDto
 import dev.minios.ocremote.data.api.PiStackEnvelope
 import dev.minios.ocremote.data.api.PiStackMessagePageDto
@@ -9,6 +10,7 @@ import dev.minios.ocremote.data.api.PiStackModelSelectionDto
 import dev.minios.ocremote.data.api.PiStackOperationDto
 import dev.minios.ocremote.data.api.PiStackProjectDto
 import dev.minios.ocremote.data.api.PiStackSessionDto
+import dev.minios.ocremote.data.api.PiStackSessionControlsDescriptorDto
 import dev.minios.ocremote.data.api.PiStackSnapshotDto
 import dev.minios.ocremote.data.api.PiStackSseFrame
 import dev.minios.ocremote.data.api.PiStackQuestionDto
@@ -16,7 +18,9 @@ import dev.minios.ocremote.data.api.PiStackQuestionResolutionDto
 import dev.minios.ocremote.data.api.PiStackNotificationDto
 import dev.minios.ocremote.data.api.PiStackNotificationReadDto
 import dev.minios.ocremote.domain.model.ServerConfig
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonElement
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -40,6 +44,7 @@ class PiStackTransport internal constructor(
     suspend fun listSessions(projectId: String? = null): PiStackEnvelope<List<PiStackSessionDto>> =
         api.listSessions(conn, projectId)
     suspend fun getSession(sessionId: String) = api.getSession(conn, sessionId)
+    suspend fun getSessionControls(sessionId: String) = api.getSessionControls(conn, sessionId)
     suspend fun createSession(
         projectId: String,
         title: String?,
@@ -49,10 +54,61 @@ class PiStackTransport internal constructor(
     ) = api.createSession(conn, projectId, title, model, generation, idempotencyKey)
     suspend fun getMessages(sessionId: String, limit: Int = 50, before: String? = null): PiStackEnvelope<PiStackMessagePageDto> =
         api.getMessages(conn, sessionId, limit, before)
-    suspend fun prompt(sessionId: String, prompt: String, generation: String, idempotencyKey: String): PiStackEnvelope<PiStackOperationDto> =
-        api.prompt(conn, sessionId, prompt, generation, idempotencyKey)
+    suspend fun prompt(
+        sessionId: String,
+        prompt: String,
+        generation: String,
+        attachments: List<String> = emptyList(),
+        idempotencyKey: String,
+    ): PiStackEnvelope<PiStackOperationDto> =
+        api.prompt(conn, sessionId, prompt, generation, idempotencyKey, attachments)
     suspend fun abort(sessionId: String, reason: String?, generation: String, idempotencyKey: String): PiStackEnvelope<PiStackOperationDto> =
         api.abort(conn, sessionId, reason, generation, idempotencyKey)
+    suspend fun renameSession(sessionId: String, title: String, generation: String, idempotencyKey: String) =
+        api.renameSession(conn, sessionId, title, generation, idempotencyKey)
+    suspend fun archiveSession(sessionId: String, generation: String, idempotencyKey: String) =
+        api.archiveSession(conn, sessionId, generation, idempotencyKey)
+    suspend fun restoreSession(sessionId: String, generation: String, idempotencyKey: String) =
+        api.restoreSession(conn, sessionId, generation, idempotencyKey)
+    suspend fun deleteSession(sessionId: String, generation: String, idempotencyKey: String) =
+        api.deleteSession(conn, sessionId, generation, idempotencyKey)
+    suspend fun selectModel(sessionId: String, provider: String, modelId: String, generation: String, idempotencyKey: String) =
+        api.selectModel(conn, sessionId, provider, modelId, generation, idempotencyKey)
+    suspend fun selectThinking(sessionId: String, level: String, generation: String, idempotencyKey: String) =
+        api.selectThinking(conn, sessionId, level, generation, idempotencyKey)
+    suspend fun compactSession(sessionId: String, instructions: String?, generation: String, idempotencyKey: String) =
+        api.compactSession(conn, sessionId, instructions, generation, idempotencyKey)
+    suspend fun forkSession(sessionId: String, entryId: String, generation: String, idempotencyKey: String) =
+        api.forkSession(conn, sessionId, entryId, generation, idempotencyKey)
+    suspend fun executeCommand(sessionId: String, text: String, generation: String, idempotencyKey: String) =
+        api.executeCommand(conn, sessionId, text, generation, idempotencyKey)
+    suspend fun uploadAttachment(
+        sessionId: String,
+        kind: String,
+        name: String,
+        mimeType: String,
+        bytes: ByteArray,
+        generation: String,
+        idempotencyKey: String,
+    ): PiStackEnvelope<PiStackAttachmentDto> =
+        api.uploadAttachment(conn, sessionId, kind, name, mimeType, bytes, generation, idempotencyKey)
+    suspend fun getOperation(operationId: String) = api.getOperation(conn, operationId)
+
+    suspend fun awaitOperation(operationId: String, timeoutMillis: Long = 30_000): PiStackOperationDto = withTimeout(timeoutMillis) {
+        while (true) {
+            val operation = getOperation(operationId).data
+            when (operation.status) {
+                "completed" -> return@withTimeout operation
+                "failed", "aborted", "dispatch_failed" -> throw IllegalStateException(
+                    operation.error ?: "Pi Stack operation ${operation.status}",
+                )
+            }
+            delay(150)
+        }
+        @Suppress("UNREACHABLE_CODE")
+        error("unreachable")
+    }
+
     suspend fun listQuestions(status: String? = "pending"): PiStackEnvelope<List<PiStackQuestionDto>> =
         api.listQuestions(conn, status)
     suspend fun replyQuestion(

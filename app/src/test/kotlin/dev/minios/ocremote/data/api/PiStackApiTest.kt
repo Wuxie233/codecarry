@@ -17,10 +17,12 @@ import io.ktor.serialization.kotlinx.json.json
 import io.ktor.utils.io.ByteReadChannel
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -64,8 +66,30 @@ class PiStackApiTest {
 
         assertEquals(1, response.protocolVersion)
         assertTrue(response.data.runtime.prompt)
+        assertTrue(response.data.runtime.attachments)
+        assertTrue(response.data.sessions.archive)
+        assertTrue(response.data.models.select)
         assertEquals("/control/v1/capabilities", captured.single().url.encodedPath)
         assertEquals("Bearer secret-token", captured.single().headers[HttpHeaders.Authorization])
+    }
+
+    @Test
+    fun `legacy capability response defaults new controls to unavailable`() = runTest {
+        val api = api(mutableListOf()) {
+            respondJson(envelope("""
+                {"protocolVersion":1,"permissions":{"supported":false,"pending":[]},
+                 "runtime":{"prompt":true,"abort":true,"retry":false,"sessionPatch":[]},
+                 "questions":{"reply":true,"reject":true}}
+            """.trimIndent()))
+        }
+
+        val capabilities = api.getCapabilities(conn).data
+
+        assertFalse(capabilities.runtime.attachments)
+        assertFalse(capabilities.runtime.compact)
+        assertFalse(capabilities.sessions.archive)
+        assertFalse(capabilities.models.select)
+        assertFalse(capabilities.thinking.list)
     }
 
     @Test
@@ -101,6 +125,79 @@ class PiStackApiTest {
         assertEquals(ContentType.Application.Json.toString(), captured[1].body.contentType.toString())
         assertEquals("/control/v1/projects/project%2Fone/sessions", captured[2].url.encodedPath)
         assertEquals("session-key", captured[2].headers["Idempotency-Key"])
+    }
+
+    @Test
+    fun `session controls and extended mutations use public v1 routes`() = runTest {
+        val captured = mutableListOf<HttpRequestData>()
+        val controls = """
+            {"runtime":{"protocolVersion":1,"daemonInstanceId":"daemon","runtimeGeneration":2,"nextSequence":4},
+             "session":{"id":"session-1","projectId":"project-1","cwd":"/srv/repo","sessionFile":"/tmp/a.jsonl",
+               "parentSessionId":null,"title":"Work","state":"idle","createdAt":"now","updatedAt":"now","messageCount":3},
+             "controls":{"model":{"provider":"openai","modelId":"gpt-5","name":"GPT-5","contextWindow":200000},
+               "thinkingLevel":"high","models":[{"provider":"openai","modelId":"gpt-5","name":"GPT-5"}],
+               "thinkingLevels":["low","high"],"commands":[{"name":"review","source":"builtin"}]},"activeOperation":null}
+        """.trimIndent()
+        val replies = ArrayDeque(listOf(
+            envelope(controls), envelope(operation("session_rename")), envelope(operation("session_archive")),
+            envelope(operation("session_restore")), envelope(operation("session_delete")), envelope(operation("model_change")),
+            envelope(operation("thinking_change")), envelope(operation("compact")), envelope(operation("fork")), envelope(operation("command")),
+        ))
+        val api = api(captured) { respondJson(replies.removeFirst()) }
+
+        val descriptor = api.getSessionControls(conn, "session/one").data
+        api.renameSession(conn, "session/one", "Renamed", "generation-1", "rename-key")
+        api.archiveSession(conn, "session/one", "generation-1", "archive-key")
+        api.restoreSession(conn, "session/one", "generation-1", "restore-key")
+        api.deleteSession(conn, "session/one", "generation-1", "delete-key")
+        api.selectModel(conn, "session/one", "openai", "gpt-5", "generation-1", "model-key")
+        api.selectThinking(conn, "session/one", "high", "generation-1", "thinking-key")
+        api.compactSession(conn, "session/one", "focus", "generation-1", "compact-key")
+        api.forkSession(conn, "session/one", "entry-7", "generation-1", "fork-key")
+        api.executeCommand(conn, "session/one", "/review focus", "generation-1", "command-key")
+
+        assertEquals("gpt-5", descriptor.controls.model?.modelId)
+        assertEquals(listOf("low", "high"), descriptor.controls.thinkingLevels)
+        assertEquals("review", descriptor.controls.commands.single().name)
+        assertEquals(HttpMethod.Get, captured[0].method)
+        assertEquals("/control/v1/sessions/session%2Fone/controls", captured[0].url.encodedPath)
+        assertEquals(HttpMethod.Patch, captured[1].method)
+        assertEquals(HttpMethod.Delete, captured[4].method)
+        assertEquals(
+            listOf("archive", "restore", "model", "thinking", "compact", "fork", "commands"),
+            listOf(2, 3, 5, 6, 7, 8, 9).map { captured[it].url.encodedPath.substringAfterLast('/') },
+        )
+        assertTrue(captured.drop(1).all { it.headers["X-Pi-Worker-Generation"] == "generation-1" })
+    }
+
+    @Test
+    fun `attachment upload uses binary contract and prompt sends handle`() = runTest {
+        val captured = mutableListOf<HttpRequestData>()
+        val replies = ArrayDeque(listOf(
+            envelope("""{"handle":"handle-1","sessionId":"session-1","cwd":"/srv/repo","kind":"file","name":"notes.txt","mimeType":"text/plain","size":5,"path":"/tmp/notes.txt","createdAt":"now"}"""),
+            envelope(operation()),
+        ))
+        val api = api(captured) { respondJson(replies.removeFirst()) }
+
+        val attachment = api.uploadAttachment(conn, "session-1", "file", "notes.txt", "text/plain", "hello".encodeToByteArray(), "generation-1", "upload-key")
+        api.prompt(conn, "session-1", "read", "generation-1", "prompt-key", listOf(attachment.data.handle))
+
+        assertEquals("handle-1", attachment.data.handle)
+        assertEquals(ContentType.Application.OctetStream.toString(), captured[0].body.contentType.toString())
+        assertEquals("file", captured[0].headers["X-Attachment-Kind"])
+        assertEquals("notes.txt", captured[0].headers["X-Attachment-Name"])
+        assertEquals("text/plain", captured[0].headers["X-Attachment-Mime"])
+        assertEquals("upload-key", captured[0].headers["Idempotency-Key"])
+        assertEquals("/control/v1/sessions/session-1/prompt", captured[1].url.encodedPath)
+    }
+
+    @Test
+    fun `history preserves authority entry id for exact fork`() = runTest {
+        val api = api(mutableListOf()) {
+            respondJson(envelope("""{"items":[{"id":"message-1","entryId":"entry-1","sessionId":"session-1","role":"user","status":"completed","parts":[]}],"hasMore":false}"""))
+        }
+
+        assertEquals("entry-1", api.getMessages(conn, "session-1").data.items.single().entryId)
     }
 
     @Test
@@ -158,7 +255,7 @@ class PiStackApiTest {
     }
 
     @Test
-    fun `SSE sends Last Event ID and decodes connected event and resync frames`() = runTest {
+    fun `SSE sends Last Event ID and decodes connected event and resync frames`() = runBlocking {
         val captured = mutableListOf<HttpRequestData>()
         val stream = """
             : heartbeat
@@ -240,11 +337,12 @@ class PiStackApiTest {
 
     private fun capabilities() = """
         {"protocolVersion":1,"permissions":{"supported":false,"pending":[]},
-         "runtime":{"prompt":true,"abort":true,"retry":false,"sessionPatch":["title"]},
+         "runtime":{"prompt":true,"abort":true,"retry":false,"sessionPatch":["title"],"compact":true,"fork":true,"commands":true,"attachments":true},
          "questions":{"reply":true,"reject":true},
          "filesystem":{"directoryBrowse":true,"defaultPath":"home"},
          "projects":{"register":true},
-         "sessions":{"create":true,"resume":"automatic","structuredHistory":true,"maxHistoryPageSize":100,"streamingActivity":true},
+         "sessions":{"create":true,"resume":"automatic","structuredHistory":true,"maxHistoryPageSize":100,"streamingActivity":true,"controls":true,"archive":true,"restore":true,"delete":true},
+         "models":{"list":true,"select":true},"thinking":{"list":true,"select":true},
          "futureCapability":true}
     """.trimIndent()
 
@@ -258,8 +356,8 @@ class PiStackApiTest {
          "createdAt":"now","updatedAt":"now","endedAt":null}
     """.trimIndent()
 
-    private fun operation() = """
-        {"id":"operation-1","kind":"prompt","status":"pending_dispatch","workerGeneration":"generation-1",
+    private fun operation(kind: String = "prompt") = """
+        {"id":"operation-1","kind":"$kind","status":"pending_dispatch","workerGeneration":"generation-1",
          "sessionId":"session-1","teamId":null,"taskId":null,"supervisorHandle":"handle","piSessionId":"pi-1",
          "runtimeGeneration":1,"promptId":"prompt-1","command":{"prompt":"work"},"result":null,"error":null,
          "acceptedAt":"now","settledAt":null,"createdAt":"now","updatedAt":"now"}

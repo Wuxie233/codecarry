@@ -1,5 +1,6 @@
 package dev.minios.ocremote.ui.screens.chat
 
+import dev.minios.ocremote.data.api.PiStackCapabilitiesDto
 import dev.minios.ocremote.domain.model.ServerType
 
 internal data class ChatBackendCapabilities(
@@ -11,14 +12,18 @@ internal data class ChatBackendCapabilities(
     val slashCommands: Boolean,
 )
 
-internal fun chatBackendCapabilities(serverType: ServerType): ChatBackendCapabilities = when (serverType) {
+internal fun chatBackendCapabilities(
+    serverType: ServerType,
+    piStack: PiStackCapabilitiesDto? = null,
+): ChatBackendCapabilities = when (serverType) {
     ServerType.PI_STACK -> ChatBackendCapabilities(
-        attachments = false,
+        attachments = piStack?.runtime?.attachments == true,
         fileMentions = false,
-        modelAndAgentSelection = false,
-        sessionExtras = false,
+        modelAndAgentSelection = piStack?.models?.select == true,
+        sessionExtras = piStack?.runtime?.compact == true || piStack?.runtime?.fork == true ||
+            "title" in piStack?.runtime?.sessionPatch.orEmpty(),
         shellAndTerminal = false,
-        slashCommands = false,
+        slashCommands = piStack?.runtime?.commands == true,
     )
     ServerType.PI_ROUNDTABLE -> ChatBackendCapabilities(
         attachments = true,

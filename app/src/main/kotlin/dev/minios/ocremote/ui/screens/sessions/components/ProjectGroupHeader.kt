@@ -66,9 +66,9 @@ fun ProjectGroupHeader(
     onToggleCollapsed: () -> Unit,
     onTogglePinned: () -> Unit,
     onToggleHidden: () -> Unit,
-    onNewSession: () -> Unit,
+    onNewSession: (() -> Unit)? = null,
     onCopyPath: () -> Unit,
-    onArchiveAll: () -> Unit,
+    onArchiveAll: (() -> Unit)? = null,
     onManageMcp: (() -> Unit)? = null,
     mcpServerCount: Int? = null,
     mcpSupportsRuntimeControl: Boolean = false,
@@ -181,13 +181,15 @@ fun ProjectGroupHeader(
                         expanded = menuExpanded,
                         onDismissRequest = { menuExpanded = false },
                     ) {
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.sessions_project_new_here)) },
-                        onClick = {
-                            menuExpanded = false
-                            onNewSession()
-                        },
-                    )
+                    onNewSession?.let { createSession ->
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.sessions_project_new_here)) },
+                            onClick = {
+                                menuExpanded = false
+                                createSession()
+                            },
+                        )
+                    }
                     DropdownMenuItem(
                         text = {
                             Text(
@@ -266,19 +268,21 @@ fun ProjectGroupHeader(
                             },
                         )
                     }
-                    if (supportsManagement) HorizontalDivider()
-                    if (supportsManagement) DropdownMenuItem(
-                        text = {
-                            Text(
-                                text = stringResource(R.string.sessions_project_archive_all),
-                                color = colors.error,
-                            )
-                        },
-                        onClick = {
-                            menuExpanded = false
-                            onArchiveAll()
-                        },
-                    )
+                    if (supportsManagement && onArchiveAll != null) HorizontalDivider()
+                    onArchiveAll?.let { archiveAll ->
+                        if (supportsManagement) DropdownMenuItem(
+                            text = {
+                                Text(
+                                    text = stringResource(R.string.sessions_project_archive_all),
+                                    color = colors.error,
+                                )
+                            },
+                            onClick = {
+                                menuExpanded = false
+                                archiveAll()
+                            },
+                        )
+                    }
                     }
                 }
             }

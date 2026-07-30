@@ -5,9 +5,11 @@ import io.ktor.client.HttpClient
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.timeout
 import io.ktor.client.request.HttpRequestBuilder
+import io.ktor.client.request.delete
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.parameter
+import io.ktor.client.request.patch
 import io.ktor.client.request.post
 import io.ktor.client.request.prepareGet
 import io.ktor.client.request.setBody
@@ -203,6 +205,7 @@ sealed class PiStackStructuredPartDto {
 @Serializable
 data class PiStackStructuredMessageDto(
     val id: String,
+    val entryId: String? = null,
     val sessionId: String,
     val promptId: String? = null,
     val role: String,
@@ -399,6 +402,10 @@ data class PiStackRuntimeCapabilityDto(
     val abort: Boolean,
     val retry: Boolean,
     val sessionPatch: List<String> = emptyList(),
+    val compact: Boolean = false,
+    val fork: Boolean = false,
+    val commands: Boolean = false,
+    val attachments: Boolean = false,
 )
 
 @Serializable
@@ -420,6 +427,98 @@ data class PiStackSessionCapabilityDto(
     val structuredHistory: Boolean = false,
     val maxHistoryPageSize: Int = 100,
     val streamingActivity: Boolean = false,
+    val controls: Boolean = false,
+    val archive: Boolean = false,
+    val restore: Boolean = false,
+    val delete: Boolean = false,
+)
+
+@Serializable
+data class PiStackSelectionCapabilityDto(
+    val list: Boolean = false,
+    val select: Boolean = false,
+)
+
+@Serializable
+data class PiStackSessionControlModelDto(
+    val provider: String,
+    val modelId: String,
+    val name: String? = null,
+    val contextWindow: Int? = null,
+    val reasoning: JsonElement? = null,
+)
+
+@Serializable
+data class PiStackCommandDto(
+    val name: String,
+    val description: String? = null,
+    val source: String,
+)
+
+@Serializable
+data class PiStackSessionControlsDto(
+    val model: PiStackSessionControlModelDto? = null,
+    val thinkingLevel: String? = null,
+    val models: List<PiStackSessionControlModelDto> = emptyList(),
+    val thinkingLevels: List<String> = emptyList(),
+    val commands: List<PiStackCommandDto> = emptyList(),
+)
+
+@Serializable
+data class PiStackAuthorityOperationDto(
+    val requestId: String,
+    val requestHash: String,
+    val sessionId: String,
+    val kind: String,
+    val status: String,
+    val outcome: String? = null,
+    val result: JsonElement? = null,
+    val error: String? = null,
+    val acceptedAt: String,
+    val settledAt: String? = null,
+)
+
+@Serializable
+data class PiStackAuthorityRuntimeDto(
+    val protocolVersion: Int,
+    val daemonInstanceId: String,
+    val runtimeGeneration: Long,
+    val nextSequence: Long,
+)
+
+@Serializable
+data class PiStackMachineSessionDto(
+    val id: String,
+    val projectId: String,
+    val cwd: String,
+    val sessionFile: String? = null,
+    val parentSessionId: String? = null,
+    val title: String? = null,
+    val state: String,
+    val createdAt: String,
+    val updatedAt: String,
+    val messageCount: Int,
+)
+
+@Serializable
+data class PiStackSessionControlsDescriptorDto(
+    val runtime: PiStackAuthorityRuntimeDto,
+    val session: PiStackMachineSessionDto,
+    val controls: PiStackSessionControlsDto,
+    val activeOperation: PiStackAuthorityOperationDto? = null,
+)
+
+@Serializable
+data class PiStackAttachmentDto(
+    val handle: String,
+    val sessionId: String,
+    val cwd: String,
+    val kind: String,
+    val name: String,
+    val mimeType: String,
+    val size: Long,
+    val path: String,
+    val createdAt: String,
 )
 
 @Serializable
@@ -431,6 +530,8 @@ data class PiStackCapabilitiesDto(
     val filesystem: PiStackFilesystemCapabilityDto = PiStackFilesystemCapabilityDto(),
     val projects: PiStackProjectCapabilityDto = PiStackProjectCapabilityDto(),
     val sessions: PiStackSessionCapabilityDto = PiStackSessionCapabilityDto(),
+    val models: PiStackSelectionCapabilityDto = PiStackSelectionCapabilityDto(),
+    val thinking: PiStackSelectionCapabilityDto = PiStackSelectionCapabilityDto(),
 )
 
 @Serializable
@@ -456,7 +557,13 @@ private data class RegisterProjectRequest(val directory: String, val name: Strin
 private data class CreateSessionRequest(val title: String? = null, val model: PiStackModelSelectionDto? = null)
 
 @Serializable
-private data class PiStackPromptRequest(val prompt: String)
+private data class PiStackPromptRequest(
+    val prompt: String,
+    val attachments: List<String> = emptyList(),
+)
+
+@Serializable
+private data class SessionTitleRequest(val title: String)
 
 @Serializable
 private data class AbortRequest(val reason: String? = null)
@@ -555,6 +662,12 @@ class PiStackApi(
     suspend fun getSession(conn: PiStackConnection, sessionId: String): PiStackEnvelope<PiStackSessionDto> =
         getEnvelope(conn, "/v1/sessions/${sessionId.pathSegment()}", PiStackSessionDto.serializer())
 
+    suspend fun getSessionControls(
+        conn: PiStackConnection,
+        sessionId: String,
+    ): PiStackEnvelope<PiStackSessionControlsDescriptorDto> =
+        getEnvelope(conn, "/v1/sessions/${sessionId.pathSegment()}/controls", PiStackSessionControlsDescriptorDto.serializer())
+
     suspend fun createSession(
         conn: PiStackConnection,
         projectId: String,
@@ -591,10 +704,82 @@ class PiStackApi(
         prompt: String,
         generation: String,
         idempotencyKey: String = UUID.randomUUID().toString(),
+        attachments: List<String> = emptyList(),
     ): PiStackEnvelope<PiStackOperationDto> = mutateEnvelope(PiStackOperationDto.serializer(), generation) {
         httpClient.post("${conn.baseUrl}/v1/sessions/${sessionId.pathSegment()}/prompt") {
             applyMutationHeaders(conn, generation, idempotencyKey)
-            setBody(PiStackPromptRequest(prompt))
+            setBody(PiStackPromptRequest(prompt, attachments))
+        }
+    }
+
+    suspend fun renameSession(
+        conn: PiStackConnection,
+        sessionId: String,
+        title: String,
+        generation: String,
+        idempotencyKey: String = UUID.randomUUID().toString(),
+    ): PiStackEnvelope<PiStackOperationDto> = mutateEnvelope(PiStackOperationDto.serializer(), generation) {
+        httpClient.patch("${conn.baseUrl}/v1/sessions/${sessionId.pathSegment()}") {
+            applyMutationHeaders(conn, generation, idempotencyKey)
+            setBody(SessionTitleRequest(title))
+        }
+    }
+
+    suspend fun archiveSession(conn: PiStackConnection, sessionId: String, generation: String, idempotencyKey: String = UUID.randomUUID().toString()) =
+        emptySessionMutation(conn, sessionId, "archive", generation, idempotencyKey)
+
+    suspend fun restoreSession(conn: PiStackConnection, sessionId: String, generation: String, idempotencyKey: String = UUID.randomUUID().toString()) =
+        emptySessionMutation(conn, sessionId, "restore", generation, idempotencyKey)
+
+    suspend fun deleteSession(
+        conn: PiStackConnection,
+        sessionId: String,
+        generation: String,
+        idempotencyKey: String = UUID.randomUUID().toString(),
+    ): PiStackEnvelope<PiStackOperationDto> = mutateEnvelope(PiStackOperationDto.serializer(), generation) {
+        httpClient.delete("${conn.baseUrl}/v1/sessions/${sessionId.pathSegment()}") {
+            applyMutationHeaders(conn, generation, idempotencyKey)
+            setBody(JsonObject(emptyMap()))
+        }
+    }
+
+    suspend fun selectModel(conn: PiStackConnection, sessionId: String, provider: String, modelId: String, generation: String, idempotencyKey: String = UUID.randomUUID().toString()) =
+        sessionMutation(conn, sessionId, "model", generation, idempotencyKey, JsonObject(mapOf(
+            "provider" to JsonPrimitive(provider),
+            "modelId" to JsonPrimitive(modelId),
+        )))
+
+    suspend fun selectThinking(conn: PiStackConnection, sessionId: String, level: String, generation: String, idempotencyKey: String = UUID.randomUUID().toString()) =
+        sessionMutation(conn, sessionId, "thinking", generation, idempotencyKey, JsonObject(mapOf("level" to JsonPrimitive(level))))
+
+    suspend fun compactSession(conn: PiStackConnection, sessionId: String, instructions: String? = null, generation: String, idempotencyKey: String = UUID.randomUUID().toString()) =
+        sessionMutation(conn, sessionId, "compact", generation, idempotencyKey, JsonObject(
+            instructions?.let { mapOf("instructions" to JsonPrimitive(it)) }.orEmpty(),
+        ))
+
+    suspend fun forkSession(conn: PiStackConnection, sessionId: String, entryId: String, generation: String, idempotencyKey: String = UUID.randomUUID().toString()) =
+        sessionMutation(conn, sessionId, "fork", generation, idempotencyKey, JsonObject(mapOf("entryId" to JsonPrimitive(entryId))))
+
+    suspend fun executeCommand(conn: PiStackConnection, sessionId: String, text: String, generation: String, idempotencyKey: String = UUID.randomUUID().toString()) =
+        sessionMutation(conn, sessionId, "commands", generation, idempotencyKey, JsonObject(mapOf("text" to JsonPrimitive(text))))
+
+    suspend fun uploadAttachment(
+        conn: PiStackConnection,
+        sessionId: String,
+        kind: String,
+        name: String,
+        mimeType: String,
+        bytes: ByteArray,
+        generation: String,
+        idempotencyKey: String = UUID.randomUUID().toString(),
+    ): PiStackEnvelope<PiStackAttachmentDto> = mutateEnvelope(PiStackAttachmentDto.serializer(), generation) {
+        httpClient.post("${conn.baseUrl}/v1/sessions/${sessionId.pathSegment()}/attachments") {
+            applyMutationIdentityHeaders(conn, generation, idempotencyKey)
+            contentType(ContentType.Application.OctetStream)
+            header("X-Attachment-Kind", kind)
+            header("X-Attachment-Name", name)
+            header("X-Attachment-Mime", mimeType)
+            setBody(bytes)
         }
     }
 
@@ -738,6 +923,35 @@ class PiStackApi(
         throw protocolError("Invalid Pi Stack SSE frame", error)
     }
 
+    private suspend fun emptySessionMutation(
+        conn: PiStackConnection,
+        sessionId: String,
+        action: String,
+        generation: String,
+        idempotencyKey: String,
+    ): PiStackEnvelope<PiStackOperationDto> = sessionMutation(
+        conn,
+        sessionId,
+        action,
+        generation,
+        idempotencyKey,
+        JsonObject(emptyMap()),
+    )
+
+    private suspend fun sessionMutation(
+        conn: PiStackConnection,
+        sessionId: String,
+        action: String,
+        generation: String,
+        idempotencyKey: String,
+        body: JsonObject,
+    ): PiStackEnvelope<PiStackOperationDto> = mutateEnvelope(PiStackOperationDto.serializer(), generation) {
+        httpClient.post("${conn.baseUrl}/v1/sessions/${sessionId.pathSegment()}/$action") {
+            applyMutationHeaders(conn, generation, idempotencyKey)
+            setBody(body)
+        }
+    }
+
     private suspend fun <T> getEnvelope(
         conn: PiStackConnection,
         path: String,
@@ -809,10 +1023,18 @@ class PiStackApi(
         generation: String,
         idempotencyKey: String,
     ) {
+        applyMutationIdentityHeaders(conn, generation, idempotencyKey)
+        contentType(ContentType.Application.Json)
+    }
+
+    private fun HttpRequestBuilder.applyMutationIdentityHeaders(
+        conn: PiStackConnection,
+        generation: String,
+        idempotencyKey: String,
+    ) {
         require(generation.isNotBlank()) { "generation must not be blank" }
         require(idempotencyKey.isNotBlank()) { "idempotencyKey must not be blank" }
         applyHeaders(conn)
-        contentType(ContentType.Application.Json)
         header("Idempotency-Key", idempotencyKey)
         header("X-Pi-Worker-Generation", generation)
     }

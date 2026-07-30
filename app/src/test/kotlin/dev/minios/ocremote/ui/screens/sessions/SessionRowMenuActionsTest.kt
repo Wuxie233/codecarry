@@ -18,6 +18,30 @@ class SessionRowMenuActionsTest {
     }
 
     @Test
+    fun `menu filters unsupported capability actions independently`() {
+        assertEquals(
+            listOf(SessionRowMenuAction.RENAME, SessionRowMenuAction.DELETE),
+            sessionRowMenuActions(
+                isArchived = false,
+                supportsRename = true,
+                supportsArchive = false,
+                supportsRestore = false,
+                supportsDelete = true,
+            ),
+        )
+        assertEquals(
+            listOf(SessionRowMenuAction.RESTORE),
+            sessionRowMenuActions(
+                isArchived = true,
+                supportsRename = false,
+                supportsArchive = false,
+                supportsRestore = true,
+                supportsDelete = false,
+            ),
+        )
+    }
+
+    @Test
     fun `archived session menu swaps in restore without removing delete`() {
         assertEquals(
             listOf(

@@ -36,6 +36,22 @@ class MessageCardActionTest {
     }
 
     @Test
+    fun `backend can expose fork without exposing restore mutation`() {
+        val actions = buildMessageCardActions(
+            chatMessage = userMessage(id = "msg_user", text = "hello"),
+            selectedMessageStreaming = false,
+            sessionBusy = false,
+            sessionReady = true,
+            supportsFork = true,
+            supportsRestore = false,
+        )
+
+        assertTrue(actions.any { it.action == MessageCardAction.ForkFromHere && it.enabled })
+        assertFalse(actions.any { it.action == MessageCardAction.RestoreToHere })
+        assertTrue(actions.any { it.action == MessageCardAction.RestoreToInput })
+    }
+
+    @Test
     fun `assistant message hides restore but keeps fork and text actions enabled`() {
         val actions = buildMessageCardActions(
             chatMessage = assistantMessage(id = "msg_assistant", text = "answer"),

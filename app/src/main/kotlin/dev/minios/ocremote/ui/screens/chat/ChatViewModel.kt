@@ -1,6 +1,7 @@
 package dev.minios.ocremote.ui.screens.chat
 
 import android.content.Context
+import android.util.Base64
 import android.util.Log
 import dev.minios.ocremote.BuildConfig
 import dev.minios.ocremote.R
@@ -17,9 +18,15 @@ import dev.minios.ocremote.data.api.PiApi
 import dev.minios.ocremote.data.api.PiConnection
 import dev.minios.ocremote.data.api.PiPersonaDto
 import dev.minios.ocremote.data.api.PiStackApi
+import dev.minios.ocremote.data.api.PiStackCapabilitiesDto
+import dev.minios.ocremote.data.api.PiStackCommandDto
 import dev.minios.ocremote.data.api.PiStackConnection
+import dev.minios.ocremote.data.api.PiStackSessionControlModelDto
 import dev.minios.ocremote.data.api.PromptPart
 import dev.minios.ocremote.data.api.ProviderInfo
+import dev.minios.ocremote.data.api.ProviderModel
+import dev.minios.ocremote.data.api.ModelCapabilities
+import dev.minios.ocremote.data.api.ModelLimit
 import dev.minios.ocremote.data.api.RoundtableSseEvent
 import dev.minios.ocremote.data.api.toPermissionAsked
 import dev.minios.ocremote.data.api.ServerConnection
@@ -62,10 +69,17 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonPrimitive
 import java.net.URLDecoder
+import java.util.UUID
 import javax.inject.Inject
 
 private const val TAG = "ChatViewModel"
+private const val PI_STACK_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024
 
 private fun decodeRouteArg(value: String?): String {
     val raw = value.orEmpty()
@@ -126,6 +140,16 @@ data class ChatUiState(
     val personaLibrary: List<PiPersonaDto> = emptyList(),
     val runState: RoundtableRunState = RoundtableRunState(),
     val subagents: List<ChatSubagentItem> = emptyList(),
+    val supportsAttachments: Boolean = false,
+    val supportsPrompt: Boolean = false,
+    val supportsAbort: Boolean = false,
+    val supportsModelSelection: Boolean = false,
+    val supportsThinkingSelection: Boolean = false,
+    val supportsCompact: Boolean = false,
+    val supportsFork: Boolean = false,
+    val supportsCommands: Boolean = false,
+    val supportsRename: Boolean = false,
+    val supportsSessionCreate: Boolean = false,
 )
 
 data class RoundtableRunState(
@@ -212,8 +236,16 @@ class ChatViewModel @Inject constructor(
 
     private val conn = ServerConnection.from(serverUrl, username, password.ifEmpty { null })
     private val piStackConn = PiStackConnection.from(serverUrl, password.takeIf { it.isNotBlank() })
+    private val piStackTransport = if (isPiStack && piStackApi != null) {
+        dev.minios.ocremote.data.transport.PiStackTransport(
+            ServerConfig(id = serverId, type = ServerType.PI_STACK, url = serverUrl, token = password.takeIf { it.isNotBlank() }),
+            piStackApi,
+        )
+    } else null
     private var piStackGeneration: String? = null
     private var piStackHistory = PiStackChatHistoryState()
+    private val piStackEntryIds = mutableMapOf<String, String>()
+    private val _piStackCapabilities = MutableStateFlow<PiStackCapabilitiesDto?>(null)
     private val piTransport: PiRoundtableTransport? = if (isPiRoundtable) {
         PiRoundtableTransport(
             server = ServerConfig(
@@ -356,6 +388,7 @@ class ChatViewModel @Inject constructor(
         },
         _hasOlderMessages,
         _isLoadingOlder,
+        _piStackCapabilities,
     ) { args ->
         @Suppress("UNCHECKED_CAST")
         val sessionsByServer = args[0] as Map<String, Map<String, Session>>
@@ -396,6 +429,7 @@ class ChatViewModel @Inject constructor(
         val commands = catalogState.commands
         val hasOlderMessages = args[23] as Boolean
         val isLoadingOlder = args[24] as Boolean
+        val piStackCapabilities = args[25] as PiStackCapabilitiesDto?
         val piPersonas = catalogState.personaLibrary
 
         val session = allSessions.find { it.id == sessionId && it.id in currentServerSessionIds }
@@ -561,6 +595,16 @@ class ChatViewModel @Inject constructor(
             personaLibrary = piPersonas,
             runState = buildRoundtableRunState(roundtable, chatMessages, piEvents),
             subagents = subagents,
+            supportsAttachments = !isPiStack || piStackCapabilities?.runtime?.attachments == true,
+            supportsPrompt = !isPiStack || piStackCapabilities?.runtime?.prompt == true,
+            supportsAbort = !isPiStack || piStackCapabilities?.runtime?.abort == true,
+            supportsModelSelection = !isPiStack || piStackCapabilities?.models?.select == true,
+            supportsThinkingSelection = !isPiStack || piStackCapabilities?.thinking?.select == true,
+            supportsCompact = !isPiStack || piStackCapabilities?.runtime?.compact == true,
+            supportsFork = !isPiStack || piStackCapabilities?.runtime?.fork == true,
+            supportsCommands = !isPiStack || piStackCapabilities?.runtime?.commands == true,
+            supportsRename = !isPiStack || "title" in piStackCapabilities?.runtime?.sessionPatch.orEmpty(),
+            supportsSessionCreate = !isPiStack || piStackCapabilities?.sessions?.create == true,
         )
     }.stateIn(
         viewModelScope,
@@ -633,7 +677,7 @@ class ChatViewModel @Inject constructor(
     private fun restoreDraft() {
         val draft = draftRepository.getDraft(sessionId) ?: return
         _draftText.value = draft.text
-        _draftAttachmentUris.value = if (isPiStack) emptyList() else draft.imageUris
+        _draftAttachmentUris.value = draft.imageUris
         if (!isPiStack && draft.confirmedFilePaths.isNotEmpty()) {
             _confirmedFilePaths.value = draft.confirmedFilePaths.toSet()
         }
@@ -643,6 +687,95 @@ class ChatViewModel @Inject constructor(
         if (!isPiStack && !draft.selectedVariant.isNullOrBlank()) {
             _selectedVariant.value = draft.selectedVariant
         }
+    }
+
+    private fun applyPiStackControls(controls: dev.minios.ocremote.data.api.PiStackSessionControlsDto) {
+        val providers = controls.models
+            .groupBy(PiStackSessionControlModelDto::provider)
+            .map { (providerId, models) ->
+                ProviderInfo(
+                    id = providerId,
+                    name = providerId,
+                    source = "pi-stack",
+                    models = models.associate { model ->
+                        model.modelId to ProviderModel(
+                            id = model.modelId,
+                            providerId = model.provider,
+                            name = model.name ?: model.modelId,
+                            capabilities = ModelCapabilities(reasoning = model.reasoning != null && model.reasoning !is JsonNull),
+                            limit = model.contextWindow?.let { ModelLimit(context = it) },
+                            variants = controls.thinkingLevels.associateWith { JsonObject(emptyMap()) },
+                        )
+                    },
+                )
+            }
+        _allProviders.value = providers
+        _providers.value = providers
+        controls.model?.let { selected ->
+            _selectedProviderId.value = selected.provider
+            _selectedModelId.value = selected.modelId
+        }
+        _selectedVariant.value = controls.thinkingLevel
+        _commands.value = controls.commands.map(PiStackCommandDto::toCommandInfo)
+    }
+
+    private fun rememberPiStackEntryIds(messages: List<dev.minios.ocremote.data.api.PiStackStructuredMessageDto>) {
+        messages.forEach { message -> message.entryId?.let { piStackEntryIds[message.id] = it } }
+    }
+
+    private suspend fun piStackGeneration(): String {
+        piStackGeneration?.let { return it }
+        val envelope = requireNotNull(piStackApi).getCapabilities(piStackConn)
+        piStackGeneration = envelope.worker.generation
+        _piStackCapabilities.value = envelope.data
+        return envelope.worker.generation
+    }
+
+    private suspend fun refreshPiStackControls() {
+        val envelope = requireNotNull(piStackApi).getSessionControls(piStackConn, sessionId)
+        piStackGeneration = envelope.worker.generation
+        applyPiStackControls(envelope.data.controls)
+    }
+
+    private suspend fun uploadPiStackAttachment(part: PromptPart): String {
+        val dataUrl = part.url?.takeIf { it.startsWith("data:") }
+            ?: throw IllegalArgumentException("Pi Stack attachments must contain inline data")
+        val encoded = dataUrl.substringAfter(',', missingDelimiterValue = "")
+        if (encoded.isBlank()) throw IllegalArgumentException("Pi Stack attachment data is empty")
+        val bytes = Base64.decode(encoded, Base64.DEFAULT)
+        if (bytes.size > PI_STACK_ATTACHMENT_MAX_BYTES) {
+            throw IllegalArgumentException("Pi Stack attachments must not exceed 10 MiB")
+        }
+        val mimeType = part.mime ?: dataUrl.substringAfter("data:").substringBefore(';').ifBlank { "application/octet-stream" }
+        val name = part.filename?.takeIf { it.isNotBlank() } ?: "attachment"
+        val uploaded = requireNotNull(piStackApi).uploadAttachment(
+            piStackConn,
+            sessionId,
+            if (mimeType.startsWith("image/")) "image" else "file",
+            name,
+            mimeType,
+            bytes,
+            piStackGeneration(),
+            UUID.randomUUID().toString(),
+        )
+        piStackGeneration = uploaded.worker.generation
+        return uploaded.data.handle
+    }
+
+    private suspend fun awaitPiStackOperation(operationId: String, timeoutMillis: Long = 30_000) =
+        requireNotNull(piStackTransport).awaitOperation(operationId, timeoutMillis)
+
+    private suspend fun resolvePiStackForkEntry(messageId: String?): String {
+        messageId?.let(piStackEntryIds::get)?.let { return it }
+        val history = requireNotNull(piStackApi).getMessages(piStackConn, sessionId, 100)
+        piStackGeneration = history.worker.generation
+        rememberPiStackEntryIds(history.data.items)
+        if (messageId != null) {
+            return piStackEntryIds[messageId]
+                ?: throw IllegalStateException("The selected Pi Stack message is not a forkable authority entry")
+        }
+        return history.data.items.asReversed().firstNotNullOfOrNull { it.entryId }
+            ?: throw IllegalStateException("Pi Stack fork requires a persisted message entry")
     }
 
     private suspend fun loadPiStackSessionAndMessages() {
@@ -655,13 +788,22 @@ class ChatViewModel @Inject constructor(
         _isLoading.value = true
         _error.value = null
         try {
+            val capabilitiesEnvelope = stackApi.getCapabilities(piStackConn)
+            piStackGeneration = capabilitiesEnvelope.worker.generation
+            _piStackCapabilities.value = capabilitiesEnvelope.data
             val sessionEnvelope = stackApi.getSession(piStackConn, sessionId)
             piStackGeneration = sessionEnvelope.worker.generation
             sessionDirectory = sessionEnvelope.data.cwd
             eventReducer.setSessions(serverId, listOf(sessionEnvelope.data.toSession()))
             eventReducer.updateSessionStatus(sessionId, sessionEnvelope.data.stateKind.toSessionStatus())
+            if (capabilitiesEnvelope.data.sessions.controls) {
+                val controlsEnvelope = stackApi.getSessionControls(piStackConn, sessionId)
+                piStackGeneration = controlsEnvelope.worker.generation
+                applyPiStackControls(controlsEnvelope.data.controls)
+            }
             val historyEnvelope = stackApi.getMessages(piStackConn, sessionId, currentMessageLimit)
             piStackGeneration = historyEnvelope.worker.generation
+            rememberPiStackEntryIds(historyEnvelope.data.items)
             val page = historyEnvelope.data.toChatHistoryPage()
             piStackHistory = mergePiStackLatestHistory(page, currentPiStackMessages())
             eventReducer.setMessages(sessionId, piStackHistory.messages)
@@ -840,6 +982,7 @@ class ChatViewModel @Inject constructor(
             try {
                 val historyEnvelope = stackApi.getMessages(piStackConn, sessionId, currentMessageLimit, before)
                 piStackGeneration = historyEnvelope.worker.generation
+                rememberPiStackEntryIds(historyEnvelope.data.items)
                 val page = historyEnvelope.data.toChatHistoryPage()
                 val liveCurrent = piStackHistory.copy(messages = currentPiStackMessages())
                 piStackHistory = mergePiStackOlderHistory(liveCurrent, page)
@@ -978,6 +1121,28 @@ class ChatViewModel @Inject constructor(
     }
 
     fun selectVariant(name: String?) {
+        if (isPiStack) {
+            val level = name ?: return
+            viewModelScope.launch {
+                try {
+                    val accepted = requireNotNull(piStackApi).selectThinking(
+                        piStackConn,
+                        sessionId,
+                        level,
+                        piStackGeneration(),
+                        UUID.randomUUID().toString(),
+                    )
+                    piStackGeneration = accepted.worker.generation
+                    awaitPiStackOperation(accepted.data.id)
+                    _selectedVariant.value = level
+                    refreshPiStackControls()
+                } catch (error: Exception) {
+                    Log.e(TAG, "Failed to select Pi Stack thinking level", error)
+                    _error.value = error.message ?: "Failed to change thinking level"
+                }
+            }
+            return
+        }
         _selectedVariant.value = name
         saveDraft()
     }
@@ -1013,6 +1178,30 @@ class ChatViewModel @Inject constructor(
     }
 
     fun selectModel(providerId: String, modelId: String) {
+        if (isPiStack) {
+            viewModelScope.launch {
+                try {
+                    val accepted = requireNotNull(piStackApi).selectModel(
+                        piStackConn,
+                        sessionId,
+                        providerId,
+                        modelId,
+                        piStackGeneration(),
+                        UUID.randomUUID().toString(),
+                    )
+                    piStackGeneration = accepted.worker.generation
+                    awaitPiStackOperation(accepted.data.id)
+                    _selectedProviderId.value = providerId
+                    _selectedModelId.value = modelId
+                    isModelExplicitlySelected = true
+                    refreshPiStackControls()
+                } catch (error: Exception) {
+                    Log.e(TAG, "Failed to select Pi Stack model", error)
+                    _error.value = error.message ?: "Failed to change model"
+                }
+            }
+            return
+        }
         _selectedProviderId.value = providerId
         _selectedModelId.value = modelId
         isModelExplicitlySelected = true
@@ -1168,16 +1357,27 @@ class ChatViewModel @Inject constructor(
             _isSending.value = true
             try {
                 if (isPiStack) {
-                    val prompt = parts.takeIf { values -> values.all { it.type == "text" && it.text != null } }
-                        ?.joinToString("\n") { it.text.orEmpty() }
-                        ?.trim()
-                    val generation = piStackGeneration
-                    val stackApi = piStackApi
-                    if (prompt.isNullOrBlank() || generation.isNullOrBlank() || stackApi == null) {
+                    if (_piStackCapabilities.value?.runtime?.prompt != true) {
+                        throw IllegalStateException("Pi Stack prompting is unavailable")
+                    }
+                    val text = parts.filter { it.type == "text" && it.text != null }
+                        .joinToString("\n") { it.text.orEmpty() }
+                        .trim()
+                    val attachmentHandles = parts.filter { it.type == "file" }.map { uploadPiStackAttachment(it) }
+                    if (text.isBlank() && attachmentHandles.isEmpty()) {
                         onResult(false)
                         return@launch
                     }
-                    stackApi.prompt(piStackConn, sessionId, prompt, generation)
+                    val stackApi = requireNotNull(piStackApi)
+                    val accepted = stackApi.prompt(
+                        piStackConn,
+                        sessionId,
+                        text.ifBlank { "Please review the attached content." },
+                        piStackGeneration(),
+                        UUID.randomUUID().toString(),
+                        attachmentHandles,
+                    )
+                    piStackGeneration = accepted.worker.generation
                     eventReducer.updateSessionStatus(sessionId, SessionStatus.Busy)
                     _error.value = null
                     onResult(true)
@@ -1369,11 +1569,21 @@ class ChatViewModel @Inject constructor(
     }
 
     fun abortSession() {
+        if (isPiStack && _piStackCapabilities.value?.runtime?.abort != true) {
+            _error.value = "Pi Stack abort is unavailable"
+            return
+        }
         viewModelScope.launch {
             val outcome: AbortOutcome = try {
                 val ok = if (isPiStack) {
-                    val generation = piStackGeneration ?: error("Pi Stack generation is unavailable")
-                    piStackApi?.abort(piStackConn, sessionId, generation = generation) != null
+                    val accepted = requireNotNull(piStackApi).abort(
+                        piStackConn,
+                        sessionId,
+                        generation = piStackGeneration(),
+                    )
+                    piStackGeneration = accepted.worker.generation
+                    awaitPiStackOperation(accepted.data.id)
+                    true
                 } else {
                     api.abortSession(conn, sessionId, directory = sessionDirectory)
                 }
@@ -1493,6 +1703,18 @@ class ChatViewModel @Inject constructor(
     fun compactSession(onResult: (Boolean) -> Unit) {
         viewModelScope.launch {
             try {
+                if (isPiStack) {
+                    val accepted = requireNotNull(piStackApi).compactSession(
+                        piStackConn,
+                        sessionId,
+                        generation = piStackGeneration(),
+                    )
+                    piStackGeneration = accepted.worker.generation
+                    awaitPiStackOperation(accepted.data.id, 120_000)
+                    refreshPiStackControls()
+                    onResult(true)
+                    return@launch
+                }
                 val state = uiState.value
                 val providerId = state.selectedProviderId
                 val modelId = state.selectedModelId
@@ -1678,6 +1900,25 @@ class ChatViewModel @Inject constructor(
     private fun forkSession(messageId: String?, onResult: (Session?) -> Unit) {
         viewModelScope.launch {
             try {
+                if (isPiStack) {
+                    val entryId = resolvePiStackForkEntry(messageId)
+                    val accepted = requireNotNull(piStackApi).forkSession(
+                        piStackConn,
+                        sessionId,
+                        entryId,
+                        piStackGeneration(),
+                    )
+                    piStackGeneration = accepted.worker.generation
+                    val completed = awaitPiStackOperation(accepted.data.id, 120_000)
+                    val session = completed.result.toPiStackForkSession(
+                        sourceSessionId = sessionId,
+                        defaultCwd = sessionDirectory,
+                        sessions = eventReducer.serverSessionDetails.value[serverId].orEmpty(),
+                    )
+                    if (session != null) eventReducer.setSessions(serverId, listOf(session))
+                    onResult(session)
+                    return@launch
+                }
                 if (!sessionLoaded.isCompleted) {
                     sessionLoaded.await()
                 }
@@ -1717,6 +1958,21 @@ class ChatViewModel @Inject constructor(
     fun renameSession(title: String, onResult: (Boolean) -> Unit) {
         viewModelScope.launch {
             try {
+                if (isPiStack) {
+                    val accepted = requireNotNull(piStackApi).renameSession(
+                        piStackConn,
+                        sessionId,
+                        title,
+                        piStackGeneration(),
+                    )
+                    piStackGeneration = accepted.worker.generation
+                    awaitPiStackOperation(accepted.data.id)
+                    val refreshed = requireNotNull(piStackApi).getSession(piStackConn, sessionId)
+                    piStackGeneration = refreshed.worker.generation
+                    eventReducer.setSessions(serverId, listOf(refreshed.data.toSession()))
+                    onResult(true)
+                    return@launch
+                }
                 api.updateSession(conn, sessionId, title)
                 if (BuildConfig.DEBUG) Log.d(TAG, "Renamed session $sessionId to $title")
                 onResult(true)
@@ -1731,6 +1987,28 @@ class ChatViewModel @Inject constructor(
     fun executeCommand(command: String, arguments: String = "", onResult: (Boolean) -> Unit) {
         viewModelScope.launch {
             try {
+                if (isPiStack) {
+                    val normalized = command.removePrefix("/").trim()
+                    val text = buildString {
+                        append('/')
+                        append(normalized)
+                        if (arguments.isNotBlank()) {
+                            append(' ')
+                            append(arguments.trim())
+                        }
+                    }
+                    val accepted = requireNotNull(piStackApi).executeCommand(
+                        piStackConn,
+                        sessionId,
+                        text,
+                        piStackGeneration(),
+                    )
+                    piStackGeneration = accepted.worker.generation
+                    awaitPiStackOperation(accepted.data.id, 120_000)
+                    refreshPiStackControls()
+                    onResult(true)
+                    return@launch
+                }
                 if (!sessionLoaded.isCompleted) {
                     sessionLoaded.await()
                 }
@@ -1860,6 +2138,10 @@ class ChatViewModel @Inject constructor(
 
     /** Create a new session and return it. */
     fun createNewSession(onResult: (Session?) -> Unit) {
+        if (isPiStack && _piStackCapabilities.value?.sessions?.create != true) {
+            onResult(null)
+            return
+        }
         if (isCreatingSession) {
             onResult(null)
             return
@@ -1867,6 +2149,24 @@ class ChatViewModel @Inject constructor(
         isCreatingSession = true
         viewModelScope.launch {
             try {
+                if (isPiStack) {
+                    val current = requireNotNull(piStackApi).getSession(piStackConn, sessionId)
+                    piStackGeneration = current.worker.generation
+                    val created = requireNotNull(piStackTransport).createSession(
+                        projectId = current.data.projectId,
+                        title = null,
+                        model = uiState.value.selectedProviderId?.let { provider ->
+                            uiState.value.selectedModelId?.let { model -> dev.minios.ocremote.data.api.PiStackModelSelectionDto(provider, model) }
+                        },
+                        generation = piStackGeneration(),
+                        idempotencyKey = UUID.randomUUID().toString(),
+                    )
+                    piStackGeneration = created.worker.generation
+                    val session = created.data.toSession()
+                    eventReducer.setSessions(serverId, listOf(session))
+                    onResult(session)
+                    return@launch
+                }
                 if (!sessionLoaded.isCompleted) {
                     sessionLoaded.await()
                 }
@@ -1908,6 +2208,36 @@ class ChatViewModel @Inject constructor(
             .ifBlank { null }
     }
 }
+
+private fun PiStackCommandDto.toCommandInfo(): CommandInfo = CommandInfo(
+    name = name.removePrefix("/"),
+    description = description,
+    source = source,
+)
+
+private fun kotlinx.serialization.json.JsonElement?.toPiStackForkSession(
+    sourceSessionId: String,
+    defaultCwd: String?,
+    sessions: Map<String, Session>,
+): Session? {
+    val value = this as? JsonObject ?: return null
+    val id = value["id"]?.jsonPrimitive?.contentOrNull?.takeIf(String::isNotBlank) ?: return null
+    val source = sessions[sourceSessionId]
+    val created = value["created"]?.jsonPrimitive?.contentOrNull.toEpochMillisOrNow()
+    val updated = value["modified"]?.jsonPrimitive?.contentOrNull.toEpochMillisOrNow()
+    return Session(
+        id = id,
+        projectId = source?.projectId.orEmpty(),
+        directory = value["cwd"]?.jsonPrimitive?.contentOrNull ?: defaultCwd.orEmpty(),
+        parentId = sourceSessionId,
+        title = value["name"]?.jsonPrimitive?.contentOrNull,
+        time = Session.Time(created = created, updated = updated),
+    )
+}
+
+private fun String?.toEpochMillisOrNow(): Long = runCatching {
+    this?.let(java.time.Instant::parse)?.toEpochMilli()
+}.getOrNull() ?: System.currentTimeMillis()
 
 private fun PiRoundtableRoom.toRoundtable(): Roundtable = Roundtable(
     id = id,

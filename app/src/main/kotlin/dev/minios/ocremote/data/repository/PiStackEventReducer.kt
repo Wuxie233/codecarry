@@ -130,6 +130,7 @@ internal fun PiStackSessionDto.toSession(): Session = Session(
     time = Session.Time(
         created = createdAt.toEpochMillis(),
         updated = updatedAt.toEpochMillis(),
+        archived = endedAt?.toEpochMillis(),
     ),
 )
 

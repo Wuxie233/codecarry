@@ -1,5 +1,10 @@
 package dev.minios.ocremote.ui.screens.chat
 
+import dev.minios.ocremote.data.api.PiStackCapabilitiesDto
+import dev.minios.ocremote.data.api.PiStackPermissionsCapabilityDto
+import dev.minios.ocremote.data.api.PiStackQuestionCapabilityDto
+import dev.minios.ocremote.data.api.PiStackRuntimeCapabilityDto
+import dev.minios.ocremote.data.api.PiStackSelectionCapabilityDto
 import dev.minios.ocremote.domain.model.ServerType
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -8,7 +13,7 @@ import org.junit.Test
 class ChatBackendCapabilitiesTest {
 
     @Test
-    fun `pi stack exposes only text chat controls`() {
+    fun `pi stack keeps optional controls closed without server capability`() {
         val piStack = ServerType.entries.first { it.name == "PI_STACK" }
 
         val capabilities = chatBackendCapabilities(piStack)
@@ -19,6 +24,34 @@ class ChatBackendCapabilitiesTest {
         assertFalse(capabilities.sessionExtras)
         assertFalse(capabilities.shellAndTerminal)
         assertFalse(capabilities.slashCommands)
+    }
+
+    @Test
+    fun `pi stack enables only controls advertised by server`() {
+        val server = PiStackCapabilitiesDto(
+            protocolVersion = 1,
+            permissions = PiStackPermissionsCapabilityDto(false),
+            runtime = PiStackRuntimeCapabilityDto(
+                prompt = true,
+                abort = true,
+                retry = false,
+                sessionPatch = listOf("title"),
+                compact = true,
+                attachments = true,
+                commands = true,
+            ),
+            questions = PiStackQuestionCapabilityDto(true, true),
+            models = PiStackSelectionCapabilityDto(list = true, select = true),
+        )
+
+        val capabilities = chatBackendCapabilities(ServerType.PI_STACK, server)
+
+        assertTrue(capabilities.attachments)
+        assertTrue(capabilities.modelAndAgentSelection)
+        assertTrue(capabilities.sessionExtras)
+        assertTrue(capabilities.slashCommands)
+        assertFalse(capabilities.fileMentions)
+        assertFalse(capabilities.shellAndTerminal)
     }
 
     @Test

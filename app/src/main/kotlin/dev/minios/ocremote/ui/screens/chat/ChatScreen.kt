@@ -429,6 +429,8 @@ internal fun buildMessageCardActions(
     selectedMessageStreaming: Boolean,
     sessionBusy: Boolean,
     sessionReady: Boolean,
+    supportsFork: Boolean = true,
+    supportsRestore: Boolean = true,
 ): List<MessageCardActionState> {
     val hasStableMessageId = chatMessage.message.id.isNotBlank()
     val hasCopyableText = messagePlainText(chatMessage).trim().isNotBlank()
@@ -443,9 +445,9 @@ internal fun buildMessageCardActions(
     return listOf(
         MessageCardActionState(
             action = MessageCardAction.ForkFromHere,
-            visible = hasStableMessageId,
-            enabled = hasStableMessageId && canMutateSession,
-            disabledReason = if (hasStableMessageId && !canMutateSession) unavailableReason else null,
+            visible = hasStableMessageId && supportsFork,
+            enabled = hasStableMessageId && supportsFork && canMutateSession,
+            disabledReason = if (hasStableMessageId && supportsFork && !canMutateSession) unavailableReason else null,
         ),
         MessageCardActionState(
             action = MessageCardAction.CopyText,
@@ -469,9 +471,9 @@ internal fun buildMessageCardActions(
         ),
         MessageCardActionState(
             action = MessageCardAction.RestoreToHere,
-            visible = chatMessage.isUser && hasStableMessageId,
-            enabled = chatMessage.isUser && hasStableMessageId && canMutateSession,
-            disabledReason = if (chatMessage.isUser && hasStableMessageId && !canMutateSession) unavailableReason else null,
+            visible = chatMessage.isUser && hasStableMessageId && supportsRestore,
+            enabled = chatMessage.isUser && hasStableMessageId && supportsRestore && canMutateSession,
+            disabledReason = if (chatMessage.isUser && hasStableMessageId && supportsRestore && !canMutateSession) unavailableReason else null,
         ),
     ).filter { it.visible }
 }
@@ -1018,6 +1020,24 @@ private fun buildPromptParts(
     return parts
 }
 
+private const val PI_STACK_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024
+
+internal fun readAttachmentBytes(input: java.io.InputStream, maxBytes: Int = PI_STACK_ATTACHMENT_MAX_BYTES): ByteArray? {
+    require(maxBytes >= 0)
+    val output = java.io.ByteArrayOutputStream(minOf(maxBytes, 64 * 1024))
+    val buffer = ByteArray(16 * 1024)
+    var total = 0
+    while (true) {
+        val remainingWithSentinel = maxBytes - total + 1
+        val read = input.read(buffer, 0, minOf(buffer.size, remainingWithSentinel))
+        if (read < 0) break
+        total += read
+        if (total > maxBytes) return null
+        output.write(buffer, 0, read)
+    }
+    return output.toByteArray()
+}
+
 /** An image attachment ready to send. */
 private data class ImageAttachment(
     val uri: Uri,
@@ -1110,11 +1130,13 @@ private suspend fun buildAttachmentFromUri(
     maxLongSidePx: Int = 1440,
     webpQuality: Int = 60
 ): PreparedAttachment? = withContext(Dispatchers.IO) {
-    val mimeType = contentResolver.getType(uri) ?: "image/png"
-    val acceptedTypes = setOf("image/png", "image/jpeg", "image/gif", "image/webp", "application/pdf")
-    if (mimeType !in acceptedTypes) return@withContext null
+    val mimeType = contentResolver.getType(uri) ?: "application/octet-stream"
 
-    val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return@withContext null
+    val sizeHint = runCatching {
+        contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length }
+    }.getOrNull()
+    if (sizeHint != null && sizeHint > PI_STACK_ATTACHMENT_MAX_BYTES) return@withContext null
+    val bytes = contentResolver.openInputStream(uri)?.use { readAttachmentBytes(it) } ?: return@withContext null
     val originalFilename = uri.lastPathSegment?.substringAfterLast('/') ?: "image.png"
 
     val shouldOptimize = compressImages && (mimeType == "image/png" || mimeType == "image/jpeg")
@@ -1800,10 +1822,10 @@ fun ChatScreen(
     val pendingCount = uiState.pendingPermissions.size + uiState.pendingQuestions.size
     val isBusy = uiState.sessionStatus is SessionStatus.Busy
     val sessionBusyForMessageActions = uiState.sessionStatus !is SessionStatus.Idle || uiState.isSending || forkFromMessageInFlight
-    val sessionReadyForMessageActions = !uiState.isPiStack &&
-        !uiState.isLoading &&
+    val sessionReadyForMessageActions = !uiState.isLoading &&
         (uiState.isPiRoundtable || uiState.error == null) &&
-        viewModel.sessionId.isNotBlank()
+        viewModel.sessionId.isNotBlank() &&
+        (!uiState.isPiStack || uiState.supportsFork)
     LaunchedEffect(messageCount, autoFollowTarget, pendingCount, isBusy) {
         if (messageCount > 0 && autoScrollEnabled) {
             val lastIndex = listState.layoutInfo.totalItemsCount.coerceAtLeast(1) - 1
@@ -1892,7 +1914,7 @@ fun ChatScreen(
                 },
                 actions = {
                     if (uiState.sessionStatus.isInterruptible) {
-                        IconButton(
+                        if (uiState.supportsAbort) IconButton(
                             onClick = { viewModel.abortSession() },
                             modifier = Modifier.size(48.dp),
                         ) {
@@ -1930,7 +1952,9 @@ fun ChatScreen(
                             )
                         }
                     }
-                    if (!uiState.isPiStack) Box {
+                    if (!uiState.isPiStack || uiState.supportsSessionCreate || uiState.supportsFork ||
+                        uiState.supportsCompact || uiState.supportsCommands || uiState.supportsRename
+                    ) Box {
                         val isAmoled = isAmoledTheme()
                         IconButton(onClick = { showMenu = true }) {
                             Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.more_options))
@@ -1941,7 +1965,7 @@ fun ChatScreen(
                             containerColor = if (isAmoled) Color.Black else MaterialTheme.colorScheme.surface,
                             border = if (isAmoled) BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)) else null
                         ) {
-                            DropdownMenuItem(
+                            if (!uiState.isPiStack) DropdownMenuItem(
                                 text = { Text(stringResource(R.string.menu_copy_web_link)) },
                                 onClick = {
                                     showMenu = false
@@ -1957,7 +1981,7 @@ fun ChatScreen(
                                     Icon(Icons.Default.Language, contentDescription = null)
                                 }
                             )
-                            DropdownMenuItem(
+                            if (uiState.supportsSessionCreate) DropdownMenuItem(
                                 text = { Text(stringResource(R.string.menu_new_session)) },
                                 onClick = {
                                     showMenu = false
@@ -1975,7 +1999,7 @@ fun ChatScreen(
                                     Icon(Icons.Default.Add, contentDescription = null)
                                 }
                             )
-                            DropdownMenuItem(
+                            if (uiState.supportsFork) DropdownMenuItem(
                                 text = { Text(stringResource(R.string.menu_fork_session)) },
                                 onClick = {
                                     showMenu = false
@@ -1993,7 +2017,7 @@ fun ChatScreen(
                                     Icon(Icons.Default.CopyAll, contentDescription = null)
                                 }
                             )
-                            DropdownMenuItem(
+                            if (uiState.supportsCompact) DropdownMenuItem(
                                 text = { Text(stringResource(R.string.menu_compact_session)) },
                                 onClick = {
                                     showMenu = false
@@ -2009,7 +2033,7 @@ fun ChatScreen(
                                     Icon(Icons.Default.Compress, contentDescription = null)
                                 }
                             )
-                            DropdownMenuItem(
+                            if (uiState.supportsCommands) DropdownMenuItem(
                                 text = { Text(stringResource(R.string.menu_review_changes)) },
                                 onClick = {
                                     showMenu = false
@@ -2025,6 +2049,7 @@ fun ChatScreen(
                                     Icon(Icons.Default.RateReview, contentDescription = null)
                                 },
                             )
+                            if (!uiState.isPiStack) {
                             // Show Share or Unshare depending on current share status
                             if (uiState.shareUrl != null) {
                                 DropdownMenuItem(
@@ -2079,7 +2104,8 @@ fun ChatScreen(
                                     }
                                 )
                             }
-                            DropdownMenuItem(
+                            }
+                            if (uiState.supportsRename) DropdownMenuItem(
                                 text = { Text(stringResource(R.string.menu_rename_session)) },
                                 onClick = {
                                     showMenu = false
@@ -2089,7 +2115,7 @@ fun ChatScreen(
                                     Icon(Icons.Default.Edit, contentDescription = null)
                                 }
                             )
-                            DropdownMenuItem(
+                            if (!uiState.isPiStack) DropdownMenuItem(
                                 text = { Text(stringResource(R.string.menu_export_session)) },
                                 onClick = {
                                     showMenu = false
@@ -2121,6 +2147,7 @@ fun ChatScreen(
                     uiState.isSending -> R.string.chat_send_disabled_sending
                     pendingCount > 0 -> R.string.chat_send_disabled_pending
                     uiState.isLoading || (!uiState.isPiRoundtable && uiState.error != null) ||
+                        (uiState.isPiStack && !uiState.supportsPrompt) ||
                         viewModel.sessionId.isBlank() || (isShellMode && isBusy) -> R.string.chat_send_disabled_not_ready
                     else -> null
                 }
@@ -2201,6 +2228,24 @@ fun ChatScreen(
                             }
                         }
                         val rawText = inputText.text
+                        if (rawText.startsWith('/') && uiState.supportsCommands) {
+                            val commandText = rawText.removePrefix("/")
+                            val commandName = commandText.substringBefore(' ').trim()
+                            val arguments = commandText.substringAfter(' ', missingDelimiterValue = "").trim()
+                            if (uiState.commands.any { it.name.removePrefix("/") == commandName }) {
+                                viewModel.executeCommand(commandName, arguments) { ok ->
+                                    if (ok) {
+                                        inputText = TextFieldValue("")
+                                        viewModel.clearDraft()
+                                    } else {
+                                        coroutineScope.launch {
+                                            snackbarHostState.showSnackbar(context.getString(R.string.chat_command_failed, commandName))
+                                        }
+                                    }
+                                }
+                                return@doSend
+                            }
+                        }
                         val shellCommand = when {
                             isShellMode -> rawText.trim()
                             rawText.startsWith("!") -> rawText.drop(1).trimStart()
@@ -2277,9 +2322,7 @@ fun ChatScreen(
                         // Build prompt parts: split text around confirmed @file mentions
                         val allParts = buildPromptParts(rawText, confirmedFilePaths, viewModel.getSessionDirectory())
                         // Add image attachments
-                        val attachmentParts = if (uiState.isPiStack) {
-                            emptyList()
-                        } else {
+                        val attachmentParts = if (uiState.supportsAttachments) {
                             attachments.map { att ->
                                 PromptPart(
                                     type = "file",
@@ -2288,6 +2331,8 @@ fun ChatScreen(
                                     filename = att.filename
                                 )
                             }
+                        } else {
+                            emptyList()
                         }
                         viewModel.sendMessage(allParts, attachmentParts) { ok ->
                             if (ok) {
@@ -2322,9 +2367,9 @@ fun ChatScreen(
                 isBusy = uiState.sessionStatus is SessionStatus.Busy,
                 sendDisabledReasonResId = sendDisabledReasonResId,
                 messages = uiState.messages,
-                attachments = if (uiState.isPiStack) emptyList() else attachments,
-                onAttach = { imagePickerLauncher.launch("image/*") },
-                supportsAttachments = !uiState.isPiStack,
+                attachments = if (uiState.supportsAttachments) attachments else emptyList(),
+                onAttach = { imagePickerLauncher.launch(if (uiState.isPiStack) "*/*" else "image/*") },
+                supportsAttachments = uiState.supportsAttachments,
                 onRemoveAttachment = { index ->
                     if (index in attachments.indices) {
                         attachments.removeAt(index)
@@ -2334,16 +2379,16 @@ fun ChatScreen(
                 onSaveAttachment = { bytes, mime, filename ->
                     requestSaveImage(bytes, mime, filename)
                 },
-                modelLabel = modelLabel,
+                modelLabel = if (uiState.supportsModelSelection) modelLabel else "",
                 selectedProviderId = uiState.selectedProviderId,
                 onModelClick = { showModelPicker = true },
-                agents = uiState.agents,
+                agents = if (uiState.isPiStack) emptyList() else uiState.agents,
                 selectedAgent = uiState.selectedAgent,
                 onAgentClick = { showAgentPicker = true },
-                variantNames = uiState.variantNames,
+                variantNames = if (uiState.supportsThinkingSelection) uiState.variantNames else emptyList(),
                 selectedVariant = uiState.selectedVariant,
                 onVariantClick = { showVariantPicker = true },
-                commands = uiState.commands,
+                commands = if (uiState.supportsCommands) uiState.commands else emptyList(),
                 fileSearchResults = fileSearchResults,
                 confirmedFilePaths = confirmedFilePaths,
                 onFileSelected = { path ->
@@ -3244,12 +3289,14 @@ fun ChatScreen(
     if (showVariantPicker) {
         val defaultKey = "__default__"
         val options = buildList {
-            add(
-                ChoicePickerOption(
-                    key = defaultKey,
-                    title = stringResource(R.string.chat_default_variant),
+            if (!uiState.isPiStack) {
+                add(
+                    ChoicePickerOption(
+                        key = defaultKey,
+                        title = stringResource(R.string.chat_default_variant),
+                    )
                 )
-            )
+            }
             addAll(
                 uiState.variantNames.map { variant ->
                     ChoicePickerOption(
@@ -3262,9 +3309,9 @@ fun ChatScreen(
         ChoicePickerDialog(
             title = stringResource(R.string.chat_variant_picker_title),
             options = options,
-            selectedKey = uiState.selectedVariant ?: defaultKey,
+            selectedKey = uiState.selectedVariant ?: options.firstOrNull()?.key.orEmpty(),
             onSelect = {
-                viewModel.selectVariant(it.takeUnless { key -> key == defaultKey })
+                viewModel.selectVariant(if (uiState.isPiStack) it else it.takeUnless { key -> key == defaultKey })
                 showVariantPicker = false
             },
             onDismiss = { showVariantPicker = false },
@@ -3281,6 +3328,8 @@ fun ChatScreen(
                 selectedMessageStreaming = selectedMessageStreaming,
                 sessionBusy = sessionBusyForMessageActions,
                 sessionReady = sessionReadyForMessageActions,
+                supportsFork = !uiState.isPiStack || uiState.supportsFork,
+                supportsRestore = !uiState.isPiStack,
             ),
             onActionSelected = { action ->
                 actionMenuMessage = null
@@ -7489,7 +7538,11 @@ private fun ChatInputBar(
     // Build merged slash commands: client commands + server commands (deduplicated)
     val clientCmds = clientCommands()
     val allCommands = remember(commands, clientCmds, isPiStack) {
-        if (isPiStack) emptyList() else mergeSlashCommands(clientCmds, commands)
+        if (isPiStack) {
+            commands.map { SlashCommand(it.name.removePrefix("/"), it.description, "server", it.source) }
+        } else {
+            mergeSlashCommands(clientCmds, commands)
+        }
     }
 
     // Slash command suggestions
@@ -7821,7 +7874,7 @@ private fun ChatInputBar(
             verticalArrangement = Arrangement.spacedBy(2.dp)
         ) {
             // Agent + Model + Variant + Attach selector row — small, subtle
-            if (!isPiRoundtable && !isPiStack && (modelLabel.isNotEmpty() || agents.size > 1)) {
+            if (!isPiRoundtable && (modelLabel.isNotEmpty() || agents.size > 1 || variantNames.isNotEmpty() || supportsAttachments)) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -7953,16 +8006,40 @@ private fun ChatInputBar(
                         Box(
                             modifier = Modifier
                                 .size(56.dp)
-                                .clip(RoundedCornerShape(10.dp))
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant)
                         ) {
-                            AsyncImage(
-                                model = imageThumbnailModel(attachment),
-                                contentDescription = attachment.filename,
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .clickable { previewAttachmentIndex = index },
-                                contentScale = ContentScale.Crop
-                            )
+                            if (attachment.mime.startsWith("image/")) {
+                                AsyncImage(
+                                    model = imageThumbnailModel(attachment),
+                                    contentDescription = attachment.filename,
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .clickable { previewAttachmentIndex = index },
+                                    contentScale = ContentScale.Crop
+                                )
+                            } else {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .padding(6.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.Center,
+                                ) {
+                                    Icon(
+                                        Icons.Default.InsertDriveFile,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(20.dp),
+                                        tint = MaterialTheme.colorScheme.primary,
+                                    )
+                                    Text(
+                                        text = attachment.filename,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
                             Surface(
                                 modifier = Modifier
                                     .align(Alignment.TopEnd)

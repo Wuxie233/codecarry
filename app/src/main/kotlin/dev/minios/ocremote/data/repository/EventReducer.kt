@@ -269,6 +269,13 @@ class EventReducer @Inject constructor() {
         piStackCursorGuard.installSnapshot(serverId, cursor)
     }
 
+    fun replacePiStackSessions(serverId: String, sessions: List<PiStackSessionDto>) {
+        val previousIds = _serverSessions.value[serverId].orEmpty()
+        val nextIds = sessions.mapTo(mutableSetOf(), PiStackSessionDto::id)
+        (previousIds - nextIds).forEach { sessionId -> removeSessionForServer(serverId, sessionId) }
+        sessions.forEach { applyPiStackSession(serverId, it) }
+    }
+
     fun applyPiStackQuestionResolution(serverId: String, result: PiStackQuestionResolutionDto) {
         if (dev.minios.ocremote.service.shouldRemovePiStackQuestion(result)) {
             removeQuestion(serverId, result.question.id)

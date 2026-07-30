@@ -285,7 +285,7 @@ fun SessionListScreen(
             }
         },
         floatingActionButton = {
-            if (!uiState.isSelectionMode) {
+            if (!uiState.isSelectionMode && uiState.supportsProjectRegister) {
                 FloatingActionButton(
                     onClick = { showOpenProject = true },
                     containerColor = if (isAmoled) Color.Black else MaterialTheme.colorScheme.primaryContainer,
@@ -424,7 +424,7 @@ fun SessionListScreen(
                             )
                         } else {
                         if (!uiState.isSelectionMode) {
-                            if (!uiState.isPiStack) SessionScopeSegmentedControl(
+                            if (!uiState.isPiStack || uiState.supportsSessionArchive || uiState.supportsSessionRestore) SessionScopeSegmentedControl(
                                 currentScope = uiState.scope,
                                 archivedCount = uiState.archivedCount,
                                 onScopeChange = viewModel::setScope,
@@ -531,12 +531,16 @@ fun SessionListScreen(
                                     onToggleCollapsed = { viewModel.toggleCollapsed(group.directory) },
                                     onTogglePinned = { viewModel.togglePinned(group.directory) },
                                     onToggleHidden = { viewModel.toggleHidden(group.directory) },
-                                    onNewSession = { viewModel.createNewSession(directory = group.directory) },
+                                    onNewSession = if (uiState.supportsSessionCreate) {
+                                        { viewModel.createNewSession(directory = group.directory) }
+                                    } else null,
                                     onCopyPath = {
                                         clipboard.setText(AnnotatedString(group.directory))
                                         Toast.makeText(context, context.getString(R.string.sessions_project_path_copied), Toast.LENGTH_SHORT).show()
                                     },
-                                    onArchiveAll = { viewModel.archiveProjectSessions(group.directory) },
+                                    onArchiveAll = if (uiState.supportsSessionArchive) {
+                                        { viewModel.archiveProjectSessions(group.directory) }
+                                    } else null,
                                     mcpServerCount = activeProjectMcpServerCount,
                                     mcpSupportsRuntimeControl = activeProjectMcpSupportsRuntimeControl,
                                     supportsManagement = uiState.supportsSessionManagement,
@@ -554,7 +558,7 @@ fun SessionListScreen(
                             }
 
                                     if (!group.isCollapsed) {
-                                         if (group.sessions.isEmpty()) {
+                                         if (group.sessions.isEmpty() && uiState.supportsSessionCreate) {
                                              item(key = "empty_${group.directory}") {
                                                  Row(
                                                      modifier = Modifier
@@ -599,7 +603,7 @@ fun SessionListScreen(
                                                 }
                                             },
                                             onLongClick = {
-                                                if (uiState.supportsSessionManagement) viewModel.toggleSelection(item.session.id)
+                                                if (uiState.supportsSessionDelete) viewModel.toggleSelection(item.session.id)
                                             },
                                             onRename = {
                                                 renameSessionId = item.session.id
@@ -621,6 +625,10 @@ fun SessionListScreen(
                                                 onNavigateToChat(sessionId, false, directory)
                                             },
                                             supportsManagement = uiState.supportsSessionManagement,
+                                            supportsRename = uiState.supportsSessionRename,
+                                            supportsArchive = uiState.supportsSessionArchive,
+                                            supportsRestore = uiState.supportsSessionRestore,
+                                            supportsDelete = uiState.supportsSessionDelete,
                                         )
                              }
                          }
@@ -826,6 +834,10 @@ private fun SessionRowWithSubagents(
     onDelete: () -> Unit,
     onSubagentClick: (sessionId: String, directory: String) -> Unit,
     supportsManagement: Boolean = true,
+    supportsRename: Boolean = true,
+    supportsArchive: Boolean = true,
+    supportsRestore: Boolean = true,
+    supportsDelete: Boolean = true,
 ) {
     val hasRunning = subagents.running.isNotEmpty()
     val hasHistorical = subagents.historical.isNotEmpty()
@@ -849,6 +861,10 @@ private fun SessionRowWithSubagents(
             onRestore = onRestore,
             onDelete = onDelete,
             supportsManagement = supportsManagement,
+            supportsRename = supportsRename,
+            supportsArchive = supportsArchive,
+            supportsRestore = supportsRestore,
+            supportsDelete = supportsDelete,
         )
 
         if (hasRunning) {
@@ -1668,11 +1684,18 @@ internal enum class SessionRowMenuAction {
     DELETE,
 }
 
-internal fun sessionRowMenuActions(isArchived: Boolean): List<SessionRowMenuAction> {
+internal fun sessionRowMenuActions(
+    isArchived: Boolean,
+    supportsRename: Boolean = true,
+    supportsArchive: Boolean = true,
+    supportsRestore: Boolean = true,
+    supportsDelete: Boolean = true,
+): List<SessionRowMenuAction> {
     return buildList {
-        add(SessionRowMenuAction.RENAME)
-        add(if (isArchived) SessionRowMenuAction.RESTORE else SessionRowMenuAction.ARCHIVE)
-        add(SessionRowMenuAction.DELETE)
+        if (supportsRename) add(SessionRowMenuAction.RENAME)
+        if (isArchived && supportsRestore) add(SessionRowMenuAction.RESTORE)
+        if (!isArchived && supportsArchive) add(SessionRowMenuAction.ARCHIVE)
+        if (supportsDelete) add(SessionRowMenuAction.DELETE)
     }
 }
 
@@ -1700,6 +1723,10 @@ private fun SessionRow(
     onRestore: () -> Unit,
     onDelete: () -> Unit,
     supportsManagement: Boolean = true,
+    supportsRename: Boolean = true,
+    supportsArchive: Boolean = true,
+    supportsRestore: Boolean = true,
+    supportsDelete: Boolean = true,
 ) {
     val isAmoled = isAmoledTheme()
     val dateFormat = remember { SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()) }
@@ -1715,11 +1742,15 @@ private fun SessionRow(
             if (!supportsManagement) return@rememberSwipeToDismissBoxState false
             when (dismissValue) {
                 SwipeToDismissBoxValue.StartToEnd -> {
-                    onRename()
+                    if (supportsRename) onRename()
                     false // don't settle — snap back
                 }
                 SwipeToDismissBoxValue.EndToStart -> {
-                    resolveSwipeLeftAction(currentScope, onArchive, onRestore).invoke()
+                    val supported = when (currentScope) {
+                        SessionScope.INBOX -> supportsArchive
+                        SessionScope.ARCHIVED -> supportsRestore
+                    }
+                    if (supported) resolveSwipeLeftAction(currentScope, onArchive, onRestore).invoke()
                     false
                 }
                 SwipeToDismissBoxValue.Settled -> false
@@ -1924,7 +1955,13 @@ private fun SessionRow(
                             expanded = menuExpanded,
                             onDismissRequest = { menuExpanded = false },
                         ) {
-                            sessionRowMenuActions(isArchived = item.session.isArchived).forEach { action ->
+                            sessionRowMenuActions(
+                                isArchived = item.session.isArchived,
+                                supportsRename = supportsRename,
+                                supportsArchive = supportsArchive,
+                                supportsRestore = supportsRestore,
+                                supportsDelete = supportsDelete,
+                            ).forEach { action ->
                                 when (action) {
                                     SessionRowMenuAction.RENAME -> DropdownMenuItem(
                                         text = { Text(stringResource(R.string.session_rename)) },
@@ -2053,8 +2090,11 @@ private fun SessionRow(
                 }
             }
         },
-    enableDismissFromStartToEnd = !isSelectionMode,
-    enableDismissFromEndToStart = !isSelectionMode
+    enableDismissFromStartToEnd = !isSelectionMode && supportsRename,
+    enableDismissFromEndToStart = !isSelectionMode && when (currentScope) {
+        SessionScope.INBOX -> supportsArchive
+        SessionScope.ARCHIVED -> supportsRestore
+    }
     ) {
         cardContent()
     }
