@@ -245,7 +245,7 @@ class PiStackApiTest {
          "filesystem":{"directoryBrowse":true,"defaultPath":"home"},
          "projects":{"register":true},
          "sessions":{"create":true,"resume":"automatic","structuredHistory":true,"maxHistoryPageSize":100,"streamingActivity":true},
-         "ensemble":{"projections":true,"commands":true,"tools":[]},"futureCapability":true}
+         "futureCapability":true}
     """.trimIndent()
 
     private fun project() =

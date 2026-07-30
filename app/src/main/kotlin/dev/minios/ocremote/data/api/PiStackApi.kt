@@ -405,13 +405,6 @@ data class PiStackRuntimeCapabilityDto(
 data class PiStackQuestionCapabilityDto(val reply: Boolean, val reject: Boolean)
 
 @Serializable
-data class PiStackEnsembleCapabilityDto(
-    val projections: Boolean,
-    val commands: Boolean,
-    val tools: List<String> = emptyList(),
-)
-
-@Serializable
 data class PiStackFilesystemCapabilityDto(
     val directoryBrowse: Boolean = false,
     val defaultPath: String? = null,
@@ -438,7 +431,6 @@ data class PiStackCapabilitiesDto(
     val filesystem: PiStackFilesystemCapabilityDto = PiStackFilesystemCapabilityDto(),
     val projects: PiStackProjectCapabilityDto = PiStackProjectCapabilityDto(),
     val sessions: PiStackSessionCapabilityDto = PiStackSessionCapabilityDto(),
-    val ensemble: PiStackEnsembleCapabilityDto,
 )
 
 @Serializable

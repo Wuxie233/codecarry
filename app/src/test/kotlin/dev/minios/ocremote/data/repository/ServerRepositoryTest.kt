@@ -347,8 +347,7 @@ class ServerRepositoryTest {
                     {"protocolVersion":1,"worker":{"generation":"generation-1","epoch":1,"startedAt":"now","active":true},
                      "data":{"protocolVersion":1,"permissions":{"supported":false,"pending":[]},
                      "runtime":{"prompt":true,"abort":true,"retry":false,"sessionPatch":[]},
-                     "questions":{"reply":true,"reject":true},
-                     "ensemble":{"projections":true,"commands":true,"tools":[]}}}
+                     "questions":{"reply":true,"reject":true}}}
                     """.trimIndent()
                 )
                 else -> error("Unexpected request: ${request.method.value} ${request.url}")

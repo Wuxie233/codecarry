@@ -30,7 +30,7 @@ class PiStackTransportTest {
                     {"protocolVersion":1,"worker":{"generation":"g","epoch":1,"startedAt":"now","active":true},
                      "data":{"protocolVersion":1,"permissions":{"supported":false,"pending":[]},
                      "runtime":{"prompt":true,"abort":true,"retry":false,"sessionPatch":[]},
-                     "questions":{"reply":true,"reject":true},"ensemble":{"projections":true,"commands":true,"tools":[]}}}
+                     "questions":{"reply":true,"reject":true}}}
                 """.trimIndent()),
                 headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
             )
