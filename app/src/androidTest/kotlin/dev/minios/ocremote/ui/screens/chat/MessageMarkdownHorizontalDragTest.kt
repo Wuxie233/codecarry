@@ -18,6 +18,9 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
+import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -56,6 +59,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
+@androidx.compose.material3.ExperimentalMaterial3Api
 class MessageMarkdownHorizontalDragTest {
     @get:Rule
     val rule = createAndroidComposeRule<ComponentActivity>()
@@ -114,6 +118,129 @@ class MessageMarkdownHorizontalDragTest {
                 "before=${target.metrics.scrollLeft}, after=${after.scrollLeft}, swipe=$swipe, target=$target",
             after.scrollLeft > target.metrics.scrollLeft,
         )
+    }
+
+    @Test
+    fun firstRealMarkdownTableCanBePhysicallyDraggedInMathMessage() {
+        setKatexWebViewContent(TwoTableKatexMarkdown)
+        val target = waitForVisibleTableTarget(FirstTableMarker)
+
+        assertEquals(MessageMarkdownRoute.KatexWebView, resolveMessageMarkdownRoute(TwoTableKatexMarkdown))
+        assertEquals("expected the first real table in DOM order", 0, target.metrics.targetTableIndex)
+        assertTrue("expected the first table to use the production scroll wrapper", target.metrics.hasScrollWrapper)
+        assertEquals("first table should start at the left edge", 0, target.metrics.scrollLeft)
+
+        val swipe = prepareTableSwipe(target, FirstTableMarker)
+        injectSwipe(swipe.startX, swipe.startY, swipe.endX, swipe.endY)
+        rule.waitForIdle()
+        SystemClock.sleep(GestureSettleMillis)
+
+        val after = readTableMetrics(target.webView, FirstTableMarker)
+        assertTrue(
+            "expected a physical finger drag on the first real table to increase scrollLeft, " +
+                "before=${target.metrics.scrollLeft}, after=${after.scrollLeft}, swipe=$swipe, target=$target",
+            after.scrollLeft > 0,
+        )
+    }
+
+    @Test
+    fun firstRealMarkdownTableCanBeDraggedInsideUserSwipeToDismissBubble() {
+        lateinit var dismissState: androidx.compose.material3.SwipeToDismissBoxState
+        rule.setContent {
+            MaterialTheme {
+                CompositionLocalProvider(
+                    LocalChatFontSize provides "medium",
+                    LocalCodeWordWrap provides false,
+                ) {
+                    dismissState = rememberSwipeToDismissBoxState(
+                        confirmValueChange = { false },
+                    )
+                    SwipeToDismissBox(
+                        state = dismissState,
+                        enableDismissFromStartToEnd = false,
+                        enableDismissFromEndToStart = true,
+                        backgroundContent = {
+                            Box(modifier = Modifier.fillMaxWidth().height(360.dp))
+                        },
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .testTag(SwipeDismissMessageTag)
+                                .width(340.dp)
+                                .padding(horizontal = 16.dp, vertical = 14.dp),
+                        ) {
+                            MessageMarkdownContent(
+                                markdown = TwoTableKatexMarkdown,
+                                textColor = Color.Black,
+                                isUser = true,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        rule.waitForIdle()
+
+        val target = waitForVisibleTableTarget(FirstTableMarker)
+        assertEquals("expected the first real table in DOM order", 0, target.metrics.targetTableIndex)
+        assertTrue("expected the first table to use the production scroll wrapper", target.metrics.hasScrollWrapper)
+        assertEquals("first table should start at the left edge", 0, target.metrics.scrollLeft)
+
+        val swipe = prepareTableSwipe(target, FirstTableMarker)
+        injectSwipe(swipe.startX, swipe.startY, swipe.endX, swipe.endY)
+        rule.waitForIdle()
+        SystemClock.sleep(GestureSettleMillis)
+
+        val after = readTableMetrics(target.webView, FirstTableMarker)
+        var finalDismissValue = SwipeToDismissBoxValue.Settled
+        rule.runOnIdle { finalDismissValue = dismissState.currentValue }
+        assertTrue(
+            "expected a physical drag on the first table inside the user bubble to increase scrollLeft, " +
+                "before=${target.metrics.scrollLeft}, after=${after.scrollLeft}, swipe=$swipe, target=$target",
+            after.scrollLeft > target.metrics.scrollLeft,
+        )
+        assertEquals("table drag should not dismiss the user bubble", SwipeToDismissBoxValue.Settled, finalDismissValue)
+    }
+
+    @Test
+    fun firstAndSecondComposeMarkdownTablesCanBeDraggedIndependently() {
+        rule.setContent {
+            MaterialTheme {
+                CompositionLocalProvider(
+                    LocalChatFontSize provides "medium",
+                    LocalCodeWordWrap provides false,
+                ) {
+                    MessageMarkdownContent(
+                        markdown = TwoComposeTableMarkdown,
+                        textColor = Color.Black,
+                        isUser = false,
+                        modifier = Modifier
+                            .testTag(ComposeTablesMessageTag)
+                            .width(340.dp)
+                            .padding(12.dp),
+                    )
+                }
+            }
+        }
+        rule.waitForIdle()
+
+        val horizontalScrollMatcher = SemanticsMatcher.keyIsDefined(SemanticsProperties.HorizontalScrollAxisRange)
+        val scrollNodes = rule.onAllNodes(horizontalScrollMatcher, useUnmergedTree = true)
+        scrollNodes.assertCountEquals(2)
+        val before = scrollNodes.fetchSemanticsNodes().map { node ->
+            node.config[SemanticsProperties.HorizontalScrollAxisRange].value()
+        }
+
+        scrollNodes[0].performTouchInput { swipeLeft() }
+        scrollNodes[1].performTouchInput { swipeLeft() }
+        rule.waitForIdle()
+
+        val after = scrollNodes.fetchSemanticsNodes().map { node ->
+            node.config[SemanticsProperties.HorizontalScrollAxisRange].value()
+        }
+        assertTrue("first Compose table should scroll horizontally, before=$before after=$after", after[0] > before[0])
+        assertTrue("second Compose table should scroll horizontally, before=$before after=$after", after[1] > before[1])
     }
 
     @Test
@@ -1591,6 +1718,8 @@ class MessageMarkdownHorizontalDragTest {
         const val MaxTargetPreCssTopPx = 200f
         const val MessageTag = "wide-markdown-message"
         const val KatexMessageTag = "katex-markdown-message"
+        const val SwipeDismissMessageTag = "swipe-dismiss-markdown-message"
+        const val ComposeTablesMessageTag = "compose-tables-markdown-message"
         const val LaterTableMarker = "LATER_TABLE_ROW"
         const val FirstTableMarker = "FIRST_TABLE_ROW"
         const val PreMetricCount = 10
@@ -1641,6 +1770,18 @@ class MessageMarkdownHorizontalDragTest {
             | Marker | Long payload A | Long payload B | Long payload C |
             | --- | --- | --- | --- |
             | $LaterTableMarker | ${"later-column-".repeat(8)} | ${"later-second-".repeat(8)} | ${"later-third-".repeat(8)} |
+        """.trimIndent()
+
+        val TwoComposeTableMarkdown = """
+            | Marker | Long payload A | Long payload B | Long payload C |
+            | --- | --- | --- | --- |
+            | FIRST_COMPOSE_TABLE_ROW | ${"first-column-".repeat(8)} | ${"first-second-".repeat(8)} | ${"first-third-".repeat(8)} |
+
+            Text separating the two real Compose GFM tables.
+
+            | Marker | Long payload A | Long payload B | Long payload C |
+            | --- | --- | --- | --- |
+            | SECOND_COMPOSE_TABLE_ROW | ${"second-column-".repeat(8)} | ${"second-second-".repeat(8)} | ${"second-third-".repeat(8)} |
         """.trimIndent()
 
         val OversizedTableKatexMarkdown = buildString {
