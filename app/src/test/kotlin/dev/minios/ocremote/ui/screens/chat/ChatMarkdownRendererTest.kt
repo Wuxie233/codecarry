@@ -4,6 +4,10 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.intellij.markdown.MarkdownElementTypes
+import org.intellij.markdown.ast.ASTNode
+import org.intellij.markdown.flavours.gfm.GFMFlavourDescriptor
+import org.intellij.markdown.parser.MarkdownParser
 
 class ChatMarkdownRendererTest {
     @Test
@@ -94,6 +98,36 @@ class ChatMarkdownRendererTest {
     }
 
     @Test
+    fun `ordered list numbering preserves start and increments by item index`() {
+        val markdown = """
+            3. First
+            4. Second
+        """.trimIndent()
+        val list = parseOrderedLists(markdown).single()
+
+        val startNumber = orderedListStartNumber(markdown, list)
+
+        assertEquals(3, startNumber)
+        assertEquals(listOf("3. ", "4. "), List(2) { orderedListMarker(startNumber, it) })
+    }
+
+    @Test
+    fun `ordered list numbering extracts each nested list start independently`() {
+        val markdown = """
+            3. Outer first
+               7. Inner first
+               8. Inner second
+            4. Outer second
+        """.trimIndent()
+        val lists = parseOrderedLists(markdown)
+
+        assertEquals(2, lists.size)
+        assertEquals(3, orderedListStartNumber(markdown, lists[0]))
+        assertEquals(7, orderedListStartNumber(markdown, lists[1]))
+        assertEquals("8. ", orderedListMarker(orderedListStartNumber(markdown, lists[1]), 1))
+    }
+
+    @Test
     fun `containsWideAsciiToken detects unbreakable prose segments`() {
         assertTrue(ChatOverflowPolicy.containsWideAsciiToken("→ ${"a".repeat(48)}"))
         assertTrue(ChatOverflowPolicy.containsWideAsciiToken("/root/CODE/oc-remote/app/src/main/kotlin/dev/minios/ocremote/ui/screens/chat/ChatScreen.kt"))
@@ -178,5 +212,16 @@ class ChatMarkdownRendererTest {
             ChatOverflowTreatment.HorizontalScroll,
             ChatOverflowPolicy.resolve(ChatOverflowContentKind.WebViewStructuredBlock),
         )
+    }
+
+    private fun parseOrderedLists(markdown: String): List<ASTNode> {
+        val root = MarkdownParser(GFMFlavourDescriptor()).buildMarkdownTreeFromString(markdown)
+        return buildList {
+            fun collect(node: ASTNode) {
+                if (node.type == MarkdownElementTypes.ORDERED_LIST) add(node)
+                node.children.forEach(::collect)
+            }
+            collect(root)
+        }
     }
 }

@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -38,6 +39,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mikepenz.markdown.coil2.Coil2ImageTransformerImpl
+import com.mikepenz.markdown.compose.LocalMarkdownComponents
+import com.mikepenz.markdown.compose.LocalMarkdownPadding
 import com.mikepenz.markdown.compose.components.MarkdownComponentModel
 import com.mikepenz.markdown.compose.components.markdownComponents
 import com.mikepenz.markdown.compose.elements.MarkdownParagraph
@@ -46,6 +49,11 @@ import com.mikepenz.markdown.m3.markdownColor
 import com.mikepenz.markdown.m3.markdownTypography
 import dev.minios.ocremote.R
 import dev.minios.ocremote.ui.theme.CodeTypography
+import org.intellij.markdown.IElementType
+import org.intellij.markdown.MarkdownElementTypes
+import org.intellij.markdown.MarkdownTokenTypes
+import org.intellij.markdown.ast.ASTNode
+import org.intellij.markdown.flavours.gfm.GFMElementTypes
 
 internal enum class MessageMarkdownRoute {
     ComposeMarkdown,
@@ -168,6 +176,9 @@ internal fun MessageMarkdownContent(
         paragraph = { model ->
             ScrollableMarkdownParagraph(model)
         },
+        orderedList = { model ->
+            OrderedMarkdownList(model)
+        },
         table = {
             DisableSelection {
                 val rawTable = runCatching {
@@ -229,6 +240,114 @@ internal fun MessageMarkdownContent(
             }
         }
     }
+}
+
+@Composable
+private fun OrderedMarkdownList(model: MarkdownComponentModel, depth: Int = 0) {
+    val padding = LocalMarkdownPadding.current
+    val startNumber = orderedListStartNumber(model.content, model.node)
+
+    Column(
+        modifier = Modifier.padding(
+            start = padding.indentList * depth,
+            top = padding.list,
+            bottom = padding.list,
+        ),
+    ) {
+        model.node.children
+            .filter { it.type == MarkdownElementTypes.LIST_ITEM }
+            .forEachIndexed { itemIndex, listItem ->
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = orderedListMarker(startNumber, itemIndex),
+                        style = model.typography.ordered,
+                    )
+                    Column(modifier = Modifier.padding(bottom = padding.listItemBottom)) {
+                        listItem.children.forEach { child ->
+                            RenderListChild(model.content, child, model, depth)
+                        }
+                    }
+                }
+            }
+    }
+}
+
+@Composable
+private fun ColumnScope.RenderListChild(
+    content: String,
+    node: ASTNode,
+    parentModel: MarkdownComponentModel,
+    depth: Int,
+) {
+    val components = LocalMarkdownComponents.current
+    val model = MarkdownComponentModel(content, node, parentModel.typography)
+    when (node.type) {
+        MarkdownElementTypes.ORDERED_LIST -> OrderedMarkdownList(model, depth + 1)
+        MarkdownElementTypes.UNORDERED_LIST -> BulletMarkdownList(model, depth + 1)
+        MarkdownElementTypes.PARAGRAPH -> components.paragraph.invoke(this, model)
+        MarkdownElementTypes.BLOCK_QUOTE -> components.blockQuote.invoke(this, model)
+        MarkdownElementTypes.CODE_BLOCK -> components.codeBlock.invoke(this, model)
+        MarkdownElementTypes.CODE_FENCE -> components.codeFence.invoke(this, model)
+        MarkdownElementTypes.ATX_1 -> components.heading1.invoke(this, model)
+        MarkdownElementTypes.ATX_2 -> components.heading2.invoke(this, model)
+        MarkdownElementTypes.ATX_3 -> components.heading3.invoke(this, model)
+        MarkdownElementTypes.ATX_4 -> components.heading4.invoke(this, model)
+        MarkdownElementTypes.ATX_5 -> components.heading5.invoke(this, model)
+        MarkdownElementTypes.ATX_6 -> components.heading6.invoke(this, model)
+        MarkdownElementTypes.SETEXT_1 -> components.setextHeading1.invoke(this, model)
+        MarkdownElementTypes.SETEXT_2 -> components.setextHeading2.invoke(this, model)
+        MarkdownElementTypes.IMAGE -> components.image.invoke(this, model)
+        MarkdownElementTypes.LINK_DEFINITION -> components.linkDefinition.invoke(this, model)
+        GFMElementTypes.TABLE -> components.table.invoke(this, model)
+        MarkdownTokenTypes.HORIZONTAL_RULE -> components.horizontalRule.invoke(this, model)
+        else -> node.children.forEach { child -> RenderListChild(content, child, model, depth) }
+    }
+}
+
+@Composable
+private fun BulletMarkdownList(model: MarkdownComponentModel, depth: Int) {
+    val padding = LocalMarkdownPadding.current
+    Column(
+        modifier = Modifier.padding(
+            start = padding.indentList * depth,
+            top = padding.list,
+            bottom = padding.list,
+        ),
+    ) {
+        model.node.children
+            .filter { it.type == MarkdownElementTypes.LIST_ITEM }
+            .forEach { listItem ->
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    Text(text = "• ", style = model.typography.bullet)
+                    Column(modifier = Modifier.padding(bottom = padding.listItemBottom)) {
+                        listItem.children.forEach { child ->
+                            RenderListChild(model.content, child, model, depth)
+                        }
+                    }
+                }
+            }
+    }
+}
+
+internal fun orderedListStartNumber(content: String, orderedList: ASTNode): Int {
+    val numberNode = orderedList.children
+        .firstOrNull { it.type == MarkdownElementTypes.LIST_ITEM }
+        ?.firstDescendantOfType(MarkdownTokenTypes.LIST_NUMBER)
+        ?: return 1
+    return content.substring(numberNode.startOffset, numberNode.endOffset)
+        .takeWhile(Char::isDigit)
+        .toIntOrNull()
+        ?: 1
+}
+
+internal fun orderedListMarker(startNumber: Int, itemIndex: Int): String = "${startNumber + itemIndex}. "
+
+private fun ASTNode.firstDescendantOfType(type: IElementType): ASTNode? {
+    children.forEach { child ->
+        if (child.type == type) return child
+        child.firstDescendantOfType(type)?.let { return it }
+    }
+    return null
 }
 
 @Composable

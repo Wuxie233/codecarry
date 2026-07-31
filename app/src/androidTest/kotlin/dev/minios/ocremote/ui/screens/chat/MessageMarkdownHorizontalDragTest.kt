@@ -24,6 +24,7 @@ import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect as ComposeRect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.toArgb
@@ -34,11 +35,13 @@ import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.down
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.moveTo
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.test.up
@@ -241,6 +244,174 @@ class MessageMarkdownHorizontalDragTest {
         }
         assertTrue("first Compose table should scroll horizontally, before=$before after=$after", after[0] > before[0])
         assertTrue("second Compose table should scroll horizontally, before=$before after=$after", after[1] > before[1])
+    }
+
+    @Test
+    fun longPlannedComposeRowsKeepLaterTablePhysicallyScrollableAndParentVerticalScroll() {
+        val message = ChatMessage(
+            message = Message.Assistant(
+                id = LongComposeMessageId,
+                sessionId = LongComposeSessionId,
+                time = TimeInfo(created = 1L),
+            ),
+            parts = listOf(
+                Part.Text(
+                    id = LongComposeTextPartId,
+                    sessionId = LongComposeSessionId,
+                    messageId = LongComposeMessageId,
+                    text = LongComposeMarkdown,
+                ),
+            ),
+        )
+        val rows = planChatMessageRows(listOf(message))
+        val targetRowIndex = rows.indexOfFirst { row ->
+            row is ChatMessageRow.TextChunk && LongComposeTableMarker in row.markdown.chunk.source
+        }
+        assertTrue("expected a long fixture to split into Compose rows", rows.size > 1)
+        assertTrue("expected the table in a later Compose row, rows=$rows", targetRowIndex > 0)
+        assertTrue(
+            "expected a non-math table row",
+            rows[targetRowIndex] is ChatMessageRow.TextChunk &&
+                (rows[targetRowIndex] as ChatMessageRow.TextChunk).markdown.math.isEmpty(),
+        )
+
+        lateinit var parentScrollState: LazyListState
+        rule.setContent {
+            MaterialTheme {
+                CompositionLocalProvider(
+                    LocalChatFontSize provides "medium",
+                    LocalCodeWordWrap provides false,
+                ) {
+                    parentScrollState = rememberLazyListState()
+                    LazyColumn(
+                        state = parentScrollState,
+                        modifier = Modifier
+                            .testTag(LongComposeParentTag)
+                            .width(340.dp)
+                            .height(360.dp),
+                    ) {
+                        itemsIndexed(rows, key = { _, row -> row.key }) { _, row ->
+                            val chunkRow = row as ChatMessageRow.TextChunk
+                            MessageMarkdownContent(
+                                markdown = chunkRow.markdown.chunk.source,
+                                textColor = Color.Black,
+                                isUser = false,
+                                modifier = Modifier
+                                    .testTag("$LongComposeRowTag:${row.key}")
+                                    .fillMaxWidth(),
+                                plannedChunk = chunkRow.markdown,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        rule.waitForIdle()
+        scrollToItem(parentScrollState, targetRowIndex)
+        rule.waitForIdle()
+        rule.onNodeWithText(LongComposeTableMarker, useUnmergedTree = true)
+            .assertExists()
+            .performScrollTo()
+        rule.waitForIdle()
+
+        val horizontalMatcher = SemanticsMatcher.keyIsDefined(SemanticsProperties.HorizontalScrollAxisRange)
+        val tableNode = rule.onAllNodes(horizontalMatcher)
+            .fetchSemanticsNodes()
+            .filter { node -> node.config[SemanticsProperties.HorizontalScrollAxisRange].maxValue() > 0f }
+            .maxByOrNull { node -> node.config[SemanticsProperties.HorizontalScrollAxisRange].maxValue() }
+            ?: throw AssertionError("expected a horizontal scroll semantics node for the later table")
+        assertTrue("expected visible table bounds, bounds=${tableNode.boundsInRoot}", tableNode.boundsInRoot.width > 24f)
+        val beforeRange = tableNode.config[SemanticsProperties.HorizontalScrollAxisRange].value()
+        val maxRange = tableNode.config[SemanticsProperties.HorizontalScrollAxisRange].maxValue()
+        assertTrue("expected a wide later table, maxRange=$maxRange", maxRange > beforeRange)
+        val tableBounds = tableNode.boundsInRoot
+        val screenBounds = tableBounds.toScreenBounds()
+        check(screenBounds.width() > 24 && screenBounds.height() > 24) {
+            "expected a usable table semantics bounds, screenBounds=$screenBounds"
+        }
+        val horizontalStartX = screenBounds.right - TableGestureInsetPx
+        val horizontalEndX = screenBounds.left + TableGestureInsetPx
+        val horizontalY = screenBounds.centerY().toFloat()
+        injectTimedSwipe(
+            startX = horizontalStartX,
+            startY = horizontalY,
+            endX = horizontalEndX,
+            endY = horizontalY,
+        )
+        rule.waitForIdle()
+        val afterHorizontalNode = rule.onAllNodes(horizontalMatcher)
+            .fetchSemanticsNodes()
+            .filter { it.config[SemanticsProperties.HorizontalScrollAxisRange].maxValue() > 0f }
+            .maxByOrNull { it.config[SemanticsProperties.HorizontalScrollAxisRange].maxValue() }
+            ?: throw AssertionError("expected the later table semantics node after horizontal drag")
+        val afterHorizontal = afterHorizontalNode.config[SemanticsProperties.HorizontalScrollAxisRange].value()
+        assertTrue(
+            "expected physical drag over the later Compose table to advance horizontal range, " +
+                "before=$beforeRange, after=$afterHorizontal, bounds=$screenBounds",
+            afterHorizontal > beforeRange,
+        )
+
+        waitUntilCanScrollForward(parentScrollState)
+        val parentBefore = readPosition(parentScrollState)
+        val verticalBounds = rule.onAllNodes(horizontalMatcher)
+            .fetchSemanticsNodes()
+            .filter { it.config[SemanticsProperties.HorizontalScrollAxisRange].maxValue() > 0f }
+            .maxByOrNull { it.config[SemanticsProperties.HorizontalScrollAxisRange].maxValue() }
+            ?.boundsInRoot
+            ?.toScreenBounds()
+            ?: throw AssertionError("expected the later table semantics node before vertical drag")
+        injectTimedSwipe(
+            startX = verticalBounds.centerX().toFloat(),
+            startY = verticalBounds.bottom - TableGestureInsetPx,
+            endX = verticalBounds.centerX().toFloat(),
+            endY = verticalBounds.top + TableGestureInsetPx,
+        )
+        rule.waitForIdle()
+        val parentAfter = readPosition(parentScrollState)
+        assertTrue(
+            "expected vertical drag over Compose table to advance parent LazyColumn, " +
+                "before=$parentBefore, after=$parentAfter, bounds=$verticalBounds",
+            parentAfter > parentBefore,
+        )
+    }
+
+    @Test
+    fun composeMarkdownPreservesSeparatedAndNestedOrderedListSemantics() {
+        rule.setContent {
+            MaterialTheme {
+                CompositionLocalProvider(
+                    LocalChatFontSize provides "medium",
+                    LocalCodeWordWrap provides false,
+                ) {
+                    MessageMarkdownContent(
+                        markdown = SeparatedOrderedListsMarkdown,
+                        textColor = Color.Black,
+                        isUser = false,
+                        modifier = Modifier
+                            .testTag(OrderedListMessageTag)
+                            .width(340.dp),
+                    )
+                }
+            }
+        }
+        rule.waitForIdle()
+
+        rule.onNodeWithText("first ordered item", useUnmergedTree = true).assertExists()
+        rule.onNodeWithText("second ordered item", useUnmergedTree = true).assertExists()
+        rule.onNodeWithText("third ordered item", useUnmergedTree = true).assertExists()
+        rule.onNodeWithText("nested first item", useUnmergedTree = true).assertExists()
+        rule.onNodeWithText("nested second item", useUnmergedTree = true).assertExists()
+        rule.onNodeWithText("1. ", useUnmergedTree = true).assertExists()
+        rule.onNodeWithText("2. ", useUnmergedTree = true).assertExists()
+        rule.onNodeWithText("3. ", useUnmergedTree = true).assertExists()
+        rule.onNodeWithText("7. ", useUnmergedTree = true).assertExists()
+        rule.onNodeWithText("8. ", useUnmergedTree = true).assertExists()
+
+        assertTrue(
+            "expected three separated ordered-list item groups",
+            rule.onAllNodesWithText("ordered item", substring = true, useUnmergedTree = true)
+                .fetchSemanticsNodes().size >= 3,
+        )
     }
 
     @Test
@@ -1152,6 +1323,34 @@ class MessageMarkdownHorizontalDragTest {
         uiAutomation.injectTouch(MotionEvent.ACTION_UP, downTime, endX, endY)
     }
 
+    private fun injectTimedSwipe(startX: Float, startY: Float, endX: Float, endY: Float) {
+        val uiAutomation = InstrumentationRegistry.getInstrumentation().uiAutomation
+        val downTime = SystemClock.uptimeMillis()
+        uiAutomation.injectTouch(MotionEvent.ACTION_DOWN, downTime, startX, startY)
+        repeat(TimedGestureStepCount) { index ->
+            SystemClock.sleep(TimedGestureStepMillis)
+            val fraction = (index + 1f) / TimedGestureStepCount
+            uiAutomation.injectTouch(
+                action = MotionEvent.ACTION_MOVE,
+                downTime = downTime,
+                x = startX + (endX - startX) * fraction,
+                y = startY + (endY - startY) * fraction,
+            )
+        }
+        uiAutomation.injectTouch(MotionEvent.ACTION_UP, downTime, endX, endY)
+    }
+
+    private fun ComposeRect.toScreenBounds(): Rect {
+        val rootLocation = IntArray(2)
+        rule.activity.findViewById<View>(android.R.id.content).getLocationOnScreen(rootLocation)
+        return Rect(
+            (left + rootLocation[0]).toInt(),
+            (top + rootLocation[1]).toInt(),
+            (right + rootLocation[0]).toInt(),
+            (bottom + rootLocation[1]).toInt(),
+        )
+    }
+
     private fun android.app.UiAutomation.injectTouch(
         action: Int,
         downTime: Long,
@@ -1725,6 +1924,8 @@ class MessageMarkdownHorizontalDragTest {
         const val PreMetricCount = 10
         const val PhysicalGestureStepCount = 30
         const val PhysicalGestureStepMillis = 30L
+        const val TimedGestureStepCount = 10
+        const val TimedGestureStepMillis = 20L
         const val RequiredStableSamples = 3
         const val RowAlignmentTolerancePx = 2
         const val ReasoningTag = "wide-reasoning-message"
@@ -1746,6 +1947,13 @@ class MessageMarkdownHorizontalDragTest {
         const val TallSessionId = "session-production-scale"
         const val TallTextPartId = "assistant-production-scale-text"
         const val TopLevelRowTag = "top-level-message-row"
+        const val LongComposeMessageId = "assistant-long-compose"
+        const val LongComposeParentTag = "long-compose-parent"
+        const val LongComposeSessionId = "session-long-compose"
+        const val LongComposeTableMarker = "LATE_COMPOSE_TABLE_ROW"
+        const val LongComposeTextPartId = "assistant-long-compose-text"
+        const val LongComposeRowTag = "long-compose-row"
+        const val OrderedListMessageTag = "ordered-list-markdown-message"
         const val GeometryTolerancePx = 0.5f
 
         val KatexMarkdown = """
@@ -1825,5 +2033,38 @@ class MessageMarkdownHorizontalDragTest {
                 if (index != 44) append("\n\n")
             }
         }
+
+        val LongComposeMarkdown = buildString {
+            repeat(145) { index ->
+                append("Paragraph $index ")
+                append("content ".repeat(23))
+                append("\n\n")
+            }
+            append("| Marker | Long payload A | Long payload B | Long payload C |\n")
+            append("| --- | --- | --- | --- |\n")
+            append("| $LongComposeTableMarker | ")
+            append("late-column-".repeat(40))
+            append(" | ")
+            append("late-second-".repeat(40))
+            append(" | ")
+            append("late-third-".repeat(40))
+            append(" |\n\n")
+            append("The final paragraph remains after the later table.")
+        }
+
+        val SeparatedOrderedListsMarkdown = """
+            1. first ordered item
+
+            Intervening prose keeps the next list as a distinct ordered list starting at 2.
+
+            2. second ordered item
+
+            More prose keeps the third start independent.
+
+            3. third ordered item
+
+               7. nested first item
+               8. nested second item
+        """.trimIndent()
     }
 }
