@@ -28,6 +28,22 @@ class ChatMarkdownRendererTest {
     }
 
     @Test
+    fun `resolveMessageMarkdownRoute keeps planned non math chunk on compose route`() {
+        val source = "Chunk source using [docs][guide]."
+        val plannedChunk = PlannedMarkdownMessageChunk(
+            chunk = MarkdownMessageChunk(
+                source = source,
+                renderMarkdown = "$source\n\n[guide]: https://example.com/docs",
+            ),
+            math = emptyList(),
+        )
+
+        val route = resolveMessageMarkdownRoute(source, plannedChunk)
+
+        assertEquals(MessageMarkdownRoute.ComposeMarkdown, route)
+    }
+
+    @Test
     fun `resolveMessageMarkdownRoute sends inline and display math to katex route`() {
         assertEquals(MessageMarkdownRoute.KatexWebView, resolveMessageMarkdownRoute("Inline ${'$'}x${'$'} math"))
         assertEquals(MessageMarkdownRoute.KatexWebView, resolveMessageMarkdownRoute("Display ${'$'}${'$'}x^2${'$'}${'$'} math"))

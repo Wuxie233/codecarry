@@ -43,8 +43,39 @@ class ChatMessageRowPlannerTest {
     }
 
     @Test
+    fun `29k non math assistant markdown expands into bounded compose rows and reconstructs source`() {
+        val source = longNonMathText()
+        val message = assistantMessage("assistant-non-math", source)
+
+        val rows = planChatMessageRows(listOf(message))
+        val chunks = rows.filterIsInstance<ChatMessageRow.TextChunk>()
+
+        assertTrue("fixture should be about 29k chars, length=${source.length}", source.length in 28_000..30_000)
+        assertTrue("expected 4-6 rows, count=${rows.size}", rows.size in 4..6)
+        assertEquals(rows.size, chunks.size)
+        assertEquals(source, chunks.joinToString(separator = "") { it.markdown.chunk.source })
+        assertTrue(chunks.all { it.markdown.chunk.source.length <= MarkdownMessageChunkTargetChars })
+        assertTrue(chunks.all { it.markdown.math.isEmpty() })
+        assertTrue(chunks.all {
+            resolveMessageMarkdownRoute(it.markdown.chunk.source, it.markdown) ==
+                MessageMarkdownRoute.ComposeMarkdown
+        })
+    }
+
+    @Test
     fun `ordinary assistant message remains one whole row`() {
         val message = assistantMessage("assistant-short", "Short answer with ${'$'}x${'$'}.")
+
+        val rows = planChatMessageRows(listOf(message))
+
+        assertEquals(1, rows.size)
+        assertTrue(rows.single() is ChatMessageRow.Whole)
+        assertSame(message, rows.single().chatMessage)
+    }
+
+    @Test
+    fun `short non math assistant message remains one whole row`() {
+        val message = assistantMessage("assistant-short-non-math", "Short answer without math.")
 
         val rows = planChatMessageRows(listOf(message))
 
@@ -201,6 +232,14 @@ class ChatMessageRowPlannerTest {
             append("Trailing paragraph $index ")
             append("content ".repeat(20))
             if (index != 44) append("\n\n")
+        }
+    }
+
+    private fun longNonMathText(): String = buildString {
+        repeat(145) { index ->
+            append("Paragraph $index ")
+            append("content ".repeat(23))
+            if (index != 144) append("\n\n")
         }
     }
 

@@ -126,8 +126,6 @@ private fun planChatMessageRows(chatMessage: ChatMessage, messageIndex: Int): Li
     val textPart = target.value as Part.Text
     val normalizedMarkdown = preserveRawHtmlPayload(textPart.text)
     val (placeholderMarkdown, math) = buildPlaceholderMarkdown(normalizedMarkdown)
-    if (math.isEmpty()) return listOf(ChatMessageRow.Whole(chatMessage, messageIndex))
-
     val chunks = planMarkdownMessageChunks(placeholderMarkdown)
     if (chunks.size == 1) return listOf(ChatMessageRow.Whole(chatMessage, messageIndex))
 

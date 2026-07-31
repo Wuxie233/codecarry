@@ -61,7 +61,8 @@ internal fun MessageMarkdownContent(
     plannedChunk: PlannedMarkdownMessageChunk? = null,
 ) {
     val normalizedMarkdown = remember(markdown) { preserveRawHtmlPayload(markdown) }
-    val mathSegments = remember(normalizedMarkdown) { splitMarkdownMathSegments(normalizedMarkdown) }
+    val renderMarkdown = plannedChunk?.chunk?.renderMarkdown ?: normalizedMarkdown
+    val mathSegments = remember(renderMarkdown) { splitMarkdownMathSegments(renderMarkdown) }
     val isAmoled = isMessageMarkdownAmoledTheme()
 
     val inlineCodeFg = when {
@@ -181,7 +182,7 @@ internal fun MessageMarkdownContent(
         },
     )
 
-    val route = if (plannedChunk != null) MessageMarkdownRoute.KatexWebView else resolveMessageMarkdownRoute(normalizedMarkdown)
+    val route = resolveMessageMarkdownRoute(normalizedMarkdown, plannedChunk)
     when (route) {
         MessageMarkdownRoute.KatexWebView -> {
             val context = LocalContext.current
@@ -476,6 +477,17 @@ internal fun resolveMessageMarkdownRoute(markdown: String): MessageMarkdownRoute
     val normalizedMarkdown = preserveRawHtmlPayload(markdown)
     val hasMath = splitMarkdownMathSegments(normalizedMarkdown).any { it is MarkdownMathSegment.Math }
     return if (hasMath) MessageMarkdownRoute.KatexWebView else MessageMarkdownRoute.ComposeMarkdown
+}
+
+internal fun resolveMessageMarkdownRoute(
+    markdown: String,
+    plannedChunk: PlannedMarkdownMessageChunk?,
+): MessageMarkdownRoute {
+    return when {
+        plannedChunk == null -> resolveMessageMarkdownRoute(markdown)
+        plannedChunk.math.isNotEmpty() -> MessageMarkdownRoute.KatexWebView
+        else -> MessageMarkdownRoute.ComposeMarkdown
+    }
 }
 
 internal fun preserveRawHtmlPayload(markdown: String): String {
