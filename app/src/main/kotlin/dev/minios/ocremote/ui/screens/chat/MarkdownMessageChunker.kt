@@ -18,17 +18,15 @@ internal fun planMarkdownMessageChunks(
     if (placeholderMarkdown.isEmpty()) return listOf(MarkdownMessageChunk("", ""))
 
     val scan = scanMarkdownBlocks(placeholderMarkdown)
-    val plannedSources = if (scan.requiresWholeFallback) {
-        listOf(placeholderMarkdown)
+    val plannedChunks = if (scan.requiresWholeFallback) {
+        listOf(MarkdownMessageChunk(placeholderMarkdown, placeholderMarkdown))
     } else {
-        packBlocks(scan.blocks, targetChars, maxChunks) ?: listOf(placeholderMarkdown)
+        packBlocks(scan.blocks, targetChars, maxChunks)
+            ?: listOf(MarkdownMessageChunk(placeholderMarkdown, placeholderMarkdown))
     }
-    return plannedSources.map { source ->
-        val missingDefinitions = scan.rootLinkDefinitions.filterNot(source::contains)
-        MarkdownMessageChunk(
-            source = source,
-            renderMarkdown = appendLinkDefinitions(source, missingDefinitions),
-        )
+    return plannedChunks.map { chunk ->
+        val missingDefinitions = scan.rootLinkDefinitions.filterNot(chunk.renderMarkdown::contains)
+        chunk.copy(renderMarkdown = appendLinkDefinitions(chunk.renderMarkdown, missingDefinitions))
     }
 }
 
@@ -43,7 +41,19 @@ private sealed interface MarkdownSourceBlock {
 
     data class Prose(override val source: String) : MarkdownSourceBlock
     data class Fence(override val source: String) : MarkdownSourceBlock
+    data class Table(
+        val header: String,
+        val divider: String,
+        val rows: List<String>,
+    ) : MarkdownSourceBlock {
+        override val source: String = header + divider + rows.joinToString(separator = "")
+    }
 }
+
+private data class MarkdownTableScan(
+    val block: MarkdownSourceBlock.Table,
+    val consumedLines: Int,
+)
 
 private data class MarkdownLine(val raw: String) {
     val content: String = raw.removeSuffix("\n").removeSuffix("\r")
@@ -97,6 +107,14 @@ private fun scanMarkdownBlocks(markdown: String): MarkdownBlockScan {
             continue
         }
 
+        val table = markdownTable(lines, index)
+        if (table != null) {
+            flushProse()
+            blocks += table.block
+            index += table.consumedLines
+            continue
+        }
+
         val definition = rootLinkDefinition(lines, index)
         if (definition != null) {
             definitions += definition.source
@@ -137,17 +155,86 @@ private fun markdownLines(markdown: String): List<MarkdownLine> {
     return lines
 }
 
+private fun markdownTable(lines: List<MarkdownLine>, index: Int): MarkdownTableScan? {
+    val header = lines.getOrNull(index) ?: return null
+    val divider = lines.getOrNull(index + 1) ?: return null
+    if (isUnsafeSplitLine(header.content) || RootLinkDefinitionCandidateRegex.containsMatchIn(header.content)) {
+        return null
+    }
+    if (!isTableRow(header.content) || !isTableRow(divider.content)) return null
+
+    val headerCells = splitMarkdownTableRow(header.content)
+    val dividerCells = splitMarkdownTableRow(divider.content)
+    if (headerCells.isEmpty() || dividerCells.size != headerCells.size) return null
+    val dividerPattern = Regex(":?-{3,}:?")
+    if (!dividerCells.all { dividerPattern.matches(it.trim()) }) return null
+
+    val rows = mutableListOf<String>()
+    var consumedLines = 2
+    while (true) {
+        val row = lines.getOrNull(index + consumedLines) ?: break
+        if (RootLinkDefinitionCandidateRegex.containsMatchIn(row.content)) break
+        if (!isTableRow(row.content)) break
+        rows += row.raw
+        consumedLines++
+    }
+    return MarkdownTableScan(
+        block = MarkdownSourceBlock.Table(header.raw, divider.raw, rows),
+        consumedLines = consumedLines,
+    )
+}
+
+private fun isTableRow(line: String): Boolean {
+    if (line.startsWith('\t')) return false
+    if (line.takeWhile { it == ' ' }.length > 3) return false
+    val trimmed = line.trim()
+    if (trimmed.isEmpty()) return false
+    return trimmed.indices.any { index ->
+        trimmed[index] == '|' && !trimmed.isTablePipeEscaped(index)
+    }
+}
+
+private fun String.isTablePipeEscaped(index: Int): Boolean {
+    var slashCount = 0
+    var position = index - 1
+    while (position >= 0 && this[position] == '\\') {
+        slashCount++
+        position--
+    }
+    return slashCount % 2 == 1
+}
+
 private fun packBlocks(
     blocks: List<MarkdownSourceBlock>,
     targetChars: Int,
     maxChunks: Int,
-): List<String>? {
-    val chunks = mutableListOf<String>()
+): List<MarkdownMessageChunk>? {
+    var tableTargetChars = targetChars
+    while (true) {
+        val chunks = packBlocksAtTarget(blocks, targetChars, tableTargetChars) ?: return null
+        if (chunks.size <= maxChunks) return chunks
+
+        val hasTables = blocks.any { it is MarkdownSourceBlock.Table }
+        val totalSourceLength = blocks.sumOf { it.source.length.toLong() }
+        if (!hasTables || tableTargetChars.toLong() >= totalSourceLength) return null
+        tableTargetChars = (tableTargetChars.toLong() * 2)
+            .coerceAtMost(Int.MAX_VALUE.toLong())
+            .toInt()
+    }
+}
+
+private fun packBlocksAtTarget(
+    blocks: List<MarkdownSourceBlock>,
+    targetChars: Int,
+    tableTargetChars: Int,
+): List<MarkdownMessageChunk>? {
+    val chunks = mutableListOf<MarkdownMessageChunk>()
     val current = StringBuilder()
 
     fun flushCurrent() {
         if (current.isNotEmpty()) {
-            chunks += current.toString()
+            val source = current.toString()
+            chunks += MarkdownMessageChunk(source = source, renderMarkdown = source)
             current.clear()
         }
     }
@@ -163,12 +250,51 @@ private fun packBlocks(
             }
             is MarkdownSourceBlock.Fence -> {
                 flushCurrent()
-                chunks += block.source
+                chunks += MarkdownMessageChunk(source = block.source, renderMarkdown = block.source)
+            }
+            is MarkdownSourceBlock.Table -> {
+                if (block.source.length <= tableTargetChars) {
+                    if (current.isNotEmpty() && current.length + block.source.length > tableTargetChars) {
+                        flushCurrent()
+                    }
+                    current.append(block.source)
+                } else {
+                    flushCurrent()
+                    chunks += splitTable(block, tableTargetChars)
+                }
             }
         }
     }
     flushCurrent()
-    return chunks.takeIf { it.size <= maxChunks }
+    return chunks
+}
+
+private fun splitTable(
+    table: MarkdownSourceBlock.Table,
+    targetChars: Int,
+): List<MarkdownMessageChunk> {
+    val chunks = mutableListOf<MarkdownMessageChunk>()
+    var rowIndex = 0
+    var first = true
+    while (first || rowIndex < table.rows.size) {
+        val prefix = table.header + table.divider
+        val rows = StringBuilder()
+        while (rowIndex < table.rows.size) {
+            val row = table.rows[rowIndex]
+            if (rows.isNotEmpty() && prefix.length + rows.length + row.length > targetChars) break
+            rows.append(row)
+            rowIndex++
+            if (prefix.length + rows.length > targetChars) break
+        }
+        val rowSource = rows.toString()
+        chunks += MarkdownMessageChunk(
+            source = (if (first) prefix else "") + rowSource,
+            renderMarkdown = prefix + rowSource,
+        )
+        first = false
+        if (table.rows.isEmpty()) break
+    }
+    return chunks
 }
 
 private fun appendLinkDefinitions(source: String, definitions: List<String>): String {

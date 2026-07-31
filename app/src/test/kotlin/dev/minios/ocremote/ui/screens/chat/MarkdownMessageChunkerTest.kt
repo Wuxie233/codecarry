@@ -144,6 +144,99 @@ class MarkdownMessageChunkerTest {
     }
 
     @Test
+    fun `multiple tables split at table boundaries and reconstruct exactly`() {
+        val first = "| Name | Value |\n| --- | --- |\n| alpha | one |\n"
+        val second = "| Name | Value |\n| --- | --- |\n| beta | two |\n"
+        val source = "Before.\n\n$first\n$second\nAfter."
+
+        val chunks = planMarkdownMessageChunks(source, targetChars = first.length + 4)
+
+        assertEquals(source, chunks.joinToString(separator = "") { it.source })
+        assertEquals(2, chunks.count { it.source.contains("| --- | --- |") })
+        assertTrue(chunks.all { it.source.length <= first.length + 4 })
+    }
+
+    @Test
+    fun `oversized table splits by rows and repeats header in rendered chunks`() {
+        val source = buildString {
+            append("| Name | Details |\n| --- | --- |\n")
+            repeat(18) { index -> append("| row-$index | ${"value ".repeat(12)}|\n") }
+        }
+
+        val chunks = planMarkdownMessageChunks(source, targetChars = 180)
+
+        assertTrue(chunks.size > 1)
+        assertEquals(source, chunks.joinToString(separator = "") { it.source })
+        assertTrue(chunks.drop(1).all { chunk ->
+            chunk.renderMarkdown.startsWith("| Name | Details |\n| --- | --- |\n")
+        })
+    }
+
+    @Test
+    fun `table row chunks preserve repeated header and divider without duplicating source`() {
+        val source = """
+            | A | B |
+            | --- | --- |
+            | 1 | ${"x".repeat(45)} |
+            | 2 | ${"y".repeat(45)} |
+            | 3 | ${"z".repeat(45)} |
+        """.trimIndent()
+
+        val chunks = planMarkdownMessageChunks(source, targetChars = 80)
+
+        assertTrue(chunks.size >= 3)
+        assertEquals(source, chunks.joinToString(separator = "") { it.source })
+        chunks.forEachIndexed { index, chunk ->
+            assertTrue(chunk.renderMarkdown.startsWith("| A | B |\n| --- | --- |\n"))
+            if (index > 0) assertTrue(!chunk.source.startsWith("| A | B |"))
+        }
+    }
+
+    @Test
+    fun `oversized tables relax target instead of falling back when rows exceed max`() {
+        val source = buildString {
+            append("| A | B |\n| --- | --- |\n")
+            repeat(20) { index -> append("| $index | ${"value ".repeat(10)} |\n") }
+        }
+
+        val chunks = planMarkdownMessageChunks(source, targetChars = 80, maxChunks = 2)
+
+        assertEquals(2, chunks.size)
+        assertEquals(source, chunks.joinToString(separator = "") { it.source })
+        assertTrue(chunks.all { it.renderMarkdown.startsWith("| A | B |\n| --- | --- |\n") })
+    }
+
+    @Test
+    fun `many small tables combine instead of falling back to one whole chunk`() {
+        val source = buildString {
+            repeat(20) { index ->
+                append("| Name | Value |\n| --- | --- |\n| table-$index | ${"value ".repeat(8)}|\n")
+                if (index != 19) append('\n')
+            }
+        }
+
+        val chunks = planMarkdownMessageChunks(source, targetChars = 120, maxChunks = 12)
+
+        assertTrue(chunks.size in 2..12)
+        assertEquals(source, chunks.joinToString(separator = "") { it.source })
+        assertTrue(chunks.all { chunk -> chunk.renderMarkdown.contains("| --- | --- |") })
+    }
+
+    @Test
+    fun `valid single column table is split by rows`() {
+        val source = buildString {
+            append("| Value |\n| --- |\n")
+            repeat(8) { index -> append("| row-$index-${"x".repeat(30)} |\n") }
+        }
+
+        val chunks = planMarkdownMessageChunks(source, targetChars = 90)
+
+        assertTrue(chunks.size > 1)
+        assertEquals(source, chunks.joinToString(separator = "") { it.source })
+        assertTrue(chunks.all { it.renderMarkdown.startsWith("| Value |\n| --- |\n") })
+    }
+
+    @Test
     fun `loose list blockquote indented code and raw html conservatively stay whole`() {
         val fixtures = listOf(
             "- first item\n\n  continuation paragraph\n\n- second item\n\n${"tail ".repeat(40)}",
