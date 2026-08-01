@@ -1,7 +1,6 @@
 package dev.minios.ocremote.ui.screens.chat
 
 internal const val MarkdownMessageChunkTargetChars = 6_000
-internal const val MarkdownMessageMaxChunks = 12
 
 internal data class MarkdownMessageChunk(
     val source: String,
@@ -11,41 +10,36 @@ internal data class MarkdownMessageChunk(
 internal fun planMarkdownMessageChunks(
     placeholderMarkdown: String,
     targetChars: Int = MarkdownMessageChunkTargetChars,
-    maxChunks: Int = MarkdownMessageMaxChunks,
 ): List<MarkdownMessageChunk> {
     require(targetChars > 0)
-    require(maxChunks > 0)
     if (placeholderMarkdown.isEmpty()) return listOf(MarkdownMessageChunk("", ""))
 
     val scan = scanMarkdownBlocks(placeholderMarkdown)
-    val plannedChunks = if (scan.requiresWholeFallback) {
-        listOf(MarkdownMessageChunk(placeholderMarkdown, placeholderMarkdown))
-    } else {
-        packBlocks(scan.blocks, targetChars, maxChunks)
-            ?: listOf(MarkdownMessageChunk(placeholderMarkdown, placeholderMarkdown))
-    }
+    val plannedChunks = packBlocks(scan.blocks, targetChars)
     return plannedChunks.map { chunk ->
         val missingDefinitions = scan.rootLinkDefinitions.filterNot(chunk.renderMarkdown::contains)
         chunk.copy(renderMarkdown = appendLinkDefinitions(chunk.renderMarkdown, missingDefinitions))
     }
 }
 
-private data class MarkdownBlockScan(
+internal data class MarkdownBlockScan(
     val blocks: List<MarkdownSourceBlock>,
     val rootLinkDefinitions: List<String>,
-    val requiresWholeFallback: Boolean,
 )
 
-private sealed interface MarkdownSourceBlock {
+internal sealed interface MarkdownSourceBlock {
     val source: String
+    val sourceRange: IntRange
 
-    data class Prose(override val source: String) : MarkdownSourceBlock
-    data class Fence(override val source: String) : MarkdownSourceBlock
-    data class AtomicStructure(override val source: String) : MarkdownSourceBlock
+    data class Prose(override val source: String, override val sourceRange: IntRange) : MarkdownSourceBlock
+    data class MathPlaceholder(override val source: String, override val sourceRange: IntRange) : MarkdownSourceBlock
+    data class Fence(override val source: String, override val sourceRange: IntRange) : MarkdownSourceBlock
+    data class AtomicStructure(override val source: String, override val sourceRange: IntRange) : MarkdownSourceBlock
     data class Table(
         val header: String,
         val divider: String,
         val rows: List<String>,
+        override val sourceRange: IntRange,
     ) : MarkdownSourceBlock {
         override val source: String = header + divider + rows.joinToString(separator = "")
     }
@@ -61,7 +55,7 @@ private data class MarkdownAtomicStructureScan(
     val consumedLines: Int,
 )
 
-private data class MarkdownLine(val raw: String) {
+private data class MarkdownLine(val raw: String, val start: Int, val endExclusive: Int) {
     val content: String = raw.removeSuffix("\n").removeSuffix("\r")
 }
 
@@ -70,24 +64,25 @@ private data class RootLinkDefinition(
     val consumedLines: Int,
 )
 
-private fun scanMarkdownBlocks(markdown: String): MarkdownBlockScan {
+internal fun scanMarkdownBlocks(markdown: String): MarkdownBlockScan {
     val lines = markdownLines(markdown)
     val blocks = mutableListOf<MarkdownSourceBlock>()
     val definitions = linkedSetOf<String>()
     val block = StringBuilder()
     var fence: FenceMarker? = null
-    var requiresWholeFallback = false
     var index = 0
+    var blockStart = 0
 
     fun flushProse() {
         if (block.isNotEmpty()) {
-            blocks += MarkdownSourceBlock.Prose(block.toString())
+            blocks += proseBlocks(block.toString(), blockStart)
             block.clear()
         }
     }
 
     fun flushFence() {
-        blocks += MarkdownSourceBlock.Fence(block.toString())
+        val source = block.toString()
+        blocks += MarkdownSourceBlock.Fence(source, blockStart..(blockStart + source.length - 1))
         block.clear()
     }
 
@@ -108,6 +103,7 @@ private fun scanMarkdownBlocks(markdown: String): MarkdownBlockScan {
         if (openingFence != null) {
             flushProse()
             fence = openingFence
+            blockStart = line.start
             block.append(line.raw)
             index++
             continue
@@ -125,6 +121,7 @@ private fun scanMarkdownBlocks(markdown: String): MarkdownBlockScan {
         if (definition != null) {
             definitions += definition.source
             repeat(definition.consumedLines) { consumedOffset ->
+                if (block.isEmpty()) blockStart = lines[index + consumedOffset].start
                 block.append(lines[index + consumedOffset].raw)
             }
             index += definition.consumedLines
@@ -139,9 +136,7 @@ private fun scanMarkdownBlocks(markdown: String): MarkdownBlockScan {
             continue
         }
 
-        if (RootLinkDefinitionCandidateRegex.containsMatchIn(line.content)) {
-            requiresWholeFallback = true
-        }
+        if (block.isEmpty()) blockStart = line.start
         block.append(line.raw)
         if (line.content.isBlank()) flushProse()
         index++
@@ -153,8 +148,25 @@ private fun scanMarkdownBlocks(markdown: String): MarkdownBlockScan {
     return MarkdownBlockScan(
         blocks = blocks,
         rootLinkDefinitions = definitions.toList(),
-        requiresWholeFallback = requiresWholeFallback,
     )
+}
+
+private val MathPlaceholderRegex = Regex("xMJXMATH\\d+HTAMXJMx")
+
+private fun proseBlocks(source: String, start: Int): List<MarkdownSourceBlock> {
+    val blocks = mutableListOf<MarkdownSourceBlock>()
+    var cursor = 0
+    MathPlaceholderRegex.findAll(source).forEach { match ->
+        if (match.range.first > cursor) {
+            blocks += MarkdownSourceBlock.Prose(source.substring(cursor, match.range.first), start + cursor..(start + match.range.first - 1))
+        }
+        blocks += MarkdownSourceBlock.MathPlaceholder(match.value, start + match.range.first..(start + match.range.last))
+        cursor = match.range.last + 1
+    }
+    if (cursor < source.length) {
+        blocks += MarkdownSourceBlock.Prose(source.substring(cursor), start + cursor..(start + source.length - 1))
+    }
+    return blocks
 }
 
 private enum class MarkdownAtomicStructureKind {
@@ -179,7 +191,7 @@ private fun markdownAtomicStructure(
         for (lineIndex in index until endExclusive) append(lines[lineIndex].raw)
     }
     return MarkdownAtomicStructureScan(
-        block = MarkdownSourceBlock.AtomicStructure(source),
+        block = MarkdownSourceBlock.AtomicStructure(source, lines[index].start..(lines[endExclusive - 1].endExclusive - 1)),
         consumedLines = endExclusive - index,
     )
 }
@@ -282,7 +294,7 @@ private fun markdownLines(markdown: String): List<MarkdownLine> {
     while (offset < markdown.length) {
         val newline = markdown.indexOf('\n', offset)
         val end = if (newline >= 0) newline + 1 else markdown.length
-        lines += MarkdownLine(markdown.substring(offset, end))
+        lines += MarkdownLine(markdown.substring(offset, end), offset, end)
         offset = end
     }
     return lines
@@ -312,7 +324,12 @@ private fun markdownTable(lines: List<MarkdownLine>, index: Int): MarkdownTableS
         consumedLines++
     }
     return MarkdownTableScan(
-        block = MarkdownSourceBlock.Table(header.raw, divider.raw, rows),
+        block = MarkdownSourceBlock.Table(
+            header.raw,
+            divider.raw,
+            rows,
+            header.start..(lines[index + consumedLines - 1].endExclusive - 1),
+        ),
         consumedLines = consumedLines,
     )
 }
@@ -340,34 +357,7 @@ private fun String.isTablePipeEscaped(index: Int): Boolean {
 private fun packBlocks(
     blocks: List<MarkdownSourceBlock>,
     targetChars: Int,
-    maxChunks: Int,
-): List<MarkdownMessageChunk>? {
-    var tableTargetChars = targetChars
-    while (true) {
-        val chunks = packBlocksAtTarget(blocks, targetChars, tableTargetChars) ?: return null
-        if (chunks.size <= maxChunks) return chunks
-
-        val indivisibleBlockCount = blocks.count {
-            it is MarkdownSourceBlock.Fence || it is MarkdownSourceBlock.AtomicStructure
-        }
-        if (indivisibleBlockCount > maxChunks) return chunks
-
-        val hasTables = blocks.any { it is MarkdownSourceBlock.Table }
-        val totalSourceLength = blocks.sumOf { it.source.length.toLong() }
-        if (!hasTables || tableTargetChars.toLong() >= totalSourceLength) {
-            return chunks.takeIf { blocks.any { it is MarkdownSourceBlock.AtomicStructure } }
-        }
-        tableTargetChars = (tableTargetChars.toLong() * 2)
-            .coerceAtMost(Int.MAX_VALUE.toLong())
-            .toInt()
-    }
-}
-
-private fun packBlocksAtTarget(
-    blocks: List<MarkdownSourceBlock>,
-    targetChars: Int,
-    tableTargetChars: Int,
-): List<MarkdownMessageChunk>? {
+): List<MarkdownMessageChunk> {
     val chunks = mutableListOf<MarkdownMessageChunk>()
     val current = StringBuilder()
 
@@ -381,12 +371,14 @@ private fun packBlocksAtTarget(
 
     for (block in blocks) {
         when (block) {
-            is MarkdownSourceBlock.Prose -> {
-                if (block.source.length > targetChars) return null
+            is MarkdownSourceBlock.Prose, is MarkdownSourceBlock.MathPlaceholder -> {
                 if (current.isNotEmpty() && current.length + block.source.length > targetChars) {
                     flushCurrent()
                 }
-                current.append(block.source)
+                if (block.source.length > targetChars) {
+                    flushCurrent()
+                    chunks += splitOversizedProse(block.source, targetChars)
+                } else current.append(block.source)
             }
             is MarkdownSourceBlock.AtomicStructure -> {
                 if (current.isNotEmpty() && current.length + block.source.length > targetChars) {
@@ -404,19 +396,24 @@ private fun packBlocksAtTarget(
                 chunks += MarkdownMessageChunk(source = block.source, renderMarkdown = block.source)
             }
             is MarkdownSourceBlock.Table -> {
-                if (block.source.length <= tableTargetChars) {
-                    if (current.isNotEmpty() && current.length + block.source.length > tableTargetChars) {
-                        flushCurrent()
-                    }
-                    current.append(block.source)
-                } else {
-                    flushCurrent()
-                    chunks += splitTable(block, tableTargetChars)
-                }
+                flushCurrent()
+                chunks += splitTable(block, targetChars)
             }
         }
     }
     flushCurrent()
+    return chunks
+}
+
+private fun splitOversizedProse(source: String, targetChars: Int): List<MarkdownMessageChunk> {
+    val chunks = mutableListOf<MarkdownMessageChunk>()
+    var offset = 0
+    while (offset < source.length) {
+        val end = (offset + targetChars).coerceAtMost(source.length)
+        val piece = source.substring(offset, end)
+        chunks += MarkdownMessageChunk(piece, piece)
+        offset = end
+    }
     return chunks
 }
 

@@ -123,24 +123,66 @@ class MarkdownMessageChunkerTest {
     }
 
     @Test
-    fun `hard cap falls back to one whole chunk instead of creating an oversized tail`() {
-        val source = List(20) { index -> "Block $index ${"x".repeat(20)}" }.joinToString("\n\n")
+    fun `typed top level blocks expose exact source ranges`() {
+        val source = "Intro xMJXMATH0HTAMXJMx.\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\n```text\ncode\n```"
 
-        val chunks = planMarkdownMessageChunks(source, targetChars = 30, maxChunks = 12)
+        val blocks = scanMarkdownBlocks(source).blocks
 
-        assertEquals(1, chunks.size)
-        assertEquals(source, chunks.joinToString(separator = "") { it.source })
-        assertEquals(source, chunks.single().renderMarkdown)
+        assertTrue(blocks.any { it is MarkdownSourceBlock.Prose })
+        assertTrue(blocks.any { it is MarkdownSourceBlock.MathPlaceholder })
+        assertTrue(blocks.any { it is MarkdownSourceBlock.Table })
+        assertTrue(blocks.any { it is MarkdownSourceBlock.Fence })
+        blocks.forEach { block ->
+            assertEquals(block.source, source.substring(block.sourceRange.first, block.sourceRange.last + 1))
+        }
+        assertEquals(source, blocks.joinToString(separator = "") { it.source })
     }
 
     @Test
-    fun `single oversized prose paragraph falls back to one whole chunk`() {
+    fun `interaction blocks always own row boundaries`() {
+        val table = "| A | B |\n| --- | --- |\n| 1 | 2 |\n"
+        val fence = "```text\ncode\n```\n"
+        val source = "Before.\n\n$table\nBetween.\n\n$fence\nAfter."
+
+        val chunks = planMarkdownMessageChunks(source)
+
+        assertEquals(source, chunks.joinToString(separator = "") { it.source })
+        assertEquals(table, chunks.single { it.source == table }.source)
+        assertEquals(fence, chunks.single { it.source == fence }.source)
+    }
+
+    @Test
+    fun `many prose blocks stay chunked without a global hard cap`() {
+        val source = List(20) { index -> "Block $index ${"x".repeat(20)}" }.joinToString("\n\n")
+
+        val chunks = planMarkdownMessageChunks(source, targetChars = 30)
+
+        assertTrue(chunks.size > 12)
+        assertEquals(source, chunks.joinToString(separator = "") { it.source })
+    }
+
+    @Test
+    fun `malformed link definition candidate no longer collapses the plan`() {
+        val source = buildString {
+            append("[broken]:\n\n")
+            repeat(20) { append("Paragraph $it ${"content ".repeat(8)}\n\n") }
+        }
+
+        val chunks = planMarkdownMessageChunks(source, targetChars = 120)
+
+        assertTrue(chunks.size > 1)
+        assertEquals(source, chunks.joinToString(separator = "") { it.source })
+    }
+
+    @Test
+    fun `single oversized prose paragraph is split into bounded rows`() {
         val source = "one continuous paragraph ${"content ".repeat(100)}"
 
         val chunks = planMarkdownMessageChunks(source, targetChars = 120)
 
-        assertEquals(listOf(source), chunks.map { it.source })
-        assertEquals(source, chunks.single().renderMarkdown)
+        assertTrue(chunks.size > 1)
+        assertEquals(source, chunks.joinToString(separator = "") { it.source })
+        assertTrue(chunks.all { it.source.length <= 120 })
     }
 
     @Test
@@ -199,15 +241,15 @@ class MarkdownMessageChunkerTest {
             repeat(20) { index -> append("| $index | ${"value ".repeat(10)} |\n") }
         }
 
-        val chunks = planMarkdownMessageChunks(source, targetChars = 80, maxChunks = 2)
+        val chunks = planMarkdownMessageChunks(source, targetChars = 80)
 
-        assertEquals(2, chunks.size)
+        assertTrue(chunks.size > 2)
         assertEquals(source, chunks.joinToString(separator = "") { it.source })
         assertTrue(chunks.all { it.renderMarkdown.startsWith("| A | B |\n| --- | --- |\n") })
     }
 
     @Test
-    fun `many small tables combine instead of falling back to one whole chunk`() {
+    fun `many small tables keep each table in its own row`() {
         val source = buildString {
             repeat(20) { index ->
                 append("| Name | Value |\n| --- | --- |\n| table-$index | ${"value ".repeat(8)}|\n")
@@ -215,11 +257,12 @@ class MarkdownMessageChunkerTest {
             }
         }
 
-        val chunks = planMarkdownMessageChunks(source, targetChars = 120, maxChunks = 12)
+        val chunks = planMarkdownMessageChunks(source, targetChars = 120)
 
-        assertTrue(chunks.size in 2..12)
+        val tableChunks = chunks.filter { "| --- | --- |" in it.renderMarkdown }
+        assertEquals(20, tableChunks.size)
         assertEquals(source, chunks.joinToString(separator = "") { it.source })
-        assertTrue(chunks.all { chunk -> chunk.renderMarkdown.contains("| --- | --- |") })
+        assertTrue(tableChunks.all { it.renderMarkdown.count { char -> char == '\n' } >= 2 })
     }
 
     @Test

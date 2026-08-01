@@ -98,6 +98,32 @@ class ChatMessageRowPlannerTest {
     }
 
     @Test
+    fun `real Chinese three column payload plans table as its own text chunk`() {
+        val source = buildString {
+            append("先给结论：高质量和高效率来自按风险分层。\n\n")
+            append("## 1. 建议的四条工作流\n\n")
+            append("| 车道 | 适用任务 | 用户是否介入 |\n")
+            append("|---|---|---|\n")
+            append("| L0 直接执行 | 查询、机械修改、明确的原子修复 | 不介入 |\n")
+            append("| L1 有界开发 | 目标明确、低风险、一个主要写入边界 | 不介入，Lead 内部做微计划 |\n")
+            append("| L2 复杂协作 | 跨模块、多需求、多 Builder、需要恢复或并行 | 只有存在未决业务判断时介入 |\n")
+            append("| L3 人机共同决策 | 产品方向、范围取舍、权限、数据、计费、破坏性操作、不可逆变更 | 必须介入 |\n\n")
+            append("路由依据不是任务文字长短，而是风险和决策不确定性。\n\n")
+            repeat(100) { index -> append("后续说明 $index ${"context ".repeat(20)}\n\n") }
+        }
+        val tableHeader = "| 车道 | 适用任务 | 用户是否介入 |"
+
+        val rows = planChatMessageRows(listOf(assistantMessage("assistant-qoder", source)))
+        val chunks = rows.filterIsInstance<ChatMessageRow.TextChunk>()
+
+        assertTrue(chunks.size > 1)
+        assertEquals(source, chunks.joinToString(separator = "") { it.markdown.chunk.source })
+        val tableChunk = chunks.single { tableHeader in it.markdown.chunk.source }
+        assertTrue(tableChunk.markdown.chunk.source.startsWith(tableHeader))
+        assertTrue(!tableChunk.markdown.chunk.source.contains("路由依据不是任务文字长短"))
+    }
+
+    @Test
     fun `ordinary assistant message remains one whole row`() {
         val message = assistantMessage("assistant-short", "Short answer with ${'$'}x${'$'}.")
 
