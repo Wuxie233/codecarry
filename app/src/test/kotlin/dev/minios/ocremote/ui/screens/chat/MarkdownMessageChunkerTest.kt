@@ -237,19 +237,63 @@ class MarkdownMessageChunkerTest {
     }
 
     @Test
-    fun `loose list blockquote indented code and raw html conservatively stay whole`() {
-        val fixtures = listOf(
-            "- first item\n\n  continuation paragraph\n\n- second item\n\n${"tail ".repeat(40)}",
-            "> quoted paragraph\n>\n> second paragraph\n\n${"tail ".repeat(40)}",
-            "Paragraph before.\n\n    indented code ${"x".repeat(80)}\n\nParagraph after.",
-            "<section>\n<p>raw document block</p>\n</section>\n\n${"tail ".repeat(40)}",
+    fun `root structures stay atomic while surrounding content is chunked`() {
+        val structures = listOf(
+            "- first item\n\n  continuation paragraph\n\n- second item\n\n",
+            "> quoted paragraph\n>\n> second paragraph\n\n",
+            "    indented code ${"x".repeat(80)}\n\n",
+            "<section>\n<p>raw document block</p>\n</section>\n\n",
         )
 
-        fixtures.forEach { source ->
+        structures.forEach { structure ->
+            val source = buildString {
+                repeat(4) { append("Before ${"lead ".repeat(8)}\n\n") }
+                append(structure)
+                repeat(4) { append("After ${"tail ".repeat(8)}\n\n") }
+            }
             val chunks = planMarkdownMessageChunks(source, targetChars = 80)
+
             assertEquals(source, chunks.joinToString(separator = "") { it.source })
-            assertEquals("unsafe structure should use Whole fallback", 1, chunks.size)
+            assertTrue("mixed source should use multiple chunks", chunks.size > 1)
+            assertEquals(1, chunks.count { structure in it.source })
         }
+    }
+
+    @Test
+    fun `mixed production-shaped markdown chunks tables without splitting root structures`() {
+        val quote = "> **Simple work stays direct; complex work asks only for business decisions.**\n\n"
+        val list = buildString {
+            repeat(18) { index -> append("- workflow rule $index keeps its contract intact\n") }
+            append('\n')
+        }
+        val rawHtml = "<details>\n<summary>Runtime evidence</summary>\n<p>Preserve this block atomically.</p>\n</details>\n\n"
+        val table = buildString {
+            append("| Lane | Scope | User involvement |\n")
+            append("|---|---|---|\n")
+            repeat(12) { index ->
+                append("| L$index | ${"bounded delivery ".repeat(8)}| only for unresolved product decisions |\n")
+            }
+        }
+        val source = buildString {
+            append("Opening ${"context ".repeat(75)}\n\n")
+            append(quote)
+            append("Bridge ${"evidence ".repeat(75)}\n\n")
+            append(table)
+            append('\n')
+            append(list)
+            append(rawHtml)
+            repeat(15) { index -> append("Closing paragraph $index ${"result ".repeat(20)}\n\n") }
+        }
+
+        val chunks = planMarkdownMessageChunks(source, targetChars = 900)
+
+        assertTrue("expected multiple bounded chunks, count=${chunks.size}", chunks.size > 1)
+        assertEquals(source, chunks.joinToString(separator = "") { it.source })
+        assertEquals(1, chunks.count { quote in it.source })
+        assertEquals(1, chunks.count { list in it.source })
+        assertEquals(1, chunks.count { rawHtml in it.source })
+        assertTrue(chunks.any { "| Lane | Scope | User involvement |" in it.renderMarkdown })
+        assertTrue(chunks.any { "| L0 |" in it.source })
     }
 
     @Test

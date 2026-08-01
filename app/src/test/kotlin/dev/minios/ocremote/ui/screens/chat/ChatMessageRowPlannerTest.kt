@@ -63,6 +63,41 @@ class ChatMessageRowPlannerTest {
     }
 
     @Test
+    fun `mixed root structures still plan the later table into compose rows`() {
+        val failingTable = buildString {
+            append("| Lane | Scope | User involvement |\n")
+            append("|---|---|---|\n")
+            repeat(20) { index ->
+                append("| L$index | ${"bounded delivery ".repeat(12)}| only for product decisions |\n")
+            }
+        }
+        val source = buildString {
+            append("Opening ${"context ".repeat(500)}\n\n")
+            append("> **Simple work stays direct; complex work asks only for business decisions.**\n\n")
+            append(failingTable)
+            append('\n')
+            repeat(13) { index -> append("```text\nworkflow stage $index\n```\n\n") }
+            repeat(20) { index -> append("- workflow rule $index keeps its contract intact\n") }
+            append('\n')
+            append("<details>\n<summary>Evidence</summary>\n<p>Atomic HTML.</p>\n</details>\n\n")
+            repeat(40) { index -> append("Closing paragraph $index ${"result ".repeat(20)}\n\n") }
+        }
+
+        val rows = planChatMessageRows(listOf(assistantMessage("assistant-mixed-structure", source)))
+        val chunks = rows.filterIsInstance<ChatMessageRow.TextChunk>()
+
+        assertTrue("expected multiple planned rows, count=${rows.size}", rows.size > 1)
+        assertTrue("atomic boundaries may exceed the soft cap, count=${rows.size}", rows.size > 12)
+        assertEquals(rows.size, chunks.size)
+        assertEquals(source, chunks.joinToString(separator = "") { it.markdown.chunk.source })
+        assertTrue(chunks.any { failingTable in it.markdown.chunk.source })
+        assertTrue(chunks.all {
+            resolveMessageMarkdownRoute(it.markdown.chunk.source, it.markdown) ==
+                MessageMarkdownRoute.ComposeMarkdown
+        })
+    }
+
+    @Test
     fun `ordinary assistant message remains one whole row`() {
         val message = assistantMessage("assistant-short", "Short answer with ${'$'}x${'$'}.")
 

@@ -41,6 +41,7 @@ private sealed interface MarkdownSourceBlock {
 
     data class Prose(override val source: String) : MarkdownSourceBlock
     data class Fence(override val source: String) : MarkdownSourceBlock
+    data class AtomicStructure(override val source: String) : MarkdownSourceBlock
     data class Table(
         val header: String,
         val divider: String,
@@ -52,6 +53,11 @@ private sealed interface MarkdownSourceBlock {
 
 private data class MarkdownTableScan(
     val block: MarkdownSourceBlock.Table,
+    val consumedLines: Int,
+)
+
+private data class MarkdownAtomicStructureScan(
+    val block: MarkdownSourceBlock.AtomicStructure,
     val consumedLines: Int,
 )
 
@@ -125,7 +131,15 @@ private fun scanMarkdownBlocks(markdown: String): MarkdownBlockScan {
             continue
         }
 
-        if (RootLinkDefinitionCandidateRegex.containsMatchIn(line.content) || isUnsafeSplitLine(line.content)) {
+        val atomicStructure = markdownAtomicStructure(lines, index)
+        if (atomicStructure != null) {
+            flushProse()
+            blocks += atomicStructure.block
+            index += atomicStructure.consumedLines
+            continue
+        }
+
+        if (RootLinkDefinitionCandidateRegex.containsMatchIn(line.content)) {
             requiresWholeFallback = true
         }
         block.append(line.raw)
@@ -142,6 +156,125 @@ private fun scanMarkdownBlocks(markdown: String): MarkdownBlockScan {
         requiresWholeFallback = requiresWholeFallback,
     )
 }
+
+private enum class MarkdownAtomicStructureKind {
+    List,
+    BlockQuote,
+    RawHtml,
+    IndentedCode,
+}
+
+private fun markdownAtomicStructure(
+    lines: List<MarkdownLine>,
+    index: Int,
+): MarkdownAtomicStructureScan? {
+    val kind = atomicStructureKind(lines[index].content) ?: return null
+    val endExclusive = when (kind) {
+        MarkdownAtomicStructureKind.List -> scanContainerStructure(lines, index, ::isRootListLine)
+        MarkdownAtomicStructureKind.BlockQuote -> scanContainerStructure(lines, index, ::isRootBlockQuoteLine)
+        MarkdownAtomicStructureKind.RawHtml -> scanRawHtmlStructure(lines, index)
+        MarkdownAtomicStructureKind.IndentedCode -> scanIndentedCodeStructure(lines, index)
+    }
+    val source = buildString {
+        for (lineIndex in index until endExclusive) append(lines[lineIndex].raw)
+    }
+    return MarkdownAtomicStructureScan(
+        block = MarkdownSourceBlock.AtomicStructure(source),
+        consumedLines = endExclusive - index,
+    )
+}
+
+private fun atomicStructureKind(line: String): MarkdownAtomicStructureKind? {
+    if (line.startsWith('\t') || line.takeWhile { it == ' ' }.length >= 4) {
+        return MarkdownAtomicStructureKind.IndentedCode
+    }
+    return when {
+        isRootBlockQuoteLine(line) -> MarkdownAtomicStructureKind.BlockQuote
+        isRootListLine(line) -> MarkdownAtomicStructureKind.List
+        isRootRawHtmlLine(line) -> MarkdownAtomicStructureKind.RawHtml
+        else -> null
+    }
+}
+
+private fun scanContainerStructure(
+    lines: List<MarkdownLine>,
+    start: Int,
+    isContainerMarker: (String) -> Boolean,
+): Int {
+    var index = start + 1
+    var afterBlank = false
+    while (index < lines.size) {
+        val line = lines[index].content
+        if (line.isBlank()) {
+            afterBlank = true
+            index++
+            continue
+        }
+        val indentation = line.takeWhile { it == ' ' }.length
+        if (isContainerMarker(line) || indentation > 0 || line.startsWith('\t')) {
+            afterBlank = false
+            index++
+            continue
+        }
+        if (afterBlank) break
+
+        // A container may lazily continue on an unmarked line until a blank boundary.
+        index++
+    }
+    return index
+}
+
+private fun scanIndentedCodeStructure(lines: List<MarkdownLine>, start: Int): Int {
+    var index = start + 1
+    while (index < lines.size) {
+        val line = lines[index].content
+        if (line.isBlank() || line.startsWith('\t') || line.takeWhile { it == ' ' }.length >= 4) {
+            index++
+        } else {
+            break
+        }
+    }
+    return index
+}
+
+private fun scanRawHtmlStructure(lines: List<MarkdownLine>, start: Int): Int {
+    val startLine = lines[start].content.dropRootIndent()
+    val closingMarker = when {
+        startLine.startsWith("<!--") -> "-->"
+        startLine.startsWith("<?") -> "?>"
+        startLine.startsWith("<![CDATA[", ignoreCase = true) -> "]]\u003e"
+        startLine.startsWith("<!") && !startLine.startsWith("<!DOCTYPE", ignoreCase = true) -> ">"
+        else -> null
+    }
+    if (closingMarker != null) {
+        var index = start
+        while (index < lines.size) {
+            index++
+            if (closingMarker in lines[index - 1].content) break
+        }
+        return index
+    }
+
+    var index = start + 1
+    while (index < lines.size) {
+        index++
+        if (lines[index - 1].content.isBlank()) break
+    }
+    return index
+}
+
+private fun String.dropRootIndent(): String {
+    val indentation = takeWhile { it == ' ' }.length
+    return if (indentation <= 3) drop(indentation) else this
+}
+
+private fun isRootBlockQuoteLine(line: String): Boolean = line.dropRootIndent().startsWith('>')
+
+private fun isRootListLine(line: String): Boolean =
+    MarkdownListMarkerRegex.containsMatchIn(line.dropRootIndent())
+
+private fun isRootRawHtmlLine(line: String): Boolean =
+    MarkdownRawHtmlBlockRegex.containsMatchIn(line.dropRootIndent())
 
 private fun markdownLines(markdown: String): List<MarkdownLine> {
     val lines = mutableListOf<MarkdownLine>()
@@ -214,9 +347,16 @@ private fun packBlocks(
         val chunks = packBlocksAtTarget(blocks, targetChars, tableTargetChars) ?: return null
         if (chunks.size <= maxChunks) return chunks
 
+        val indivisibleBlockCount = blocks.count {
+            it is MarkdownSourceBlock.Fence || it is MarkdownSourceBlock.AtomicStructure
+        }
+        if (indivisibleBlockCount > maxChunks) return chunks
+
         val hasTables = blocks.any { it is MarkdownSourceBlock.Table }
         val totalSourceLength = blocks.sumOf { it.source.length.toLong() }
-        if (!hasTables || tableTargetChars.toLong() >= totalSourceLength) return null
+        if (!hasTables || tableTargetChars.toLong() >= totalSourceLength) {
+            return chunks.takeIf { blocks.any { it is MarkdownSourceBlock.AtomicStructure } }
+        }
         tableTargetChars = (tableTargetChars.toLong() * 2)
             .coerceAtMost(Int.MAX_VALUE.toLong())
             .toInt()
@@ -247,6 +387,17 @@ private fun packBlocksAtTarget(
                     flushCurrent()
                 }
                 current.append(block.source)
+            }
+            is MarkdownSourceBlock.AtomicStructure -> {
+                if (current.isNotEmpty() && current.length + block.source.length > targetChars) {
+                    flushCurrent()
+                }
+                if (block.source.length > targetChars) {
+                    flushCurrent()
+                    chunks += MarkdownMessageChunk(source = block.source, renderMarkdown = block.source)
+                } else {
+                    current.append(block.source)
+                }
             }
             is MarkdownSourceBlock.Fence -> {
                 flushCurrent()
