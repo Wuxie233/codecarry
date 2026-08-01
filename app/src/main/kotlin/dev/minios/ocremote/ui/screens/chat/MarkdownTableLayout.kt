@@ -1,6 +1,7 @@
 package dev.minios.ocremote.ui.screens.chat
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
@@ -82,6 +83,8 @@ internal fun MeasuredMarkdownTable(
     rawTable: String,
     textStyle: TextStyle,
     textColor: Color,
+    modifier: Modifier = Modifier,
+    scrollStateSink: ((ScrollState) -> Unit)? = null,
 ) {
     val parsed = remember(rawTable) { parseMarkdownTable(rawTable) }
     if (parsed == null) {
@@ -91,6 +94,7 @@ internal fun MeasuredMarkdownTable(
 
     val (header, rows) = parsed
     val scrollState = rememberScrollState()
+    scrollStateSink?.invoke(scrollState)
     val tableShape = RoundedCornerShape(8.dp)
     val borderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)
     val dividerColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
@@ -98,7 +102,7 @@ internal fun MeasuredMarkdownTable(
     val headerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
     val tableScrollsHorizontally = ChatOverflowPolicy.shouldUseHorizontalScroll(ChatOverflowContentKind.Table)
 
-    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+    BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
         val viewportWidthDp = maxWidth.value
         Column(modifier = Modifier.fillMaxWidth()) {
             Box(

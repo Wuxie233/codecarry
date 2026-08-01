@@ -1,30 +1,21 @@
 package dev.minios.ocremote.ui.screens.chat
 
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
@@ -33,8 +24,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -70,7 +59,7 @@ internal fun MessageMarkdownContent(
 ) {
     val normalizedMarkdown = remember(markdown) { preserveRawHtmlPayload(markdown) }
     val renderMarkdown = plannedChunk?.chunk?.renderMarkdown ?: normalizedMarkdown
-    val mathSegments = remember(renderMarkdown) { splitMarkdownMathSegments(renderMarkdown) }
+    val blocks = remember(renderMarkdown) { scanMarkdownBlocks(renderMarkdown).blocks }
     val isAmoled = isMessageMarkdownAmoledTheme()
 
     val inlineCodeFg = when {
@@ -184,7 +173,7 @@ internal fun MessageMarkdownContent(
                 val rawTable = runCatching {
                     it.content.substring(it.node.startOffset, it.node.endOffset)
                 }.getOrElse { _ -> it.content }
-                ScrollableMarkdownTable(
+                MeasuredMarkdownTable(
                     rawTable = rawTable,
                     textStyle = bodyStyle,
                     textColor = textColor,
@@ -216,24 +205,35 @@ internal fun MessageMarkdownContent(
         }
         MessageMarkdownRoute.ComposeMarkdown -> {
             Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                mathSegments.forEachIndexed { index, segment ->
-                    key(markdownMathSegmentKey(index, segment)) {
-                        when (segment) {
-                            is MarkdownMathSegment.Markdown -> {
-                                if (segment.text.isNotBlank()) {
-                                    SelectionContainer {
-                                        Markdown(
-                                            content = segment.text,
-                                            colors = colors,
-                                            typography = typography,
-                                            components = components,
-                                            imageTransformer = Coil2ImageTransformerImpl,
-                                            modifier = Modifier.fillMaxWidth(),
-                                        )
-                                    }
-                                }
+                blocks.forEachIndexed { index, block ->
+                    key(markdownBlockKey(index, block)) {
+                        when (block) {
+                            is MarkdownSourceBlock.Table -> MeasuredMarkdownTable(
+                                rawTable = block.source,
+                                textStyle = bodyStyle,
+                                textColor = textColor,
+                            )
+                            is MarkdownSourceBlock.Fence -> Markdown(
+                                content = block.source,
+                                colors = colors,
+                                typography = typography,
+                                components = components,
+                                imageTransformer = Coil2ImageTransformerImpl,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            is MarkdownSourceBlock.Prose,
+                            is MarkdownSourceBlock.AtomicStructure,
+                            is MarkdownSourceBlock.MathPlaceholder,
+                            -> SelectionContainer {
+                                Markdown(
+                                    content = block.source,
+                                    colors = colors,
+                                    typography = typography,
+                                    components = components,
+                                    imageTransformer = Coil2ImageTransformerImpl,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
                             }
-                            is MarkdownMathSegment.Math -> Unit
                         }
                     }
                 }
@@ -401,134 +401,8 @@ private fun isMessageMarkdownAmoledTheme(): Boolean {
     return colors.background == Color.Black && colors.surface == Color.Black
 }
 
-private fun markdownMathSegmentKey(index: Int, segment: MarkdownMathSegment): String {
-    return when (segment) {
-        is MarkdownMathSegment.Markdown -> "md-$index-${segment.text.hashCode()}"
-        is MarkdownMathSegment.Math -> "math-$index-${segment.source.hashCode()}-${segment.display}"
-    }
-}
-
-@Composable
-private fun ScrollableMarkdownTable(
-    rawTable: String,
-    textStyle: TextStyle,
-    textColor: Color,
-) {
-    val parsed = remember(rawTable) { parseMarkdownTable(rawTable) }
-    if (parsed == null) {
-        Text(
-            text = rawTable.trim(),
-            style = textStyle,
-            color = textColor,
-        )
-        return
-    }
-
-    val (header, rows) = parsed
-    val columnCount = header.size
-    val scrollState = rememberScrollState()
-    val tableScrollsHorizontally = ChatOverflowPolicy.shouldUseHorizontalScroll(ChatOverflowContentKind.Table)
-    val tableShape = RoundedCornerShape(8.dp)
-    val borderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)
-    val dividerColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
-
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .then(
-                    if (tableScrollsHorizontally) {
-                        Modifier.horizontalScroll(scrollState)
-                    } else {
-                        Modifier
-                    }
-                ),
-        ) {
-            Column(
-                modifier = Modifier
-                    .clip(tableShape)
-                    .border(BorderStroke(1.dp, borderColor), tableShape)
-                    .background(MaterialTheme.colorScheme.surface),
-            ) {
-                MarkdownTableRow(
-                    cells = header,
-                    columnCount = columnCount,
-                    isHeader = true,
-                    textStyle = textStyle,
-                    textColor = textColor,
-                    dividerColor = dividerColor,
-                )
-                if (rows.isNotEmpty()) {
-                    HorizontalDivider(color = dividerColor)
-                }
-                rows.forEachIndexed { index, row ->
-                    MarkdownTableRow(
-                        cells = row,
-                        columnCount = columnCount,
-                        isHeader = false,
-                        textStyle = textStyle,
-                        textColor = textColor,
-                        dividerColor = dividerColor,
-                    )
-                    if (index != rows.lastIndex) {
-                        HorizontalDivider(color = dividerColor)
-                    }
-                }
-            }
-        }
-        if (scrollState.maxValue > 0) {
-            Text(
-                text = stringResource(R.string.chat_table_scroll_hint),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 4.dp),
-            )
-        }
-    }
-}
-
-@Composable
-private fun MarkdownTableRow(
-    cells: List<String>,
-    columnCount: Int,
-    isHeader: Boolean,
-    textStyle: TextStyle,
-    textColor: Color,
-    dividerColor: Color,
-) {
-    val backgroundColor = if (isHeader) {
-        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
-    } else {
-        MaterialTheme.colorScheme.surface
-    }
-    Row(
-        modifier = Modifier
-            .height(IntrinsicSize.Min)
-            .background(backgroundColor),
-    ) {
-        repeat(columnCount) { index ->
-            if (index > 0) {
-                VerticalDivider(
-                    color = dividerColor,
-                    modifier = Modifier.fillMaxHeight(),
-                )
-            }
-            Text(
-                text = cells.getOrElse(index) { "" },
-                style = textStyle.copy(
-                    fontWeight = if (isHeader) FontWeight.SemiBold else textStyle.fontWeight,
-                ),
-                color = textColor,
-                modifier = Modifier
-                    .width(176.dp)
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
-            )
-        }
-    }
-}
+private fun markdownBlockKey(index: Int, block: MarkdownSourceBlock): String =
+    "block-$index-${block.sourceRange.first}-${block.sourceRange.last}-${block.source.hashCode()}"
 
 internal fun parseMarkdownTable(raw: String): Pair<List<String>, List<List<String>>>? {
     val lines = raw.lines()
@@ -604,10 +478,13 @@ internal fun resolveMessageMarkdownRoute(
 ): MessageMarkdownRoute {
     return when {
         plannedChunk == null -> resolveMessageMarkdownRoute(markdown)
-        plannedChunk.math.isNotEmpty() -> MessageMarkdownRoute.KatexWebView
+        plannedChunkContainsMathPlaceholder(plannedChunk) -> MessageMarkdownRoute.KatexWebView
         else -> MessageMarkdownRoute.ComposeMarkdown
     }
 }
+
+internal fun plannedChunkContainsMathPlaceholder(plannedChunk: PlannedMarkdownMessageChunk): Boolean =
+    scanMarkdownBlocks(plannedChunk.chunk.renderMarkdown).blocks.any { it is MarkdownSourceBlock.MathPlaceholder }
 
 internal fun preserveRawHtmlPayload(markdown: String): String {
     if (markdown.isBlank()) return markdown

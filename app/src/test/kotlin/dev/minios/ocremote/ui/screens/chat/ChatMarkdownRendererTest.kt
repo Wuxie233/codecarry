@@ -48,6 +48,39 @@ class ChatMarkdownRendererTest {
     }
 
     @Test
+    fun `planned table chunk stays compose when another chunk contains math`() {
+        val table = "| Name | Value |\n| --- | --- |\n| Alpha | Beta |"
+        val placeholderMarkdown = "Before\n\n$table\n\nAfter xMJXMATH0HTAMXJMx"
+        val chunks = planMarkdownMessageChunks(placeholderMarkdown, targetChars = 20)
+        val tableChunk = chunks.first { it.renderMarkdown.contains("| Name |") }
+        val mathChunk = chunks.first { it.renderMarkdown.contains("xMJXMATH0") }
+        val globalMath = listOf(MarkdownMathSegment.Math("x", display = false, delimiter = "${'$'}"))
+
+        assertEquals(
+            MessageMarkdownRoute.ComposeMarkdown,
+            resolveMessageMarkdownRoute(
+                tableChunk.source,
+                PlannedMarkdownMessageChunk(tableChunk, globalMath),
+            ),
+        )
+        assertEquals(
+            MessageMarkdownRoute.KatexWebView,
+            resolveMessageMarkdownRoute(
+                mathChunk.source,
+                PlannedMarkdownMessageChunk(mathChunk, globalMath),
+            ),
+        )
+    }
+
+    @Test
+    fun `planned renderer chunks reconstruct placeholder source exactly`() {
+        val source = "Intro\n\n| Name | Value |\n| --- | --- |\n| Alpha | Beta |\n\nFormula xMJXMATH0HTAMXJMx"
+        val chunks = planMarkdownMessageChunks(source, targetChars = 24)
+
+        assertEquals(source, chunks.joinToString(separator = "") { it.source })
+    }
+
+    @Test
     fun `resolveMessageMarkdownRoute sends inline and display math to katex route`() {
         assertEquals(MessageMarkdownRoute.KatexWebView, resolveMessageMarkdownRoute("Inline ${'$'}x${'$'} math"))
         assertEquals(MessageMarkdownRoute.KatexWebView, resolveMessageMarkdownRoute("Display ${'$'}${'$'}x^2${'$'}${'$'} math"))
