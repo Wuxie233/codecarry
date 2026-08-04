@@ -11,8 +11,11 @@ internal data class MarkdownRenderPlan(
 internal data class MarkdownRenderBlock(
     val key: String,
     val kind: MarkdownRenderBlockKind,
+    val semanticParserRange: SourceRange,
+    val semanticOriginalRange: SourceRange,
     val parserRange: SourceRange,
     val originalRange: SourceRange,
+    val semanticSource: String,
     val source: String,
     val renderSource: String,
     val route: MarkdownRenderRoute,
@@ -56,12 +59,18 @@ internal data class MarkdownRenderTable(
 internal fun planMarkdownDocument(
     document: MarkdownDocument,
     targetChars: Int = MarkdownRenderPlanTargetChars,
+    coalesceSelectableProse: Boolean = true,
 ): MarkdownRenderPlan {
     require(targetChars > 0)
     val candidates = document.blocks.flatMap { block ->
         planBlock(document, block, targetChars)
     }
-    val coalesced = uniquifyRenderBlockKeys(coalesceProse(document, candidates, targetChars))
+    val planned = if (coalesceSelectableProse) {
+        coalesceProse(document, candidates, targetChars)
+    } else {
+        candidates
+    }
+    val coalesced = uniquifyRenderBlockKeys(planned)
     return MarkdownRenderPlan(
         originalSource = document.originalSource,
         parserSource = document.parserSource,
@@ -96,7 +105,9 @@ private fun planBlock(
     }
     val parserRange = block.ownedRange
     val originalRange = document.mapParserRangeToOriginal(parserRange)
+    val semanticOriginalRange = document.mapParserRangeToOriginal(block.semanticRange)
     val source = originalRange.slice(document.normalizedSource)
+    val semanticSource = semanticOriginalRange.slice(document.normalizedSource)
     val parserSource = parserRange.slice(document.parserSource)
     val renderSource = appendDocumentLinkDefinitions(
         source = parserSource,
@@ -105,10 +116,13 @@ private fun planBlock(
     )
     return listOf(
         MarkdownRenderBlock(
-            key = stableRenderBlockKey(kind, source),
+            key = stableRenderBlockKey(kind, semanticSource),
             kind = kind,
+            semanticParserRange = block.semanticRange,
+            semanticOriginalRange = semanticOriginalRange,
             parserRange = parserRange,
             originalRange = originalRange,
+            semanticSource = semanticSource,
             source = source,
             renderSource = renderSource,
             route = route,
@@ -143,8 +157,11 @@ private fun splitLargeProse(
         MarkdownRenderBlock(
             key = stableRenderBlockKey(MarkdownRenderBlockKind.Prose, source),
             kind = MarkdownRenderBlockKind.Prose,
+            semanticParserRange = parserRange,
+            semanticOriginalRange = originalRange,
             parserRange = parserRange,
             originalRange = originalRange,
+            semanticSource = source,
             source = source,
             renderSource = appendDocumentLinkDefinitions(
                 parserSource,
@@ -195,8 +212,17 @@ private fun coalesceProse(
         pending = current.copy(
             key = stableRenderBlockKey(MarkdownRenderBlockKind.Prose, source),
             kind = MarkdownRenderBlockKind.Prose,
+            semanticParserRange = SourceRange(
+                current.semanticParserRange.start,
+                block.semanticParserRange.endExclusive,
+            ),
+            semanticOriginalRange = SourceRange(
+                current.semanticOriginalRange.start,
+                block.semanticOriginalRange.endExclusive,
+            ),
             parserRange = parserRange,
             originalRange = originalRange,
+            semanticSource = source,
             source = source,
             renderSource = appendDocumentLinkDefinitions(
                 parserRange.slice(document.parserSource),
