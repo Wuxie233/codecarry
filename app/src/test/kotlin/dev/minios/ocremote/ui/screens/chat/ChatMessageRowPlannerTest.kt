@@ -16,30 +16,29 @@ class ChatMessageRowPlannerTest {
         val rows = planChatMessageRows(listOf(message))
         val chunks = rows.filterIsInstance<ChatMessageRow.TextChunk>()
 
-        assertTrue("expected 5-8 rows, count=${rows.size}", rows.size in 5..8)
+        assertTrue("expected bounded rows, count=${rows.size}", rows.size in 5..10)
         assertEquals(rows.size, chunks.size)
         assertEquals(ChatMessageSegmentPosition.First, chunks.first().position)
         assertEquals(ChatMessageSegmentPosition.Last, chunks.last().position)
         assertTrue(chunks.drop(1).dropLast(1).all { it.position == ChatMessageSegmentPosition.Middle })
         assertEquals(rows.size, rows.map { it.key }.distinct().size)
-        chunks.forEachIndexed { index, row ->
+        chunks.forEach { row ->
             assertTrue(row.key.contains("assistant-long"))
             assertTrue(row.key.contains("assistant-long-text"))
             assertTrue(row.key.contains("part-0"))
-            assertTrue(row.key.contains("chunk-$index"))
+            assertTrue(row.key.contains("type-markdown-block:"))
             assertSame(message, row.chatMessage)
         }
     }
 
     @Test
-    fun `expanded rows reconstruct placeholder source exactly`() {
+    fun `expanded rows reconstruct normalized source exactly`() {
         val message = assistantMessage("assistant-source", longMathText())
         val text = (message.parts.single() as Part.Text).text
-        val (placeholderMarkdown, _) = buildPlaceholderMarkdown(text)
 
         val rows = planChatMessageRows(listOf(message)).filterIsInstance<ChatMessageRow.TextChunk>()
 
-        assertEquals(placeholderMarkdown, rows.joinToString(separator = "") { it.markdown.chunk.source })
+        assertEquals(text, rows.joinToString(separator = "") { it.markdown.source })
     }
 
     @Test
@@ -53,13 +52,10 @@ class ChatMessageRowPlannerTest {
         assertTrue("fixture should be about 29k chars, length=${source.length}", source.length in 28_000..30_000)
         assertTrue("expected 4-6 rows, count=${rows.size}", rows.size in 4..6)
         assertEquals(rows.size, chunks.size)
-        assertEquals(source, chunks.joinToString(separator = "") { it.markdown.chunk.source })
-        assertTrue(chunks.all { it.markdown.chunk.source.length <= MarkdownMessageChunkTargetChars })
+        assertEquals(source, chunks.joinToString(separator = "") { it.markdown.source })
+        assertTrue(chunks.all { it.markdown.source.length <= MarkdownRenderPlanTargetChars })
         assertTrue(chunks.all { it.markdown.math.isEmpty() })
-        assertTrue(chunks.all {
-            resolveMessageMarkdownRoute(it.markdown.chunk.source, it.markdown) ==
-                MessageMarkdownRoute.ComposeMarkdown
-        })
+        assertTrue(chunks.all { it.markdown.route == MarkdownRenderRoute.Compose })
     }
 
     @Test
@@ -89,12 +85,9 @@ class ChatMessageRowPlannerTest {
         assertTrue("expected multiple planned rows, count=${rows.size}", rows.size > 1)
         assertTrue("atomic boundaries may exceed the soft cap, count=${rows.size}", rows.size > 12)
         assertEquals(rows.size, chunks.size)
-        assertEquals(source, chunks.joinToString(separator = "") { it.markdown.chunk.source })
-        assertTrue(chunks.any { failingTable in it.markdown.chunk.source })
-        assertTrue(chunks.all {
-            resolveMessageMarkdownRoute(it.markdown.chunk.source, it.markdown) ==
-                MessageMarkdownRoute.ComposeMarkdown
-        })
+        assertEquals(source, chunks.joinToString(separator = "") { it.markdown.source })
+        assertTrue(chunks.any { failingTable in it.markdown.source })
+        assertTrue(chunks.all { it.markdown.route == MarkdownRenderRoute.Compose })
     }
 
     @Test
@@ -117,10 +110,10 @@ class ChatMessageRowPlannerTest {
         val chunks = rows.filterIsInstance<ChatMessageRow.TextChunk>()
 
         assertTrue(chunks.size > 1)
-        assertEquals(source, chunks.joinToString(separator = "") { it.markdown.chunk.source })
-        val tableChunk = chunks.single { tableHeader in it.markdown.chunk.source }
-        assertTrue(tableChunk.markdown.chunk.source.startsWith(tableHeader))
-        assertTrue(!tableChunk.markdown.chunk.source.contains("路由依据不是任务文字长短"))
+        assertEquals(source, chunks.joinToString(separator = "") { it.markdown.source })
+        val tableChunk = chunks.single { tableHeader in it.markdown.source }
+        assertTrue(tableChunk.markdown.source.startsWith(tableHeader))
+        assertTrue(!tableChunk.markdown.source.contains("路由依据不是任务文字长短"))
     }
 
     @Test
@@ -172,7 +165,7 @@ class ChatMessageRowPlannerTest {
 
         val rows = planChatMessageRows(listOf(message))
 
-        assertTrue(rows.size in 5..8)
+        assertTrue(rows.size > 1)
         assertTrue(rows.all { it is ChatMessageRow.TextChunk })
         assertTrue((rows.first() as ChatMessageRow.TextChunk).showsSteps)
         assertTrue(rows.drop(1).none { (it as ChatMessageRow.TextChunk).showsSteps })
@@ -207,16 +200,15 @@ class ChatMessageRowPlannerTest {
             repeat(500) { index -> append("<p>Payload $index ${"content ".repeat(8)}</p>") }
             append("</body></html>")
         }
-        val normalized = preserveRawHtmlPayload(rawHtml)
-        val (placeholderMarkdown, math) = buildPlaceholderMarkdown(normalized)
-        val planned = planMarkdownMessageChunks(placeholderMarkdown)
+        val document = parseMarkdownDocument(rawHtml).getOrThrow()
+        val planned = planMarkdownDocument(document)
 
-        assertTrue(normalized.startsWith("```text\n<!doctype html>"))
-        assertTrue(normalized.endsWith("\n```"))
-        assertTrue(math.isEmpty())
-        assertEquals(listOf(normalized), planned.map { it.source })
-        assertTrue(planned.all { it.renderMarkdown.startsWith("```text\n") })
-        assertTrue(planned.none { it.renderMarkdown.startsWith("<!doctype html>") })
+        assertTrue(document.normalizedSource.startsWith("```text\n<!doctype html>"))
+        assertTrue(document.normalizedSource.endsWith("\n```"))
+        assertTrue(document.math.isEmpty())
+        assertEquals(listOf(document.normalizedSource), planned.blocks.map { it.source })
+        assertTrue(planned.blocks.all { it.renderSource.startsWith("```text\n") })
+        assertTrue(planned.blocks.none { it.renderSource.startsWith("<!doctype html>") })
 
         val rows = planChatMessageRows(listOf(assistantMessage("assistant-html", rawHtml)))
         assertEquals(1, rows.size)
@@ -265,13 +257,31 @@ class ChatMessageRowPlannerTest {
         assertTrue(grownTarget.lastRowKey != firstTarget.lastRowKey)
     }
 
+    @Test
+    fun `streaming plans remain isolated when messages reuse a part id`() {
+        val state = ChatMessageRowPlanningState()
+        val sharedPartId = "shared-text"
+        val first = assistantMessage("assistant-one", streamingMathText(40), partId = sharedPartId)
+        val second = assistantMessage("assistant-two", longNonMathText(), partId = sharedPartId)
+
+        val initialRows = planChatMessageRows(listOf(first, second), state)
+        val firstPrefixKey = initialRows.first { it.sourceMessageIndex == 0 }.key
+        val grownFirst = assistantMessage("assistant-one", streamingMathText(80), partId = sharedPartId)
+        val grownRows = planChatMessageRows(listOf(grownFirst, second), state)
+
+        assertEquals(firstPrefixKey, grownRows.first { it.sourceMessageIndex == 0 }.key)
+        assertTrue(grownRows.filter { it.sourceMessageIndex == 0 }.all { "assistant-one" in it.key })
+        assertTrue(grownRows.filter { it.sourceMessageIndex == 1 }.all { "assistant-two" in it.key })
+    }
+
     private fun assistantMessage(
         id: String,
         text: String,
         extraParts: List<Part> = emptyList(),
+        partId: String = "$id-text",
     ): ChatMessage = ChatMessage(
         message = Message.Assistant(id = id, sessionId = SessionId, time = TimeInfo(created = 1L)),
-        parts = listOf(textPart(id, "$id-text", text)) + extraParts,
+        parts = listOf(textPart(id, partId, text)) + extraParts,
     )
 
     private fun textPart(messageId: String, partId: String, text: String): Part.Text = Part.Text(

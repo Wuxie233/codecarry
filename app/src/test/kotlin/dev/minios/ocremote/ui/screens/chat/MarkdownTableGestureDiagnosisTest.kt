@@ -150,9 +150,12 @@ class MarkdownTableGestureDiagnosisTest {
         stateSink: (androidx.compose.foundation.ScrollState) -> Unit,
         contentWidthSink: (Int) -> Unit,
     ) {
-        val parsed = remember(TABLE_MARKDOWN) { parseMarkdownTable(TABLE_MARKDOWN) }
-            ?: error("diagnostic payload must parse as a GFM table")
-        val (header, rows) = parsed
+        val table = remember(TABLE_MARKDOWN) {
+            planMarkdownDocument(parseMarkdownDocument(TABLE_MARKDOWN.trimIndent()).getOrThrow())
+                .blocks.single().table ?: error("diagnostic payload must parse as a GFM table")
+        }
+        val header = table.header
+        val rows = table.rows
         val scrollState = rememberScrollState()
         stateSink(scrollState)
         val dividerColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)

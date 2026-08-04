@@ -20,7 +20,16 @@ class MarkdownMessageRendererTest {
                 | val reallyLongLine = "${"x".repeat(120)}"
                 | ```
             """.trimMargin(),
-            math = listOf(MarkdownMathSegment.Math("x", display = false, delimiter = "${'$'}")),
+            math = listOf(
+                MarkdownMathPlaceholder(
+                    id = 0,
+                    parserRange = SourceRange(7, 25),
+                    normalizedRange = SourceRange(7, 10),
+                    source = "x",
+                    display = false,
+                    delimiter = "${'$'}",
+                ),
+            ),
             textColor = Color.Black,
             codeBackground = Color.LightGray,
             codeForeground = Color.Black,

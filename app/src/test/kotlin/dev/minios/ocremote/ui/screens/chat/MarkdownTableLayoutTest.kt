@@ -37,14 +37,15 @@ class MarkdownTableLayoutTest {
             | 权限 | 待确认 | 请确认是否允许访问项目目录中的相关文件 |
             | 输出 | 已完成 | 结果已经整理完成，可以继续查看后续内容 |
         """.trimIndent()
-        val parsed = parseMarkdownTable(payload)!!
-        val naturalWidthsDp = parsed.first.indices.map { columnIndex ->
-            parsed.first.indices
+        val table = planMarkdownDocument(parseMarkdownDocument(payload).getOrThrow())
+            .blocks.single().table!!
+        val naturalWidthsDp = table.header.indices.map { columnIndex ->
+            table.header.indices
                 .map { rowIndex ->
                     val cell = if (rowIndex == 0) {
-                        parsed.first[columnIndex]
+                        table.header[columnIndex]
                     } else {
-                        parsed.second[rowIndex - 1][columnIndex]
+                        table.rows[rowIndex - 1][columnIndex]
                     }
                     cell.length * 7f + 24f
                 }
@@ -52,7 +53,7 @@ class MarkdownTableLayoutTest {
         }
         val allocation = allocateMarkdownTableColumnWidths(naturalWidthsDp, viewportWidthDp = 330f)
 
-        assertTrue(parsed.first.size == 3)
+        assertTrue(table.header.size == 3)
         assertTrue(allocation.totalWidthDp > 330f)
     }
 }

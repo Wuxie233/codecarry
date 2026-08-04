@@ -41,7 +41,7 @@ class ChatMarkdownRendererGestureTest {
                     item {
                         ProductionShapedAssistantBubble {
                             MeasuredMarkdownTable(
-                                rawTable = TABLE_MARKDOWN,
+                                table = rememberRenderTable(TABLE_MARKDOWN.trimIndent()),
                                 textStyle = MaterialTheme.typography.bodyMedium,
                                 textColor = MaterialTheme.colorScheme.onSurface,
                                 modifier = Modifier.testTag("measured-table"),
@@ -66,6 +66,11 @@ class ChatMarkdownRendererGestureTest {
                 "maxValue=$maxValue postDragValue=${scrollState.value}",
         )
         assertTrue("table horizontal scroll did not move", scrollState.value > initialValue)
+    }
+
+    @Composable
+    private fun rememberRenderTable(markdown: String): MarkdownRenderTable = androidx.compose.runtime.remember(markdown) {
+        planMarkdownDocument(parseMarkdownDocument(markdown).getOrThrow()).blocks.single().table!!
     }
 
     @OptIn(ExperimentalFoundationApi::class)

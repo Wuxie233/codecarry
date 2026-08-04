@@ -9,10 +9,22 @@ internal enum class ChatMessageSegmentPosition {
     Last,
 }
 
-internal data class PlannedMarkdownMessageChunk(
-    val chunk: MarkdownMessageChunk,
-    val math: List<MarkdownMathSegment.Math>,
-)
+internal class ChatMessageRowPlanningState {
+    private val plansByPart = mutableMapOf<ChatMarkdownPartIdentity, MarkdownRenderPlan>()
+
+    internal fun previous(messageId: String, partId: String): MarkdownRenderPlan? =
+        plansByPart[ChatMarkdownPartIdentity(messageId, partId)]
+
+    internal fun update(messageId: String, partId: String, plan: MarkdownRenderPlan) {
+        plansByPart[ChatMarkdownPartIdentity(messageId, partId)] = plan
+    }
+
+    internal fun retain(parts: Set<ChatMarkdownPartIdentity>) {
+        plansByPart.keys.retainAll(parts)
+    }
+}
+
+internal data class ChatMarkdownPartIdentity(val messageId: String, val partId: String)
 
 internal data class ChatAutoFollowTarget(
     val messageId: String?,
@@ -42,20 +54,26 @@ internal sealed interface ChatMessageRow {
         override val sourceMessageIndex: Int,
         val partIndex: Int,
         val partId: String,
-        val chunkIndex: Int,
-        val markdown: PlannedMarkdownMessageChunk,
+        val blockIndex: Int,
+        val markdown: MarkdownRenderBlock,
         override val position: ChatMessageSegmentPosition,
     ) : ChatMessageRow {
         override val key: String =
-            "message:${chatMessage.message.id}:part:$partId:part-$partIndex:type-text-chunk:chunk-$chunkIndex"
+            "message:${chatMessage.message.id}:part:$partId:part-$partIndex:type-markdown-block:${markdown.key}"
         val showsSteps: Boolean get() = position == ChatMessageSegmentPosition.First
     }
 }
 
-internal fun planChatMessageRows(messages: List<ChatMessage>): List<ChatMessageRow> {
-    return messages.flatMapIndexed { messageIndex, chatMessage ->
-        planChatMessageRows(chatMessage, messageIndex)
+internal fun planChatMessageRows(
+    messages: List<ChatMessage>,
+    planningState: ChatMessageRowPlanningState? = null,
+): List<ChatMessageRow> {
+    val activeParts = mutableSetOf<ChatMarkdownPartIdentity>()
+    val rows = messages.flatMapIndexed { messageIndex, chatMessage ->
+        planChatMessageRows(chatMessage, messageIndex, planningState, activeParts)
     }
+    planningState?.retain(activeParts)
+    return rows
 }
 
 internal fun timelineIndexForMessage(
@@ -109,7 +127,12 @@ internal fun timelineLeadingItemCount(hasOlderMessages: Boolean, hasRoster: Bool
     return (if (hasOlderMessages) 1 else 0) + (if (hasRoster) 1 else 0)
 }
 
-private fun planChatMessageRows(chatMessage: ChatMessage, messageIndex: Int): List<ChatMessageRow> {
+private fun planChatMessageRows(
+    chatMessage: ChatMessage,
+    messageIndex: Int,
+    planningState: ChatMessageRowPlanningState?,
+    activeParts: MutableSet<ChatMarkdownPartIdentity>,
+): List<ChatMessageRow> {
     if (!chatMessage.isAssistant) return listOf(ChatMessageRow.Whole(chatMessage, messageIndex))
 
     val renderableText = chatMessage.parts.withIndex().filter { (_, part) ->
@@ -124,20 +147,26 @@ private fun planChatMessageRows(chatMessage: ChatMessage, messageIndex: Int): Li
     if (!supportedParts) return listOf(ChatMessageRow.Whole(chatMessage, messageIndex))
 
     val textPart = target.value as Part.Text
-    val normalizedMarkdown = preserveRawHtmlPayload(textPart.text)
-    val (placeholderMarkdown, math) = buildPlaceholderMarkdown(normalizedMarkdown)
-    val chunks = planMarkdownMessageChunks(placeholderMarkdown)
-    if (chunks.size == 1) return listOf(ChatMessageRow.Whole(chatMessage, messageIndex))
+    val partIdentity = ChatMarkdownPartIdentity(chatMessage.message.id, textPart.id)
+    activeParts += partIdentity
+    val planned = planStreamingMarkdown(
+        source = textPart.text,
+        previous = planningState?.previous(partIdentity.messageId, partIdentity.partId),
+    )
+    val plan = (planned as? MarkdownStreamingPlanResult.Success)?.plan
+        ?: return listOf(ChatMessageRow.Whole(chatMessage, messageIndex))
+    planningState?.update(partIdentity.messageId, partIdentity.partId, plan)
+    if (plan.blocks.size == 1) return listOf(ChatMessageRow.Whole(chatMessage, messageIndex))
 
-    return chunks.mapIndexed { chunkIndex, chunk ->
+    return plan.blocks.mapIndexed { blockIndex, block ->
         ChatMessageRow.TextChunk(
             chatMessage = chatMessage,
             sourceMessageIndex = messageIndex,
             partIndex = target.index,
             partId = textPart.id,
-            chunkIndex = chunkIndex,
-            markdown = PlannedMarkdownMessageChunk(chunk = chunk, math = math),
-            position = chunkPosition(chunkIndex, chunks.lastIndex),
+            blockIndex = blockIndex,
+            markdown = block,
+            position = chunkPosition(blockIndex, plan.blocks.lastIndex),
         )
     }
 }

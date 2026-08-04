@@ -20,7 +20,16 @@ class MarkdownMessageWebViewScrollTest {
     fun webViewHtmlMakesEveryPreTableAndMathBlockIndependentlyScrollable() {
         val html = buildMessageHtml(
             placeholderMarkdown = "xMJXMATH0HTAMXJMx",
-            math = listOf(MarkdownMathSegment.Math("x", display = true, delimiter = "${'$'}${'$'}")),
+            math = listOf(
+                MarkdownMathPlaceholder(
+                    id = 0,
+                    parserRange = SourceRange(0, 18),
+                    normalizedRange = SourceRange(0, 5),
+                    source = "x",
+                    display = true,
+                    delimiter = "${'$'}${'$'}",
+                ),
+            ),
             textColor = Color.Black,
             codeBackground = Color.LightGray,
             codeForeground = Color.Black,

@@ -14,13 +14,11 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -37,7 +35,6 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.net.toUri
 import androidx.core.view.NestedScrollingChildHelper
 import androidx.core.view.ViewCompat
-import kotlin.math.absoluteValue
 import kotlin.math.roundToInt
 
 private const val MessageAssetBaseUrl = "file:///android_asset/"
@@ -56,30 +53,9 @@ private object MarkdownRendererAssets {
         katexJs ?: synchronized(this) { katexJs ?: read(context, "katex/katex.min.js").also { katexJs = it } }
 }
 
-private fun mathPlaceholder(index: Int): String = "xMJXMATH${index}HTAMXJMx"
-
-internal fun buildPlaceholderMarkdown(markdown: String): Pair<String, List<MarkdownMathSegment.Math>> {
-    val segments = splitMarkdownMathSegments(markdown)
-    if (segments.none { it is MarkdownMathSegment.Math }) {
-        return markdown to emptyList()
-    }
-    val math = mutableListOf<MarkdownMathSegment.Math>()
-    val builder = StringBuilder(markdown.length)
-    for (segment in segments) {
-        when (segment) {
-            is MarkdownMathSegment.Markdown -> builder.append(segment.text)
-            is MarkdownMathSegment.Math -> {
-                builder.append(mathPlaceholder(math.size))
-                math += segment
-            }
-        }
-    }
-    return builder.toString() to math
-}
-
 @Composable
 internal fun MarkdownMessageView(
-    markdown: String,
+    block: MarkdownRenderBlock,
     textColor: Color,
     codeBackground: Color,
     codeForeground: Color,
@@ -87,7 +63,6 @@ internal fun MarkdownMessageView(
     bodyFontSizeSp: Int,
     onLinkClick: (String) -> Unit,
     modifier: Modifier = Modifier,
-    plannedChunk: PlannedMarkdownMessageChunk? = null,
 ) {
     val context = LocalContext.current
     val colorScheme = androidx.compose.material3.MaterialTheme.colorScheme
@@ -95,73 +70,53 @@ internal fun MarkdownMessageView(
     val isDark = textColor.luminance() > 0.5f
     val markedJs = remember { MarkdownRendererAssets.marked(context.applicationContext) }
     val katexJs = remember { MarkdownRendererAssets.katex(context.applicationContext) }
-    val renderedChunks = remember(
-        markdown,
+    val renderedChunk = remember(
+        block,
         textColor,
         codeBackground,
         codeForeground,
         linkColor,
         bodyFontSizeSp,
         isDark,
-        plannedChunk,
     ) {
-        val plannedMarkdown = if (plannedChunk != null) {
-            listOf(plannedChunk)
-        } else {
-            val (placeholderMarkdown, globalMath) = buildPlaceholderMarkdown(markdown)
-            planMarkdownMessageChunks(placeholderMarkdown).map { chunk ->
-                PlannedMarkdownMessageChunk(chunk = chunk, math = globalMath)
-            }
-        }
-        plannedMarkdown.mapIndexed { index, item ->
-            val html = buildMessageHtml(
-                placeholderMarkdown = item.chunk.renderMarkdown,
-                math = item.math,
-                textColor = textColor,
-                codeBackground = codeBackground,
-                codeForeground = codeForeground,
-                linkColor = linkColor,
-                borderColor = borderColor,
-                bodyFontSizePx = bodyFontSizeSp,
-                darkMode = isDark,
-                markedJs = markedJs,
-                katexJs = katexJs,
-            )
-            RenderedMarkdownChunk(
-                html = html,
-                renderKey = "${index.toString(36)}-${html.hashCode().absoluteValue.toString(36)}",
-            )
-        }
+        val html = buildMessageHtml(
+            placeholderMarkdown = block.renderSource,
+            math = block.math,
+            textColor = textColor,
+            codeBackground = codeBackground,
+            codeForeground = codeForeground,
+            linkColor = linkColor,
+            borderColor = borderColor,
+            bodyFontSizePx = bodyFontSizeSp,
+            darkMode = isDark,
+            markedJs = markedJs,
+            katexJs = katexJs,
+        )
+        RenderedMarkdownPage(html = html, renderKey = block.key)
     }
 
-    Column(modifier = modifier.fillMaxWidth()) {
-        renderedChunks.forEach { chunk ->
-            key(chunk.renderKey) {
-                MarkdownMessageChunkView(
-                    chunk = chunk,
-                    onLinkClick = onLinkClick,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-        }
-    }
+    MarkdownMessageWebView(
+        page = renderedChunk,
+        onLinkClick = onLinkClick,
+        modifier = modifier.fillMaxWidth(),
+    )
 }
 
-private data class RenderedMarkdownChunk(
+private data class RenderedMarkdownPage(
     val html: String,
     val renderKey: String,
 )
 
 @Composable
-private fun MarkdownMessageChunkView(
-    chunk: RenderedMarkdownChunk,
+private fun MarkdownMessageWebView(
+    page: RenderedMarkdownPage,
     onLinkClick: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
-    var heightPx by remember(chunk.renderKey) { mutableStateOf(0) }
+    var heightPx by remember(page.renderKey) { mutableStateOf(0) }
     val latestOnHeight by rememberUpdatedState<(String, Int) -> Unit> { key, px ->
-        if (key == chunk.renderKey && px > 0) {
+        if (key == page.renderKey && px > 0) {
             heightPx = px
         }
     }
@@ -190,12 +145,12 @@ private fun MarkdownMessageChunkView(
             update = { view ->
                 view.removeJavascriptInterface("AndroidMarkdownBridge")
                 view.addJavascriptInterface(
-                    MarkdownJavascriptBridge(chunk.renderKey, latestOnHeight),
+                    MarkdownJavascriptBridge(page.renderKey, latestOnHeight),
                     "AndroidMarkdownBridge",
                 )
-                if (view.tag != chunk.renderKey) {
-                    view.tag = chunk.renderKey
-                    view.loadDataWithBaseURL(MessageAssetBaseUrl, chunk.html, "text/html", "UTF-8", null)
+                if (view.tag != page.renderKey) {
+                    view.tag = page.renderKey
+                    view.loadDataWithBaseURL(MessageAssetBaseUrl, page.html, "text/html", "UTF-8", null)
                 }
             },
             modifier = Modifier.fillMaxWidth().then(if (heightPx > 0) Modifier.height(heightDp) else Modifier),
@@ -401,7 +356,7 @@ private fun messageCssColor(color: Color): String {
 
 internal fun buildMessageHtml(
     placeholderMarkdown: String,
-    math: List<MarkdownMathSegment.Math>,
+    math: List<MarkdownMathPlaceholder>,
     textColor: Color,
     codeBackground: Color,
     codeForeground: Color,
@@ -423,8 +378,8 @@ internal fun buildMessageHtml(
     val tableWrapperClasses = ChatOverflowPolicy.webViewTableWrapperClasses()
     val structuredScrollSelector = ChatOverflowPolicy.webViewStructuredScrollSelector()
     val sourceLiteral = jsStringLiteral(placeholderMarkdown)
-    val mathJson = math.joinToString(prefix = "[", postfix = "]") { seg ->
-        "{\"s\":${jsStringLiteral(seg.source)},\"d\":${if (seg.display) "true" else "false"}}"
+    val mathJson = math.joinToString(prefix = "[", postfix = "]") { placeholder ->
+        "{\"i\":${placeholder.id},\"s\":${jsStringLiteral(placeholder.source)},\"d\":${if (placeholder.display) "true" else "false"}}"
     }
     return """
         <!doctype html>
@@ -533,7 +488,7 @@ internal fun buildMessageHtml(
                 var mathList = $mathJson;
                 var html = window.marked ? marked.parse(source) : source;
                 for (var i = 0; i < mathList.length; i++) {
-                  var ph = 'xMJXMATH' + i + 'HTAMXJMx';
+                  var ph = 'xMJXMATH' + mathList[i].i + 'HTAMXJMx';
                   html = html.split(ph).join(renderMath(mathList[i]));
                 }
                 document.getElementById('content').innerHTML = html;

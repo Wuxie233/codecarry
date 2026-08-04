@@ -44,22 +44,20 @@ import org.intellij.markdown.MarkdownTokenTypes
 import org.intellij.markdown.ast.ASTNode
 import org.intellij.markdown.flavours.gfm.GFMElementTypes
 
-internal enum class MessageMarkdownRoute {
-    ComposeMarkdown,
-    KatexWebView,
-}
-
 @Composable
 internal fun MessageMarkdownContent(
     markdown: String,
     textColor: Color,
     isUser: Boolean,
     modifier: Modifier = Modifier,
-    plannedChunk: PlannedMarkdownMessageChunk? = null,
+    plannedBlock: MarkdownRenderBlock? = null,
 ) {
-    val normalizedMarkdown = remember(markdown) { preserveRawHtmlPayload(markdown) }
-    val renderMarkdown = plannedChunk?.chunk?.renderMarkdown ?: normalizedMarkdown
-    val blocks = remember(renderMarkdown) { scanMarkdownBlocks(renderMarkdown).blocks }
+    val blocks = remember(markdown, plannedBlock) {
+        plannedBlock?.let(::listOf) ?: when (val planned = planStreamingMarkdown(markdown)) {
+            is MarkdownStreamingPlanResult.Success -> planned.plan.blocks
+            is MarkdownStreamingPlanResult.Failure -> emptyList()
+        }
+    }
     val isAmoled = isMessageMarkdownAmoledTheme()
 
     val inlineCodeFg = when {
@@ -170,11 +168,8 @@ internal fun MessageMarkdownContent(
         },
         table = {
             DisableSelection {
-                val rawTable = runCatching {
-                    it.content.substring(it.node.startOffset, it.node.endOffset)
-                }.getOrElse { _ -> it.content }
                 MeasuredMarkdownTable(
-                    rawTable = rawTable,
+                    table = markdownTableFromComponent(it),
                     textStyle = bodyStyle,
                     textColor = textColor,
                 )
@@ -182,65 +177,83 @@ internal fun MessageMarkdownContent(
         },
     )
 
-    val route = resolveMessageMarkdownRoute(normalizedMarkdown, plannedChunk)
-    when (route) {
-        MessageMarkdownRoute.KatexWebView -> {
-            val context = LocalContext.current
-            val linkColor = when {
-                isAmoled -> MaterialTheme.colorScheme.primary
-                isUser -> MaterialTheme.colorScheme.onPrimaryContainer
-                else -> MaterialTheme.colorScheme.primary
-            }
-            MarkdownMessageView(
-                markdown = normalizedMarkdown,
-                textColor = textColor,
-                codeBackground = codeBlockBg,
-                codeForeground = codeBlockFg,
-                linkColor = linkColor,
-                bodyFontSizeSp = bodyFontSize.value.toInt(),
-                onLinkClick = { url -> openMessageLink(context, url) },
-                modifier = modifier.fillMaxWidth(),
-                plannedChunk = plannedChunk,
-            )
-        }
-        MessageMarkdownRoute.ComposeMarkdown -> {
-            Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                blocks.forEachIndexed { index, block ->
-                    key(markdownBlockKey(index, block)) {
-                        when (block) {
-                            is MarkdownSourceBlock.Table -> MeasuredMarkdownTable(
-                                rawTable = block.source,
-                                textStyle = bodyStyle,
-                                textColor = textColor,
-                            )
-                            is MarkdownSourceBlock.Fence -> Markdown(
-                                content = block.source,
-                                colors = colors,
-                                typography = typography,
-                                components = components,
-                                imageTransformer = Coil2ImageTransformerImpl,
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                            is MarkdownSourceBlock.Prose,
-                            is MarkdownSourceBlock.AtomicStructure,
-                            is MarkdownSourceBlock.MathPlaceholder,
-                            -> SelectionContainer {
-                                Markdown(
-                                    content = block.source,
-                                    colors = colors,
-                                    typography = typography,
-                                    components = components,
-                                    imageTransformer = Coil2ImageTransformerImpl,
-                                    modifier = Modifier.fillMaxWidth(),
-                                )
-                            }
-                        }
+    val context = LocalContext.current
+    val linkColor = when {
+        isAmoled -> MaterialTheme.colorScheme.primary
+        isUser -> MaterialTheme.colorScheme.onPrimaryContainer
+        else -> MaterialTheme.colorScheme.primary
+    }
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        blocks.forEach { block ->
+            key(block.key) {
+                when {
+                    block.kind == MarkdownRenderBlockKind.Table && block.table != null -> {
+                        MeasuredMarkdownTable(
+                            table = block.table,
+                            textStyle = bodyStyle,
+                            textColor = textColor,
+                        )
+                    }
+                    block.route == MarkdownRenderRoute.Katex -> {
+                        MarkdownMessageView(
+                            block = block,
+                            textColor = textColor,
+                            codeBackground = codeBlockBg,
+                            codeForeground = codeBlockFg,
+                            linkColor = linkColor,
+                            bodyFontSizeSp = bodyFontSize.value.toInt(),
+                            onLinkClick = { url -> openMessageLink(context, url) },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                    block.interactionOwner == MarkdownInteractionOwner.HorizontalScroll -> {
+                        Markdown(
+                            content = block.renderSource,
+                            colors = colors,
+                            typography = typography,
+                            components = components,
+                            imageTransformer = Coil2ImageTransformerImpl,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                    block.interactionOwner == MarkdownInteractionOwner.Passive &&
+                        block.kind == MarkdownRenderBlockKind.LinkDefinition -> Unit
+                    else -> SelectionContainer {
+                        Markdown(
+                            content = block.renderSource,
+                            colors = colors,
+                            typography = typography,
+                            components = components,
+                            imageTransformer = Coil2ImageTransformerImpl,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
                     }
                 }
             }
         }
     }
 }
+
+private fun markdownTableFromComponent(model: MarkdownComponentModel): MarkdownRenderTable {
+    val headerNode = model.node.children.firstOrNull { it.type == GFMElementTypes.HEADER }
+    val header = headerNode?.componentTableCells(model.content).orEmpty()
+    val rows = model.node.children.filter { it.type == GFMElementTypes.ROW }
+        .map { row ->
+            val cells = row.componentTableCells(model.content)
+            List(header.size) { index -> cells.getOrElse(index) { "" } }
+        }
+    return MarkdownRenderTable(header = header, rows = rows)
+}
+
+private fun ASTNode.componentTableCells(source: String): List<String> = children
+    .filter { it.type == org.intellij.markdown.flavours.gfm.GFMTokenTypes.CELL }
+    .map { cell ->
+        if (cell.endOffset <= cell.startOffset || cell.startOffset !in 0..source.length) {
+            ""
+        } else {
+            renderTableCellText(source.substring(cell.startOffset, cell.endOffset.coerceAtMost(source.length)))
+        }
+    }
 
 @Composable
 private fun OrderedMarkdownList(model: MarkdownComponentModel, depth: Int = 0) {
@@ -400,106 +413,3 @@ private fun isMessageMarkdownAmoledTheme(): Boolean {
     val colors = MaterialTheme.colorScheme
     return colors.background == Color.Black && colors.surface == Color.Black
 }
-
-private fun markdownBlockKey(index: Int, block: MarkdownSourceBlock): String =
-    "block-$index-${block.sourceRange.first}-${block.sourceRange.last}-${block.source.hashCode()}"
-
-internal fun parseMarkdownTable(raw: String): Pair<List<String>, List<List<String>>>? {
-    val lines = raw.lines()
-        .map { it.trim() }
-        .filter { it.isNotEmpty() }
-    if (lines.size < 2) return null
-
-    val header = splitMarkdownTableRow(lines[0]).map(::cleanInlineTableMarkdown)
-    val divider = splitMarkdownTableRow(lines[1])
-    if (header.isEmpty() || divider.size != header.size) return null
-
-    val dividerPattern = Regex(":?-{3,}:?")
-    if (!divider.all { dividerPattern.matches(it.trim()) }) return null
-
-    val rows = lines.drop(2)
-        .map { line -> splitMarkdownTableRow(line).map(::cleanInlineTableMarkdown) }
-        .filter { cells -> cells.any { it.isNotBlank() } }
-        .map { cells -> List(header.size) { index -> cells.getOrElse(index) { "" } } }
-    return header to rows
-}
-
-internal fun splitMarkdownTableRow(line: String): List<String> {
-    var row = line.trim()
-    if (row.startsWith("|")) {
-        row = row.drop(1)
-    }
-    if (row.endsWith("|") && !row.isPipeEscaped(row.lastIndex)) {
-        row = row.dropLast(1)
-    }
-
-    val cells = mutableListOf<String>()
-    val current = StringBuilder()
-    row.forEachIndexed { index, char ->
-        if (char == '|' && !row.isPipeEscaped(index)) {
-            cells += current.toString().trim()
-            current.clear()
-        } else {
-            current.append(char)
-        }
-    }
-    cells += current.toString().trim()
-    return cells
-}
-
-internal fun cleanInlineTableMarkdown(cell: String): String {
-    return cell
-        .replace(Regex("(?i)<br\\s*/?>"), "\n")
-        .replace("**", "")
-        .replace("`", "")
-        .replace("\\|", "|")
-        .trim()
-}
-
-private fun String.isPipeEscaped(index: Int): Boolean {
-    var slashCount = 0
-    var position = index - 1
-    while (position >= 0 && this[position] == '\\') {
-        slashCount++
-        position--
-    }
-    return slashCount % 2 == 1
-}
-
-internal fun resolveMessageMarkdownRoute(markdown: String): MessageMarkdownRoute {
-    val normalizedMarkdown = preserveRawHtmlPayload(markdown)
-    val hasMath = splitMarkdownMathSegments(normalizedMarkdown).any { it is MarkdownMathSegment.Math }
-    return if (hasMath) MessageMarkdownRoute.KatexWebView else MessageMarkdownRoute.ComposeMarkdown
-}
-
-internal fun resolveMessageMarkdownRoute(
-    markdown: String,
-    plannedChunk: PlannedMarkdownMessageChunk?,
-): MessageMarkdownRoute {
-    return when {
-        plannedChunk == null -> resolveMessageMarkdownRoute(markdown)
-        plannedChunkContainsMathPlaceholder(plannedChunk) -> MessageMarkdownRoute.KatexWebView
-        else -> MessageMarkdownRoute.ComposeMarkdown
-    }
-}
-
-internal fun plannedChunkContainsMathPlaceholder(plannedChunk: PlannedMarkdownMessageChunk): Boolean =
-    scanMarkdownBlocks(plannedChunk.chunk.renderMarkdown).blocks.any { it is MarkdownSourceBlock.MathPlaceholder }
-
-internal fun preserveRawHtmlPayload(markdown: String): String {
-    if (markdown.isBlank()) return markdown
-    if ("```" in markdown) return markdown
-
-    val looksLikeHtmlDocument = HtmlDocumentHintRegex.containsMatchIn(markdown)
-    val htmlTagCount = HtmlTagRegex.findAll(markdown).take(16).count()
-    if (!looksLikeHtmlDocument && htmlTagCount < 8) return markdown
-
-    return buildString(markdown.length + 16) {
-        append("```text\n")
-        append(markdown.trimEnd())
-        append("\n```")
-    }
-}
-
-private val HtmlDocumentHintRegex = Regex("(?is)<!doctype\\s+html\\b|<\\s*html\\b")
-private val HtmlTagRegex = Regex("(?is)<\\s*/?\\s*[a-z][^>]*>")

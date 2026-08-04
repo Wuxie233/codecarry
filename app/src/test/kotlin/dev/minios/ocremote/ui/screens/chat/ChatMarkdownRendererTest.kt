@@ -11,7 +11,7 @@ import org.intellij.markdown.parser.MarkdownParser
 
 class ChatMarkdownRendererTest {
     @Test
-    fun `resolveMessageMarkdownRoute keeps non math markdown on compose route`() {
+    fun `render plan keeps non math markdown on compose route`() {
         val markdown = """
             # Heading
 
@@ -26,70 +26,58 @@ class ChatMarkdownRendererTest {
             ```
         """.trimIndent()
 
-        val route = resolveMessageMarkdownRoute(markdown)
+        val plan = planMarkdownDocument(parseMarkdownDocument(markdown).getOrThrow())
 
-        assertEquals(MessageMarkdownRoute.ComposeMarkdown, route)
+        assertTrue(plan.blocks.all { it.route == MarkdownRenderRoute.Compose })
     }
 
     @Test
-    fun `resolveMessageMarkdownRoute keeps planned non math chunk on compose route`() {
+    fun `render plan carries link definitions into non math block context`() {
         val source = "Chunk source using [docs][guide]."
-        val plannedChunk = PlannedMarkdownMessageChunk(
-            chunk = MarkdownMessageChunk(
-                source = source,
-                renderMarkdown = "$source\n\n[guide]: https://example.com/docs",
-            ),
-            math = emptyList(),
-        )
+        val markdown = "$source\n\n[guide]: https://example.com/docs"
+        val plan = planMarkdownDocument(parseMarkdownDocument(markdown).getOrThrow())
+        val prose = plan.blocks.first()
 
-        val route = resolveMessageMarkdownRoute(source, plannedChunk)
-
-        assertEquals(MessageMarkdownRoute.ComposeMarkdown, route)
+        assertEquals(MarkdownRenderRoute.Compose, prose.route)
+        assertTrue("[guide]: https://example.com/docs" in prose.renderSource)
     }
 
     @Test
     fun `planned table chunk stays compose when another chunk contains math`() {
         val table = "| Name | Value |\n| --- | --- |\n| Alpha | Beta |"
-        val placeholderMarkdown = "Before\n\n$table\n\nAfter xMJXMATH0HTAMXJMx"
-        val chunks = planMarkdownMessageChunks(placeholderMarkdown, targetChars = 20)
-        val tableChunk = chunks.first { it.renderMarkdown.contains("| Name |") }
-        val mathChunk = chunks.first { it.renderMarkdown.contains("xMJXMATH0") }
-        val globalMath = listOf(MarkdownMathSegment.Math("x", display = false, delimiter = "${'$'}"))
+        val markdown = "Before\n\n$table\n\nAfter ${'$'}x${'$'}"
+        val plan = planMarkdownDocument(parseMarkdownDocument(markdown).getOrThrow(), targetChars = 20)
+        val tableBlock = plan.blocks.first { it.kind == MarkdownRenderBlockKind.Table }
+        val mathBlock = plan.blocks.first { it.math.isNotEmpty() }
 
-        assertEquals(
-            MessageMarkdownRoute.ComposeMarkdown,
-            resolveMessageMarkdownRoute(
-                tableChunk.source,
-                PlannedMarkdownMessageChunk(tableChunk, globalMath),
-            ),
-        )
-        assertEquals(
-            MessageMarkdownRoute.KatexWebView,
-            resolveMessageMarkdownRoute(
-                mathChunk.source,
-                PlannedMarkdownMessageChunk(mathChunk, globalMath),
-            ),
-        )
+        assertEquals(MarkdownRenderRoute.Compose, tableBlock.route)
+        assertEquals(MarkdownRenderRoute.Katex, mathBlock.route)
     }
 
     @Test
     fun `planned renderer chunks reconstruct placeholder source exactly`() {
-        val source = "Intro\n\n| Name | Value |\n| --- | --- |\n| Alpha | Beta |\n\nFormula xMJXMATH0HTAMXJMx"
-        val chunks = planMarkdownMessageChunks(source, targetChars = 24)
+        val source = "Intro\n\n| Name | Value |\n| --- | --- |\n| Alpha | Beta |\n\nFormula ${'$'}x${'$'}"
+        val plan = planMarkdownDocument(parseMarkdownDocument(source).getOrThrow(), targetChars = 24)
 
-        assertEquals(source, chunks.joinToString(separator = "") { it.source })
+        assertEquals(source, plan.blocks.joinToString(separator = "") { it.source })
     }
 
     @Test
-    fun `resolveMessageMarkdownRoute sends inline and display math to katex route`() {
-        assertEquals(MessageMarkdownRoute.KatexWebView, resolveMessageMarkdownRoute("Inline ${'$'}x${'$'} math"))
-        assertEquals(MessageMarkdownRoute.KatexWebView, resolveMessageMarkdownRoute("Display ${'$'}${'$'}x^2${'$'}${'$'} math"))
-        assertEquals(MessageMarkdownRoute.KatexWebView, resolveMessageMarkdownRoute("Bracket \\(x + y\\) math"))
-        assertEquals(MessageMarkdownRoute.KatexWebView, resolveMessageMarkdownRoute("Display bracket \\[x + y\\] math"))
+    fun `render plan sends inline and display math to katex route`() {
+        listOf(
+            "Inline ${'$'}x${'$'} math",
+            "Display ${'$'}${'$'}x^2${'$'}${'$'} math",
+            "Bracket \\(x + y\\) math",
+            "Display bracket \\[x + y\\] math",
+        ).forEach { markdown ->
+            assertTrue(planMarkdownDocument(parseMarkdownDocument(markdown).getOrThrow()).blocks.any {
+                it.route == MarkdownRenderRoute.Katex
+            })
+        }
     }
 
     @Test
-    fun `resolveMessageMarkdownRoute ignores currency inline code and fenced dollars`() {
+    fun `render plan ignores currency inline code and fenced dollars`() {
         val markdown = """
             Price is ${'$'}20 and inline code `value = ${'$'}x${'$'}`.
 
@@ -98,26 +86,24 @@ class ChatMarkdownRendererTest {
             ```
         """.trimIndent()
 
-        val route = resolveMessageMarkdownRoute(markdown)
-
-        assertEquals(MessageMarkdownRoute.ComposeMarkdown, route)
+        val plan = planMarkdownDocument(parseMarkdownDocument(markdown).getOrThrow())
+        assertTrue(plan.blocks.all { it.route == MarkdownRenderRoute.Compose })
     }
 
     @Test
-    fun `resolveMessageMarkdownRoute keeps financial markdown with dollar ratios on compose route`() {
+    fun `render plan keeps financial markdown with dollar ratios on compose route`() {
         val markdown = """
             **Total budget**: ${'$'}7000
             **Current spend**: ${'$'}769 + ${'$'}58 = ${'$'}827
             **Coverage**: (${ '$' }827/${ '$' }1484)
         """.trimIndent()
 
-        val route = resolveMessageMarkdownRoute(markdown)
-
-        assertEquals(MessageMarkdownRoute.ComposeMarkdown, route)
+        val plan = planMarkdownDocument(parseMarkdownDocument(markdown).getOrThrow())
+        assertTrue(plan.blocks.all { it.route == MarkdownRenderRoute.Compose })
     }
 
     @Test
-    fun `resolveMessageMarkdownRoute keeps mermaid fences on compose route`() {
+    fun `render plan keeps mermaid fences on compose route`() {
         val markdown = """
             ```mermaid
             flowchart TD
@@ -125,9 +111,8 @@ class ChatMarkdownRendererTest {
             ```
         """.trimIndent()
 
-        val route = resolveMessageMarkdownRoute(markdown)
-
-        assertEquals(MessageMarkdownRoute.ComposeMarkdown, route)
+        val plan = planMarkdownDocument(parseMarkdownDocument(markdown).getOrThrow())
+        assertTrue(plan.blocks.all { it.route == MarkdownRenderRoute.Compose })
     }
 
     @Test

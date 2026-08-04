@@ -151,7 +151,7 @@ internal enum class MarkdownInlineReferenceKind {
 internal data class MarkdownMathPlaceholder(
     val id: Int,
     val parserRange: SourceRange,
-    val originalRange: SourceRange,
+    val normalizedRange: SourceRange,
     val source: String,
     val display: Boolean,
     val delimiter: String,

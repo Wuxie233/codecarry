@@ -16,7 +16,8 @@ internal fun planStreamingMarkdown(
             val next = planMarkdownDocument(
                 document = parsed.document,
                 targetChars = targetChars,
-                coalesceSelectableProse = false,
+                coalesceSelectableProse = true,
+                isolateLastBlock = true,
             )
             MarkdownStreamingPlanResult.Success(reconcileMarkdownRenderPlan(previous, next))
         }
@@ -41,7 +42,7 @@ internal fun reconcileMarkdownRenderPlan(
 private fun MarkdownRenderBlock.hasSameCompletedIdentity(other: MarkdownRenderBlock): Boolean {
     return kind == other.kind &&
         semanticParserRange == other.semanticParserRange &&
-        semanticOriginalRange == other.semanticOriginalRange &&
+        semanticNormalizedRange == other.semanticNormalizedRange &&
         semanticSource == other.semanticSource &&
         route == other.route &&
         interactionOwner == other.interactionOwner &&
@@ -51,4 +52,4 @@ private fun MarkdownRenderBlock.hasSameCompletedIdentity(other: MarkdownRenderBl
 }
 
 private fun MarkdownMathPlaceholder.identity(): List<Any> =
-    listOf(source, display, delimiter, originalRange, parserRange)
+    listOf(source, display, delimiter, normalizedRange, parserRange)

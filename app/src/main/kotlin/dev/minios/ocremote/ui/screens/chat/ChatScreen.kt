@@ -1800,7 +1800,10 @@ fun ChatScreen(
     var collapsedRoundNumbers by remember { mutableStateOf<Set<Int>>(emptySet()) }
     val roundMarkers = remember(uiState.roundtableEvents) { buildRoundMarkers(uiState.roundtableEvents) }
     val messageRoundNumbers = remember(uiState.messages, roundMarkers) { mapMessageRounds(uiState.messages, roundMarkers) }
-    val messageRows = remember(uiState.messages) { planChatMessageRows(uiState.messages) }
+    val markdownPlanningState = remember { ChatMessageRowPlanningState() }
+    val messageRows = remember(uiState.messages) {
+        planChatMessageRows(uiState.messages, markdownPlanningState)
+    }
 
     fun jumpToRoundtableRound(roundNumber: Int) {
         coroutineScope.launch {
@@ -3074,7 +3077,7 @@ fun ChatScreen(
                                         previous = uiState.messages.getOrNull(index - 1),
                                     ),
                                     segmentPosition = messageRow.position,
-                                    plannedChunk = (messageRow as? ChatMessageRow.TextChunk)?.markdown,
+                                    plannedBlock = (messageRow as? ChatMessageRow.TextChunk)?.markdown,
                                     onRevert = if (chatMessage.isUser) {
                                         {
                                             val revertText = chatMessage.parts
@@ -4509,7 +4512,7 @@ private fun ChatMessageBubble(
     chatMessage: ChatMessage,
     showSenderHeader: Boolean = true,
     segmentPosition: ChatMessageSegmentPosition = ChatMessageSegmentPosition.Single,
-    plannedChunk: PlannedMarkdownMessageChunk? = null,
+    plannedBlock: MarkdownRenderBlock? = null,
     onRevert: (() -> Unit)? = null,
     onCopyText: (() -> Unit)? = null,
     onMessageActionsRequested: (ChatMessage) -> Unit = {},
@@ -4585,7 +4588,7 @@ private fun ChatMessageBubble(
     val contentParts: List<Part>
     val stepParts: List<Part>
     if (!isUser) {
-        contentParts = if (plannedChunk != null) emptyList() else visibleParts.filter { part ->
+        contentParts = if (plannedBlock != null) emptyList() else visibleParts.filter { part ->
             part is Part.Text || part is Part.Reasoning || part is Part.Patch ||
                     part is Part.File || part is Part.Permission || part is Part.Question ||
                     part is Part.Abort || part is Part.Retry
@@ -4601,7 +4604,7 @@ private fun ChatMessageBubble(
     val hasRenderableUserPart = contentParts.any(::isBubbleRenderablePart)
     val hasRenderableUserContent = !isUser || hasRenderableUserPart || userFallbackText != null || userCommandLabel != null
     val hasRenderableAssistantContent = isUser ||
-            plannedChunk != null ||
+            plannedBlock != null ||
             contentParts.isNotEmpty() ||
             stepParts.isNotEmpty() ||
             assistantErrorText != null
@@ -4622,7 +4625,7 @@ private fun ChatMessageBubble(
 
     // Check if any tool is currently running (show spinner)
     val hasRunningTool = stepParts.any { it is Part.Tool && it.state is ToolState.Running }
-    val hasAssistantText = plannedChunk != null || contentParts
+    val hasAssistantText = plannedBlock != null || contentParts
         .filterIsInstance<Part.Text>()
         .any { part -> part.text.isNotBlank() && part.synthetic != true && part.ignored != true }
     val isLivePiSender = senderIdentity != null && assistantMessage?.finish == null
@@ -4776,19 +4779,19 @@ private fun ChatMessageBubble(
                     val renderableOtherParts = otherParts.filter(::isBubbleRenderablePart)
 
                     // Render image thumbnails as a horizontal row
-                    if (plannedChunk != null) {
+                    if (plannedBlock != null) {
                         MessageMarkdownContent(
-                            markdown = plannedChunk.chunk.source,
+                            markdown = plannedBlock.source,
                             textColor = textColor,
                             isUser = false,
                             modifier = Modifier.fillMaxWidth(),
-                            plannedChunk = plannedChunk,
+                            plannedBlock = plannedBlock,
                         )
                     } else if (imageFiles.isNotEmpty()) {
                         ImageThumbnailRow(imageFiles = imageFiles)
                     }
 
-                    if (plannedChunk == null && !isUser && isLivePiSender && renderableOtherParts.isEmpty() && imageFiles.isEmpty() && assistantErrorText == null) {
+                    if (plannedBlock == null && !isUser && isLivePiSender && renderableOtherParts.isEmpty() && imageFiles.isEmpty() && assistantErrorText == null) {
                         PiSenderThinkingPlaceholder(
                             textColor = textColor,
                             accentColor = senderAccentColor ?: textColor,

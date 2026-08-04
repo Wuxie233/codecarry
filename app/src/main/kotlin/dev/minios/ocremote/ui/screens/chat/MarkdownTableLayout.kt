@@ -80,19 +80,19 @@ internal fun allocateMarkdownTableColumnWidths(
  */
 @Composable
 internal fun MeasuredMarkdownTable(
-    rawTable: String,
+    table: MarkdownRenderTable,
     textStyle: TextStyle,
     textColor: Color,
     modifier: Modifier = Modifier,
     scrollStateSink: ((ScrollState) -> Unit)? = null,
 ) {
-    val parsed = remember(rawTable) { parseMarkdownTable(rawTable) }
-    if (parsed == null) {
-        Text(text = rawTable.trim(), style = textStyle, color = textColor)
+    if (table.header.isEmpty()) {
+        Text(text = "", style = textStyle, color = textColor)
         return
     }
 
-    val (header, rows) = parsed
+    val header = table.header
+    val rows = table.rows
     val scrollState = rememberScrollState()
     scrollStateSink?.invoke(scrollState)
     val tableShape = RoundedCornerShape(8.dp)

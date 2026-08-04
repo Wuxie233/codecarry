@@ -12,9 +12,9 @@ internal data class MarkdownRenderBlock(
     val key: String,
     val kind: MarkdownRenderBlockKind,
     val semanticParserRange: SourceRange,
-    val semanticOriginalRange: SourceRange,
+    val semanticNormalizedRange: SourceRange,
     val parserRange: SourceRange,
-    val originalRange: SourceRange,
+    val normalizedRange: SourceRange,
     val semanticSource: String,
     val source: String,
     val renderSource: String,
@@ -60,12 +60,24 @@ internal fun planMarkdownDocument(
     document: MarkdownDocument,
     targetChars: Int = MarkdownRenderPlanTargetChars,
     coalesceSelectableProse: Boolean = true,
+    isolateLastBlock: Boolean = false,
 ): MarkdownRenderPlan {
     require(targetChars > 0)
-    val candidates = document.blocks.flatMap { block ->
-        planBlock(document, block, targetChars)
+    val candidates = document.blocks.flatMapIndexed { index, block ->
+        planBlock(
+            document = document,
+            block = block,
+            targetChars = targetChars,
+            ownedRange = if (index == 0) {
+                SourceRange(0, block.ownedRange.endExclusive)
+            } else {
+                block.ownedRange
+            },
+        )
     }
-    val planned = if (coalesceSelectableProse) {
+    val planned = if (coalesceSelectableProse && isolateLastBlock && candidates.size > 1) {
+        coalesceProse(document, candidates.dropLast(1), targetChars) + candidates.last()
+    } else if (coalesceSelectableProse) {
         coalesceProse(document, candidates, targetChars)
     } else {
         candidates
@@ -82,9 +94,10 @@ private fun planBlock(
     document: MarkdownDocument,
     block: MarkdownBlock,
     targetChars: Int,
+    ownedRange: SourceRange,
 ): List<MarkdownRenderBlock> {
-    if (block is MarkdownBlock.Paragraph && block.ownedRange.length > targetChars) {
-        return splitLargeProse(document, block, targetChars)
+    if (block is MarkdownBlock.Paragraph && ownedRange.length > targetChars) {
+        return splitLargeProse(document, block, ownedRange, targetChars)
     }
     val math = document.math.filter { placeholder ->
         block.semanticRange.contains(placeholder.parserRange)
@@ -103,11 +116,11 @@ private fun planBlock(
             MarkdownInteractionOwner.Passive
         else -> MarkdownInteractionOwner.SelectableText
     }
-    val parserRange = block.ownedRange
-    val originalRange = document.mapParserRangeToOriginal(parserRange)
-    val semanticOriginalRange = document.mapParserRangeToOriginal(block.semanticRange)
-    val source = originalRange.slice(document.normalizedSource)
-    val semanticSource = semanticOriginalRange.slice(document.normalizedSource)
+    val parserRange = ownedRange
+    val normalizedRange = document.mapParserRangeToNormalized(parserRange)
+    val semanticNormalizedRange = document.mapParserRangeToNormalized(block.semanticRange)
+    val source = normalizedRange.slice(document.normalizedSource)
+    val semanticSource = semanticNormalizedRange.slice(document.normalizedSource)
     val parserSource = parserRange.slice(document.parserSource)
     val renderSource = appendDocumentLinkDefinitions(
         source = parserSource,
@@ -119,16 +132,16 @@ private fun planBlock(
             key = stableRenderBlockKey(kind, semanticSource),
             kind = kind,
             semanticParserRange = block.semanticRange,
-            semanticOriginalRange = semanticOriginalRange,
+            semanticNormalizedRange = semanticNormalizedRange,
             parserRange = parserRange,
-            originalRange = originalRange,
+            normalizedRange = normalizedRange,
             semanticSource = semanticSource,
             source = source,
             renderSource = renderSource,
             route = route,
             interactionOwner = interaction,
             math = math,
-            table = (block as? MarkdownBlock.Table)?.toRenderTable(document.parserSource),
+            table = (block as? MarkdownBlock.Table)?.toRenderTable(document),
             isOpen = block is MarkdownBlock.CodeFence && !block.isClosed,
         ),
     )
@@ -137,30 +150,41 @@ private fun planBlock(
 private fun splitLargeProse(
     document: MarkdownDocument,
     block: MarkdownBlock.Paragraph,
+    ownedRange: SourceRange,
     targetChars: Int,
 ): List<MarkdownRenderBlock> {
     val ranges = mutableListOf<SourceRange>()
-    var cursor = block.ownedRange.start
-    while (cursor < block.ownedRange.endExclusive) {
-        val ideal = (cursor + targetChars).coerceAtMost(block.ownedRange.endExclusive)
-        val end = if (ideal == block.ownedRange.endExclusive) ideal else {
-            document.parserSource.lastIndexOf('\n', ideal).takeIf { it >= cursor }?.plus(1) ?: ideal
+    var cursor = ownedRange.start
+    while (cursor < ownedRange.endExclusive) {
+        val ideal = (cursor + targetChars).coerceAtMost(ownedRange.endExclusive)
+        val containingMath = document.math.firstOrNull { placeholder ->
+            ideal > placeholder.parserRange.start && ideal < placeholder.parserRange.endExclusive
+        }
+        val safeIdeal = when {
+            containingMath == null -> ideal
+            containingMath.parserRange.start > cursor -> containingMath.parserRange.start
+            else -> containingMath.parserRange.endExclusive
+        }
+        val end = if (safeIdeal == ownedRange.endExclusive || containingMath != null) {
+            safeIdeal
+        } else {
+            document.parserSource.lastIndexOf('\n', safeIdeal).takeIf { it >= cursor }?.plus(1) ?: safeIdeal
         }
         ranges += SourceRange(cursor, end)
         cursor = end
     }
     return ranges.map { parserRange ->
-        val originalRange = document.mapParserRangeToOriginal(parserRange)
+        val normalizedRange = document.mapParserRangeToNormalized(parserRange)
         val math = document.math.filter { parserRange.contains(it.parserRange) }
-        val source = originalRange.slice(document.normalizedSource)
+        val source = normalizedRange.slice(document.normalizedSource)
         val parserSource = parserRange.slice(document.parserSource)
         MarkdownRenderBlock(
             key = stableRenderBlockKey(MarkdownRenderBlockKind.Prose, source),
             kind = MarkdownRenderBlockKind.Prose,
             semanticParserRange = parserRange,
-            semanticOriginalRange = originalRange,
+            semanticNormalizedRange = normalizedRange,
             parserRange = parserRange,
-            originalRange = originalRange,
+            normalizedRange = normalizedRange,
             semanticSource = source,
             source = source,
             renderSource = appendDocumentLinkDefinitions(
@@ -207,8 +231,8 @@ private fun coalesceProse(
             continue
         }
         val parserRange = SourceRange(current!!.parserRange.start, block.parserRange.endExclusive)
-        val originalRange = document.mapParserRangeToOriginal(parserRange)
-        val source = originalRange.slice(document.normalizedSource)
+        val normalizedRange = document.mapParserRangeToNormalized(parserRange)
+        val source = normalizedRange.slice(document.normalizedSource)
         pending = current.copy(
             key = stableRenderBlockKey(MarkdownRenderBlockKind.Prose, source),
             kind = MarkdownRenderBlockKind.Prose,
@@ -216,12 +240,12 @@ private fun coalesceProse(
                 current.semanticParserRange.start,
                 block.semanticParserRange.endExclusive,
             ),
-            semanticOriginalRange = SourceRange(
-                current.semanticOriginalRange.start,
-                block.semanticOriginalRange.endExclusive,
+            semanticNormalizedRange = SourceRange(
+                current.semanticNormalizedRange.start,
+                block.semanticNormalizedRange.endExclusive,
             ),
             parserRange = parserRange,
-            originalRange = originalRange,
+            normalizedRange = normalizedRange,
             semanticSource = source,
             source = source,
             renderSource = appendDocumentLinkDefinitions(
@@ -249,21 +273,33 @@ private fun MarkdownBlock.renderKind(): MarkdownRenderBlockKind = when (this) {
     is MarkdownBlock.Unknown -> MarkdownRenderBlockKind.Unknown
 }
 
-private fun MarkdownBlock.Table.toRenderTable(parserSource: String): MarkdownRenderTable = MarkdownRenderTable(
-    header = header.map { it.contentRange.slice(parserSource) },
-    rows = rows.map { row -> row.map { it.contentRange.slice(parserSource) } },
+private fun MarkdownBlock.Table.toRenderTable(document: MarkdownDocument): MarkdownRenderTable = MarkdownRenderTable(
+    header = header.map { cell -> document.renderTableCell(cell) },
+    rows = rows.map { row -> row.map { cell -> document.renderTableCell(cell) } },
 )
+
+private fun MarkdownDocument.renderTableCell(cell: MarkdownTableCell): String {
+    val normalizedRange = mapParserRangeToNormalized(cell.contentRange)
+    return renderTableCellText(normalizedRange.slice(normalizedSource))
+}
+
+internal fun renderTableCellText(source: String): String = source
+    .replace(Regex("(?i)<br\\s*/?>"), "\n")
+    .replace("**", "")
+    .replace("`", "")
+    .replace("\\|", "|")
+    .trim()
 
 private fun SourceRange.contains(other: SourceRange): Boolean =
     other.start >= start && other.endExclusive <= endExclusive
 
-private fun MarkdownDocument.mapParserRangeToOriginal(range: SourceRange): SourceRange {
-    val start = mapParserOffsetToOriginal(range.start, endBias = false)
-    val end = mapParserOffsetToOriginal(range.endExclusive, endBias = true)
+private fun MarkdownDocument.mapParserRangeToNormalized(range: SourceRange): SourceRange {
+    val start = mapParserOffsetToNormalized(range.start, endBias = false)
+    val end = mapParserOffsetToNormalized(range.endExclusive, endBias = true)
     return SourceRange(start, end)
 }
 
-private fun MarkdownDocument.mapParserOffsetToOriginal(offset: Int, endBias: Boolean): Int {
+private fun MarkdownDocument.mapParserOffsetToNormalized(offset: Int, endBias: Boolean): Int {
     var parserCursor = 0
     var originalCursor = 0
     math.forEach { placeholder ->
@@ -274,9 +310,9 @@ private fun MarkdownDocument.mapParserOffsetToOriginal(offset: Int, endBias: Boo
         parserCursor = placeholder.parserRange.endExclusive
         originalCursor += gap
         if (offset < parserCursor || (endBias && offset == parserCursor)) {
-            return if (endBias) placeholder.originalRange.endExclusive else placeholder.originalRange.start
+            return if (endBias) placeholder.normalizedRange.endExclusive else placeholder.normalizedRange.start
         }
-        originalCursor = placeholder.originalRange.endExclusive
+        originalCursor = placeholder.normalizedRange.endExclusive
     }
     return originalCursor + (offset - parserCursor)
 }

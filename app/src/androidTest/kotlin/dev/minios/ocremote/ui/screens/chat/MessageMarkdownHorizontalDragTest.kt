@@ -68,82 +68,53 @@ class MessageMarkdownHorizontalDragTest {
     val rule = createAndroidComposeRule<ComponentActivity>()
 
     @Test
-    fun katexWebViewCodeBlockCanBeDraggedHorizontallyInsideVerticalComposeParent() {
+    fun mixedCodeAndMathMessageRoutesOnlyTheMathBlockToKatex() {
+        val plan = planMarkdownDocument(parseMarkdownDocument(KatexMarkdown).getOrThrow())
         val fixture = setKatexWebViewContent()
-        val before = waitForWidePre(fixture.webView)
 
-        assertEquals(MessageMarkdownRoute.KatexWebView, resolveMessageMarkdownRoute(KatexMarkdown))
-        assertEquals("pre should start at the left edge", 0, before.scrollLeft)
-
-        val target = fixture.webView.preDragCoordinates(before)
-        rule.onNodeWithTag(KatexMessageTag).performTouchInput {
-            drag(
-                start = Offset(target.right, target.centerY),
-                end = Offset(target.left, target.centerY),
-            )
-        }
-        rule.waitForIdle()
-        SystemClock.sleep(GestureSettleMillis)
-
-        val after = readPreMetrics(fixture.webView)
-        assertTrue(
-            "expected a physical horizontal drag on the wide WebView <pre> to increase scrollLeft, " +
-                "before=${before.scrollLeft}, after=${after.scrollLeft}, " +
-                "clientWidth=${after.clientWidth}, scrollWidth=${after.scrollWidth}",
-            after.scrollLeft > before.scrollLeft,
-        )
+        assertTrue(plan.blocks.any {
+            it.kind == MarkdownRenderBlockKind.CodeFence && it.route == MarkdownRenderRoute.Compose
+        })
+        assertTrue(plan.blocks.any { it.route == MarkdownRenderRoute.Katex })
+        assertTrue("expected KaTeX output in the planned math block", readKatexNodeCount(fixture.webView) > 0)
     }
 
     @Test
-    fun laterRealMarkdownTableCanBePhysicallyDraggedInMathMessage() {
+    fun laterTableInMathMessageUsesItsOwnComposeScroll() {
         setKatexWebViewContent(TwoTableKatexMarkdown)
-        val first = waitForVisibleTableTarget(FirstTableMarker)
-        val target = waitForVisibleTableTarget(LaterTableMarker)
+        val plan = planMarkdownDocument(parseMarkdownDocument(TwoTableKatexMarkdown).getOrThrow())
+        assertEquals(2, plan.blocks.count { it.kind == MarkdownRenderBlockKind.Table })
+        assertTrue(plan.blocks.filter { it.kind == MarkdownRenderBlockKind.Table }
+            .all { it.route == MarkdownRenderRoute.Compose })
+        assertTrue(plan.blocks.any { it.route == MarkdownRenderRoute.Katex })
+        waitForKatexWebView()
 
-        assertEquals(MessageMarkdownRoute.KatexWebView, resolveMessageMarkdownRoute(TwoTableKatexMarkdown))
-        assertEquals("expected marked to render both GFM tables", 2, readTotalTableCount())
-        assertTrue(
-            "expected the target table after the first table in production render order, first=$first, target=$target",
-            target.renderOrder > first.renderOrder || target.metrics.targetTableIndex > first.metrics.targetTableIndex,
-        )
-        assertTrue("expected KaTeX to render the message math", readTotalKatexCount() > 0)
-        assertTrue("expected the later table to use the production scroll wrapper", target.metrics.hasScrollWrapper)
-        assertEquals("later table should start at the left edge", 0, target.metrics.scrollLeft)
-
-        val swipe = prepareTableSwipe(target, LaterTableMarker)
-        injectSwipe(swipe.startX, swipe.startY, swipe.endX, swipe.endY)
+        val matcher = SemanticsMatcher.keyIsDefined(SemanticsProperties.HorizontalScrollAxisRange)
+        val tables = rule.onAllNodes(matcher, useUnmergedTree = true)
+        tables.assertCountEquals(2)
+        val before = tables.fetchSemanticsNodes()[1]
+            .config[SemanticsProperties.HorizontalScrollAxisRange].value()
+        tables[1].performTouchInput { swipeLeft() }
         rule.waitForIdle()
-        SystemClock.sleep(GestureSettleMillis)
-
-        val after = readTableMetrics(target.webView, LaterTableMarker)
-        assertTrue(
-            "expected a physical finger drag on the later real table to increase scrollLeft, " +
-                "before=${target.metrics.scrollLeft}, after=${after.scrollLeft}, swipe=$swipe, target=$target",
-            after.scrollLeft > target.metrics.scrollLeft,
-        )
+        val after = tables.fetchSemanticsNodes()[1]
+            .config[SemanticsProperties.HorizontalScrollAxisRange].value()
+        assertTrue("later Compose table should scroll independently, before=$before after=$after", after > before)
     }
 
     @Test
-    fun firstRealMarkdownTableCanBePhysicallyDraggedInMathMessage() {
+    fun firstTableInMathMessageUsesItsOwnComposeScroll() {
         setKatexWebViewContent(TwoTableKatexMarkdown)
-        val target = waitForVisibleTableTarget(FirstTableMarker)
-
-        assertEquals(MessageMarkdownRoute.KatexWebView, resolveMessageMarkdownRoute(TwoTableKatexMarkdown))
-        assertEquals("expected the first real table in DOM order", 0, target.metrics.targetTableIndex)
-        assertTrue("expected the first table to use the production scroll wrapper", target.metrics.hasScrollWrapper)
-        assertEquals("first table should start at the left edge", 0, target.metrics.scrollLeft)
-
-        val swipe = prepareTableSwipe(target, FirstTableMarker)
-        injectSwipe(swipe.startX, swipe.startY, swipe.endX, swipe.endY)
+        waitForKatexWebView()
+        val matcher = SemanticsMatcher.keyIsDefined(SemanticsProperties.HorizontalScrollAxisRange)
+        val tables = rule.onAllNodes(matcher, useUnmergedTree = true)
+        tables.assertCountEquals(2)
+        val before = tables.fetchSemanticsNodes()[0]
+            .config[SemanticsProperties.HorizontalScrollAxisRange].value()
+        tables[0].performTouchInput { swipeLeft() }
         rule.waitForIdle()
-        SystemClock.sleep(GestureSettleMillis)
-
-        val after = readTableMetrics(target.webView, FirstTableMarker)
-        assertTrue(
-            "expected a physical finger drag on the first real table to increase scrollLeft, " +
-                "before=${target.metrics.scrollLeft}, after=${after.scrollLeft}, swipe=$swipe, target=$target",
-            after.scrollLeft > 0,
-        )
+        val after = tables.fetchSemanticsNodes()[0]
+            .config[SemanticsProperties.HorizontalScrollAxisRange].value()
+        assertTrue("first Compose table should scroll independently, before=$before after=$after", after > before)
     }
 
     @Test
@@ -185,23 +156,21 @@ class MessageMarkdownHorizontalDragTest {
         }
         rule.waitForIdle()
 
-        val target = waitForVisibleTableTarget(FirstTableMarker)
-        assertEquals("expected the first real table in DOM order", 0, target.metrics.targetTableIndex)
-        assertTrue("expected the first table to use the production scroll wrapper", target.metrics.hasScrollWrapper)
-        assertEquals("first table should start at the left edge", 0, target.metrics.scrollLeft)
-
-        val swipe = prepareTableSwipe(target, FirstTableMarker)
-        injectSwipe(swipe.startX, swipe.startY, swipe.endX, swipe.endY)
+        waitForKatexWebView()
+        val matcher = SemanticsMatcher.keyIsDefined(SemanticsProperties.HorizontalScrollAxisRange)
+        val tables = rule.onAllNodes(matcher, useUnmergedTree = true)
+        tables.assertCountEquals(2)
+        val before = tables.fetchSemanticsNodes()[0]
+            .config[SemanticsProperties.HorizontalScrollAxisRange].value()
+        tables[0].performTouchInput { swipeLeft() }
         rule.waitForIdle()
-        SystemClock.sleep(GestureSettleMillis)
-
-        val after = readTableMetrics(target.webView, FirstTableMarker)
+        val after = tables.fetchSemanticsNodes()[0]
+            .config[SemanticsProperties.HorizontalScrollAxisRange].value()
         var finalDismissValue = SwipeToDismissBoxValue.Settled
         rule.runOnIdle { finalDismissValue = dismissState.currentValue }
         assertTrue(
-            "expected a physical drag on the first table inside the user bubble to increase scrollLeft, " +
-                "before=${target.metrics.scrollLeft}, after=${after.scrollLeft}, swipe=$swipe, target=$target",
-            after.scrollLeft > target.metrics.scrollLeft,
+            "expected the first table inside the user bubble to scroll, before=$before after=$after",
+            after > before,
         )
         assertEquals("table drag should not dismiss the user bubble", SwipeToDismissBoxValue.Settled, finalDismissValue)
     }
@@ -265,7 +234,7 @@ class MessageMarkdownHorizontalDragTest {
         )
         val rows = planChatMessageRows(listOf(message))
         val targetRowIndex = rows.indexOfFirst { row ->
-            row is ChatMessageRow.TextChunk && LongComposeTableMarker in row.markdown.chunk.source
+            row is ChatMessageRow.TextChunk && LongComposeTableMarker in row.markdown.source
         }
         assertTrue("expected a long fixture to split into Compose rows", rows.size > 1)
         assertTrue("expected the table in a later Compose row, rows=$rows", targetRowIndex > 0)
@@ -293,13 +262,13 @@ class MessageMarkdownHorizontalDragTest {
                         itemsIndexed(rows, key = { _, row -> row.key }) { _, row ->
                             val chunkRow = row as ChatMessageRow.TextChunk
                             MessageMarkdownContent(
-                                markdown = chunkRow.markdown.chunk.source,
+                                markdown = chunkRow.markdown.source,
                                 textColor = Color.Black,
                                 isUser = false,
                                 modifier = Modifier
                                     .testTag("$LongComposeRowTag:${row.key}")
                                     .fillMaxWidth(),
-                                plannedChunk = chunkRow.markdown,
+                                plannedBlock = chunkRow.markdown,
                             )
                         }
                     }
@@ -415,11 +384,11 @@ class MessageMarkdownHorizontalDragTest {
     }
 
     @Test
-    fun deepRowOfOversizedRealMarkdownTableCanBePhysicallyDraggedInMathMessage() {
-        assertEquals(
-            MessageMarkdownRoute.KatexWebView,
-            resolveMessageMarkdownRoute(OversizedTableKatexMarkdown),
-        )
+    fun deepRowOfOversizedTableInMathMessageUsesComposeScroll() {
+        val plan = planMarkdownDocument(parseMarkdownDocument(OversizedTableKatexMarkdown).getOrThrow())
+        val tableBlock = plan.blocks.single { it.kind == MarkdownRenderBlockKind.Table }
+        assertEquals(MarkdownRenderRoute.Compose, tableBlock.route)
+        assertTrue(plan.blocks.any { it.route == MarkdownRenderRoute.Katex })
         val chatMessage = ChatMessage(
             message = Message.Assistant(
                 id = OversizedTableMessageId,
@@ -437,10 +406,11 @@ class MessageMarkdownHorizontalDragTest {
         )
         val messageRows = planChatMessageRows(listOf(chatMessage))
         val targetRowIndex = messageRows.indexOfFirst { row ->
-            row is ChatMessageRow.TextChunk && OversizedTableDeepRowMarker in row.markdown.chunk.source
+            row is ChatMessageRow.TextChunk && OversizedTableDeepRowMarker in row.markdown.source
         }
-        assertTrue("expected the deep table row in a later top-level chunk", targetRowIndex > 0)
+        assertTrue("expected the deep table in a later planned block", targetRowIndex > 0)
         val targetRow = messageRows[targetRowIndex] as ChatMessageRow.TextChunk
+        assertEquals(MarkdownRenderBlockKind.Table, targetRow.markdown.kind)
 
         lateinit var parentScrollState: LazyListState
         rule.setContent {
@@ -460,13 +430,13 @@ class MessageMarkdownHorizontalDragTest {
                         itemsIndexed(messageRows, key = { _, row -> row.key }) { _, row ->
                             val chunkRow = row as ChatMessageRow.TextChunk
                             MessageMarkdownContent(
-                                markdown = chunkRow.markdown.chunk.source,
+                                markdown = chunkRow.markdown.source,
                                 textColor = Color.Black,
                                 isUser = false,
                                 modifier = Modifier
                                     .testTag("$TopLevelRowTag:${row.key}")
                                     .fillMaxWidth(),
-                                plannedChunk = chunkRow.markdown,
+                                plannedBlock = chunkRow.markdown,
                             )
                         }
                     }
@@ -474,44 +444,39 @@ class MessageMarkdownHorizontalDragTest {
             }
         }
         rule.waitForIdle()
-        val mathWebView = waitForKatexWebView()
-        assertTrue("expected KaTeX to render before navigating to a deep table chunk", readKatexNodeCount(mathWebView) > 0)
-
-        val target = waitForChunkedTableTarget(
-            targetMarker = OversizedTableDeepRowMarker,
-            parentScrollState = parentScrollState,
-            targetRowIndex = targetRowIndex,
-            targetRowKey = targetRow.key,
-        )
-        assertTrue("expected a real marked table", target.metrics.tableCount > 0)
-        assertTrue("expected multiple rendered rows around the deep source row", target.metrics.rowCount > 3)
-        assertTrue(
-            "expected the deep source row to remain a later rendered row in its table chunk, " +
-                "index=${target.metrics.targetRowIndex}",
-            target.metrics.targetRowIndex > 2,
-        )
-        assertTrue("expected the production table scroll wrapper", target.metrics.hasScrollWrapper)
-        assertEquals("deep-row table should start at the left edge", 0, target.metrics.scrollLeft)
-
-        val swipe = prepareTableSwipe(target, OversizedTableDeepRowMarker)
-        injectSwipe(swipe.startX, swipe.startY, swipe.endX, swipe.endY)
+        scrollToItem(parentScrollState, targetRowIndex)
+        rule.onNodeWithText(OversizedTableDeepRowMarker, useUnmergedTree = true)
+            .assertExists()
+            .performScrollTo()
         rule.waitForIdle()
-        SystemClock.sleep(GestureSettleMillis)
-
-        val after = readTableMetrics(target.webView, OversizedTableDeepRowMarker)
+        val matcher = SemanticsMatcher.keyIsDefined(SemanticsProperties.HorizontalScrollAxisRange)
+        val tableNode = rule.onAllNodes(matcher, useUnmergedTree = true)
+            .fetchSemanticsNodes()
+            .maxByOrNull { it.config[SemanticsProperties.HorizontalScrollAxisRange].maxValue() }
+            ?: throw AssertionError("expected horizontal scroll semantics for the oversized Compose table")
+        val before = tableNode.config[SemanticsProperties.HorizontalScrollAxisRange].value()
+        val bounds = tableNode.boundsInRoot.toScreenBounds()
+        injectTimedSwipe(
+            startX = bounds.right - TableGestureInsetPx,
+            startY = bounds.centerY().toFloat(),
+            endX = bounds.left + TableGestureInsetPx,
+            endY = bounds.centerY().toFloat(),
+        )
+        rule.waitForIdle()
+        val after = rule.onAllNodes(matcher, useUnmergedTree = true)
+            .fetchSemanticsNodes()
+            .maxOf { it.config[SemanticsProperties.HorizontalScrollAxisRange].value() }
         assertTrue(
-            "expected a physical finger drag over the deep table row to increase scrollLeft, " +
-                "before=${target.metrics.scrollLeft}, after=${after.scrollLeft}, swipe=$swipe, target=$target",
-            after.scrollLeft > target.metrics.scrollLeft,
+            "expected a physical drag over the deep Compose table row to advance horizontal scroll, " +
+                "before=$before after=$after bounds=$bounds",
+            after > before,
         )
     }
 
     @Test
-    fun lateCodeBlockInChunkedKatexWebViewsSupportsHorizontalAndVerticalDrag() {
-        assertEquals(
-            MessageMarkdownRoute.KatexWebView,
-            resolveMessageMarkdownRoute(TallChunkedKatexMarkdown),
-        )
+    fun lateCodeBlockInMathMessageUsesComposeScrollAndParentVerticalDrag() {
+        val plan = planMarkdownDocument(parseMarkdownDocument(TallChunkedKatexMarkdown).getOrThrow())
+        assertTrue(plan.blocks.any { it.route == MarkdownRenderRoute.Katex })
         assertTrue(
             "expected a production-scale 29k fixture, length=${TallChunkedKatexMarkdown.length}",
             TallChunkedKatexMarkdown.length in 28_000..30_000,
@@ -533,11 +498,13 @@ class MessageMarkdownHorizontalDragTest {
         )
         val messageRows = planChatMessageRows(listOf(chatMessage))
         val targetRowIndex = messageRows.indexOfFirst { row ->
-            row is ChatMessageRow.TextChunk && TallChunkedCodePrefix in row.markdown.chunk.source
+            row is ChatMessageRow.TextChunk && TallChunkedCodePrefix in row.markdown.source
         }
         val targetRow = messageRows[targetRowIndex] as ChatMessageRow.TextChunk
-        assertTrue("expected 5-8 top-level rows, count=${messageRows.size}", messageRows.size in 5..8)
+        assertTrue("expected bounded top-level rows, count=${messageRows.size}", messageRows.size in 5..10)
         assertTrue("expected target code in a later top-level row, index=$targetRowIndex", targetRowIndex > 0)
+        assertEquals(MarkdownRenderBlockKind.CodeFence, targetRow.markdown.kind)
+        assertEquals(MarkdownRenderRoute.Compose, targetRow.markdown.route)
 
         lateinit var parentScrollState: LazyListState
         rule.setContent {
@@ -557,13 +524,13 @@ class MessageMarkdownHorizontalDragTest {
                         itemsIndexed(messageRows, key = { _, row -> row.key }) { _, row ->
                             val chunkRow = row as ChatMessageRow.TextChunk
                             MessageMarkdownContent(
-                                markdown = chunkRow.markdown.chunk.source,
+                                markdown = chunkRow.markdown.source,
                                 textColor = Color.Black,
                                 isUser = false,
                                 modifier = Modifier
                                     .testTag("$TopLevelRowTag:${row.key}")
                                     .fillMaxWidth(),
-                                plannedChunk = chunkRow.markdown,
+                                plannedBlock = chunkRow.markdown,
                             )
                         }
                     }
@@ -571,82 +538,48 @@ class MessageMarkdownHorizontalDragTest {
             }
         }
         rule.waitForIdle()
-
-        waitForKatexWebView()
-
-        val target = waitForChunkedTarget(
-            targetPrefix = TallChunkedCodePrefix,
-            parentScrollState = parentScrollState,
-            targetRowIndex = targetRowIndex,
-            targetRowKey = targetRow.key,
-        )
-        assertEquals("expected target WebView in its own top-level row", targetRow.key, target.rowKey)
-        assertTrue(
-            "expected bounded top-level target item, size=${target.rowSize}",
-            target.rowSize in 1 until MaxTopLevelItemHeightPx,
-        )
-        assertTrue(
-            "expected bounded target WebView, target=$target",
-            target.view.height in 1 until MaxChunkWebViewHeightPx,
-        )
-        assertEquals("target pre should start at the left edge", 0, target.metrics.scrollLeft)
-        assertTrue(
-            "expected the target pre near the top of its chunk, cssTop=${target.metrics.top}",
-            target.metrics.top < MaxTargetPreCssTopPx,
-        )
-
-        val horizontalSwipe = prepareChunkedSwipe(
-            stableTarget = target,
-            targetPrefix = TallChunkedCodePrefix,
-            parentScrollState = parentScrollState,
-            targetRowKey = targetRow.key,
-            direction = SwipeDirection.Horizontal,
-        )
-
-        injectSwipe(
-            startX = horizontalSwipe.startX,
-            startY = horizontalSwipe.startY,
-            endX = horizontalSwipe.endX,
-            endY = horizontalSwipe.endY,
+        scrollToItem(parentScrollState, targetRowIndex)
+        rule.onNodeWithText(TallChunkedCodePrefix, substring = true, useUnmergedTree = true)
+            .assertExists()
+            .performScrollTo()
+        rule.waitForIdle()
+        val matcher = SemanticsMatcher.keyIsDefined(SemanticsProperties.HorizontalScrollAxisRange)
+        val codeNode = rule.onAllNodes(matcher, useUnmergedTree = true)
+            .fetchSemanticsNodes()
+            .maxByOrNull { it.config[SemanticsProperties.HorizontalScrollAxisRange].maxValue() }
+            ?: throw AssertionError("expected horizontal scroll semantics for the Compose code block")
+        val beforeHorizontal = codeNode.config[SemanticsProperties.HorizontalScrollAxisRange].value()
+        val codeBounds = codeNode.boundsInRoot.toScreenBounds()
+        injectTimedSwipe(
+            startX = codeBounds.right - GestureEdgeInsetPx,
+            startY = codeBounds.centerY().toFloat(),
+            endX = codeBounds.left + GestureEdgeInsetPx,
+            endY = codeBounds.centerY().toFloat(),
         )
         rule.waitForIdle()
-        SystemClock.sleep(GestureSettleMillis)
-
-        val afterHorizontal = readTargetPreMetrics(target.webView, TallChunkedCodePrefix)
+        val afterHorizontal = rule.onAllNodes(matcher, useUnmergedTree = true)
+            .fetchSemanticsNodes()
+            .maxOf { it.config[SemanticsProperties.HorizontalScrollAxisRange].value() }
         assertTrue(
-            "expected a physical horizontal drag on the later chunk pre to increase scrollLeft, " +
-                "before=${target.metrics.scrollLeft}, after=${afterHorizontal.scrollLeft}, " +
-                "swipe=$horizontalSwipe, stableTarget=$target",
-            afterHorizontal.scrollLeft > target.metrics.scrollLeft,
+            "expected a physical drag on the later Compose code block to advance horizontal scroll, " +
+                "before=$beforeHorizontal after=$afterHorizontal bounds=$codeBounds",
+            afterHorizontal > beforeHorizontal,
         )
 
-        val verticalTarget = waitForChunkedTarget(
-            targetPrefix = TallChunkedCodePrefix,
-            parentScrollState = parentScrollState,
-            targetRowIndex = targetRowIndex,
-            targetRowKey = targetRow.key,
-        )
-        val verticalSwipe = prepareChunkedSwipe(
-            stableTarget = verticalTarget,
-            targetPrefix = TallChunkedCodePrefix,
-            parentScrollState = parentScrollState,
-            targetRowKey = targetRow.key,
-            direction = SwipeDirection.Vertical,
-        )
+        waitUntilCanScrollForward(parentScrollState)
         val parentPositionBeforeVertical = readPosition(parentScrollState)
-        injectSwipe(
-            startX = verticalSwipe.startX,
-            startY = verticalSwipe.startY,
-            endX = verticalSwipe.endX,
-            endY = verticalSwipe.endY,
+        injectTimedSwipe(
+            startX = codeBounds.centerX().toFloat(),
+            startY = codeBounds.bottom - GestureEdgeInsetPx,
+            endX = codeBounds.centerX().toFloat(),
+            endY = codeBounds.top + GestureEdgeInsetPx,
         )
         rule.waitForIdle()
-        SystemClock.sleep(GestureSettleMillis)
         val parentPositionAfterVertical = readPosition(parentScrollState)
         assertTrue(
-            "expected a vertical drag over the later KaTeX chunk to scroll the Compose parent, " +
+            "expected a vertical drag over the later Compose code block to scroll the parent, " +
                 "before=$parentPositionBeforeVertical, after=$parentPositionAfterVertical, " +
-                "swipe=$verticalSwipe, stableTarget=$verticalTarget",
+                "bounds=$codeBounds",
             parentPositionAfterVertical > parentPositionBeforeVertical,
         )
     }
@@ -1003,255 +936,9 @@ class MessageMarkdownHorizontalDragTest {
         )
     }
 
-    private fun readTargetPreMetrics(webView: WebView, targetPrefix: String): PreMetrics {
-        val values = evaluateArray(
-            webView,
-            """
-                (function() {
-                  var pre = Array.from(document.querySelectorAll('pre')).find(function(node) {
-                    return node.textContent.indexOf('$targetPrefix') >= 0;
-                  });
-                  if (!pre) return [];
-                  var rect = pre.getBoundingClientRect();
-                  return [
-                    document.querySelectorAll('pre').length,
-                    pre.scrollLeft,
-                    pre.clientWidth,
-                    pre.scrollWidth,
-                    rect.left,
-                    rect.top,
-                    rect.width,
-                    rect.height,
-                    document.documentElement.clientWidth,
-                    document.body.getBoundingClientRect().height
-                  ];
-                })()
-            """.trimIndent(),
-        )
-        if (values.length() != PreMetricCount) return PreMetrics.Empty
-        return PreMetrics(
-            preCount = values.getInt(0),
-            scrollLeft = values.getInt(1),
-            clientWidth = values.getInt(2),
-            scrollWidth = values.getInt(3),
-            left = values.getDouble(4).toFloat(),
-            top = values.getDouble(5).toFloat(),
-            width = values.getDouble(6).toFloat(),
-            height = values.getDouble(7).toFloat(),
-            viewportWidth = values.getInt(8),
-            documentHeight = values.getDouble(9).toFloat(),
-        )
-    }
-
     private fun readKatexNodeCount(webView: WebView): Int {
         val values = evaluateArray(webView, "[document.querySelectorAll('.katex').length]")
         return if (values.length() == 1) values.getInt(0) else 0
-    }
-
-    private fun readTableMetrics(webView: WebView, targetMarker: String): TableMetrics {
-        val values = evaluateArray(
-            webView,
-            """
-                (function() {
-                  var row = Array.from(document.querySelectorAll('tr')).find(function(node) {
-                    return node.textContent.indexOf('$targetMarker') >= 0;
-                  });
-                  if (!row) return [];
-                  var table = row.closest('table');
-                  var wrapper = table && table.parentElement;
-                  if (!table || !wrapper) return [];
-                  var rowRect = row.getBoundingClientRect();
-                  var wrapperRect = wrapper.getBoundingClientRect();
-                  return [
-                    document.querySelectorAll('table').length,
-                    document.querySelectorAll('.katex').length,
-                    Array.from(document.querySelectorAll('table')).indexOf(table),
-                    Array.from(table.querySelectorAll('tr')).indexOf(row),
-                    table.querySelectorAll('tr').length,
-                    wrapper.scrollLeft,
-                    wrapper.clientWidth,
-                    wrapper.scrollWidth,
-                    wrapperRect.left,
-                    rowRect.top,
-                    wrapperRect.width,
-                    rowRect.height,
-                    document.documentElement.clientWidth,
-                    wrapper.classList.contains('table-scroll') && wrapper.classList.contains('markdown-horizontal-scroll')
-                  ];
-                })()
-            """.trimIndent(),
-        )
-        if (values.length() != TableMetricCount) return TableMetrics.Empty
-        return TableMetrics(
-            tableCount = values.getInt(0),
-            katexCount = values.getInt(1),
-            targetTableIndex = values.getInt(2),
-            targetRowIndex = values.getInt(3),
-            rowCount = values.getInt(4),
-            scrollLeft = values.getInt(5),
-            clientWidth = values.getInt(6),
-            scrollWidth = values.getInt(7),
-            left = values.getDouble(8).toFloat(),
-            top = values.getDouble(9).toFloat(),
-            width = values.getDouble(10).toFloat(),
-            height = values.getDouble(11).toFloat(),
-            viewportWidth = values.getInt(12),
-            hasScrollWrapper = values.getBoolean(13),
-        )
-    }
-
-    private fun readTotalTableCount(): Int = findAttachedWebViews().sumOf { webView ->
-        val values = evaluateArray(webView, "[document.querySelectorAll('table').length]")
-        if (values.length() == 1) values.getInt(0) else 0
-    }
-
-    private fun readTotalKatexCount(): Int = findAttachedWebViews().sumOf(::readKatexNodeCount)
-
-    private fun waitForVisibleTableTarget(
-        targetMarker: String,
-        expectedWebView: WebView? = null,
-        rowKey: String? = null,
-    ): TableTarget {
-        val deadline = SystemClock.uptimeMillis() + LoadTimeoutMillis
-        var latest: TableTarget? = null
-        var stableSamples = 0
-        while (SystemClock.uptimeMillis() < deadline) {
-            val candidates = findAttachedWebViews()
-            val sample = candidates.mapIndexedNotNull { index, webView ->
-                if (expectedWebView != null && webView !== expectedWebView) return@mapIndexedNotNull null
-                val metrics = readTableMetrics(webView, targetMarker)
-                if (metrics == TableMetrics.Empty) null else TableTarget(
-                    webView = webView,
-                    metrics = metrics,
-                    view = snapshot(webView),
-                    renderOrder = index,
-                    rowKey = rowKey,
-                )
-            }.firstOrNull { it.isReady() }
-            if (sample != null) {
-                stableSamples = if (latest?.isStableWith(sample) == true) stableSamples + 1 else 1
-                latest = sample
-                if (stableSamples >= RequiredStableSamples) return sample
-            } else {
-                stableSamples = 0
-            }
-            SystemClock.sleep(DomPollMillis)
-        }
-        throw AssertionError(
-            "expected a stable visible real table containing '$targetMarker', latest=$latest",
-        )
-    }
-
-    private fun waitForChunkedTableTarget(
-        targetMarker: String,
-        parentScrollState: LazyListState,
-        targetRowIndex: Int,
-        targetRowKey: String,
-    ): TableTarget {
-        val deadline = SystemClock.uptimeMillis() + LoadTimeoutMillis
-        var latest: TableTarget? = null
-        var stableSamples = 0
-        var targetScrollOffset = 0
-        while (SystemClock.uptimeMillis() < deadline) {
-            scrollToItem(parentScrollState, targetRowIndex, targetScrollOffset)
-            val sample = findAttachedWebViews().mapIndexedNotNull { index, webView ->
-                val metrics = readTableMetrics(webView, targetMarker)
-                if (metrics == TableMetrics.Empty) null else TableTarget(
-                    webView = webView,
-                    metrics = metrics,
-                    view = snapshot(webView),
-                    renderOrder = index,
-                    rowKey = targetRowKey,
-                )
-            }.firstOrNull { it.isReady() }
-            if (sample != null && sample.targetIsVisible()) {
-                stableSamples = if (latest?.isStableWith(sample) == true) stableSamples + 1 else 1
-                latest = sample
-                if (stableSamples >= RequiredStableSamples) return sample
-            } else if (sample != null) {
-                val scale = sample.view.width.toFloat() / sample.metrics.viewportWidth
-                targetScrollOffset = maxOf(0, (sample.metrics.top * scale - TargetViewportInsetPx).toInt())
-                stableSamples = 0
-                latest = sample
-            } else {
-                stableSamples = 0
-            }
-            SystemClock.sleep(DomPollMillis)
-        }
-        throw AssertionError(
-            "expected a stable deep-row table target, rowKey=$targetRowKey, latest=$latest",
-        )
-    }
-
-    private fun findAttachedWebViews(): List<WebView> {
-        var views = emptyList<WebView>()
-        rule.runOnIdle {
-            views = findWebViews(rule.activity.window.decorView).filter { it.isAttachedToWindow && it.height > 0 }
-        }
-        return views
-    }
-
-    private fun snapshot(webView: WebView): ViewSnapshot {
-        lateinit var snapshot: ViewSnapshot
-        rule.runOnIdle { snapshot = webView.snapshotOnUiThread() }
-        return snapshot
-    }
-
-    private fun prepareTableSwipe(stableTarget: TableTarget, targetMarker: String): ScreenSwipe {
-        val current = waitForVisibleTableTarget(targetMarker, stableTarget.webView, stableTarget.rowKey)
-        check(stableTarget.isStableWith(current)) {
-            "table target changed before physical input, stable=$stableTarget, current=$current"
-        }
-        val geometry = current.screenGeometry()
-        val intersection = Rect(geometry.targetBounds)
-        check(intersection.intersect(geometry.visibleBounds)) {
-            "table row has no visible intersection before physical input, target=$current"
-        }
-        check(intersection.width() > GestureEdgeInsetPx * 2 && intersection.height() > TableGestureInsetPx * 2) {
-            "table row intersection lacks a gesture interior, intersection=$intersection, target=$current"
-        }
-        val swipe = ScreenSwipe(
-            startX = intersection.right - GestureEdgeInsetPx,
-            startY = intersection.centerY().toFloat(),
-            endX = intersection.left + GestureEdgeInsetPx,
-            endY = intersection.centerY().toFloat(),
-            geometry = geometry,
-        )
-        val hit = readTableTargetHit(current, targetMarker, swipe.startX, swipe.startY)
-        check(hit.hitsTarget) {
-            "physical input point does not hit the target table row, hit=$hit, swipe=$swipe, target=$current"
-        }
-        return swipe
-    }
-
-    private fun readTableTargetHit(
-        target: TableTarget,
-        targetMarker: String,
-        screenX: Float,
-        screenY: Float,
-    ): TargetHit {
-        val scale = target.view.width.toFloat() / target.metrics.viewportWidth
-        val clientX = (screenX - target.view.bounds.left) / scale
-        val clientY = (screenY - target.view.bounds.top) / scale
-        val values = evaluateArray(
-            target.webView,
-            """
-                (function() {
-                  var row = Array.from(document.querySelectorAll('tr')).find(function(node) {
-                    return node.textContent.indexOf('$targetMarker') >= 0;
-                  });
-                  var hit = document.elementFromPoint($clientX, $clientY);
-                  return [!!row && !!hit && (hit === row || row.contains(hit)), hit ? hit.tagName : '', hit ? hit.className : ''];
-                })()
-            """.trimIndent(),
-        )
-        return TargetHit(
-            hitsTarget = values.length() == TargetHitMetricCount && values.getBoolean(0),
-            tagName = if (values.length() == TargetHitMetricCount) values.getString(1) else "",
-            className = if (values.length() == TargetHitMetricCount) values.getString(2) else "",
-            clientX = clientX,
-            clientY = clientY,
-        )
     }
 
     private fun evaluateArray(webView: WebView, script: String): JSONArray {
@@ -1261,27 +948,6 @@ class MessageMarkdownHorizontalDragTest {
         }
         rule.waitUntil(LoadTimeoutMillis) { output != null }
         return JSONArray(output)
-    }
-
-    private fun WebView.preDragCoordinates(metrics: PreMetrics): DragCoordinates {
-        val location = IntArray(2)
-        val visibleBounds = Rect()
-        var viewWidth = 0
-        rule.runOnIdle {
-            getLocationOnScreen(location)
-            check(getGlobalVisibleRect(visibleBounds)) { "WebView should be visible" }
-            viewWidth = width
-        }
-        val pageScale = viewWidth.toFloat() / metrics.viewportWidth
-        val centerY = location[1] + (metrics.top + metrics.height / 2f) * pageScale
-        check(centerY in visibleBounds.top.toFloat()..visibleBounds.bottom.toFloat()) {
-            "target <pre> should be visible, centerY=$centerY, visibleBounds=$visibleBounds"
-        }
-        return DragCoordinates(
-            left = (metrics.left + metrics.width * 0.2f) * pageScale,
-            right = (metrics.left + metrics.width * 0.8f) * pageScale,
-            centerY = (metrics.top + metrics.height / 2f) * pageScale,
-        )
     }
 
     private fun WebView.globalVisibleBounds(): Rect = Rect().also { bounds ->
@@ -1304,23 +970,6 @@ class MessageMarkdownHorizontalDragTest {
         }
         advanceEventTime(GestureStepMillis)
         up()
-    }
-
-    private fun injectSwipe(startX: Float, startY: Float, endX: Float, endY: Float) {
-        val uiAutomation = InstrumentationRegistry.getInstrumentation().uiAutomation
-        val downTime = SystemClock.uptimeMillis()
-        uiAutomation.injectTouch(MotionEvent.ACTION_DOWN, downTime, startX, startY)
-        repeat(PhysicalGestureStepCount) { index ->
-            SystemClock.sleep(PhysicalGestureStepMillis)
-            val fraction = (index + 1f) / PhysicalGestureStepCount
-            uiAutomation.injectTouch(
-                action = MotionEvent.ACTION_MOVE,
-                downTime = downTime,
-                x = startX + (endX - startX) * fraction,
-                y = startY + (endY - startY) * fraction,
-            )
-        }
-        uiAutomation.injectTouch(MotionEvent.ACTION_UP, downTime, endX, endY)
     }
 
     private fun injectTimedSwipe(startX: Float, startY: Float, endX: Float, endY: Float) {
@@ -1414,35 +1063,6 @@ class MessageMarkdownHorizontalDragTest {
         throw AssertionError("expected an attached segmented WebView with rendered KaTeX")
     }
 
-    private fun waitForChunkedTarget(
-        targetPrefix: String,
-        parentScrollState: LazyListState,
-        targetRowIndex: Int,
-        targetRowKey: String,
-    ): ChunkedTarget {
-        val deadline = SystemClock.uptimeMillis() + LoadTimeoutMillis
-        var latest: ChunkedTarget? = null
-        var stableSamples = 0
-        while (SystemClock.uptimeMillis() < deadline) {
-            scrollToItem(parentScrollState, targetRowIndex)
-            val sample = captureChunkedTarget(parentScrollState, targetRowKey, targetPrefix)
-            if (sample != null && sample.isReady()) {
-                stableSamples = if (latest?.isStableWith(sample) == true) stableSamples + 1 else 1
-                latest = sample
-                if (stableSamples >= RequiredStableSamples) return sample
-            } else {
-                stableSamples = 0
-                latest = sample
-            }
-            SystemClock.sleep(DomPollMillis)
-        }
-        throw AssertionError(
-            "expected $RequiredStableSamples consecutive aligned/stable target samples, " +
-                "targetRowKey=$targetRowKey, targetRowIndex=$targetRowIndex, " +
-                "stableSamples=$stableSamples, latest=$latest",
-        )
-    }
-
     private fun scrollToItem(state: LazyListState, index: Int, scrollOffset: Int = 0) {
         lateinit var scrollJob: Job
         rule.runOnIdle {
@@ -1450,170 +1070,6 @@ class MessageMarkdownHorizontalDragTest {
         }
         rule.waitUntil(LoadTimeoutMillis) { scrollJob.isCompleted }
         rule.waitForIdle()
-    }
-
-    private fun captureChunkedTarget(
-        state: LazyListState,
-        targetRowKey: String,
-        targetPrefix: String,
-        expectedWebView: WebView? = null,
-    ): ChunkedTarget? {
-        var listSnapshot: ListSnapshot? = null
-        var candidates = emptyList<ViewSnapshot>()
-        rule.runOnIdle {
-            val layoutInfo = state.layoutInfo
-            val item = layoutInfo.visibleItemsInfo.firstOrNull { it.key == targetRowKey }
-            listSnapshot = item?.let {
-                ListSnapshot(
-                    rowKey = targetRowKey,
-                    rowOffset = it.offset,
-                    rowSize = it.size,
-                    viewportStartOffset = layoutInfo.viewportStartOffset,
-                    viewportEndOffset = layoutInfo.viewportEndOffset,
-                    position = state.position(),
-                )
-            }
-            candidates = findWebViews(rule.activity.window.decorView)
-                .asSequence()
-                .filter { expectedWebView == null || it === expectedWebView }
-                .map { it.snapshotOnUiThread() }
-                .toList()
-        }
-        val list = listSnapshot ?: return null
-        candidates.forEach { view ->
-            val metrics = readTargetPreMetrics(view.webView, targetPrefix)
-            if (metrics != PreMetrics.Empty) {
-                var currentView: ViewSnapshot? = null
-                var currentList: ListSnapshot? = null
-                rule.runOnIdle {
-                    currentView = view.webView.snapshotOnUiThread()
-                    val layoutInfo = state.layoutInfo
-                    currentList = layoutInfo.visibleItemsInfo
-                        .firstOrNull { it.key == targetRowKey }
-                        ?.let {
-                            ListSnapshot(
-                                rowKey = targetRowKey,
-                                rowOffset = it.offset,
-                                rowSize = it.size,
-                                viewportStartOffset = layoutInfo.viewportStartOffset,
-                                viewportEndOffset = layoutInfo.viewportEndOffset,
-                                position = state.position(),
-                            )
-                        }
-                }
-                val verifiedView = currentView
-                val verifiedList = currentList
-                if (verifiedView != null && verifiedList != null && view == verifiedView && list == verifiedList) {
-                    return ChunkedTarget(verifiedView.webView, metrics, verifiedList, verifiedView)
-                }
-            }
-        }
-        return null
-    }
-
-    private fun WebView.snapshotOnUiThread(): ViewSnapshot {
-        val bounds = Rect()
-        val visibleBounds = Rect()
-        getGlobalVisibleRect(visibleBounds)
-        getGlobalBounds(bounds)
-        return ViewSnapshot(
-            webView = this,
-            identity = System.identityHashCode(this),
-            tag = tag?.toString(),
-            width = width,
-            height = height,
-            bounds = bounds,
-            visibleBounds = visibleBounds,
-            isAttached = isAttachedToWindow,
-            hasWindowFocus = hasWindowFocus(),
-            isShown = isShown,
-        )
-    }
-
-    private fun View.getGlobalBounds(outBounds: Rect) {
-        val location = IntArray(2)
-        getLocationOnScreen(location)
-        outBounds.set(location[0], location[1], location[0] + width, location[1] + height)
-    }
-
-    private fun prepareChunkedSwipe(
-        stableTarget: ChunkedTarget,
-        targetPrefix: String,
-        parentScrollState: LazyListState,
-        targetRowKey: String,
-        direction: SwipeDirection,
-    ): ScreenSwipe {
-        val current = captureChunkedTarget(
-            state = parentScrollState,
-            targetRowKey = targetRowKey,
-            targetPrefix = targetPrefix,
-            expectedWebView = stableTarget.webView,
-        ) ?: throw AssertionError("target disappeared before $direction injection, stableTarget=$stableTarget")
-        check(stableTarget.isStableWith(current)) {
-            "target changed after stable readiness and before $direction injection, " +
-                "stable=$stableTarget, current=$current"
-        }
-        check(current.isReady()) { "target no longer ready before $direction injection, current=$current" }
-
-        val geometry = current.screenGeometry()
-        val intersection = Rect(geometry.targetBounds)
-        check(intersection.intersect(geometry.visibleBounds)) {
-            "target has no visible intersection before $direction injection, current=$current, geometry=$geometry"
-        }
-        check(intersection.width() > GestureEdgeInsetPx * 2 && intersection.height() > GestureEdgeInsetPx * 2) {
-            "target intersection lacks gesture interior, intersection=$intersection, current=$current"
-        }
-        val swipe = when (direction) {
-            SwipeDirection.Horizontal -> ScreenSwipe(
-                startX = intersection.right - GestureEdgeInsetPx,
-                startY = intersection.centerY().toFloat(),
-                endX = intersection.left + GestureEdgeInsetPx,
-                endY = intersection.centerY().toFloat(),
-                geometry = geometry,
-            )
-            SwipeDirection.Vertical -> ScreenSwipe(
-                startX = intersection.centerX().toFloat(),
-                startY = intersection.bottom - GestureEdgeInsetPx,
-                endX = intersection.centerX().toFloat(),
-                endY = intersection.top + GestureEdgeInsetPx,
-                geometry = geometry,
-            )
-        }
-        val hit = readTargetHit(current, targetPrefix, swipe.startX, swipe.startY)
-        check(hit.hitsTarget) {
-            "injection point does not hit target pre for $direction, hit=$hit, swipe=$swipe, current=$current"
-        }
-        return swipe
-    }
-
-    private fun readTargetHit(
-        target: ChunkedTarget,
-        targetPrefix: String,
-        screenX: Float,
-        screenY: Float,
-    ): TargetHit {
-        val scale = target.view.width.toFloat() / target.metrics.viewportWidth
-        val clientX = (screenX - target.view.bounds.left) / scale
-        val clientY = (screenY - target.view.bounds.top) / scale
-        val values = evaluateArray(
-            target.webView,
-            """
-                (function() {
-                  var pre = Array.from(document.querySelectorAll('pre')).find(function(node) {
-                    return node.textContent.indexOf('$targetPrefix') >= 0;
-                  });
-                  var hit = document.elementFromPoint($clientX, $clientY);
-                  return [!!pre && !!hit && (hit === pre || pre.contains(hit)), hit ? hit.tagName : '', hit ? hit.className : ''];
-                })()
-            """.trimIndent(),
-        )
-        return TargetHit(
-            hitsTarget = values.length() == TargetHitMetricCount && values.getBoolean(0),
-            tagName = if (values.length() == TargetHitMetricCount) values.getString(1) else "",
-            className = if (values.length() == TargetHitMetricCount) values.getString(2) else "",
-            clientX = clientX,
-            clientY = clientY,
-        )
     }
 
     private fun waitUntilCanScrollForward(state: LazyListState) {
@@ -1680,194 +1136,9 @@ class MessageMarkdownHorizontalDragTest {
         val viewportWidth: Int,
         val documentHeight: Float,
     ) {
-        fun isStableWith(other: PreMetrics): Boolean =
-            preCount == other.preCount &&
-                scrollLeft == other.scrollLeft &&
-                clientWidth == other.clientWidth &&
-                scrollWidth == other.scrollWidth &&
-                kotlin.math.abs(left - other.left) <= GeometryTolerancePx &&
-                kotlin.math.abs(top - other.top) <= GeometryTolerancePx &&
-                kotlin.math.abs(width - other.width) <= GeometryTolerancePx &&
-                kotlin.math.abs(height - other.height) <= GeometryTolerancePx &&
-                viewportWidth == other.viewportWidth &&
-                kotlin.math.abs(documentHeight - other.documentHeight) <= GeometryTolerancePx
-
         companion object {
             val Empty = PreMetrics(0, 0, 0, 0, 0f, 0f, 0f, 0f, 1, 0f)
         }
-    }
-
-    private data class TableMetrics(
-        val tableCount: Int,
-        val katexCount: Int,
-        val targetTableIndex: Int,
-        val targetRowIndex: Int,
-        val rowCount: Int,
-        val scrollLeft: Int,
-        val clientWidth: Int,
-        val scrollWidth: Int,
-        val left: Float,
-        val top: Float,
-        val width: Float,
-        val height: Float,
-        val viewportWidth: Int,
-        val hasScrollWrapper: Boolean,
-    ) {
-        fun isStableWith(other: TableMetrics): Boolean =
-            tableCount == other.tableCount &&
-                katexCount == other.katexCount &&
-                targetTableIndex == other.targetTableIndex &&
-                targetRowIndex == other.targetRowIndex &&
-                rowCount == other.rowCount &&
-                scrollLeft == other.scrollLeft &&
-                clientWidth == other.clientWidth &&
-                scrollWidth == other.scrollWidth &&
-                kotlin.math.abs(left - other.left) <= GeometryTolerancePx &&
-                kotlin.math.abs(top - other.top) <= GeometryTolerancePx &&
-                kotlin.math.abs(width - other.width) <= GeometryTolerancePx &&
-                kotlin.math.abs(height - other.height) <= GeometryTolerancePx &&
-                viewportWidth == other.viewportWidth &&
-                hasScrollWrapper == other.hasScrollWrapper
-
-        companion object {
-            val Empty = TableMetrics(0, 0, -1, -1, 0, 0, 0, 0, 0f, 0f, 0f, 0f, 1, false)
-        }
-    }
-
-    private data class TableTarget(
-        val webView: WebView,
-        val metrics: TableMetrics,
-        val view: ViewSnapshot,
-        val renderOrder: Int,
-        val rowKey: String? = null,
-    ) {
-        fun isReady(): Boolean =
-            view.width > 0 &&
-                view.height > 0 &&
-                view.isAttached &&
-                view.hasWindowFocus &&
-                view.isShown &&
-                !view.visibleBounds.isEmpty &&
-                metrics.clientWidth > 0 &&
-                metrics.scrollWidth > metrics.clientWidth &&
-                metrics.viewportWidth > 0 &&
-                metrics.height > 0f &&
-                metrics.hasScrollWrapper
-
-        fun isStableWith(other: TableTarget): Boolean =
-            webView === other.webView &&
-                renderOrder == other.renderOrder &&
-                rowKey == other.rowKey &&
-                view.isStableWith(other.view) &&
-                metrics.isStableWith(other.metrics)
-
-        fun targetIsVisible(): Boolean {
-            val geometry = screenGeometry()
-            return Rect(geometry.targetBounds).intersect(geometry.visibleBounds)
-        }
-
-        fun screenGeometry(): PreScreenGeometry {
-            val pageScale = view.width.toFloat() / metrics.viewportWidth
-            return PreScreenGeometry(
-                visibleBounds = Rect(view.visibleBounds),
-                targetBounds = Rect(
-                    (view.bounds.left + metrics.left * pageScale).toInt(),
-                    (view.bounds.top + metrics.top * pageScale).toInt(),
-                    (view.bounds.left + (metrics.left + metrics.width) * pageScale).toInt(),
-                    (view.bounds.top + (metrics.top + metrics.height) * pageScale).toInt(),
-                ),
-            )
-        }
-    }
-
-    private data class DragCoordinates(
-        val left: Float,
-        val right: Float,
-        val centerY: Float,
-    )
-
-    private data class ChunkedTarget(
-        val webView: WebView,
-        val metrics: PreMetrics,
-        val list: ListSnapshot,
-        val view: ViewSnapshot,
-    ) {
-        val rowKey: String get() = list.rowKey
-        val rowSize: Int get() = list.rowSize
-
-        fun isReady(): Boolean =
-            kotlin.math.abs(list.rowOffset - list.viewportStartOffset) <= RowAlignmentTolerancePx &&
-                list.rowSize in 1 until MaxTopLevelItemHeightPx &&
-                view.width > 0 &&
-                view.height in 1 until MaxChunkWebViewHeightPx &&
-                view.isAttached &&
-                view.hasWindowFocus &&
-                view.isShown &&
-                !view.visibleBounds.isEmpty &&
-                metrics.clientWidth > 0 &&
-                metrics.scrollWidth > metrics.clientWidth &&
-                metrics.viewportWidth > 0 &&
-                metrics.documentHeight > 0f &&
-                metrics.height > 0f
-
-        fun isStableWith(other: ChunkedTarget): Boolean =
-            isSameGeneration(other) &&
-                list == other.list &&
-                view.isStableWith(other.view) &&
-                metrics.isStableWith(other.metrics)
-
-        fun isSameGeneration(other: ChunkedTarget): Boolean =
-            webView === other.webView &&
-                view.identity == other.view.identity &&
-                view.tag == other.view.tag &&
-                list.rowKey == other.list.rowKey
-
-        fun screenGeometry(): PreScreenGeometry {
-            val pageScale = view.width.toFloat() / metrics.viewportWidth
-            return PreScreenGeometry(
-                visibleBounds = Rect(view.visibleBounds),
-                targetBounds = Rect(
-                    (view.bounds.left + metrics.left * pageScale).toInt(),
-                    (view.bounds.top + metrics.top * pageScale).toInt(),
-                    (view.bounds.left + (metrics.left + metrics.width) * pageScale).toInt(),
-                    (view.bounds.top + (metrics.top + metrics.height) * pageScale).toInt(),
-                ),
-            )
-        }
-    }
-
-    private data class ListSnapshot(
-        val rowKey: String,
-        val rowOffset: Int,
-        val rowSize: Int,
-        val viewportStartOffset: Int,
-        val viewportEndOffset: Int,
-        val position: LazyPosition,
-    )
-
-    private data class ViewSnapshot(
-        val webView: WebView,
-        val identity: Int,
-        val tag: String?,
-        val width: Int,
-        val height: Int,
-        val bounds: Rect,
-        val visibleBounds: Rect,
-        val isAttached: Boolean,
-        val hasWindowFocus: Boolean,
-        val isShown: Boolean,
-    ) {
-        fun isStableWith(other: ViewSnapshot): Boolean =
-            webView === other.webView &&
-                identity == other.identity &&
-                tag == other.tag &&
-                width == other.width &&
-                height == other.height &&
-                bounds == other.bounds &&
-                visibleBounds == other.visibleBounds &&
-                isAttached == other.isAttached &&
-                hasWindowFocus == other.hasWindowFocus &&
-                isShown == other.isShown
     }
 
     private data class LazyPosition(val index: Int, val offset: Int) : Comparable<LazyPosition> {
@@ -1879,32 +1150,6 @@ class MessageMarkdownHorizontalDragTest {
     private fun LazyListState.position(): LazyPosition =
         LazyPosition(firstVisibleItemIndex, firstVisibleItemScrollOffset)
 
-    private data class PreScreenGeometry(
-        val visibleBounds: Rect,
-        val targetBounds: Rect,
-    )
-
-    private data class ScreenSwipe(
-        val startX: Float,
-        val startY: Float,
-        val endX: Float,
-        val endY: Float,
-        val geometry: PreScreenGeometry,
-    )
-
-    private data class TargetHit(
-        val hitsTarget: Boolean,
-        val tagName: String,
-        val className: String,
-        val clientX: Float,
-        val clientY: Float,
-    )
-
-    private enum class SwipeDirection {
-        Horizontal,
-        Vertical,
-    }
-
     private companion object {
         const val DomPollMillis = 100L
         const val GestureEdgeInsetPx = 32f
@@ -1912,9 +1157,6 @@ class MessageMarkdownHorizontalDragTest {
         const val GestureStepCount = 12
         const val GestureStepMillis = 16L
         const val LoadTimeoutMillis = 10_000L
-        const val MaxChunkWebViewHeightPx = 20_000
-        const val MaxTopLevelItemHeightPx = 20_000
-        const val MaxTargetPreCssTopPx = 200f
         const val MessageTag = "wide-markdown-message"
         const val KatexMessageTag = "katex-markdown-message"
         const val SwipeDismissMessageTag = "swipe-dismiss-markdown-message"
@@ -1922,12 +1164,8 @@ class MessageMarkdownHorizontalDragTest {
         const val LaterTableMarker = "LATER_TABLE_ROW"
         const val FirstTableMarker = "FIRST_TABLE_ROW"
         const val PreMetricCount = 10
-        const val PhysicalGestureStepCount = 30
-        const val PhysicalGestureStepMillis = 30L
         const val TimedGestureStepCount = 10
         const val TimedGestureStepMillis = 20L
-        const val RequiredStableSamples = 3
-        const val RowAlignmentTolerancePx = 2
         const val ReasoningTag = "wide-reasoning-message"
         const val OversizedTableDeepRowIndex = 65
         const val OversizedTableDeepRowMarker = "DEEP_TABLE_ROW_065"
@@ -1936,11 +1174,8 @@ class MessageMarkdownHorizontalDragTest {
         const val OversizedTableSessionId = "session-oversized-table"
         const val OversizedTableTextPartId = "assistant-oversized-table-text"
         const val TableGestureInsetPx = 4f
-        const val TableMetricCount = 14
-        const val TargetViewportInsetPx = 80f
         const val ReleaseUrl = "https://github.com/Wuxie233/oc-remote/releases/tag/v1.7.42"
         const val ReleaseUrlMarkdown = "v1.7.42 已发布:\n\n$ReleaseUrl"
-        const val TargetHitMetricCount = 3
         const val VerticalParentTag = "vertical-markdown-parent"
         const val TallChunkedCodePrefix = "信号是连续的、网络只吃向量"
         const val TallMessageId = "assistant-production-scale"
@@ -1954,7 +1189,6 @@ class MessageMarkdownHorizontalDragTest {
         const val LongComposeTextPartId = "assistant-long-compose-text"
         const val LongComposeRowTag = "long-compose-row"
         const val OrderedListMessageTag = "ordered-list-markdown-message"
-        const val GeometryTolerancePx = 0.5f
 
         val KatexMarkdown = """
             ```text

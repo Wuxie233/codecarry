@@ -86,20 +86,70 @@ class MarkdownDocumentParserTest {
     }
 
     @Test
-    fun `math placeholders keep parser and original coordinates and match legacy semantics`() {
+    fun `math placeholders keep parser and normalized coordinates`() {
         val source = "Price ${'$'}20, inline ${'$'}x+1${'$'}, display \\[y^2\\], code `${'$'}z${'$'}`."
 
         val document = parseMarkdownDocument(source).getOrThrow()
-        val legacy = splitMarkdownMathSegments(source).filterIsInstance<MarkdownMathSegment.Math>()
 
         assertEquals(2, document.math.size)
-        assertEquals(legacy.map { it.source }, document.math.map { it.source })
         assertEquals(listOf("x+1", "y^2"), document.math.map { it.source })
         document.math.forEach { placeholder ->
             assertEquals("xMJXMATH${placeholder.id}HTAMXJMx", placeholder.parserRange.slice(document.parserSource))
-            assertTrue(placeholder.originalRange.slice(document.normalizedSource).isNotEmpty())
+            assertTrue(placeholder.normalizedRange.slice(document.normalizedSource).isNotEmpty())
         }
         assertEquals(source, reconstructOriginalSource(document))
+    }
+
+    @Test
+    fun `math preprocessing detects all supported delimiters in order`() {
+        val source = "Inline ${'$'}x${'$'}, display ${'$'}${'$'}y${'$'}${'$'}, brackets \\(a\\) and \\[b\\]."
+
+        val math = parseMarkdownDocument(source).getOrThrow().math
+
+        assertEquals(listOf("x", "y", "a", "b"), math.map { it.source })
+        assertEquals(listOf(false, true, false, true), math.map { it.display })
+        assertEquals(listOf("${'$'}", "${'$'}${'$'}", "\\(", "\\["), math.map { it.delimiter })
+    }
+
+    @Test
+    fun `math preprocessing ignores code fences inline code currency and unmatched delimiters`() {
+        val source = """
+            Price is ${'$'}20, ratio (${ '$' }827/${ '$' }1484), and code `${'$'}inline${'$'}`.
+
+            ```kotlin
+            val formula = "${'$'}fenced${'$'}"
+            ```
+
+            Keep ${'$'}unfinished and \\(also unfinished.
+
+            Real math: ${'$'}z${'$'}.
+        """.trimIndent()
+
+        val document = parseMarkdownDocument(source).getOrThrow()
+
+        assertEquals(listOf("z"), document.math.map { it.source })
+        assertEquals(source, reconstructOriginalSource(document))
+    }
+
+    @Test
+    fun `math preprocessing distinguishes numeric expressions from financial amounts`() {
+        val source = "Budget ${'$'}7,000 plus ${'$'}58, while ratios use ${'$'}3/4${'$'} and ${'$'}3+2${'$'}."
+
+        val document = parseMarkdownDocument(source).getOrThrow()
+
+        assertEquals(listOf("3/4", "3+2"), document.math.map { it.source })
+        assertEquals(source, reconstructOriginalSource(document))
+    }
+
+    @Test
+    fun `math preprocessing detects markdown escaped display dollars`() {
+        val source = "Before \\$\\$\\frac{1}{y}\\$\\$ after"
+
+        val math = parseMarkdownDocument(source).getOrThrow().math.single()
+
+        assertEquals("\\frac{1}{y}", math.source)
+        assertTrue(math.display)
+        assertEquals("\\${'$'}\\${'$'}", math.delimiter)
     }
 
     @Test
@@ -125,9 +175,9 @@ class MarkdownDocumentParserTest {
         var originalCursor = 0
         document.math.forEach { placeholder ->
             output.append(document.parserSource, parserCursor, placeholder.parserRange.start)
-            output.append(document.normalizedSource, placeholder.originalRange.start, placeholder.originalRange.endExclusive)
+            output.append(document.normalizedSource, placeholder.normalizedRange.start, placeholder.normalizedRange.endExclusive)
             parserCursor = placeholder.parserRange.endExclusive
-            originalCursor = placeholder.originalRange.endExclusive
+            originalCursor = placeholder.normalizedRange.endExclusive
         }
         output.append(document.parserSource, parserCursor, document.parserSource.length)
         assertEquals(document.normalizedSource.length, originalCursor + document.normalizedSource.substring(originalCursor).length)

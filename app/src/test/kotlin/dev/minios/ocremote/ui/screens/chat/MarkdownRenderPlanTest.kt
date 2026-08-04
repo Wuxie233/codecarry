@@ -44,6 +44,16 @@ class MarkdownRenderPlanTest {
     }
 
     @Test
+    fun `table cells restore math source instead of exposing parser placeholders`() {
+        val plan = plan("| Formula |\n| --- |\n| ${'$'}x+1${'$'} |\n")
+        val table = plan.blocks.single()
+
+        assertEquals(listOf(listOf("${'$'}x+1${'$'}")), table.table!!.rows)
+        assertTrue("xMJXMATH" !in table.table.rows.flatten().joinToString())
+        assertEquals(MarkdownRenderRoute.Compose, table.route)
+    }
+
+    @Test
     fun `source ranges reconstruct normalized original while render context includes definitions`() {
         val source = "Use [docs][guide].\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\n[guide]: https://example.com"
         val plan = plan(source)
@@ -52,6 +62,16 @@ class MarkdownRenderPlanTest {
         plan.blocks.forEach { block ->
             assertTrue("[guide]: https://example.com" in block.renderSource)
         }
+    }
+
+    @Test
+    fun `source ranges include leading root trivia`() {
+        val source = "\n\n# Heading\n\nParagraph.\n"
+
+        val plan = plan(source)
+
+        assertEquals(source, plan.blocks.joinToString(separator = "") { it.source })
+        assertTrue(plan.blocks.first().source.startsWith("\n\n"))
     }
 
     @Test

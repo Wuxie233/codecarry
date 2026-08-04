@@ -37,7 +37,7 @@ from the original formulas. Every placeholder therefore carries two ranges:
 data class MathPlaceholder(
     val id: Int,
     val parserRange: SourceRange,
-    val originalRange: SourceRange,
+    val normalizedRange: SourceRange,
     val source: String,
     val display: Boolean,
     val delimiter: String,
@@ -56,7 +56,8 @@ sealed interface DocumentSegment {
 ```
 
 Concatenating segment slices must reproduce the parser source exactly. Mapping
-placeholders back through their dual ranges must reproduce the original source.
+placeholders back through their dual ranges must reproduce the normalized source;
+the untouched raw input remains available as `originalSource`.
 
 ## Markdown Document
 
@@ -105,7 +106,7 @@ data class RenderPlan(val blocks: List<RenderBlock>)
 
 data class RenderBlock(
     val key: String,
-    val originalRange: SourceRange,
+    val normalizedRange: SourceRange,
     val parserRange: SourceRange,
     val content: RenderContent,
     val route: RenderRoute,
@@ -132,7 +133,9 @@ markdown-jvm 0.7.3 has no incremental parser. Project-level reconciliation
 compares the previous plan with a fresh parse:
 
 - Reuse the longest completed prefix whose type, original source slice, and
-  structural fingerprint match.
+  structural fingerprint match. Raw user text remains separately available as
+  the plan's `originalSource`; normalized ranges address the protected source
+  after raw-HTML preprocessing.
 - Preserve keys for that prefix.
 - Replace only the open suffix.
 - Allow the active tail to change type when syntax closes, for example prose to

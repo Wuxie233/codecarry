@@ -32,6 +32,23 @@ internal fun parseMarkdownDocument(source: String): MarkdownDocumentParseResult 
     )
 }
 
+private fun preserveRawHtmlPayload(markdown: String): String {
+    if (markdown.isBlank() || "```" in markdown) return markdown
+
+    val looksLikeHtmlDocument = HtmlDocumentHintRegex.containsMatchIn(markdown)
+    val htmlTagCount = HtmlTagRegex.findAll(markdown).take(16).count()
+    if (!looksLikeHtmlDocument && htmlTagCount < 8) return markdown
+
+    return buildString(markdown.length + 16) {
+        append("```text\n")
+        append(markdown.trimEnd())
+        append("\n```")
+    }
+}
+
+private val HtmlDocumentHintRegex = Regex("(?is)<!doctype\\s+html\\b|<\\s*html\\b")
+private val HtmlTagRegex = Regex("(?is)<\\s*/?\\s*[a-z][^>]*>")
+
 internal fun MarkdownDocumentParseResult.getOrThrow(): MarkdownDocument = when (this) {
     is MarkdownDocumentParseResult.Success -> document
     is MarkdownDocumentParseResult.Failure -> error("Markdown parse failed: $message")
@@ -265,7 +282,7 @@ private fun preprocessDocumentMath(source: String): DocumentMathPreprocessing {
         placeholders += MarkdownMathPlaceholder(
             id = placeholders.size,
             parserRange = SourceRange(parserStart, parserStart + token.length),
-            originalRange = SourceRange(start, endExclusive),
+            normalizedRange = SourceRange(start, endExclusive),
             source = mathSource,
             display = display,
             delimiter = delimiter,
@@ -317,7 +334,8 @@ private fun preprocessDocumentMath(source: String): DocumentMathPreprocessing {
             if (next == '[' || next == '(') {
                 val closeDelimiter = if (next == '[') "\\]" else "\\)"
                 val close = source.indexOf(closeDelimiter, index + 2)
-                if (close >= 0) {
+                val crossesLine = next == '(' && source.indexOf('\n', index + 2).let { it >= 0 && it < close }
+                if (close >= 0 && !crossesLine) {
                     val mathSource = source.substring(index + 2, close).trim()
                     if (mathSource.isNotEmpty()) {
                         appendMath(index, close + closeDelimiter.length, mathSource, next == '[', "\\$next")
@@ -405,10 +423,11 @@ private fun documentCurrencyAmount(text: String, contentStart: Int): Boolean {
 
 private fun documentDollarClose(text: String, start: Int, display: Boolean): Int {
     val delimiter = if (display) "$$" else "$"
+    val lineEnd = if (display) text.length else text.indexOf('\n', start).let { if (it >= 0) it else text.length }
     var cursor = start
-    while (cursor < text.length) {
+    while (cursor < lineEnd) {
         val close = text.indexOf(delimiter, cursor)
-        if (close < 0) return -1
+        if (close < 0 || close >= lineEnd) return -1
         if (!documentEscaped(text, close) && (display || !documentCurrencyAmount(text, close + 1))) return close
         cursor = close + delimiter.length
     }
@@ -417,10 +436,11 @@ private fun documentDollarClose(text: String, start: Int, display: Boolean): Int
 
 private fun documentEscapedDollarClose(text: String, start: Int, display: Boolean): Int {
     val delimiter = if (display) "\\$\\$" else "\\$"
+    val lineEnd = if (display) text.length else text.indexOf('\n', start).let { if (it >= 0) it else text.length }
     var cursor = start
-    while (cursor < text.length) {
+    while (cursor < lineEnd) {
         val close = text.indexOf(delimiter, cursor)
-        if (close < 0) return -1
+        if (close < 0 || close >= lineEnd) return -1
         if (display || !documentCurrencyAmount(text, close + delimiter.length)) return close
         cursor = close + delimiter.length
     }
