@@ -89,8 +89,7 @@ remain usable on a narrow phone, a tablet, and a wide landscape window.
   the project viewport to `SessionProjectsViewport.kt`.
 - Existing markdown and message-row planning files are stable boundaries and
   must remain untouched unless a focused regression requires it.
-- Current version is `1.8.7` / code `102`; the next release is `1.8.8` / code
-  `103` unless repository state proves a different version was prepared.
+- Delivered release version is `1.8.8` / code `103`.
 
 ## Assumptions
 
