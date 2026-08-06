@@ -48,7 +48,6 @@ import androidx.compose.foundation.text.selection.TextSelectionColors
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Article
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.CallSplit
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.automirrored.filled.Undo
@@ -1881,93 +1880,69 @@ fun ChatScreen(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             if (!isTerminalMode) {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text(
-                            text = uiState.sessionTitle,
-                            style = MaterialTheme.typography.titleMedium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        // Subtitle: total tokens and cost for the session
-                        val totalTokens = uiState.totalInputTokens + uiState.totalOutputTokens
-                        if (totalTokens > 0 || uiState.totalCost > 0) {
-                            val parts = mutableListOf<String>()
-                            if (totalTokens > 0) {
-                                parts.add(stringResource(R.string.chat_tokens_summary, formatTokenCount(totalTokens)))
-                            }
-                            if (uiState.totalCost > 0) {
-                                parts.add(stringResource(R.string.chat_cost_format, String.format("%.4f", uiState.totalCost)))
-                            }
-                            if (parts.isNotEmpty()) {
-                                Text(
-                                    text = parts.joinToString(" · "),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
-                                )
-                            }
-                        }
+                val totalTokens = uiState.totalInputTokens + uiState.totalOutputTokens
+                val usageParts = buildList {
+                    if (totalTokens > 0) {
+                        add(stringResource(R.string.chat_tokens_summary, formatTokenCount(totalTokens)))
                     }
-                },
-                navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.back))
+                    if (uiState.totalCost > 0) {
+                        add(stringResource(R.string.chat_cost_format, String.format("%.4f", uiState.totalCost)))
                     }
-                },
-                actions = {
-                    if (uiState.sessionStatus.isInterruptible) {
-                        if (uiState.supportsAbort) IconButton(
-                            onClick = { viewModel.abortSession() },
-                            modifier = Modifier.size(48.dp),
-                        ) {
-                            Icon(
-                                Icons.Default.Stop,
-                                contentDescription = stringResource(R.string.chat_stop),
-                                tint = MaterialTheme.colorScheme.error
-                            )
-                        }
-                    }
-                    if (!uiState.isPiRoundtable && !uiState.isPiStack) {
-                        IconButton(onClick = { showSubagentDrawer = !showSubagentDrawer }) {
-                            BadgedBox(
-                                badge = {
-                                    if (runningSubagentCount > 0) {
-                                        Badge { Text(runningSubagentCount.toString()) }
-                                    }
-                                },
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.SmartToy,
-                                    contentDescription = stringResource(
-                                        R.string.chat_subagents_open_count,
-                                        runningSubagentCount,
-                                    ),
-                                )
-                            }
-                        }
-                    }
-                    if (!uiState.isPiStack) {
-                        IconButton(onClick = { isTerminalMode = true }) {
-                            Icon(
-                                imageVector = Icons.Default.Terminal,
-                                contentDescription = stringResource(R.string.tool_terminal)
-                            )
-                        }
-                    }
-                    if (!uiState.isPiStack || uiState.supportsSessionCreate || uiState.supportsFork ||
-                        uiState.supportsCompact || uiState.supportsCommands || uiState.supportsRename
-                    ) Box {
+                }
+                val backendLabel = stringResource(
+                    when {
+                        uiState.isPiRoundtable -> R.string.server_type_pi_roundtable
+                        uiState.isPiStack -> R.string.server_type_pi_stack
+                        else -> R.string.server_type_opencode
+                    },
+                )
+                val statusLabel = stringResource(
+                    when (uiState.sessionStatus) {
+                        is SessionStatus.Idle -> R.string.session_status_idle
+                        is SessionStatus.Busy -> R.string.session_status_busy
+                        is SessionStatus.Retry -> R.string.sessions_retrying
+                    },
+                )
+                val showOverflow = !uiState.isPiStack || uiState.supportsSessionCreate || uiState.supportsFork ||
+                    uiState.supportsCompact || uiState.supportsCommands || uiState.supportsRename
+                ChatHeader(
+                    title = uiState.sessionTitle,
+                    context = viewModel.getSessionDirectory().orEmpty(),
+                    backendLabel = backendLabel,
+                    statusLabel = statusLabel,
+                    usageSummary = usageParts.takeIf { it.isNotEmpty() }?.joinToString(" · "),
+                    canStop = uiState.sessionStatus.isInterruptible && uiState.supportsAbort,
+                    showSubagents = !uiState.isPiRoundtable && !uiState.isPiStack,
+                    runningSubagentCount = runningSubagentCount,
+                    showTerminal = !uiState.isPiStack,
+                    showOverflow = showOverflow,
+                    onNavigateBack = onNavigateBack,
+                    onStop = { viewModel.abortSession() },
+                    onToggleSubagents = { showSubagentDrawer = !showSubagentDrawer },
+                    onOpenTerminal = { isTerminalMode = true },
+                    onOpenOverflow = { showMenu = true },
+                    overflowMenu = { headerDensity ->
                         val isAmoled = isAmoledTheme()
-                        IconButton(onClick = { showMenu = true }) {
-                            Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.more_options))
-                        }
                         DropdownMenu(
                             expanded = showMenu,
                             onDismissRequest = { showMenu = false },
                             containerColor = if (isAmoled) Color.Black else MaterialTheme.colorScheme.surface,
                             border = if (isAmoled) BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)) else null
                         ) {
+                            ChatHeaderCompactOverflowActions(
+                                density = headerDensity,
+                                showSubagents = !uiState.isPiRoundtable && !uiState.isPiStack,
+                                runningSubagentCount = runningSubagentCount,
+                                showTerminal = !uiState.isPiStack,
+                                onToggleSubagents = {
+                                    showMenu = false
+                                    showSubagentDrawer = !showSubagentDrawer
+                                },
+                                onOpenTerminal = {
+                                    showMenu = false
+                                    isTerminalMode = true
+                                },
+                            )
                             if (!uiState.isPiStack) DropdownMenuItem(
                                 text = { Text(stringResource(R.string.menu_copy_web_link)) },
                                 onClick = {
@@ -2133,9 +2108,8 @@ fun ChatScreen(
                                 }
                             )
                         }
-                    }
-                }
-            )
+                    },
+                )
             }
         },
         bottomBar = {
