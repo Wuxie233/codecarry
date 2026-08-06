@@ -444,6 +444,40 @@ class SessionListViewModelTest {
     }
 
     @Test
+    fun `session search keeps project results scoped to selected server`() = runTest(dispatcher) {
+        val eventReducer = EventReducer()
+        val localMatch = testSession(id = "local-match", title = "Needle local")
+        val localOther = testSession(id = "local-other", title = "Unrelated")
+        val remoteMatch = testSession(id = "remote-match", title = "Needle remote")
+        val vm = newSessionListViewModel(eventReducer = eventReducer)
+        collectUiState(vm)
+        eventReducer.setSessions("srv-session-list", listOf(localMatch, localOther))
+        eventReducer.setSessions("other-server", listOf(remoteMatch))
+
+        vm.setSearchQuery("needle")
+        advanceUntilIdle()
+
+        assertEquals(listOf(localMatch.id), vm.uiState.value.groups.single().sessions.map { it.session.id })
+        assertEquals(listOf(localMatch.id), vm.uiState.value.recentWork.filter { it.title?.contains("Needle") == true }.map { it.sessionId })
+    }
+
+    @Test
+    fun `project collapse normalizes directory and updates selected server group`() = runTest(dispatcher) {
+        val eventReducer = EventReducer()
+        val session = testSession(id = "local")
+        val vm = newSessionListViewModel(eventReducer = eventReducer)
+        collectUiState(vm)
+        eventReducer.setSessions("srv-session-list", listOf(session))
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.groups.single().isCollapsed)
+
+        vm.toggleCollapsed("/workspace/project/")
+        advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.groups.single().isCollapsed)
+    }
+
+    @Test
     fun `parent conversation stops being active after child subagent finishes`() = runTest(dispatcher) {
         val eventReducer = EventReducer()
         val parent = testSession(id = "parent")
@@ -600,10 +634,12 @@ class SessionListViewModelTest {
         directory: String = "/workspace/project",
         parentId: String? = null,
         archived: Long? = null,
+        title: String? = null,
     ) = Session(
         id = id,
         directory = directory,
         parentId = parentId,
+        title = title,
         time = Session.Time(
             created = 1L,
             updated = 1L,

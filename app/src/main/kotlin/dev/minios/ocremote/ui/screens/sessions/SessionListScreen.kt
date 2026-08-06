@@ -72,6 +72,7 @@ import dev.minios.ocremote.ui.screens.sessions.components.SessionProjectsViewpor
 import dev.minios.ocremote.ui.screens.sessions.components.SessionRecentWork
 import dev.minios.ocremote.ui.screens.sessions.components.SessionScopeSegmentedControl
 import dev.minios.ocremote.ui.screens.sessions.components.SessionWorkspaceViewControl
+import dev.minios.ocremote.ui.screens.sessions.components.SessionWorkspaceOverview
 
 @Composable
 private fun isAmoledTheme(): Boolean {
@@ -396,19 +397,47 @@ fun SessionListScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         if (!uiState.isSelectionMode) {
-                            SessionRecentWork(
-                                items = uiState.recentWork,
-                                onSessionClick = { sessionId, directory ->
-                                    onNavigateToChat(sessionId, false, directory)
+                            SessionWorkspaceOverview(
+                                recentWork = if (uiState.recentWork.isNotEmpty()) {
+                                    {
+                                        SessionRecentWork(
+                                            items = uiState.recentWork,
+                                            onSessionClick = { sessionId, directory ->
+                                                onNavigateToChat(sessionId, false, directory)
+                                            },
+                                        )
+                                    }
+                                } else null,
+                                viewControl = {
+                                    SessionWorkspaceViewControl(
+                                        currentView = uiState.viewMode,
+                                        activityCount = uiState.activityQueue.items.size,
+                                        onViewChange = viewModel::setViewMode,
+                                        modifier = Modifier.padding(top = 4.dp),
+                                    )
                                 },
-                            )
-                        }
-                        if (!uiState.isSelectionMode) {
-                            SessionWorkspaceViewControl(
-                                currentView = uiState.viewMode,
-                                activityCount = uiState.activityQueue.items.size,
-                                onViewChange = viewModel::setViewMode,
-                                modifier = Modifier.padding(top = 4.dp),
+                                projectControls = if (uiState.viewMode == SessionListViewMode.PROJECTS) {
+                                    {
+                                        if (!uiState.isPiStack || uiState.supportsSessionArchive || uiState.supportsSessionRestore) {
+                                            SessionScopeSegmentedControl(
+                                                currentScope = uiState.scope,
+                                                archivedCount = uiState.archivedCount,
+                                                onScopeChange = viewModel::setScope,
+                                                modifier = Modifier.padding(top = 4.dp),
+                                            )
+                                        }
+
+                                        SessionListTopControls(
+                                            searchQuery = uiState.searchQuery,
+                                            onSearchQueryChange = viewModel::setSearchQuery,
+                                            sort = uiState.sort,
+                                            onSortChange = viewModel::setSort,
+                                            filter = uiState.filter,
+                                            onFilterChange = viewModel::setFilter,
+                                            scope = uiState.scope,
+                                        )
+                                    }
+                                } else null,
                             )
                         }
 
@@ -423,25 +452,6 @@ fun SessionListScreen(
                                 listState = activityListState,
                             )
                         } else {
-                        if (!uiState.isSelectionMode) {
-                            if (!uiState.isPiStack || uiState.supportsSessionArchive || uiState.supportsSessionRestore) SessionScopeSegmentedControl(
-                                currentScope = uiState.scope,
-                                archivedCount = uiState.archivedCount,
-                                onScopeChange = viewModel::setScope,
-                                modifier = Modifier.padding(top = 4.dp),
-                            )
-
-                            SessionListTopControls(
-                                searchQuery = uiState.searchQuery,
-                                onSearchQueryChange = viewModel::setSearchQuery,
-                                sort = uiState.sort,
-                                onSortChange = viewModel::setSort,
-                                filter = uiState.filter,
-                                onFilterChange = viewModel::setFilter,
-                                scope = uiState.scope,
-                            )
-                        }
-
                         if (uiState.hiddenProjectCount > 0 && !uiState.isSelectionMode) {
                             HiddenProjectsBadge(
                                 count = uiState.hiddenProjectCount,
