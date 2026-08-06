@@ -15,6 +15,8 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSizeClassApi
+import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -136,6 +138,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    @OptIn(ExperimentalMaterial3WindowSizeClassApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -157,6 +160,7 @@ class MainActivity : ComponentActivity() {
         handleShareIntent(intent)
         
         setContent {
+            val windowSizeClass = calculateWindowSizeClass(this)
             // Collect theme preference
             val appTheme by settingsRepository.appTheme.collectAsState(initial = "system")
             val dynamicColor by settingsRepository.dynamicColor.collectAsState(initial = true)
@@ -192,7 +196,8 @@ class MainActivity : ComponentActivity() {
                         sharedImagesFlow = sharedImagesFlow,
                         settingsRepository = settingsRepository,
                         serverRepository = serverRepository,
-                        eventReducer = eventReducer
+                        eventReducer = eventReducer,
+                        windowSizeClass = windowSizeClass,
                     )
                 }
             }

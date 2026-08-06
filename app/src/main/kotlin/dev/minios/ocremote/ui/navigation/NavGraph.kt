@@ -12,6 +12,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.material3.windowsizeclass.WindowSizeClass
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -86,7 +87,8 @@ fun NavGraph(
     sharedImagesFlow: SharedFlow<List<Uri>>,
     settingsRepository: SettingsRepository,
     serverRepository: ServerRepository,
-    eventReducer: EventReducer
+    eventReducer: EventReducer,
+    windowSizeClass: WindowSizeClass,
 ) {
     val navController = rememberNavController()
     
@@ -681,7 +683,8 @@ fun NavGraph(
                     pendingShareUris = emptyList()
                     pendingShareSessionId = null
                 },
-                startInTerminalMode = openTerminal
+                startInTerminalMode = openTerminal,
+                windowSizeClass = windowSizeClass,
             )
         }
     }

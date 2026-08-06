@@ -53,6 +53,7 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.material3.windowsizeclass.WindowSizeClass
 import androidx.compose.runtime.*
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.saveable.listSaver
@@ -1241,6 +1242,7 @@ fun ChatScreen(
     initialSharedImages: List<Uri> = emptyList(),
     onSharedImagesConsumed: () -> Unit = {},
     startInTerminalMode: Boolean = false,
+    windowSizeClass: WindowSizeClass,
     viewModel: ChatViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -1863,11 +1865,15 @@ fun ChatScreen(
         LocalHapticFeedbackEnabled provides hapticEnabled,
         LocalImageSaveRequest provides requestSaveImage,
     ) {
-    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-    val usePersistentSubagentPane = maxWidth >= 840.dp
     val runningSubagentCount = uiState.subagents.count(ChatSubagentItem::isRunning)
-    Row(modifier = Modifier.fillMaxSize()) {
-    Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
+    val showSubagentContext = showSubagentDrawer &&
+        !isTerminalMode &&
+        !uiState.isPiRoundtable &&
+        !uiState.isPiStack
+    ChatAdaptiveShell(
+        windowSizeClass = windowSizeClass,
+        contextVisible = showSubagentContext,
+        primaryContent = {
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
@@ -3119,42 +3125,25 @@ fun ChatScreen(
             }
         }
     }
-    }
-    if (usePersistentSubagentPane && showSubagentDrawer && !isTerminalMode && !uiState.isPiRoundtable && !uiState.isPiStack) {
-        ChatSubagentDrawer(
-            items = uiState.subagents,
-            onDismiss = { showSubagentDrawer = false },
-            onOpenSession = { item ->
-                showSubagentDrawer = false
-                onNavigateToSession(item.id, item.directory)
-            },
-            modifier = Modifier.width(360.dp),
-        )
-    }
-    }
+        },
+        contextContent = { contextModifier ->
+            ChatSubagentDrawer(
+                items = uiState.subagents,
+                onDismiss = { showSubagentDrawer = false },
+                onOpenSession = { item ->
+                    showSubagentDrawer = false
+                    onNavigateToSession(item.id, item.directory)
+                },
+                modifier = contextModifier,
+            )
+        },
+    )
 
-    if (!usePersistentSubagentPane && showSubagentDrawer && !isTerminalMode && !uiState.isPiRoundtable && !uiState.isPiStack) {
+    if (!showSubagentDrawer && !isTerminalMode && !uiState.isPiRoundtable && !uiState.isPiStack) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.34f))
-                .clickable { showSubagentDrawer = false },
-        )
-        ChatSubagentDrawer(
-            items = uiState.subagents,
-            onDismiss = { showSubagentDrawer = false },
-            onOpenSession = { item ->
-                showSubagentDrawer = false
-                onNavigateToSession(item.id, item.directory)
-            },
-            modifier = Modifier
-                .align(Alignment.CenterEnd)
-                .fillMaxWidth(0.86f),
-        )
-    } else if (!showSubagentDrawer && !isTerminalMode && !uiState.isPiRoundtable && !uiState.isPiStack) {
-        Box(
-            modifier = Modifier
-                .align(Alignment.CenterEnd)
+                .wrapContentWidth(Alignment.End)
                 .fillMaxHeight()
                 .width(20.dp)
                 .pointerInput(Unit) {
@@ -3172,7 +3161,6 @@ fun ChatScreen(
                     )
                 },
         )
-    }
     }
 
     // Model picker dialog
