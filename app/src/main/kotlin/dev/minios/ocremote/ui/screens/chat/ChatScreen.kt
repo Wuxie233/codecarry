@@ -2120,36 +2120,64 @@ fun ChatScreen(
                         viewModel.sessionId.isBlank() || (isShellMode && isBusy) -> R.string.chat_send_disabled_not_ready
                     else -> null
                 }
+                val responseDockItems = buildChatResponseDockItems(
+                    hasRetry = uiState.sessionStatus is SessionStatus.Retry,
+                    roundtableStatus = uiState.roundtable?.status,
+                    hasAwaitingSkip = uiState.runState.awaitingSkip != null,
+                    permissionIds = uiState.pendingPermissions.map { it.id },
+                    questionIds = uiState.pendingQuestions.map { it.id },
+                )
 
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    // Issue #22: live session retry status renders directly above the
-                    // composer so users do not need to scroll to the top of the message
-                    // list to see it. Historical Part.Retry parts continue to render
-                    // inline in the message timeline (see ChatMessageBubble).
-                        if (uiState.sessionStatus is SessionStatus.Retry) {
-                            RetryStatusBanner(
-                                retry = uiState.sessionStatus as SessionStatus.Retry,
-                                isRetryingNow = uiState.isRetryingNow,
-                                onRetryNow = { viewModel.retrySessionNow() },
-                                onStop = { viewModel.abortSession() },
-                                modifier = Modifier.padding(horizontal = 12.dp),
-                            )
+                ChatResponseDock(
+                    items = responseDockItems,
+                    responseContent = { item ->
+                        when (item.kind) {
+                            ChatResponseDockKind.Retry -> (uiState.sessionStatus as? SessionStatus.Retry)?.let { retry ->
+                                RetryStatusBanner(
+                                    retry = retry,
+                                    isRetryingNow = uiState.isRetryingNow,
+                                    onRetryNow = { viewModel.retrySessionNow() },
+                                    onStop = { viewModel.abortSession() },
+                                    modifier = Modifier.padding(horizontal = 12.dp),
+                                )
+                            }
+                            ChatResponseDockKind.Roundtable -> if (uiState.isPiRoundtable) {
+                                RoundtableContextControls(
+                                    status = uiState.roundtable?.status,
+                                    awaitingSkip = uiState.runState.awaitingSkip,
+                                    pendingCommand = roundtablePendingCommand,
+                                    supplementActive = roundtableSupplementMode,
+                                    onContinue = { submitRoundtableCommand("continue") { onDone -> viewModel.continueRoundtable(onDone) } },
+                                    onSkip = { submitRoundtableCommand("skip") { onDone -> viewModel.skipAwaitingPersona(onDone) } },
+                                    onSupplement = { roundtableSupplementMode = !roundtableSupplementMode },
+                                    modifier = Modifier.padding(horizontal = 12.dp),
+                                )
+                            }
+                            ChatResponseDockKind.Permission -> uiState.pendingPermissions
+                                .firstOrNull { it.id == item.ownershipId }
+                                ?.let { permission ->
+                                    PermissionCard(
+                                        permission = permission,
+                                        onOnce = { viewModel.replyToPermission(permission.id, "once") },
+                                        onAlways = { viewModel.replyToPermission(permission.id, "always") },
+                                        onReject = { viewModel.replyToPermission(permission.id, "reject") },
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                                    )
+                                }
+                            ChatResponseDockKind.Question -> uiState.pendingQuestions
+                                .firstOrNull { it.id == item.ownershipId }
+                                ?.let { question ->
+                                    QuestionCard(
+                                        question = question,
+                                        onSubmit = { answers -> viewModel.replyToQuestion(question.id, answers) },
+                                        onReject = { viewModel.rejectQuestion(question.id) },
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                                    )
+                                }
                         }
-
-                        if (uiState.isPiRoundtable) {
-                            RoundtableContextControls(
-                                status = uiState.roundtable?.status,
-                                awaitingSkip = uiState.runState.awaitingSkip,
-                                pendingCommand = roundtablePendingCommand,
-                                supplementActive = roundtableSupplementMode,
-                                onContinue = { submitRoundtableCommand("continue") { onDone -> viewModel.continueRoundtable(onDone) } },
-                                onSkip = { submitRoundtableCommand("skip") { onDone -> viewModel.skipAwaitingPersona(onDone) } },
-                                onSupplement = { roundtableSupplementMode = !roundtableSupplementMode },
-                                modifier = Modifier.padding(horizontal = 12.dp),
-                            )
-                        }
-
-            ChatInputBar(
+                    },
+                    composerContent = {
+                        ChatInputBar(
                 textFieldValue = inputText,
                 onTextFieldValueChange = { newValue ->
                     val shouldAutoShell = !uiState.isPiStack && !isShellMode && newValue.text.startsWith("!")
@@ -2486,7 +2514,8 @@ fun ChatScreen(
                 contextWindow = uiState.contextWindow,
                 lastContextTokens = uiState.lastContextTokens
             )
-                }
+                    },
+                )
             }
         }
     ) { padding ->
@@ -2854,32 +2883,6 @@ fun ChatScreen(
                 else -> {
                     val messageSpacing = if (LocalCompactMessages.current) 4.dp else 12.dp
                     Column(modifier = Modifier.fillMaxSize()) {
-                        AnimatedVisibility(
-                            visible = pendingCount > 0,
-                            enter = fadeIn(),
-                            exit = fadeOut()
-                        ) {
-                            PendingActionsBanner(
-                                pendingCount = pendingCount,
-                                onClick = {
-                                    coroutineScope.launch {
-                                        // Pending cards are rendered after the optional older-loader,
-                                        // all messages, and the optional revert banner.
-                                        val pendingStartIndex =
-                                            pendingTimelineStartIndex(
-                                                rows = messageRows,
-                                                hasOlderMessages = uiState.hasOlderMessages,
-                                                hasRoster = uiState.isPiRoundtable,
-                                                hasRevertBanner = uiState.revert != null,
-                                            )
-                                        val maxIndex = listState.layoutInfo.totalItemsCount.coerceAtLeast(1) - 1
-                                        listState.animateScrollToItem(pendingStartIndex.coerceIn(0, maxIndex))
-                                        followTailState = ChatFollowTailPolicy.onManualNavigation(followTailState)
-                                    }
-                                }
-                            )
-                        }
-
                         LazyColumn(
                             state = listState,
                             modifier = Modifier
@@ -3094,38 +3097,6 @@ fun ChatScreen(
                             }
                         }
 
-                        // Pending permissions
-                        items(
-                            uiState.pendingPermissions,
-                            key = { "perm_${it.id}" }
-                        ) { permission ->
-                            Box(modifier = Modifier.padding(bottom = messageSpacing)) {
-                                PermissionCard(
-                                    permission = permission,
-                                    onOnce = { viewModel.replyToPermission(permission.id, "once") },
-                                    onAlways = { viewModel.replyToPermission(permission.id, "always") },
-                                    onReject = { viewModel.replyToPermission(permission.id, "reject") }
-                                )
-                            }
-                        }
-
-                        // Pending questions
-                        items(
-                            uiState.pendingQuestions,
-                            key = { "question_${it.id}" }
-                        ) { question ->
-                            Box(modifier = Modifier.padding(bottom = messageSpacing)) {
-                                QuestionCard(
-                                    question = question,
-                                    onSubmit = { answers ->
-                                        viewModel.replyToQuestion(question.id, answers)
-                                    },
-                                    onReject = {
-                                        viewModel.rejectQuestion(question.id)
-                                    }
-                                )
-                            }
-                        }
                     }
                     }
 
@@ -5286,57 +5257,6 @@ private fun resolveUserCommandLabel(parts: List<Part>): String? {
 }
 
 /**
- * Sticky cue shown above the chat list while permission or question cards wait below.
- */
-@Composable
-private fun PendingActionsBanner(
-    pendingCount: Int,
-    onClick: () -> Unit
-) {
-    val hapticView = LocalView.current
-    val hapticOn = LocalHapticFeedbackEnabled.current
-    Surface(
-        shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.68f),
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 6.dp)
-            .clickable { performHaptic(hapticView, hapticOn); onClick() }
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                Icons.Default.PendingActions,
-                contentDescription = null,
-                modifier = Modifier.size(18.dp),
-                tint = MaterialTheme.colorScheme.onTertiaryContainer
-            )
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = stringResource(R.string.chat_pending_actions, pendingCount),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onTertiaryContainer
-                )
-                Text(
-                    text = stringResource(R.string.chat_pending_tap_to_view),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.72f)
-                )
-            }
-            Icon(
-                Icons.Default.KeyboardArrowDown,
-                contentDescription = stringResource(R.string.chat_pending_tap_to_view),
-                modifier = Modifier.size(20.dp),
-                tint = MaterialTheme.colorScheme.onTertiaryContainer
-            )
-        }
-    }
-}
-
-/**
  * Banner shown when messages have been reverted.
  * Tapping restores (redo) the reverted messages.
  */
@@ -7334,7 +7254,8 @@ private fun PermissionCard(
     permission: SseEvent.PermissionAsked,
     onOnce: () -> Unit,
     onAlways: () -> Unit,
-    onReject: () -> Unit
+    onReject: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val isAmoled = isAmoledTheme()
     val hapticView = LocalView.current
@@ -7346,7 +7267,7 @@ private fun PermissionCard(
             containerColor = containerColor
         ),
         border = if (isAmoled) BorderStroke(1.dp, MaterialTheme.colorScheme.tertiary.copy(alpha = 0.7f)) else null,
-        modifier = Modifier.fillMaxWidth()
+        modifier = modifier.fillMaxWidth()
     ) {
         Column(
             modifier = Modifier.padding(12.dp),
@@ -7460,7 +7381,8 @@ private fun ChatInputBar(
     roundtableSupplementMode: Boolean = false,
     activeRoster: List<Roundtable.RoleSummary> = emptyList(),
     contextWindow: Int = 0,
-    lastContextTokens: Int = 0
+    lastContextTokens: Int = 0,
+    modifier: Modifier = Modifier,
 ) {
     val isAmoled = isAmoledTheme()
     val isShellMode = inputMode == ChatInputMode.SHELL
@@ -7518,7 +7440,8 @@ private fun ChatInputBar(
         ?: emptyList()
 
     Column(
-        modifier = Modifier
+        modifier = modifier
+            .chatComposerPrimaryWidth()
             .fillMaxWidth()
             .navigationBarsPadding()
             .imePadding()
@@ -8337,21 +8260,21 @@ private fun RoundtableContextControls(
     onSupplement: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val isAwaitingAdvance = status == Roundtable.Status.AwaitingCommand
-    if (awaitingSkip == null && !isAwaitingAdvance) return
+    val actions = roundtableDockActions(status, awaitingSkip != null)
+    if (actions.isEmpty()) return
 
     Column(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        awaitingSkip?.let { skip ->
+        if (RoundtableDockAction.Skip in actions && awaitingSkip != null) {
             RoundtableSkipBanner(
-                awaitingSkip = skip,
+                awaitingSkip = awaitingSkip,
                 pendingCommand = pendingCommand,
                 onSkip = onSkip,
             )
         }
-        if (isAwaitingAdvance) {
+        if (RoundtableDockAction.Continue in actions) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
@@ -8674,7 +8597,8 @@ private fun RoundDivider(
 private fun QuestionCard(
     question: SseEvent.QuestionAsked,
     onSubmit: (answers: List<List<String>>) -> Unit,
-    onReject: () -> Unit
+    onReject: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val isAmoled = isAmoledTheme()
     val isSingle = question.questions.size == 1 && question.questions[0].multiple != true
@@ -8705,7 +8629,7 @@ private fun QuestionCard(
         colors = CardDefaults.cardColors(containerColor = containerColor),
         border = if (isAmoled) BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)) else null,
         shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.fillMaxWidth()
+        modifier = modifier.fillMaxWidth()
     ) {
         Column(
             modifier = Modifier.padding(12.dp),
