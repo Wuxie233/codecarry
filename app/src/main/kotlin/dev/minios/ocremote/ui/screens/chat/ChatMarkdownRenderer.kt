@@ -6,7 +6,10 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -21,14 +24,22 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.isSpecified
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mikepenz.markdown.coil2.Coil2ImageTransformerImpl
+import com.mikepenz.markdown.compose.LocalMarkdownColors
 import com.mikepenz.markdown.compose.LocalMarkdownComponents
+import com.mikepenz.markdown.compose.LocalMarkdownDimens
 import com.mikepenz.markdown.compose.LocalMarkdownPadding
 import com.mikepenz.markdown.compose.components.MarkdownComponentModel
 import com.mikepenz.markdown.compose.components.markdownComponents
@@ -163,6 +174,9 @@ internal fun MessageMarkdownContent(
         paragraph = { model ->
             ScrollableMarkdownParagraph(model)
         },
+        blockQuote = { model ->
+            CompleteMarkdownBlockQuote(model)
+        },
         orderedList = { model ->
             OrderedMarkdownList(model)
         },
@@ -231,6 +245,87 @@ internal fun MessageMarkdownContent(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun CompleteMarkdownBlockQuote(model: MarkdownComponentModel) {
+    val padding = LocalMarkdownPadding.current
+    val barColor = model.typography.quote.color.takeIf(Color::isSpecified)
+        ?: LocalMarkdownColors.current.text
+    val barThickness = LocalMarkdownDimens.current.blockQuoteThickness
+    val layoutDirection = LocalLayoutDirection.current
+
+    Column(
+        modifier = Modifier
+            .drawBehind {
+                val start = padding.blockQuoteBar.calculateStartPadding(layoutDirection).toPx()
+                val x = if (layoutDirection == androidx.compose.ui.unit.LayoutDirection.Ltr) start else size.width - start
+                drawLine(
+                    color = barColor,
+                    strokeWidth = barThickness.toPx(),
+                    start = Offset(x, padding.blockQuoteBar.calculateTopPadding().toPx()),
+                    end = Offset(x, size.height - padding.blockQuoteBar.calculateBottomPadding().toPx()),
+                )
+            }
+            .padding(padding.blockQuote),
+    ) {
+        var priorNestedQuote = false
+        model.node.children.forEachIndexed { index, child ->
+            when (child.type) {
+                MarkdownElementTypes.BLOCK_QUOTE -> {
+                    if (!priorNestedQuote && index != 0) {
+                        Spacer(Modifier.height(padding.blockQuoteText.calculateBottomPadding()))
+                    }
+                    RenderQuoteChild(model.content, child, model)
+                    priorNestedQuote = true
+                }
+                MarkdownTokenTypes.EOL -> with(LocalDensity.current) {
+                    Spacer(Modifier.height(model.typography.quote.fontSize.toDp()))
+                }
+                else -> {
+                    if (index == 0 || priorNestedQuote) {
+                        Spacer(Modifier.height(padding.blockQuoteText.calculateTopPadding()))
+                    }
+                    priorNestedQuote = false
+                    RenderQuoteChild(model.content, child, model)
+                    if (index == model.node.children.lastIndex) {
+                        Spacer(Modifier.height(padding.blockQuoteText.calculateBottomPadding()))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ColumnScope.RenderQuoteChild(
+    content: String,
+    node: ASTNode,
+    parentModel: MarkdownComponentModel,
+) {
+    val components = LocalMarkdownComponents.current
+    val model = MarkdownComponentModel(content, node, parentModel.typography)
+    when (node.type) {
+        MarkdownElementTypes.PARAGRAPH -> ScrollableMarkdownParagraph(model, model.typography.quote)
+        MarkdownElementTypes.ORDERED_LIST -> OrderedMarkdownList(model)
+        MarkdownElementTypes.UNORDERED_LIST -> BulletMarkdownList(model, depth = 0)
+        MarkdownElementTypes.BLOCK_QUOTE -> components.blockQuote.invoke(this, model)
+        MarkdownElementTypes.CODE_BLOCK -> components.codeBlock.invoke(this, model)
+        MarkdownElementTypes.CODE_FENCE -> components.codeFence.invoke(this, model)
+        MarkdownElementTypes.ATX_1 -> components.heading1.invoke(this, model)
+        MarkdownElementTypes.ATX_2 -> components.heading2.invoke(this, model)
+        MarkdownElementTypes.ATX_3 -> components.heading3.invoke(this, model)
+        MarkdownElementTypes.ATX_4 -> components.heading4.invoke(this, model)
+        MarkdownElementTypes.ATX_5 -> components.heading5.invoke(this, model)
+        MarkdownElementTypes.ATX_6 -> components.heading6.invoke(this, model)
+        MarkdownElementTypes.SETEXT_1 -> components.setextHeading1.invoke(this, model)
+        MarkdownElementTypes.SETEXT_2 -> components.setextHeading2.invoke(this, model)
+        MarkdownElementTypes.IMAGE -> components.image.invoke(this, model)
+        MarkdownElementTypes.LINK_DEFINITION -> components.linkDefinition.invoke(this, model)
+        GFMElementTypes.TABLE -> components.table.invoke(this, model)
+        MarkdownTokenTypes.HORIZONTAL_RULE -> components.horizontalRule.invoke(this, model)
+        else -> node.children.forEach { child -> RenderQuoteChild(content, child, model) }
     }
 }
 
@@ -364,7 +459,10 @@ private fun ASTNode.firstDescendantOfType(type: IElementType): ASTNode? {
 }
 
 @Composable
-private fun ScrollableMarkdownParagraph(model: MarkdownComponentModel) {
+private fun ScrollableMarkdownParagraph(
+    model: MarkdownComponentModel,
+    style: TextStyle = model.typography.paragraph,
+) {
     val rawParagraph = remember(model.content, model.node.startOffset, model.node.endOffset) {
         runCatching {
             model.content.substring(model.node.startOffset, model.node.endOffset)
@@ -381,7 +479,7 @@ private fun ScrollableMarkdownParagraph(model: MarkdownComponentModel) {
             model.content,
             model.node,
             Modifier.fillMaxWidth(),
-            model.typography.paragraph,
+            style,
         )
         return
     }
@@ -398,7 +496,7 @@ private fun ScrollableMarkdownParagraph(model: MarkdownComponentModel) {
                 model.content,
                 model.node,
                 Modifier.widthIn(min = paragraphMinWidth),
-                model.typography.paragraph,
+                style,
             )
         }
     }
