@@ -1765,9 +1765,8 @@ fun ChatScreen(
         }
     }
 
-    // Whether auto-scroll should follow new content.
-    // Disabled when user manually scrolls up; re-enabled when user scrolls back to bottom.
-    var autoScrollEnabled by remember { mutableStateOf(true) }
+    var followTailState by remember { mutableStateOf(ChatFollowTailState()) }
+    var programmaticScrollInProgress by remember { mutableStateOf(false) }
 
     // True when the very bottom of the list is visible (accounting for offset within tall items)
     val isAtBottom by remember {
@@ -1783,15 +1782,32 @@ fun ChatScreen(
         }
     }
 
-    // When user touches the list, disable auto-scroll; re-enable when they reach the bottom
-    LaunchedEffect(listState.isScrollInProgress, isAtBottom) {
-        if (listState.isScrollInProgress) {
-            // User is actively dragging/flinging — disable auto-scroll
-            autoScrollEnabled = false
-        } else if (isAtBottom) {
-            // User stopped scrolling and ended up at the bottom — re-enable
-            autoScrollEnabled = true
+    suspend fun scrollToTail() {
+        programmaticScrollInProgress = true
+        try {
+            val lastIndex = listState.layoutInfo.totalItemsCount.coerceAtLeast(1) - 1
+            listState.scrollToItem(lastIndex)
+            // scrollToItem aligns a tall last row at its top; consume the remaining
+            // overflow so streaming content reaches the actual tail.
+            val lastItem = listState.layoutInfo.visibleItemsInfo.lastOrNull()
+            if (lastItem != null) {
+                val viewport = listState.layoutInfo.viewportEndOffset - listState.layoutInfo.viewportStartOffset
+                val overflow = lastItem.size - viewport
+                if (overflow > 0) {
+                    listState.scrollBy(overflow.toFloat())
+                }
+            }
+        } finally {
+            programmaticScrollInProgress = false
         }
+    }
+
+    LaunchedEffect(listState.isScrollInProgress, isAtBottom) {
+        followTailState = ChatFollowTailPolicy.onViewportChanged(
+            state = followTailState,
+            isAtTail = isAtBottom,
+            isUserScrollInProgress = listState.isScrollInProgress && !programmaticScrollInProgress,
+        )
     }
 
 
@@ -1815,7 +1831,7 @@ fun ChatScreen(
                 rows = messageRows,
             )
             listState.animateScrollToItem(itemIndex.coerceAtLeast(0))
-            autoScrollEnabled = false
+            followTailState = ChatFollowTailPolicy.onManualNavigation(followTailState)
         }
     }
     val autoFollowTarget = remember(uiState.messages, messageRows) {
@@ -1828,38 +1844,14 @@ fun ChatScreen(
         (uiState.isPiRoundtable || uiState.error == null) &&
         viewModel.sessionId.isNotBlank() &&
         (!uiState.isPiStack || uiState.supportsFork)
-    LaunchedEffect(messageCount, autoFollowTarget, pendingCount, isBusy) {
-        if (messageCount > 0 && autoScrollEnabled) {
-            val lastIndex = listState.layoutInfo.totalItemsCount.coerceAtLeast(1) - 1
-            listState.scrollToItem(lastIndex)
-            // scrollToItem goes to the TOP of the last item; when a message is
-            // taller than the viewport (e.g. streaming summarisation) we also
-            // need to scroll past it so the user sees the bottom of that message.
-            val lastItem = listState.layoutInfo.visibleItemsInfo.lastOrNull()
-            if (lastItem != null) {
-                val viewport = listState.layoutInfo.viewportEndOffset - listState.layoutInfo.viewportStartOffset
-                val overflow = lastItem.size - viewport
-                if (overflow > 0) {
-                    listState.scrollBy(overflow.toFloat())
-                }
-            }
-        }
-    }
-
-    // Also auto-scroll when first loading
-    LaunchedEffect(uiState.isLoading) {
-        if (!uiState.isLoading && messageCount > 0) {
-            val lastIndex = listState.layoutInfo.totalItemsCount.coerceAtLeast(1) - 1
-            listState.scrollToItem(lastIndex)
-            val lastItem = listState.layoutInfo.visibleItemsInfo.lastOrNull()
-            if (lastItem != null) {
-                val viewport = listState.layoutInfo.viewportEndOffset - listState.layoutInfo.viewportStartOffset
-                val overflow = lastItem.size - viewport
-                if (overflow > 0) {
-                    listState.scrollBy(overflow.toFloat())
-                }
-            }
-            autoScrollEnabled = true
+    LaunchedEffect(messageCount, autoFollowTarget) {
+        val transition = ChatFollowTailPolicy.onContentChanged(
+            state = followTailState,
+            hasContent = messageCount > 0,
+        )
+        followTailState = transition.state
+        if (transition.scrollToTail) {
+            scrollToTail()
         }
     }
 
@@ -2882,7 +2874,7 @@ fun ChatScreen(
                                             )
                                         val maxIndex = listState.layoutInfo.totalItemsCount.coerceAtLeast(1) - 1
                                         listState.animateScrollToItem(pendingStartIndex.coerceIn(0, maxIndex))
-                                        autoScrollEnabled = false
+                                        followTailState = ChatFollowTailPolicy.onManualNavigation(followTailState)
                                     }
                                 }
                             )
@@ -3137,36 +3129,20 @@ fun ChatScreen(
                     }
                     }
 
-                    // Scroll-to-bottom FAB
-                    if (!isAtBottom && !autoScrollEnabled) {
-                        SmallFloatingActionButton(
+                    if (!isAtBottom && followTailState.showAffordance) {
+                        ChatTailAffordance(
+                            hasNewContent = followTailState.hasNewContent,
                             onClick = {
                                 coroutineScope.launch {
-                                    val lastIndex = listState.layoutInfo.totalItemsCount.coerceAtLeast(1) - 1
-                                    listState.scrollToItem(lastIndex)
-                                    val lastItem = listState.layoutInfo.visibleItemsInfo.lastOrNull()
-                                    if (lastItem != null) {
-                                        val viewport = listState.layoutInfo.viewportEndOffset - listState.layoutInfo.viewportStartOffset
-                                        val overflow = lastItem.size - viewport
-                                        if (overflow > 0) {
-                                            listState.scrollBy(overflow.toFloat())
-                                        }
-                                    }
-                                    autoScrollEnabled = true
+                                    val transition = ChatFollowTailPolicy.onReturnToTail()
+                                    followTailState = transition.state
+                                    if (transition.scrollToTail) scrollToTail()
                                 }
                             },
                             modifier = Modifier
                                 .align(Alignment.BottomCenter)
                                 .padding(bottom = 8.dp),
-                            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                            contentColor = MaterialTheme.colorScheme.onSurface
-                        ) {
-                            Icon(
-                                Icons.Default.KeyboardArrowDown,
-                                contentDescription = stringResource(R.string.chat_scroll_bottom),
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
+                        )
                     }
                 }
             }

@@ -211,6 +211,7 @@
     <string name="chat_remove">移除</string>
     <string name="chat_clear">清除</string>
     <string name="chat_scroll_bottom">滚动到底部</string>
+    <string name="chat_new_content">新消息</string>
     <string name="chat_open_webui">在 Web UI 中打开</string>
     <string name="chat_dismiss">忽略</string>
     <string name="settings_language">语言</string>
