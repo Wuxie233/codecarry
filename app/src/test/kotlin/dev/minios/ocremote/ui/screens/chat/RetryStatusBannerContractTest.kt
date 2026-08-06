@@ -8,6 +8,7 @@ import java.io.File
 class RetryStatusBannerContractTest {
 
     private val chatScreenSource = File("src/main/kotlin/dev/minios/ocremote/ui/screens/chat/ChatScreen.kt").readText()
+    private val chatHeaderSource = File("src/main/kotlin/dev/minios/ocremote/ui/screens/chat/ChatHeader.kt").readText()
     private val bannerSource = chatScreenSource
         .substringAfter("private fun RetryStatusBanner(")
         .substringBefore("/**\n * Edit tool card")
@@ -47,10 +48,8 @@ class RetryStatusBannerContractTest {
     @Test
     fun `retry stop descriptions use localized resources`() {
         assertFalse(chatScreenSource.contains("停止重试"))
-        assertTrue(
-            Regex(
-                """if \(uiState\.sessionStatus\.isInterruptible\)[\s\S]*?Icons\.Default\.Stop,[\s\S]*?contentDescription = stringResource\(R\.string\.chat_stop\)""",
-            ).containsMatchIn(chatScreenSource),
-        )
+        assertTrue(chatScreenSource.contains("canStop = uiState.sessionStatus.isInterruptible && uiState.supportsAbort"))
+        assertTrue(chatHeaderSource.contains("if (canStop)"))
+        assertTrue(chatHeaderSource.contains("contentDescription = stringResource(R.string.chat_stop)"))
     }
 }
