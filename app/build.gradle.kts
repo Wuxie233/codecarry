@@ -11,11 +11,11 @@ plugins {
 }
 
 android {
-    namespace = "dev.minios.ocremote"
+    namespace = "dev.wuxie233.codecarry"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "dev.minios.ocremote"
+        applicationId = "dev.wuxie233.codecarry"
         minSdk = 26
         targetSdk = 34
         versionCode = 103
