@@ -422,7 +422,7 @@
     <string name="about_description">Her yerden geliştirmeye devam etmeniz için uzak kodlama ortamlarına bağlanan Android istemcisi</string>
     <string name="about_unofficial">CodeCarry bağımsız olarak sürdürülür, OC Remote temel alınmıştır ve OpenCode ekibiyle bağlantılı değildir.</string>
     <string name="about_github">GitHub</string>
-    <string name="about_github_url">https://github.com/Wuxie233/oc-remote</string>
+    <string name="about_github_url">https://github.com/Wuxie233/codecarry</string>
     <string name="about_opencode">OpenCode</string>
     <string name="about_opencode_url">https://github.com/anomalyco/opencode</string>
     <string name="about_license">Lisans</string>

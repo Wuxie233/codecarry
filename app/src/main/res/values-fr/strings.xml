@@ -655,7 +655,7 @@ Jetons : ~%4$d -&gt; ~%5$d</string>
     <string name="about_description">Client Android qui vous connecte aux environnements de développement distants pour coder partout</string>
     <string name="about_unofficial">CodeCarry est maintenu indépendamment, basé sur OC Remote, et n\'est pas affilié à l\'équipe OpenCode.</string>
     <string name="about_github">GitHub</string>
-    <string name="about_github_url">https://github.com/Wuxie233/oc-remote</string>
+    <string name="about_github_url">https://github.com/Wuxie233/codecarry</string>
     <string name="about_opencode">OpenCode</string>
     <string name="about_opencode_url">https://github.com/anomalyco/opencode</string>
     <string name="about_license">Licence</string>

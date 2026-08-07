@@ -545,7 +545,7 @@
     <string name="about_description">连接远程开发环境，让你随时随地继续开发的 Android 客户端</string>
     <string name="about_unofficial">CodeCarry 独立维护，基于 OC Remote，与 OpenCode 团队无关。</string>
     <string name="about_github">GitHub</string>
-    <string name="about_github_url">https://github.com/Wuxie233/oc-remote</string>
+    <string name="about_github_url">https://github.com/Wuxie233/codecarry</string>
     <string name="about_opencode">OpenCode</string>
     <string name="about_opencode_url">https://github.com/anomalyco/opencode</string>
     <string name="about_license">许可证</string>

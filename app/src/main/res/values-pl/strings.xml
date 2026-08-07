@@ -422,7 +422,7 @@
     <string name="about_description">Klient Android łączący ze zdalnymi środowiskami programistycznymi, aby rozwijać z dowolnego miejsca</string>
     <string name="about_unofficial">CodeCarry jest niezależnie rozwijany, bazuje na OC Remote i nie jest powiązany z zespołem OpenCode.</string>
     <string name="about_github">GitHub</string>
-    <string name="about_github_url">https://github.com/Wuxie233/oc-remote</string>
+    <string name="about_github_url">https://github.com/Wuxie233/codecarry</string>
     <string name="about_opencode">OpenCode</string>
     <string name="about_opencode_url">https://github.com/anomalyco/opencode</string>
     <string name="about_license">Licencja</string>

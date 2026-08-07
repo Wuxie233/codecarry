@@ -422,7 +422,7 @@
     <string name="about_description">リモートのコーディング環境に接続し、どこからでも開発を続けられるAndroidクライアント</string>
     <string name="about_unofficial">CodeCarryは独立して保守され、OC Remoteをベースにしており、OpenCodeチームとは無関係です。</string>
     <string name="about_github">GitHub</string>
-    <string name="about_github_url">https://github.com/Wuxie233/oc-remote</string>
+    <string name="about_github_url">https://github.com/Wuxie233/codecarry</string>
     <string name="about_opencode">OpenCode</string>
     <string name="about_opencode_url">https://github.com/anomalyco/opencode</string>
     <string name="about_license">ライセンス</string>
