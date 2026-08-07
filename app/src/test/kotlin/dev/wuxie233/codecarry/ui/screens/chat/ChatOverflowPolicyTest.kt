@@ -7,7 +7,7 @@ class ChatOverflowPolicyTest {
     @Test
     fun `bare http urls wrap in markdown paragraphs`() {
         assertMarkdownParagraphWraps(
-            "v1.7.42 released:\n\nhttps://github.com/Wuxie233/oc-remote/releases/tag/v1.7.42",
+            "v1.7.42 released:\n\nhttps://github.com/Wuxie233/codecarry/releases/tag/v1.7.42",
         )
         assertMarkdownParagraphWraps(
             "See (http://example.com/${"release-segment/".repeat(4)}notes), then continue.",
@@ -22,14 +22,14 @@ class ChatOverflowPolicyTest {
         )
         assertWraps(
             kind = ChatOverflowContentKind.PlainText,
-            text = "https://github.com/Wuxie233/oc-remote/releases/tag/v1.7.42",
+            text = "https://github.com/Wuxie233/codecarry/releases/tag/v1.7.42",
         )
     }
 
     @Test
     fun `markdown links with long targets wrap`() {
         assertMarkdownParagraphWraps(
-            "[Release notes](https://github.com/Wuxie233/oc-remote/releases/tag/v1.7.42)",
+            "[Release notes](https://github.com/Wuxie233/codecarry/releases/tag/v1.7.42)",
         )
     }
 

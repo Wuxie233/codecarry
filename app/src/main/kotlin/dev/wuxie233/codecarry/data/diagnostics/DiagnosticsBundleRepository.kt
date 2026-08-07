@@ -11,7 +11,7 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 private const val DIAGNOSTICS_BUNDLE_CONTENT_TYPE = "application/zip"
-private const val DIAGNOSTICS_BUNDLE_PREFIX = "oc-remote-diagnostics"
+private const val DIAGNOSTICS_BUNDLE_PREFIX = "codecarry-diagnostics"
 private const val BUNDLE_CACHE_MAX_AGE_MILLIS = 24L * 60L * 60L * 1000L
 
 @Singleton

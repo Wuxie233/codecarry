@@ -1174,7 +1174,7 @@ class MessageMarkdownHorizontalDragTest {
         const val OversizedTableSessionId = "session-oversized-table"
         const val OversizedTableTextPartId = "assistant-oversized-table-text"
         const val TableGestureInsetPx = 4f
-        const val ReleaseUrl = "https://github.com/Wuxie233/oc-remote/releases/tag/v1.7.42"
+        const val ReleaseUrl = "https://github.com/Wuxie233/codecarry/releases/tag/v1.7.42"
         const val ReleaseUrlMarkdown = "v1.7.42 已发布:\n\n$ReleaseUrl"
         const val VerticalParentTag = "vertical-markdown-parent"
         const val TallChunkedCodePrefix = "信号是连续的、网络只吃向量"

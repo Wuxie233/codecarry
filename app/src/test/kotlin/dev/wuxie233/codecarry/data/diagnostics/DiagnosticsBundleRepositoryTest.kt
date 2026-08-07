@@ -29,7 +29,7 @@ class DiagnosticsBundleRepositoryTest {
         val uploadFile = fixture.bundleRepository.createBundle(listOf(item), nowMillis = 1000L)
         val entries = uploadFile.zipEntries()
 
-        assertEquals("oc-remote-diagnostics-19700101-000001.zip", uploadFile.filename)
+        assertEquals("codecarry-diagnostics-19700101-000001.zip", uploadFile.filename)
         assertEquals("application/zip", uploadFile.contentType)
         assertEquals(listOf("app-event-1000-${item.id}.log"), entries)
         assertEquals(1, fixture.logRepository.bundleCacheDirectory.listFiles().orEmpty().size)

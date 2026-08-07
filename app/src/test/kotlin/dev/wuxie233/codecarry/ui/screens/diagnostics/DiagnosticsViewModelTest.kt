@@ -130,7 +130,7 @@ class DiagnosticsViewModelTest {
         assertEquals(1, requestCount)
         assertTrue("selection after success: $state", state.selectedLogIds.isEmpty())
         assertTrue("status after success: ${state.statusMessage}", state.statusMessage.orEmpty().contains("diag_success"))
-        assertTrue("status after success: ${state.statusMessage}", state.statusMessage.orEmpty().contains("oc-remote-diagnostics"))
+        assertTrue("status after success: ${state.statusMessage}", state.statusMessage.orEmpty().contains("codecarry-diagnostics"))
         assertFalse(state.statusMessage.orEmpty().contains("upload-token"))
         assertFalse(state.isUploading)
     }

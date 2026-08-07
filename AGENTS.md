@@ -1,5 +1,9 @@
 # OC Remote Agent Notes
 
+The current product identity is CodeCarry. It is an independently maintained
+fork based on OC Remote; the Android namespace/applicationId is
+`dev.wuxie233.codecarry`, and the canonical repository is
+
 ## Communication
 
 - Prefer concise Chinese for user-facing updates and final summaries.

@@ -31,8 +31,8 @@ class AppUpdateLogicTest {
 
     @Test
     fun selectApkAssetPrefersDebugApkWhenRequested() {
-        val releaseAsset = asset(name = "oc-remote-release.apk")
-        val debugAsset = asset(name = "oc-remote-debug.apk")
+        val releaseAsset = asset(name = "codecarry-release.apk")
+        val debugAsset = asset(name = "codecarry-debug.apk")
 
         val selected = AppUpdateLogic.selectApkAsset(
             assets = listOf(
@@ -48,8 +48,8 @@ class AppUpdateLogicTest {
 
     @Test
     fun selectApkAssetPrefersNonDebugApkByDefault() {
-        val debugAsset = asset(name = "oc-remote-debug.apk")
-        val releaseAsset = asset(name = "oc-remote-release.apk")
+        val debugAsset = asset(name = "codecarry-debug.apk")
+        val releaseAsset = asset(name = "codecarry-release.apk")
 
         val selected = AppUpdateLogic.selectApkAsset(
             assets = listOf(debugAsset, releaseAsset),
