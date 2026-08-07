@@ -106,7 +106,7 @@ jobs:
           fi
 
           APK_SOURCE="app/build/outputs/apk/release/${OUTPUT_FILE}"
-          TARGET_APK="$OUTPUT_DIR/oc-remote-${VERSION}.apk"
+          TARGET_APK="$OUTPUT_DIR/codecarry-${VERSION}.apk"
 
           rm -rf "$OUTPUT_DIR"
           mkdir -p "$OUTPUT_DIR"
@@ -153,7 +153,7 @@ jobs:
       - name: Upload Release APK
         uses: actions/upload-artifact@v4
         with:
-          name: ocremote-release-${{ steps.version.outputs.name }}
+          name: codecarry-release-${{ steps.version.outputs.name }}
           path: ${{ steps.package_apk.outputs.apk }}
           retention-days: 90
 

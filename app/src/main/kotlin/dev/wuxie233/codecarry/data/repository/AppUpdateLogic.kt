@@ -4,7 +4,7 @@ import dev.wuxie233.codecarry.domain.model.GitHubRelease
 
 object AppUpdateLogic {
     const val DEFAULT_LATEST_RELEASE_API_URL =
-        "https://api.github.com/repos/Wuxie233/oc-remote/releases/latest"
+        "https://api.github.com/repos/Wuxie233/codecarry/releases/latest"
 
     fun normalizeReleaseTag(tag: String?): String? {
         val normalized = tag

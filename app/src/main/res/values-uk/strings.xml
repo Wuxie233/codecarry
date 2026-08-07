@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">OC Remote</string>
+    <string name="app_name">CodeCarry</string>
     <!-- Home Screen -->
-    <string name="home_title">OC Remote</string>
+    <string name="home_title">CodeCarry</string>
     <string name="home_add_server">Додати сервер</string>
     <string name="home_no_servers">Сервери не налаштовані</string>
     <string name="home_server_health_good">Підключено</string>
@@ -399,7 +399,7 @@
     <string name="notification_connecting">Підключення до %1$s…</string>
     <string name="notification_connected_count">Підключено до %1$d з %2$d серверів</string>
     <string name="notification_disconnect_all">Відключити всі</string>
-    <string name="notification_inbox_title">OC Remote — %1$d/%2$d підключено</string>
+    <string name="notification_inbox_title">CodeCarry — %1$d/%2$d підключено</string>
     <string name="notification_status_connected">Підключено</string>
     <string name="notification_status_connecting">Підключення…</string>
     <string name="notification_response_ready">Відповідь готова</string>
@@ -419,10 +419,10 @@
     <string name="chat_session_exporting">Експортується… %s</string>
     <string name="about_title">Про додаток</string>
     <string name="about_version">Версія %s</string>
-    <string name="about_description">Android клієнт для серверів OpenCode</string>
-    <string name="about_unofficial">Це неофіційний проект спільноти, не пов’язаний з командою OpenCode.</string>
+    <string name="about_description">Android-клієнт для підключення до віддалених середовищ розробки та роботи будь-де</string>
+    <string name="about_unofficial">CodeCarry незалежно підтримується, базується на OC Remote і не пов’язаний з командою OpenCode.</string>
     <string name="about_github">GitHub</string>
-    <string name="about_github_url">https://github.com/crim50n/oc-remote</string>
+    <string name="about_github_url">https://github.com/Wuxie233/oc-remote</string>
     <string name="about_opencode">OpenCode</string>
     <string name="about_opencode_url">https://github.com/anomalyco/opencode</string>
     <string name="about_license">Ліцензія</string>
@@ -564,7 +564,7 @@
     <string name="home_local_server_password_placeholder">Залиште порожнім, щоб вимкнути автентифікацію</string>
     <string name="home_local_lan_password_warning">Доступ до LAN увімкнено без пароля. Будь-хто у вашій мережі може відкрити цей сервер.</string>
     <string name="home_local_auto_start_label">Автоматично запускати локальний сервер під час відкриття додатку</string>
-    <string name="home_local_auto_start_desc">Автоматично запускати локальне середовище при відкритті OC Remote</string>
+    <string name="home_local_auto_start_desc">Автоматично запускати локальне середовище при відкритті CodeCarry</string>
     <string name="home_local_startup_timeout_label">Тайм-аут запуску</string>
     <string name="home_local_startup_timeout_value">%1$d сек</string>
     <string name="home_local_launch_options_title">Параметри запуску</string>

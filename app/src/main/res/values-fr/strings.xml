@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">OC Remote</string>
+    <string name="app_name">CodeCarry</string>
     <!-- Home Screen -->
-    <string name="home_title">OC Remote</string>
+    <string name="home_title">CodeCarry</string>
     <string name="home_add_server">Ajouter un serveur</string>
     <string name="home_no_servers">Aucun serveur configuré</string>
     <string name="home_server_health_good">Connecté</string>
@@ -53,7 +53,7 @@
     <string name="home_local_run_background_label">Exécuter le serveur en arrière-plan</string>
     <string name="home_local_run_background_desc">Utiliser le mode tâche en arrière-plan de Termux pour démarrer l\'exécution locale</string>
     <string name="home_local_auto_start_label">Démarrage automatique du serveur local au lancement de l\'application</string>
-    <string name="home_local_auto_start_desc">Démarrer automatiquement l\'exécution locale à l\'ouverture d\'OC Remote</string>
+    <string name="home_local_auto_start_desc">Démarrer automatiquement l\'exécution locale à l\'ouverture de CodeCarry</string>
     <string name="home_local_auto_start_requires_background">Le démarrage automatique nécessite le mode arrière-plan</string>
     <string name="home_local_startup_timeout_label">Délai d\'expiration au démarrage</string>
     <string name="home_local_startup_timeout_value">%1$d s</string>
@@ -594,7 +594,7 @@
     <string name="notification_connecting">Connexion à %1$s…</string>
     <string name="notification_connected_count">Connecté à %1$d serveur(s) sur %2$d</string>
     <string name="notification_disconnect_all">Tout déconnecter</string>
-    <string name="notification_inbox_title">OC Remote — %1$d/%2$d connecté(s)</string>
+    <string name="notification_inbox_title">CodeCarry — %1$d/%2$d connecté(s)</string>
     <string name="notification_status_connected">Connecté</string>
     <string name="notification_status_connecting">Connexion…</string>
     <string name="notification_response_ready">Réponse prête</string>
@@ -652,10 +652,10 @@ Jetons : ~%4$d -&gt; ~%5$d</string>
     <!-- About Screen -->
     <string name="about_title">À propos</string>
     <string name="about_version">Version %s</string>
-    <string name="about_description">Client Android pour serveurs OpenCode</string>
-    <string name="about_unofficial">Ceci est un projet communautaire non officiel, non affilié à l\'équipe OpenCode.</string>
+    <string name="about_description">Client Android qui vous connecte aux environnements de développement distants pour coder partout</string>
+    <string name="about_unofficial">CodeCarry est maintenu indépendamment, basé sur OC Remote, et n\'est pas affilié à l\'équipe OpenCode.</string>
     <string name="about_github">GitHub</string>
-    <string name="about_github_url">https://github.com/crim50n/oc-remote</string>
+    <string name="about_github_url">https://github.com/Wuxie233/oc-remote</string>
     <string name="about_opencode">OpenCode</string>
     <string name="about_opencode_url">https://github.com/anomalyco/opencode</string>
     <string name="about_license">Licence</string>

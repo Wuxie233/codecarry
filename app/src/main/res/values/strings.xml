@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">OC Remote</string>
+    <string name="app_name">CodeCarry</string>
     
     <!-- Home Screen -->
-    <string name="home_title">OC Remote</string>
+    <string name="home_title">CodeCarry</string>
     <string name="home_add_server">Add Server</string>
     <string name="home_no_servers">No servers configured</string>
     <string name="home_server_health_good">Connected</string>
@@ -64,7 +64,7 @@
     <string name="home_local_run_background_label">Run server in background</string>
     <string name="home_local_run_background_desc">Use Termux background task mode to start local runtime</string>
     <string name="home_local_auto_start_label">Auto-start local server on app launch</string>
-    <string name="home_local_auto_start_desc">Start local runtime automatically when OC Remote opens</string>
+    <string name="home_local_auto_start_desc">Start local runtime automatically when CodeCarry opens</string>
     <string name="home_local_auto_start_requires_background">Auto-start requires background mode</string>
     <string name="home_local_startup_timeout_label">Startup timeout</string>
     <string name="home_local_startup_timeout_value">%1$d sec</string>
@@ -700,7 +700,7 @@
     <string name="notification_connecting">Connecting to %1$s…</string>
     <string name="notification_connected_count">Connected to %1$d of %2$d servers</string>
     <string name="notification_disconnect_all">Disconnect All</string>
-    <string name="notification_inbox_title">OC Remote — %1$d/%2$d connected</string>
+    <string name="notification_inbox_title">CodeCarry — %1$d/%2$d connected</string>
     <string name="notification_status_connected">Connected</string>
     <string name="notification_status_connecting">Connecting…</string>
     <string name="notification_response_ready">Response ready</string>
@@ -765,10 +765,10 @@ Tokens: ~%4$d -&gt; ~%5$d</string>
     <!-- About Screen -->
     <string name="about_title">About</string>
     <string name="about_version">Version %s</string>
-    <string name="about_description">Android client for OpenCode servers</string>
-    <string name="about_unofficial">This is an unofficial community project, not affiliated with the OpenCode team.</string>
+    <string name="about_description">CodeCarry connects you to remote coding environments so you can keep developing anywhere.</string>
+    <string name="about_unofficial">CodeCarry is independently maintained, based on OC Remote, and not affiliated with the OpenCode team.</string>
     <string name="about_github">GitHub</string>
-    <string name="about_github_url">https://github.com/crim50n/oc-remote</string>
+    <string name="about_github_url">https://github.com/Wuxie233/oc-remote</string>
     <string name="about_opencode">OpenCode</string>
     <string name="about_opencode_url">https://github.com/anomalyco/opencode</string>
     <string name="about_license">License</string>

@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">OC Remote</string>
+    <string name="app_name">CodeCarry</string>
     <!-- Home Screen -->
-    <string name="home_title">OC Remote</string>
+    <string name="home_title">CodeCarry</string>
     <string name="home_add_server">Adicionar servidor</string>
     <string name="home_no_servers">Nenhum servidor configurado</string>
     <string name="home_server_health_good">Conectado</string>
@@ -399,7 +399,7 @@
     <string name="notification_connecting">Conectando a %1$s…</string>
     <string name="notification_connected_count">Conectado a %1$d de %2$d servidores</string>
     <string name="notification_disconnect_all">Desconectar tudo</string>
-    <string name="notification_inbox_title">OC Remote — %1$d/%2$d conectados</string>
+    <string name="notification_inbox_title">CodeCarry — %1$d/%2$d conectados</string>
     <string name="notification_status_connected">Conectado</string>
     <string name="notification_status_connecting">Conectando…</string>
     <string name="notification_response_ready">Resposta pronta</string>
@@ -419,10 +419,10 @@
     <string name="chat_session_exporting">Exportando… %s</string>
     <string name="about_title">Sobre</string>
     <string name="about_version">Versão %s</string>
-    <string name="about_description">Cliente Android para servidores OpenCode</string>
-    <string name="about_unofficial">Este é um projeto comunitário não oficial, sem vínculo com a equipe OpenCode.</string>
+    <string name="about_description">Cliente Android que conecta você a ambientes de desenvolvimento remotos para continuar desenvolvendo de qualquer lugar</string>
+    <string name="about_unofficial">CodeCarry é mantido de forma independente, baseado no OC Remote, e não tem vínculo com a equipe OpenCode.</string>
     <string name="about_github">GitHub</string>
-    <string name="about_github_url">https://github.com/crim50n/oc-remote</string>
+    <string name="about_github_url">https://github.com/Wuxie233/oc-remote</string>
     <string name="about_opencode">OpenCode</string>
     <string name="about_opencode_url">https://github.com/anomalyco/opencode</string>
     <string name="about_license">Licença</string>
@@ -564,7 +564,7 @@ Tokens: ~%4$d -&gt; ~%5$d</string>
     <string name="home_local_server_password_placeholder">Deixe em branco para desativar a autenticação</string>
     <string name="home_local_lan_password_warning">O acesso à LAN está ativado sem senha. Qualquer pessoa na sua rede pode abrir este servidor.</string>
     <string name="home_local_auto_start_label">Iniciar servidor local automaticamente ao abrir o app</string>
-    <string name="home_local_auto_start_desc">Iniciar o runtime local automaticamente quando o OC Remote for aberto</string>
+    <string name="home_local_auto_start_desc">Iniciar o runtime local automaticamente quando o CodeCarry for aberto</string>
     <string name="home_local_startup_timeout_label">Tempo limite de inicialização</string>
     <string name="home_local_startup_timeout_value">%1$d seg</string>
     <string name="home_local_launch_options_title">Opções de inicialização</string>

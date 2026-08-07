@@ -47,7 +47,7 @@ android {
     buildTypes {
         debug {
             applicationIdSuffix = ".debug"
-            manifestPlaceholders["appLabel"] = "OC Remote Dev"
+            manifestPlaceholders["appLabel"] = "CodeCarry Dev"
         }
         release {
             manifestPlaceholders["appLabel"] = "@string/app_name"

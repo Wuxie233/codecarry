@@ -1,8 +1,8 @@
-# OC Remote
+# CodeCarry
 
-Android client for remote [OpenCode](https://github.com/anomalyco/opencode) servers and Codex app-server endpoints, with native chat and session management.
+CodeCarry is an independently maintained Android client that connects developers to remote coding environments so they can keep developing anywhere. It supports [OpenCode](https://github.com/anomalyco/opencode) servers and Codex app-server endpoints, with native chat and session management.
 
-**This is an unofficial community project, not affiliated with the OpenCode team.**
+**CodeCarry is based on OC Remote. It is an independent project and is not affiliated with the OpenCode team.**
 
 ## Screenshots
 
@@ -125,9 +125,9 @@ codex app-server \
   --ws-token-file /absolute/private/codex-app-server.token
 ```
 
-Expose the loopback listener through an SSH port forward, or a reverse proxy that provides `wss://` and preserves the `Authorization` and WebSocket upgrade headers. OC Remote rejects plain `ws://` for non-loopback Codex endpoints because bearer tokens and protocol traffic would otherwise cross the network unencrypted.
+Expose the loopback listener through an SSH port forward, or a reverse proxy that provides `wss://` and preserves the `Authorization` and WebSocket upgrade headers. CodeCarry rejects plain `ws://` for non-loopback Codex endpoints because bearer tokens and protocol traffic would otherwise cross the network unencrypted.
 
-In OC Remote, add a **Codex** server with the `ws://`/`wss://` endpoint and the token file contents. Because the protocol is experimental, keep the server Codex CLI reasonably current and verify compatibility after upgrades.
+In CodeCarry, add a **Codex** server with the `ws://`/`wss://` endpoint and the token file contents. Because the protocol is experimental, keep the server Codex CLI reasonably current and verify compatibility after upgrades.
 
 ## Building
 
@@ -162,7 +162,7 @@ Releases are **manual-only**.
 3. Push `master`
 4. Create and push the release tag
 5. Manually trigger `.github/workflows/release.yml` and provide `tag` (e.g. `v1.6.18`)
-6. Confirm the GitHub Release has exactly one uploaded APK `oc-remote-<version>.apk` and that install metadata matches the tag version
+6. Confirm the GitHub Release has exactly one uploaded APK `codecarry-<version>.apk` and that install metadata matches the tag version
 
 Tag pushes must **not** be relied on to auto-publish releases.
 
