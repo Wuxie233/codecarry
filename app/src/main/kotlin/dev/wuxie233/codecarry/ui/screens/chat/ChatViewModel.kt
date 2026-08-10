@@ -289,7 +289,6 @@ class ChatViewModel @Inject constructor(
         val model: ModelSelection?,
         val agent: String,
         val variant: String?,
-        val onResult: (Boolean) -> Unit,
     )
     private val pendingOpenCodeSends = ArrayDeque<PendingOpenCodeSend>()
     private var pendingOpenCodeDrain: Job? = null
@@ -892,20 +891,23 @@ class ChatViewModel @Inject constructor(
                 resolvedDirectory = session.directory
                 if (BuildConfig.DEBUG) Log.d(TAG, "Session directory: ${session.directory}")
             }
-            if (resolvedDirectory == null) {
-                throw IllegalStateException("Session directory is unavailable. Retry to send queued messages.")
-            }
-            drainPendingOpenCodeSends()
+            if (_pendingSendError.value == null) drainPendingOpenCodeSends()
             if (routeDirectory == null) loadMessages()
             viewModelScope.launch { loadPendingQuestions() }
             viewModelScope.launch { loadPendingPermissions() }
             viewModelScope.launch { loadSessionStatus() }
-            val projectSessions = api.listSessions(
-                conn = conn,
-                directory = sessionDirectory,
-                rootsOnly = false,
-            )
-            eventReducer.setSessions(serverId, projectSessions)
+            if (!resolvedDirectory.isNullOrBlank()) {
+                val projectSessions = api.listSessions(
+                    conn = conn,
+                    directory = sessionDirectory,
+                    rootsOnly = false,
+                )
+                eventReducer.setSessions(serverId, projectSessions)
+            } else if (pendingOpenCodeSends.isNotEmpty()) {
+                val message = "Session directory is unavailable. Retry to send queued messages."
+                _error.value = message
+                _pendingSendError.value = message
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to load session info", e)
             if (sessionDirectory.isNullOrBlank()) {
@@ -1386,11 +1388,11 @@ class ChatViewModel @Inject constructor(
                     model = model,
                     agent = uiState.value.selectedAgent,
                     variant = _selectedVariant.value,
-                    onResult = onResult,
                 )
             )
             _pendingSendCount.value = pendingOpenCodeSends.size
-            drainPendingOpenCodeSends()
+            onResult(true)
+            if (_pendingSendError.value == null) drainPendingOpenCodeSends()
             return
         }
         viewModelScope.launch {
@@ -1508,7 +1510,6 @@ class ChatViewModel @Inject constructor(
                         _pendingSendError.value = null
                         _error.value = null
                         eventReducer.updateSessionStatus(sessionId, SessionStatus.Busy)
-                        head.onResult(true)
                     } catch (error: Exception) {
                         Log.e(TAG, "Failed to send queued message", error)
                         _pendingSendError.value = error.message ?: "Failed to send queued message"

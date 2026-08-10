@@ -1757,8 +1757,8 @@ fun ChatScreen(
     }
 
     // Show errors as persistent snackbar when messages are already loaded
-    LaunchedEffect(uiState.error) {
-        val error = uiState.error
+    LaunchedEffect(uiState.error, uiState.pendingSendError) {
+        val error = uiState.pendingSendError ?: uiState.error
         if (error != null && (uiState.messages.isNotEmpty() || uiState.pendingSendError != null)) {
             val result = snackbarHostState.showSnackbar(
                 message = error,
@@ -2122,11 +2122,11 @@ fun ChatScreen(
             } else ""
 
             if (!isTerminalMode) {
+                val composerIsSending = uiState.isSending &&
+                    (uiState.isPiStack || uiState.isPiRoundtable || isShellMode)
                 val sendDisabledReasonResId = when {
-                    uiState.isSending -> R.string.chat_send_disabled_sending
-                    pendingCount > 0 -> R.string.chat_send_disabled_pending
-                    (!uiState.isPiRoundtable && uiState.pendingSendError != null) ||
-                        (uiState.isPiStack && !uiState.supportsPrompt) ||
+                    composerIsSending -> R.string.chat_send_disabled_sending
+                    (uiState.isPiStack && !uiState.supportsPrompt) ||
                         viewModel.sessionId.isBlank() || (isShellMode && isBusy) -> R.string.chat_send_disabled_not_ready
                     else -> null
                 }
@@ -2370,7 +2370,7 @@ fun ChatScreen(
                         viewModel.clearFileSearch()
                     }
                 },
-                isSending = uiState.isSending,
+                isSending = composerIsSending,
                 isBusy = uiState.sessionStatus is SessionStatus.Busy,
                 sendDisabledReasonResId = sendDisabledReasonResId,
                 messages = uiState.messages,
