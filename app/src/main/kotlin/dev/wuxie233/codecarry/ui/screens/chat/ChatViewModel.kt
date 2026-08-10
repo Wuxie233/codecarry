@@ -108,6 +108,8 @@ data class ChatUiState(
     val isLoading: Boolean = true,
     val error: String? = null,
     val isSending: Boolean = false,
+    val pendingSendCount: Int = 0,
+    val pendingSendError: String? = null,
     val isRetryingNow: Boolean = false,
     val providers: List<ProviderInfo> = emptyList(),
     val hasServerModelCatalog: Boolean = false,
@@ -267,6 +269,8 @@ class ChatViewModel @Inject constructor(
     private val _isLoading = MutableStateFlow(true)
     private val _error = MutableStateFlow<String?>(null)
     private val _isSending = MutableStateFlow(false)
+    private val _pendingSendCount = MutableStateFlow(0)
+    private val _pendingSendError = MutableStateFlow<String?>(null)
     private val _isRetryingNow = MutableStateFlow(false)
     private val _retryNowFailureEvent = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val retryNowFailureEvent: SharedFlow<Unit> = _retryNowFailureEvent
@@ -280,6 +284,15 @@ class ChatViewModel @Inject constructor(
     private var isModelExplicitlySelected = false
     /** The directory of this session's project — sent as x-opencode-directory so the server resolves the correct project context. */
     private var sessionDirectory: String? = routeDirectory
+    private data class PendingOpenCodeSend(
+        val parts: List<PromptPart>,
+        val model: ModelSelection?,
+        val agent: String,
+        val variant: String?,
+        val onResult: (Boolean) -> Unit,
+    )
+    private val pendingOpenCodeSends = ArrayDeque<PendingOpenCodeSend>()
+    private var pendingOpenCodeDrain: Job? = null
     /** Signals when [loadSession] has finished (successfully or with error), so that terminal
      *  creation can wait for [sessionDirectory] to be populated. */
     private val sessionLoaded = CompletableDeferred<Unit>()
@@ -374,6 +387,8 @@ class ChatViewModel @Inject constructor(
         _isLoading,
         _error,
         _isSending,
+        _pendingSendCount,
+        _pendingSendError,
         _isRetryingNow,
         _selectedProviderId,
         _selectedModelId,
@@ -413,23 +428,25 @@ class ChatViewModel @Inject constructor(
         val loading = args[10] as Boolean
         val error = args[11] as String?
         val sending = args[12] as Boolean
-        val retryingNow = args[13] as Boolean
-        val selProviderId = args[14] as String?
-        val selModelId = args[15] as String?
-        val allProviders = args[16] as List<ProviderInfo>
-        val providers = args[17] as List<ProviderInfo>
-        val defaultModels = args[18] as Map<String, String>
-        val agents = args[19] as List<AgentInfo>
+        val pendingSendCount = args[13] as Int
+        val pendingSendError = args[14] as String?
+        val retryingNow = args[15] as Boolean
+        val selProviderId = args[16] as String?
+        val selModelId = args[17] as String?
+        val allProviders = args[18] as List<ProviderInfo>
+        val providers = args[19] as List<ProviderInfo>
+        val defaultModels = args[20] as Map<String, String>
+        val agents = args[21] as List<AgentInfo>
         @Suppress("UNCHECKED_CAST")
-        val agentSelection = args[20] as Pair<String, Boolean>
+        val agentSelection = args[22] as Pair<String, Boolean>
         val selectedAgent = agentSelection.first
         val isAgentExplicitlySelected = agentSelection.second
-        val selectedVariant = args[21] as String?
-        val catalogState = args[22] as PiRoundtableCatalogState
+        val selectedVariant = args[23] as String?
+        val catalogState = args[24] as PiRoundtableCatalogState
         val commands = catalogState.commands
-        val hasOlderMessages = args[23] as Boolean
-        val isLoadingOlder = args[24] as Boolean
-        val piStackCapabilities = args[25] as PiStackCapabilitiesDto?
+        val hasOlderMessages = args[25] as Boolean
+        val isLoadingOlder = args[26] as Boolean
+        val piStackCapabilities = args[27] as PiStackCapabilitiesDto?
         val piPersonas = catalogState.personaLibrary
 
         val session = allSessions.find { it.id == sessionId && it.id in currentServerSessionIds }
@@ -455,15 +472,8 @@ class ChatViewModel @Inject constructor(
         val partsByMessage = if (isPiRoundtable) roundtableParts else allParts
         val revertState = session?.revert
 
-        // While the REST call is still loading, suppress SSE-only messages to prevent
-        // showing a flash of partial data (e.g., 1-2 messages from SSE when opening via
-        // notification deep-link before the full history arrives).
-        val hasUserMessage = sessionMessages.any { it is Message.User }
-        val shouldSuppressPartialData = loading && sessionMessages.size < 3 && !hasUserMessage
-        val chatMessages = if (shouldSuppressPartialData) {
-            emptyList()
-        } else {
-            val sorted = sessionMessages.sortedBy { it.time.created }
+        val chatMessages = run {
+            val sorted = sessionMessages.sortedWith(compareBy<Message> { it.time.created }.thenBy { it.id })
             // Filter out reverted messages (at or after revert point)
             val visible = if (revertState != null) {
                 sorted.filter { it.id < revertState.messageId }
@@ -568,6 +578,8 @@ class ChatViewModel @Inject constructor(
             isLoading = loading,
             error = error,
             isSending = sending,
+            pendingSendCount = pendingSendCount,
+            pendingSendError = pendingSendError,
             isRetryingNow = retryingNow,
             providers = providers,
             hasServerModelCatalog = allProviders.any { it.models.isNotEmpty() },
@@ -661,11 +673,8 @@ class ChatViewModel @Inject constructor(
             // Load initial message count from settings, then load data
             viewModelScope.launch {
                 currentMessageLimit = settingsRepository.initialMessageCount.first()
+                if (routeDirectory != null) loadMessages()
                 loadSession()
-                loadMessages()
-                loadPendingQuestions()
-                loadPendingPermissions()
-                loadSessionStatus()
             }
             loadProviders()
             loadAgents()
@@ -875,12 +884,22 @@ class ChatViewModel @Inject constructor(
 
     /** Load the session info to get its directory for correct project context. */
     private suspend fun loadSession() {
+        var resolvedDirectory = routeDirectory
         try {
             val session = api.getSession(conn, sessionId, directory = sessionDirectory)
             if (session.directory.isNotBlank()) {
                 sessionDirectory = session.directory
+                resolvedDirectory = session.directory
                 if (BuildConfig.DEBUG) Log.d(TAG, "Session directory: ${session.directory}")
             }
+            if (resolvedDirectory == null) {
+                throw IllegalStateException("Session directory is unavailable. Retry to send queued messages.")
+            }
+            drainPendingOpenCodeSends()
+            if (routeDirectory == null) loadMessages()
+            viewModelScope.launch { loadPendingQuestions() }
+            viewModelScope.launch { loadPendingPermissions() }
+            viewModelScope.launch { loadSessionStatus() }
             val projectSessions = api.listSessions(
                 conn = conn,
                 directory = sessionDirectory,
@@ -889,6 +908,10 @@ class ChatViewModel @Inject constructor(
             eventReducer.setSessions(serverId, projectSessions)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to load session info", e)
+            if (sessionDirectory.isNullOrBlank()) {
+                _error.value = e.message ?: "Failed to resolve session directory"
+                _pendingSendError.value = _error.value
+            }
         } finally {
             sessionLoaded.complete(Unit)
         }
@@ -909,7 +932,7 @@ class ChatViewModel @Inject constructor(
                     limit = currentMessageLimit,
                     directory = sessionDirectory,
                 )
-                eventReducer.setMessages(sessionId, messages)
+                eventReducer.mergeMessages(sessionId, messages)
                 // If we got exactly the limit, there are likely more messages on the server
                 _hasOlderMessages.value = messages.size >= currentMessageLimit
                 if (BuildConfig.DEBUG) Log.d(TAG, "Loaded ${messages.size} messages for session $sessionId (limit=$currentMessageLimit, hasOlder=${_hasOlderMessages.value})")
@@ -926,7 +949,7 @@ class ChatViewModel @Inject constructor(
                             limit = currentMessageLimit,
                             directory = sessionDirectory,
                         )
-                        eventReducer.setMessages(sessionId, messages)
+                        eventReducer.mergeMessages(sessionId, messages)
                         _hasOlderMessages.value = messages.size >= currentMessageLimit
                         if (BuildConfig.DEBUG) Log.d(TAG, "Retry succeeded: loaded ${messages.size} messages (limit=$currentMessageLimit)")
                     } catch (retryEx: Exception) {
@@ -961,7 +984,7 @@ class ChatViewModel @Inject constructor(
                     limit = currentMessageLimit,
                     directory = sessionDirectory,
                 )
-                eventReducer.setMessages(sessionId, messages)
+                eventReducer.mergeMessages(sessionId, messages)
                 _hasOlderMessages.value = messages.size >= currentMessageLimit
                 if (BuildConfig.DEBUG) Log.d(TAG, "Loaded older: ${messages.size} messages (limit=$currentMessageLimit, hasOlder=${_hasOlderMessages.value})")
             } catch (e: Exception) {
@@ -1353,6 +1376,23 @@ class ChatViewModel @Inject constructor(
     }
 
     private fun sendParts(parts: List<PromptPart>, onResult: (Boolean) -> Unit = {}) {
+        if (!isPiStack && !isPiRoundtable) {
+            val model = if (_selectedProviderId.value != null && _selectedModelId.value != null) {
+                ModelSelection(_selectedProviderId.value!!, _selectedModelId.value!!)
+            } else null
+            pendingOpenCodeSends.addLast(
+                PendingOpenCodeSend(
+                    parts = parts.toList(),
+                    model = model,
+                    agent = uiState.value.selectedAgent,
+                    variant = _selectedVariant.value,
+                    onResult = onResult,
+                )
+            )
+            _pendingSendCount.value = pendingOpenCodeSends.size
+            drainPendingOpenCodeSends()
+            return
+        }
         viewModelScope.launch {
             _isSending.value = true
             try {
@@ -1423,33 +1463,59 @@ class ChatViewModel @Inject constructor(
                     onResult(true)
                     return@launch
                 }
-                val model = if (_selectedProviderId.value != null && _selectedModelId.value != null) {
-                    ModelSelection(
-                        providerId = _selectedProviderId.value!!,
-                        modelId = _selectedModelId.value!!
-                    )
-                } else null
-
-                api.promptAsync(
-                    conn = conn,
-                    sessionId = sessionId,
-                    parts = parts,
-                    model = model,
-                    agent = uiState.value.selectedAgent,
-                    variant = _selectedVariant.value,
-                    directory = sessionDirectory
-                )
-                if (BuildConfig.DEBUG) Log.d(TAG, "Sent prompt to session $sessionId (${parts.size} parts)")
-                // Optimistically mark the session busy so the working indicator shows immediately
-                // instead of waiting for the server's session.status=busy event to stream back.
-                // The real SSE status reconciles this (idle on completion/error).
-                eventReducer.updateSessionStatus(sessionId, SessionStatus.Busy)
-                _error.value = null
-                onResult(true)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to send message", e)
                 _error.value = roundtableErrorMessage(e, "Failed to send message")
                 onResult(false)
+            } finally {
+                _isSending.value = false
+            }
+        }
+    }
+
+    fun retryPendingSend() {
+        if (pendingOpenCodeSends.isEmpty()) return
+        _pendingSendError.value = null
+        _error.value = null
+        if (sessionDirectory.isNullOrBlank()) {
+            viewModelScope.launch { loadSession() }
+        } else {
+            drainPendingOpenCodeSends()
+        }
+    }
+
+    private fun drainPendingOpenCodeSends() {
+        if (pendingOpenCodeDrain?.isActive == true || pendingOpenCodeSends.isEmpty()) return
+        pendingOpenCodeDrain = viewModelScope.launch {
+            val directory = sessionDirectory
+            if (directory.isNullOrBlank()) return@launch
+            _isSending.value = true
+            try {
+                while (pendingOpenCodeSends.isNotEmpty()) {
+                    val head = pendingOpenCodeSends.first()
+                    try {
+                        api.promptAsync(
+                            conn = conn,
+                            sessionId = sessionId,
+                            parts = head.parts,
+                            model = head.model,
+                            agent = head.agent,
+                            variant = head.variant,
+                            directory = directory,
+                        )
+                        pendingOpenCodeSends.removeFirst()
+                        _pendingSendCount.value = pendingOpenCodeSends.size
+                        _pendingSendError.value = null
+                        _error.value = null
+                        eventReducer.updateSessionStatus(sessionId, SessionStatus.Busy)
+                        head.onResult(true)
+                    } catch (error: Exception) {
+                        Log.e(TAG, "Failed to send queued message", error)
+                        _pendingSendError.value = error.message ?: "Failed to send queued message"
+                        _error.value = _pendingSendError.value
+                        break
+                    }
+                }
             } finally {
                 _isSending.value = false
             }

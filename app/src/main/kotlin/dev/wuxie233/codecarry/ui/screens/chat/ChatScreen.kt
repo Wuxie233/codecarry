@@ -1759,11 +1759,15 @@ fun ChatScreen(
     // Show errors as persistent snackbar when messages are already loaded
     LaunchedEffect(uiState.error) {
         val error = uiState.error
-        if (error != null && uiState.messages.isNotEmpty()) {
-            snackbarHostState.showSnackbar(
+        if (error != null && (uiState.messages.isNotEmpty() || uiState.pendingSendError != null)) {
+            val result = snackbarHostState.showSnackbar(
                 message = error,
+                actionLabel = if (uiState.pendingSendError != null) context.getString(R.string.retry) else null,
                 duration = SnackbarDuration.Indefinite
             )
+            if (result == SnackbarResult.ActionPerformed && uiState.pendingSendError != null) {
+                viewModel.retryPendingSend()
+            }
         }
     }
 
@@ -2121,7 +2125,7 @@ fun ChatScreen(
                 val sendDisabledReasonResId = when {
                     uiState.isSending -> R.string.chat_send_disabled_sending
                     pendingCount > 0 -> R.string.chat_send_disabled_pending
-                    uiState.isLoading || (!uiState.isPiRoundtable && uiState.error != null) ||
+                    (!uiState.isPiRoundtable && uiState.pendingSendError != null) ||
                         (uiState.isPiStack && !uiState.supportsPrompt) ||
                         viewModel.sessionId.isBlank() || (isShellMode && isBusy) -> R.string.chat_send_disabled_not_ready
                     else -> null

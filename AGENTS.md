@@ -3,6 +3,37 @@
 The current product identity is CodeCarry. It is an independently maintained
 fork based on OC Remote; the Android namespace/applicationId is
 `dev.wuxie233.codecarry`, and the canonical repository is
+<https://github.com/Wuxie233/codecarry>.
+
+## Architecture
+
+- CodeCarry is a single-module Android application in `app/`, built with
+  Kotlin, Jetpack Compose, Hilt, Ktor, coroutines, and kotlinx serialization.
+- `ServerType` is the backend boundary: `OPENCODE`, `CODEX`, `PI_ROUNDTABLE`,
+  and `PI_STACK` have separate transport contracts and capability routing.
+- OpenCode uses REST for snapshots and commands plus SSE for live state.
+  `OpenCodeConnectionService` owns connection continuity, `EventReducer` owns
+  the server-scoped live aggregate, and screen ViewModels derive UI state and
+  coordinate user actions.
+- Codex app-server transport and request lifecycle live under `data/codex`.
+  Pi Stack uses its native Control v1 API in `data/api/PiStackApi.kt`; Pi
+  Roundtable uses its domain and transport types rather than OpenCode models.
+- Compose screens own presentation. Keep navigation, transport, reducer, and
+  backend-specific state outside reusable UI components.
+
+## Conventions
+
+- Route backend behavior through `ServerType` and explicit capability models;
+  do not infer protocol compatibility from similar UI features.
+- Scope OpenCode reducer reads and mutations by `serverId` before joining on
+  session, permission, question, or parent IDs.
+- Keep REST snapshots merge-safe with live events. A late snapshot may fill
+  missing history, but must not overwrite newer SSE-derived state.
+- Put JVM tests in `app/src/test` and device/gesture coverage in
+  `app/src/androidTest`. Prefer focused tests for a changed state machine, then
+  run the repository verification commands below once after integration.
+- Keep user-facing strings in Android resources and preserve the existing
+  Compose component boundaries when changing chat or session layouts.
 
 ## Communication
 
@@ -35,6 +66,26 @@ fork based on OC Remote; the Android namespace/applicationId is
 
 ## Gotchas & Decisions
 
+- Native OpenCode send readiness is independent of full REST history and
+  unrelated screen initialization. A usable OpenCode connection plus an
+  available route directory is enough to start draining sends; do not wait for
+  delayed session metadata or project sync once that directory is known.
+- Early native OpenCode submissions are captured in a per-chat, in-memory FIFO.
+  Additional submissions may append while a queue exists. Remove only
+  successful heads and drain in order; later entries must not overtake the
+  head.
+- If the FIFO head fails, keep it at the head with visible retry semantics.
+  Retrying resumes the same queue; it must not duplicate a successful send or
+  silently discard the failed request.
+- The native pending-send FIFO is ViewModel memory, not durable storage. It does
+  not survive process death; persisted composer drafts are a separate feature.
+- OpenCode message history remains a limit-only REST contract. Loading older
+  messages raises the limit and refetches a larger full page; there is no
+  cursor or incremental-page API to document. Render reducer messages already
+  available while that request or other initialization remains in flight.
+- Merge a restored OpenCode REST page into the current reducer state rather
+  than replacing it. On conflicts, the current live message/part state wins so
+  a late REST response cannot roll back newer SSE deltas.
 - Pi Stack is a separate `PI_STACK` backend, not an OpenCode-compatible API.
   Android connects to the native Bearer-authenticated Control v1 endpoint and
   keeps Pi Stack transport models under `data/api/PiStackApi.kt`. Origin-only
@@ -76,3 +127,41 @@ fork based on OC Remote; the Android namespace/applicationId is
 - Background OpenCode status continuity has two safeguards: the SSE read must use a finite timeout so silent half-open sockets enter the service reconnect loop, and `ProcessLifecycleOwner.ON_START` reconciles every connected OpenCode server from REST snapshots. Snapshot application must remain revision-safe, preserve newer live SSE events, and fail closed when a complete project-scope list cannot be discovered or reused.
 - Native Chat layout now has focused boundaries: `ChatHeader.kt` owns compact/expanded context actions, `ChatResponseDock.kt` owns retry/Roundtable/permission/question placement above the primary composer, `ChatAdaptiveShell.kt` owns `WindowSizeClass` and safe-drawing layout, and `ChatFollowTailPolicy.kt` owns long-session follow-tail state. Keep backend callbacks and the single `LazyListState` scroll owner in `ChatScreen.kt`; do not reintroduce pending request cards in the timeline or hard-coded width breakpoints.
 - `SessionWorkspaceOverview.kt` and `SessionProjectsViewport.kt` share a centered 960dp content cap for the selected server's recent work, view controls, and project queue. Preserve `SessionListViewModel` as the server-scoped state authority when changing the visual hierarchy.
+
+## Commands
+
+Use Java 21 for Gradle on this host:
+
+```bash
+JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 ./gradlew :app:testDebugUnitTest :app:assembleDebug
+```
+
+Run one JVM test class with:
+
+```bash
+JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 ./gradlew :app:testDebugUnitTest --tests 'fully.qualified.TestClass'
+```
+
+If generated Hilt/Kotlin caches fail, rerun the affected verification after
+`./gradlew clean` before diagnosing a source regression.
+
+## Module Map
+
+- `app/src/main/kotlin/dev/wuxie233/codecarry/data/api/`: OpenCode and Pi Stack
+  wire APIs and DTOs.
+- `app/src/main/kotlin/dev/wuxie233/codecarry/data/codex/`: Codex app-server
+  protocol, connections, reducers, and request lifecycle.
+- `app/src/main/kotlin/dev/wuxie233/codecarry/data/repository/`: persisted
+  repositories and shared event reduction.
+- `app/src/main/kotlin/dev/wuxie233/codecarry/domain/`: backend-neutral models
+  and transport contracts, including Pi Roundtable types.
+- `app/src/main/kotlin/dev/wuxie233/codecarry/service/`: foreground connection,
+  notification, reconciliation, and local-runtime services.
+- `app/src/main/kotlin/dev/wuxie233/codecarry/ui/screens/`: screen state,
+  ViewModels, and backend-specific user workflows.
+- `app/src/main/kotlin/dev/wuxie233/codecarry/ui/components/`: reusable Compose
+  presentation components.
+- `app/src/main/res/`: Android resources and localized strings.
+- `app/src/test/`: JVM/Robolectric behavior tests.
+- `app/src/androidTest/`: device and physical-gesture tests.
+- `docs/research/`: evidence-backed design and compatibility research.

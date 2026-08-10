@@ -5,6 +5,7 @@ import dev.wuxie233.codecarry.domain.model.MessageWithParts
 import dev.wuxie233.codecarry.domain.model.Part
 import dev.wuxie233.codecarry.domain.model.SseEvent
 import dev.wuxie233.codecarry.domain.model.ToolState
+import dev.wuxie233.codecarry.domain.model.TimeInfo
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -90,6 +91,37 @@ class EventReducerBadPartFilterTest {
 
         assertEquals(listOf(keptText.id, keptTool.id), reducer.parts.value[messageId].orEmpty().map { it.id })
     }
+
+    @Test
+    fun mergeMessagesKeepsLiveMessagesAndSameIdMessageAndParts() {
+        val reducer = EventReducer()
+        reducer.mergeMessages(
+            sessionId = "ses-1",
+            messages = listOf(message("rest-only", 1, "rest"), message("shared", 2, "stale")),
+        )
+        val liveMessage = Message.Assistant(id = "shared", sessionId = "ses-1", time = TimeInfo(created = 3), finish = "stop")
+        val livePart = Part.Text(id = "part-shared", sessionId = "ses-1", messageId = "shared", text = "live")
+        reducer.processEvent(SseEvent.MessageUpdated(liveMessage), "server-1")
+        reducer.processEvent(SseEvent.MessagePartUpdated(livePart), "server-1")
+        reducer.processEvent(
+            SseEvent.MessageUpdated(Message.User(id = "live-only", sessionId = "ses-1", time = TimeInfo(created = 4))),
+            "server-1",
+        )
+
+        reducer.mergeMessages(
+            sessionId = "ses-1",
+            messages = listOf(message("rest-only", 1, "rest"), message("shared", 2, "stale-again")),
+        )
+
+        assertEquals(listOf("rest-only", "shared", "live-only"), reducer.messages.value["ses-1"].orEmpty().map { it.id })
+        assertEquals(liveMessage, reducer.messages.value["ses-1"].orEmpty().first { it.id == "shared" })
+        assertEquals(listOf(livePart), reducer.parts.value["shared"])
+    }
+
+    private fun message(id: String, created: Long, text: String) = MessageWithParts(
+        info = Message.Assistant(id = id, sessionId = "ses-1", time = TimeInfo(created = created)),
+        parts = listOf(Part.Text(id = "part-$id", sessionId = "ses-1", messageId = id, text = text)),
+    )
 
     private fun toolPart(
         id: String,

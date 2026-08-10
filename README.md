@@ -1,6 +1,6 @@
 # CodeCarry
 
-CodeCarry is an independently maintained Android client that connects developers to remote coding environments so they can keep developing anywhere. It supports [OpenCode](https://github.com/anomalyco/opencode) servers and Codex app-server endpoints, with native chat and session management.
+CodeCarry is an independently maintained Android client that connects developers to remote coding environments so they can keep developing anywhere. It supports [OpenCode](https://github.com/anomalyco/opencode), Codex app-server, Pi Roundtable, and Pi Stack backends with native chat and session management. The canonical repository is [Wuxie233/codecarry](https://github.com/Wuxie233/codecarry).
 
 **CodeCarry is based on OC Remote. It is an independent project and is not affiliated with the OpenCode team.**
 
@@ -31,6 +31,7 @@ CodeCarry is an independently maintained Android client that connects developers
 - **HTML error fallback modes** — switch long HTML error payloads between rendered page view and raw code view
 - **Slash commands** — `/new`, `/fork`, `/compact`, `/share`, `/rename`, `/undo`, `/redo`, `/shell`
 - **Swipe to revert** — swipe user messages to undo (with confirmation dialog)
+- **OpenCode early-send queue** — submissions made before native send readiness are held in an in-memory per-chat FIFO and sent when transport and routing are ready; a failed head remains available for retry
 
 ### Terminal Mode
 - **Termux-like terminal mode** — full-screen terminal UI with dedicated extra keys and mobile-first interactions
@@ -45,8 +46,9 @@ CodeCarry is an independently maintained Android client that connects developers
 - **Multi-session** — switch between sessions, view history
 - **Session actions** — create, fork, compact, review changes, share/unshare, rename via dropdown menu
 - **Terminal mode shortcut** — open the current session in terminal mode from the chat top bar
-- **Load older messages** — paginated history loading; initial batch size is configurable (25-200)
-- **Large-session stability** — `largeHeap`, paginated message loading, and OOM fallback retry with smaller limits
+- **Responsive OpenCode history** — available messages remain visible while REST history or other initialization is still loading; send readiness does not wait for full history
+- **Load older messages** — limit-based history loading refetches a larger full page; initial batch size is configurable (25-200)
+- **Large-session stability** — `largeHeap`, bounded message history loading, and OOM fallback retry with smaller limits
 - **Session export** — export full session as JSON file with streaming progress notification
 - **Multi-select in sessions** — long-press to enter selection mode, select multiple sessions, and delete in one action
 - **Draft persistence** — input text, image attachments, and @file mentions saved per session; survives navigation, app restart, and WebUI detours
@@ -84,7 +86,7 @@ CodeCarry is an independently maintained Android client that connects developers
 - **Image optimization controls** — tune max image side (keep original or 720–2560 px) and WebP quality for attachments
 
 ### Connection
-- **Multi-server** — connect to multiple OpenCode, Codex, and Pi Roundtable servers
+- **Multi-server** — connect to multiple OpenCode, Codex, Pi Roundtable, and Pi Stack servers
 - **Codex app-server** — native threads, streaming turns, approvals, models, goals, per-thread memory mode, archive/restore, rename, fork, compact, and interrupt actions
 - **Local runtime via Termux** — set up and run OpenCode directly on-device from the Home screen (setup/start/stop/sessions)
 - **Local runtime launch options** — configure LAN binding (`0.0.0.0`), optional server username/password auth, background launch mode, auto-start (background-only), startup timeout, and proxy/`NO_PROXY` from the app
@@ -97,7 +99,7 @@ CodeCarry is an independently maintained Android client that connects developers
 ## Requirements
 
 - Android 8.0+ (API 26)
-- OpenCode server or Codex app-server WebSocket endpoint accessible over the network
+- OpenCode, Codex app-server, Pi Roundtable, or Pi Stack endpoint accessible over the network
 
 ## Setup
 

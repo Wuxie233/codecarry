@@ -1057,6 +1057,35 @@ class EventReducer @Inject constructor() {
         }
         _parts.update { it + partsMap }
     }
+
+    /** Merge a REST history snapshot without replacing state that may have arrived live. */
+    fun mergeMessages(sessionId: String, messages: List<MessageWithParts>) {
+        _messages.update { current ->
+            val liveById = current[sessionId].orEmpty().associateBy { it.id }
+            val merged = buildMap {
+                messages.forEach { put(it.info.id, it.info) }
+                putAll(liveById)
+            }.values.sortedWith(compareBy<Message> { it.time.created }.thenBy { it.id })
+            current + (sessionId to merged)
+        }
+        _parts.update { current ->
+            val merged = current.toMutableMap()
+            messages.forEach { message ->
+                val liveParts = current[message.info.id].orEmpty()
+                val liveById = liveParts.associateBy { it.id }
+                val snapshotPartIds = message.parts.asSequence().map { it.id }.toSet()
+                merged[message.info.id] = buildList {
+                    message.parts.filter { it.isRenderablePart() }.forEach { snapshotPart ->
+                        add(liveById[snapshotPart.id] ?: snapshotPart)
+                    }
+                    liveParts.forEach { livePart ->
+                        if (livePart.id !in snapshotPartIds) add(livePart)
+                    }
+                }
+            }
+            merged
+        }
+    }
     
     /**
      * Clear all state (used when ALL servers disconnect)
