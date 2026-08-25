@@ -226,6 +226,9 @@ class ChatViewModel @Inject constructor(
     )
     private val pendingOpenCodeSends = ArrayDeque<PendingOpenCodeSend>()
     private var pendingOpenCodeDrain: Job? = null
+    private val dshResolvedAttachments = mutableMapOf<String, String>()
+    private var dshAttachmentJob: Job? = null
+    private var dshAppliedEventSeq: Long = -1
     /** Signals when [loadSession] has finished (successfully or with error), so that terminal
      *  creation can wait for [sessionDirectory] to be populated. */
     private val sessionLoaded = CompletableDeferred<Unit>()
@@ -601,11 +604,11 @@ class ChatViewModel @Inject constructor(
         val snapshot = state.sessions[sessionId]
         if (snapshot != null) {
             val folded = foldDshHistory(sessionId, snapshot.events)
-            eventReducer.setMessages(sessionId, folded)
+            val lastSeq = snapshot.events.maxOfOrNull { it.seq } ?: -1L
+            eventReducer.setMessages(sessionId, applyCachedDshAttachments(folded))
             sessionDirectory = snapshot.cwd?.takeIf { it.isNotBlank() } ?: sessionDirectory
-            viewModelScope.launch {
-                eventReducer.setMessages(sessionId, resolveDshAttachments(folded))
-            }
+            dshAppliedEventSeq = lastSeq
+            resolveMissingDshAttachments(folded, lastSeq)
         }
         eventReducer.setPermissions(
             serverId,
@@ -666,21 +669,47 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    private suspend fun resolveDshAttachments(messages: List<MessageWithParts>): List<MessageWithParts> {
+    private fun applyCachedDshAttachments(messages: List<MessageWithParts>): List<MessageWithParts> {
+        if (dshResolvedAttachments.isEmpty()) return messages
         return messages.map { message ->
             val parts = message.parts.map { part ->
                 val file = part as? Part.File ?: return@map part
-                val attachmentId = file.url?.removePrefix("dsh-attachment:") ?: return@map part
-                if (attachmentId == file.url) return@map part
-                runCatching {
-                    val fetched = dshApi.sessionAttachment(dshConn, sessionId, attachmentId)
-                    if (fetched.data.length * 3 / 4 > DSH_ATTACHMENT_MAX_BYTES) part else {
-                        file.copy(url = "data:${fetched.attachment.mediaType};base64,${fetched.data}")
-                    }
-                }.getOrDefault(part)
+                val attachmentId = dshAttachmentId(file.url) ?: return@map part
+                val cached = dshResolvedAttachments[attachmentId] ?: return@map part
+                file.copy(url = cached)
             }
             message.copy(parts = parts)
         }
+    }
+
+    private fun resolveMissingDshAttachments(messages: List<MessageWithParts>, foldSeq: Long) {
+        val missing = messages.flatMap { it.parts }.mapNotNull { part ->
+            dshAttachmentId((part as? Part.File)?.url)
+        }.filter { it !in dshResolvedAttachments }.distinct()
+        if (missing.isEmpty()) return
+        if (dshAttachmentJob?.isActive == true) return
+        dshAttachmentJob = viewModelScope.launch {
+            missing.forEach { attachmentId ->
+                runCatching {
+                    val fetched = dshApi.sessionAttachment(dshConn, sessionId, attachmentId)
+                    if (fetched.data.length * 3 / 4 <= DSH_ATTACHMENT_MAX_BYTES) {
+                        dshResolvedAttachments[attachmentId] =
+                            "data:${fetched.attachment.mediaType};base64,${fetched.data}"
+                    }
+                }
+            }
+            val current = dshReducer.state.value.sessions[sessionId] ?: return@launch
+            val currentSeq = current.events.maxOfOrNull { it.seq } ?: -1L
+            if (currentSeq < foldSeq) return@launch
+            eventReducer.setMessages(sessionId, applyCachedDshAttachments(foldDshHistory(sessionId, current.events)))
+            dshAppliedEventSeq = currentSeq
+        }
+    }
+
+    private fun dshAttachmentId(url: String?): String? {
+        val prefix = "dsh-attachment:"
+        if (url.isNullOrBlank() || !url.startsWith(prefix)) return null
+        return url.removePrefix(prefix).takeIf { it.isNotBlank() }
     }
 
     private fun loadDshProviders() {
