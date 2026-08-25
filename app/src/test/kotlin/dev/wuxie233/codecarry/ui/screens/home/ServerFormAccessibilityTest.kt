@@ -10,7 +10,7 @@ class ServerFormAccessibilityTest {
     fun serverDialog_textFieldsHaveExplicitContentDescriptionsDerivedFromLabels() {
         val source = File("src/main/kotlin/dev/wuxie233/codecarry/ui/screens/home/ServerDialog.kt").readText()
 
-        listOf("nameLabel", "urlLabel", "usernameLabel", "passwordLabel", "tokenLabel").forEach { labelVariable ->
+        listOf("nameLabel", "urlLabel", "usernameLabel", "passwordLabel").forEach { labelVariable ->
             assertTrue(
                 "$labelVariable should be reused as an explicit text-field contentDescription",
                 source.contains("contentDescription = $labelVariable"),

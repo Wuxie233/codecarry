@@ -9,15 +9,19 @@ fork based on OC Remote; the Android namespace/applicationId is
 
 - CodeCarry is a single-module Android application in `app/`, built with
   Kotlin, Jetpack Compose, Hilt, Ktor, coroutines, and kotlinx serialization.
-- `ServerType` is the backend boundary: `OPENCODE`, `CODEX`, `PI_ROUNDTABLE`,
-  and `PI_STACK` have separate transport contracts and capability routing.
+- `ServerType` is the backend boundary: `OPENCODE` and `DSH` have separate
+  transport contracts and capability routing. Codex, Pi Stack, and Pi
+  Roundtable were product-deleted in 1.9.0; persisted rows of those types
+  drop on DataStore read.
 - OpenCode uses REST for snapshots and commands plus SSE for live state.
   `OpenCodeConnectionService` owns connection continuity, `EventReducer` owns
   the server-scoped live aggregate, and screen ViewModels derive UI state and
   coordinate user actions.
-- Codex app-server transport and request lifecycle live under `data/codex`.
-  Pi Stack uses its native Control v1 API in `data/api/PiStackApi.kt`; Pi
-  Roundtable uses its domain and transport types rather than OpenCode models.
+- DSH uses `POST /api/<method>` plus downlink-only WebSockets
+  `/api/events.mux` and `/api/events.host`. `DshApiClient` owns unary RPC and
+  respond, `DshConnectionManager` owns generation readiness and reconnect,
+  `DshEventReducer` owns mux/host aggregates. Ready only after `host.describe`
+  plus both sockets.
 - Compose screens own presentation. Keep navigation, transport, reducer, and
   backend-specific state outside reusable UI components.
 
@@ -41,15 +45,6 @@ fork based on OC Remote; the Android namespace/applicationId is
 - Keep code symbols, commands, file paths, version tags, and API names in their original spelling.
 - Do not ask code-level questions. Make technical decisions from the codebase; only ask when product behavior or user intent is genuinely unclear.
 - The user prefers `vibe talking`: natural chat-first UX, minimal visible control panels, and no unnecessary explanation.
-
-## Pi Roundtable Product Preferences
-
-- Treat the chat composer as the primary Pi Roundtable interaction surface.
-- Avoid reintroducing a separate “roundtable steering/scheduler” main UI unless explicitly requested.
-- `@` suggestions in Pi Roundtable are input helpers only. They should insert role mentions or natural-language requests; they must not directly send control commands.
-- Streaming is a product requirement: thinking states and each agent’s live turn should appear as soon as possible, including placeholders before the first text delta.
-- Preserve current service semantics: registry `paused` means internal `awaiting_command`; registry `awaiting` means internal `awaiting_skip`.
-- Send `可` / continue only when the domain status is `Roundtable.Status.AwaitingCommand`; never send continue for `AwaitingSkip`.
 
 ## Release Workflow
 
@@ -86,30 +81,26 @@ fork based on OC Remote; the Android namespace/applicationId is
 - Merge a restored OpenCode REST page into the current reducer state rather
   than replacing it. On conflicts, the current live message/part state wins so
   a late REST response cannot roll back newer SSE deltas.
-- Pi Stack is a separate `PI_STACK` backend, not an OpenCode-compatible API.
-  Android connects to the native Bearer-authenticated Control v1 endpoint and
-  keeps Pi Stack transport models under `data/api/PiStackApi.kt`. Origin-only
-  URLs resolve to `/control`; explicit custom Control paths remain unchanged.
-- The Pi Stack control server enforces a bearer secret of at least 32
-  characters (`PI_CONTROL_BEARER_SECRET`); the app token must match it exactly.
-  Health-check failures must keep their `PiStackApiErrorKind` classification:
-  `healthCheckErrorMessage` in `HomeViewModel.kt` maps Auth/Protocol failures
-  to actionable messages instead of a generic "Server is not responding".
-- Pi Stack project selection is server-authoritative. The client browses only
-  server-allowed absolute directories, registers a project, and then creates
-  or resumes sessions within that project. Do not relabel an allowlist root as
-  `~` or let the client supply an unchecked session working directory.
-- Pi Stack history is the recovery authority and SSE supplies live deltas. When
-  live and restored messages lack a shared stable ID, merge the nearest
-  unmatched message with the same role and complete parts content one-to-one;
-  preserve legitimate repeated turns.
-- Codex is a separate backend from OpenCode. Connect Android to `codex app-server --listen ws://...`, not the daemon's local Unix control socket, and keep its bidirectional request/approval lifecycle in `data/codex` rather than adapting it to OpenCode REST/SSE models.
-- Codex app-server wire messages omit the `jsonrpc` field. Each connection must send `initialize`, wait for its response, send `initialized`, then `thread/resume` any opened thread before relying on streaming notifications. Preserve unknown fields/types and regenerate the experimental schema when upgrading compatibility.
-- Keep Codex sockets in the shared `CodexConnectionManager`: reconnect persistent or leased connections with backoff, and track leased chat thread IDs so a new handshake resumes every still-open thread.
-- Keep background Codex threads subscribed after their screen closes while a turn or server request is active. Reconnect must resume the union of screen leases and retained background threads; terminal completion, request resolution, deletion, cancellation, or explicit service disconnect releases retention.
-- Treat the `turn/start` response as acceptance only: its turn ID may be provisional, and some server runs omit `turn/started`. Derive the authoritative turn ID and background retention from reducer state after any notification carrying `threadId + turnId`, including item and delta events; a terminal turn must prevent late item events from restoring retention.
-- Codex approvals and `requestUserInput` are server-initiated requests whose original IDs must be answered on the same persistent socket. Never auto-approve unknown requests; retain pending requests independently of screen collector timing and clear them on disconnect or `serverRequest/resolved`.
-- Codex approval UI must honor the server's ordered primitive `availableDecisions`, including `cancel`, and show the affected command directory, network/permission scope, or file paths before enabling approval. Send each user input with a stable `clientUserMessageId` and reconcile uncertain responses by `userMessage.clientId` before allowing a retry.
+- DSH is its own transport. Do not reuse OpenCode REST/SSE models. Unary
+  envelope is `{ rpcId, payload }`; mux/host frames are server-originated
+  `server-request` text. Client sends no application data on those sockets.
+  Reconnect reopens both sockets and refetches history. No SSE fallback.
+- DSH connect is HTTP(S) only, no token. Reachability is Host plus
+  `trustedHosts`. Loopback-locked methods stay hidden on non-loopback URLs:
+  `host.pickDirectory`, `host.openPath`, `credentials.*`,
+  `settings.openDocument`, `llm.discoverModels`,
+  `agentPreset.read/copy/openDocument/remove`.
+- Answer DSH `approval/requested` and `question/requested` on unary
+  `POST /api/respond` with the host `rpcId`. Pending requests survive screen
+  collector timing and clear on disconnect or resolved frames. DSH approval
+  has no Always grant.
+- `session.prompt` mode is `queue` or `steer`. A sole text block starting with
+  `/` is a host slash command. DSH file mentions use `host.listDirectory`,
+  not OpenCode `@file` search. DSH has no shell/terminal.
+- Remaining non-loopback DSH unary surfaces (workspace, skill, git, preset
+  list/select, goal, automation, settings mutate, llm catalog, subagent,
+  systemPrompt, directory browse) live under Server Settings via
+  `DshHostSurfaceController`.
 - Chat markdown has two render paths: normal markdown uses Compose in `ChatMarkdownRenderer.kt`; KaTeX/math markdown uses the WebView renderer in `MarkdownMessageRenderer.kt`. Keep code blocks, tables, display math, and reasoning/plain text with long unbreakable ASCII tokens independently horizontally scrollable; normal prose should still wrap to the bubble width.
 - Chat Markdown has one structural pipeline: `MarkdownDocumentParser.kt` builds the GFM AST-backed document, `MarkdownRenderPlan.kt` assigns block routes and structured table data, and `MarkdownStreamingPlan.kt` reconciles completed-prefix identity while reparsing the open suffix. Do not add a second line scanner or whole-message/max-chunks fallback.
 - Long assistant Markdown is split into typed top-level rows. Tables and fenced code own their rows; root lists, blockquotes, raw HTML, and indented code remain atomic; prose may coalesce within the size budget.
@@ -125,7 +116,7 @@ fork based on OC Remote; the Android namespace/applicationId is
 - Pending OpenCode permissions and questions retain ownership in `EventReducer.permissionsByServer` and `questionsByServer`. Consumers and optimistic removals must select the active `serverId`; duplicate session or request IDs across servers must never share or clear pending state.
 - OpenCode recent work belongs inside the selected server's Sessions control surface and must be derived from that server's `serverSessions[serverId]`; do not place a cross-server recent-work feed on global Home.
 - Background OpenCode status continuity has two safeguards: the SSE read must use a finite timeout so silent half-open sockets enter the service reconnect loop, and `ProcessLifecycleOwner.ON_START` reconciles every connected OpenCode server from REST snapshots. Snapshot application must remain revision-safe, preserve newer live SSE events, and fail closed when a complete project-scope list cannot be discovered or reused.
-- Native Chat layout now has focused boundaries: `ChatHeader.kt` owns compact/expanded context actions, `ChatResponseDock.kt` owns retry/Roundtable/permission/question placement above the primary composer, `ChatAdaptiveShell.kt` owns `WindowSizeClass` and safe-drawing layout, and `ChatFollowTailPolicy.kt` owns long-session follow-tail state. Keep backend callbacks and the single `LazyListState` scroll owner in `ChatScreen.kt`; do not reintroduce pending request cards in the timeline or hard-coded width breakpoints.
+- Native Chat layout now has focused boundaries: `ChatHeader.kt` owns compact/expanded context actions, `ChatResponseDock.kt` owns retry/permission/question placement above the primary composer, `ChatAdaptiveShell.kt` owns `WindowSizeClass` and safe-drawing layout, and `ChatFollowTailPolicy.kt` owns long-session follow-tail state. Keep backend callbacks and the single `LazyListState` scroll owner in `ChatScreen.kt`; do not reintroduce pending request cards in the timeline or hard-coded width breakpoints.
 - `SessionWorkspaceOverview.kt` and `SessionProjectsViewport.kt` share a centered 960dp content cap for the selected server's recent work, view controls, and project queue. Preserve `SessionListViewModel` as the server-scoped state authority when changing the visual hierarchy.
 
 ## Commands
@@ -147,14 +138,14 @@ If generated Hilt/Kotlin caches fail, rerun the affected verification after
 
 ## Module Map
 
-- `app/src/main/kotlin/dev/wuxie233/codecarry/data/api/`: OpenCode and Pi Stack
-  wire APIs and DTOs.
-- `app/src/main/kotlin/dev/wuxie233/codecarry/data/codex/`: Codex app-server
-  protocol, connections, reducers, and request lifecycle.
+- `app/src/main/kotlin/dev/wuxie233/codecarry/data/api/`: OpenCode wire APIs
+  and DTOs.
+- `app/src/main/kotlin/dev/wuxie233/codecarry/data/dsh/`: DSH RPC, mux/host
+  downlinks, event reduce, chat fold, and remaining host unary surfaces.
 - `app/src/main/kotlin/dev/wuxie233/codecarry/data/repository/`: persisted
-  repositories and shared event reduction.
+  repositories and shared OpenCode event reduction.
 - `app/src/main/kotlin/dev/wuxie233/codecarry/domain/`: backend-neutral models
-  and transport contracts, including Pi Roundtable types.
+  and transport contracts.
 - `app/src/main/kotlin/dev/wuxie233/codecarry/service/`: foreground connection,
   notification, reconciliation, and local-runtime services.
 - `app/src/main/kotlin/dev/wuxie233/codecarry/ui/screens/`: screen state,

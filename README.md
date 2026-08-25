@@ -1,6 +1,6 @@
 # CodeCarry
 
-CodeCarry is an independently maintained Android client that connects developers to remote coding environments so they can keep developing anywhere. It supports [OpenCode](https://github.com/anomalyco/opencode), Codex app-server, Pi Roundtable, and Pi Stack backends with native chat and session management. The canonical repository is [Wuxie233/codecarry](https://github.com/Wuxie233/codecarry).
+CodeCarry is an independently maintained Android client that connects developers to remote coding environments so they can keep developing anywhere. It supports [OpenCode](https://github.com/anomalyco/opencode) and [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) backends with native chat and session management. The canonical repository is [Wuxie233/codecarry](https://github.com/Wuxie233/codecarry).
 
 **CodeCarry is based on OC Remote. It is an independent project and is not affiliated with the OpenCode team.**
 
@@ -86,8 +86,8 @@ CodeCarry is an independently maintained Android client that connects developers
 - **Image optimization controls** — tune max image side (keep original or 720–2560 px) and WebP quality for attachments
 
 ### Connection
-- **Multi-server** — connect to multiple OpenCode, Codex, Pi Roundtable, and Pi Stack servers
-- **Codex app-server** — native threads, streaming turns, approvals, models, goals, per-thread memory mode, archive/restore, rename, fork, compact, and interrupt actions
+- **Multi-server** — connect to multiple OpenCode and DSH servers
+- **DSH** — native sessions and chat over `/api` RPC plus mux/host WebSockets; remaining host surfaces live under Server Settings
 - **Local runtime via Termux** — set up and run OpenCode directly on-device from the Home screen (setup/start/stop/sessions)
 - **Local runtime launch options** — configure LAN binding (`0.0.0.0`), optional server username/password auth, background launch mode, auto-start (background-only), startup timeout, and proxy/`NO_PROXY` from the app
 - **Provider OAuth flow** — browser OAuth, headless fallback handling, and provider-state refresh on resume
@@ -99,7 +99,7 @@ CodeCarry is an independently maintained Android client that connects developers
 ## Requirements
 
 - Android 8.0+ (API 26)
-- OpenCode, Codex app-server, Pi Roundtable, or Pi Stack endpoint accessible over the network
+- OpenCode or DSH endpoint accessible over the network. DSH LAN access needs the serving authority in `trustedHosts`.
 
 ## Setup
 
@@ -113,23 +113,9 @@ opencode serve --port 4096 --hostname 0.0.0.0
 
 3. Tap **Connect** on the server card.
 
-### Codex app-server
+### DeepSeek Harness
 
-Codex support uses the experimental app-server WebSocket protocol, not the local daemon control socket. Generate a private capability token and start a listener on the server:
-
-```bash
-umask 077
-openssl rand -hex 32 > /absolute/private/codex-app-server.token
-
-codex app-server \
-  --listen ws://127.0.0.1:8765 \
-  --ws-auth capability-token \
-  --ws-token-file /absolute/private/codex-app-server.token
-```
-
-Expose the loopback listener through an SSH port forward, or a reverse proxy that provides `wss://` and preserves the `Authorization` and WebSocket upgrade headers. CodeCarry rejects plain `ws://` for non-loopback Codex endpoints because bearer tokens and protocol traffic would otherwise cross the network unencrypted.
-
-In CodeCarry, add a **Codex** server with the `ws://`/`wss://` endpoint and the token file contents. Because the protocol is experimental, keep the server Codex CLI reasonably current and verify compatibility after upgrades.
+Add a **DSH** server with an HTTP(S) URL only (for example `http://192.168.1.8:3080`). There is no token field. CodeCarry talks to `POST /api/<method>` and opens downlink-only WebSockets at `/api/events.mux` and `/api/events.host`. The DSH host must list the serving authority in `trustedHosts` for LAN access. Loopback-locked methods (native directory picker, credentials, document open, model discovery, preset authoring) stay hidden on non-loopback URLs.
 
 ## Building
 

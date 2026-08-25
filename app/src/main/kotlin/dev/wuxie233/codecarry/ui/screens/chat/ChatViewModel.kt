@@ -126,8 +126,6 @@ data class ChatUiState(
     val contextWindow: Int = 0,
     /** Total tokens from the last assistant message with output > 0 (current context usage). */
     val lastContextTokens: Int = 0,
-    val isPiStack: Boolean = false,
-    val isPiRoundtable: Boolean = false,
     val subagents: List<ChatSubagentItem> = emptyList(),
     val supportsAttachments: Boolean = false,
     val supportsPrompt: Boolean = false,
@@ -193,8 +191,6 @@ class ChatViewModel @Inject constructor(
     private val serverType: ServerType = runCatching {
         ServerType.valueOf(decodeRouteArg(savedStateHandle.get<String>("serverType")).ifBlank { ServerType.OPENCODE.name })
     }.getOrDefault(ServerType.OPENCODE)
-    private val isPiStack: Boolean = false
-    private val isPiRoundtable: Boolean = false
     private val isDsh: Boolean = serverType == ServerType.DSH
     private val dshCapabilities = chatBackendCapabilities(serverType)
 
@@ -494,8 +490,6 @@ class ChatViewModel @Inject constructor(
             shareUrl = session?.share?.url?.takeIf { it.isNotBlank() },
             contextWindow = currentModel?.limit?.context ?: 0,
             lastContextTokens = lastContextTokens,
-            isPiStack = false,
-            isPiRoundtable = false,
             subagents = subagents,
             supportsAttachments = true,
             supportsPrompt = true,
