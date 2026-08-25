@@ -682,6 +682,26 @@
     <string name="server_settings_search_placeholder">Search models</string>
     <string name="server_settings_empty">No models found</string>
     <string name="server_settings_load_error">Failed to load models</string>
+    <string name="dsh_host_surfaces_title">DSH host surfaces</string>
+    <string name="dsh_host_surfaces_desc">Workspaces, skills, git, presets, goals, automation, settings, and models for this DSH host</string>
+    <string name="dsh_host_surfaces_available">Available methods</string>
+    <string name="dsh_host_surfaces_hidden_loopback">Hidden on this non-loopback URL</string>
+    <string name="dsh_host_surfaces_workspaces">Workspaces</string>
+    <string name="dsh_host_surfaces_workspace_path">Existing directory path</string>
+    <string name="dsh_host_surfaces_create_workspace">Create workspace</string>
+    <string name="dsh_host_surfaces_browse">Host directories</string>
+    <string name="dsh_host_surfaces_folder_name">New folder name</string>
+    <string name="dsh_host_surfaces_create_folder">Create folder</string>
+    <string name="dsh_host_surfaces_skills">Skills</string>
+    <string name="dsh_host_surfaces_git">Git</string>
+    <string name="dsh_host_surfaces_presets">Agent presets</string>
+    <string name="dsh_host_surfaces_automation">Automation</string>
+    <string name="dsh_host_surfaces_settings">Host settings</string>
+    <string name="dsh_host_surfaces_models">Providers and models</string>
+    <string name="dsh_host_surfaces_system_prompt">System prompt</string>
+    <string name="dsh_host_surfaces_subagents">Subagents</string>
+    <string name="dsh_host_surfaces_parent_session">Parent session id</string>
+    <string name="dsh_host_surfaces_load_subagents">Load subagents</string>
 
     <!-- Common -->
     <string name="loading">Loading…</string>

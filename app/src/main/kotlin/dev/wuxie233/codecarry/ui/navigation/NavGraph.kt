@@ -41,6 +41,7 @@ import dev.wuxie233.codecarry.ui.screens.home.HomeScreen
 import dev.wuxie233.codecarry.ui.screens.about.AboutScreen
 import dev.wuxie233.codecarry.ui.screens.sessions.SessionListScreen
 import dev.wuxie233.codecarry.ui.screens.settings.SettingsScreen
+import dev.wuxie233.codecarry.ui.screens.server.DshHostSurfacesScreen
 import dev.wuxie233.codecarry.ui.screens.server.ServerModelFilterScreen
 import dev.wuxie233.codecarry.ui.screens.server.ServerProvidersScreen
 import dev.wuxie233.codecarry.ui.screens.server.ServerSettingsScreen
@@ -338,7 +339,33 @@ fun NavGraph(
                             serverId = serverId
                         )
                     )
-                }
+                },
+                onOpenDshHostSurfaces = {
+                    navController.navigate(
+                        Screen.DshHostSurfaces.createRoute(
+                            serverUrl = serverUrl,
+                            username = username,
+                            password = password,
+                            serverName = serverName,
+                            serverId = serverId,
+                        )
+                    )
+                },
+            )
+        }
+
+        composable(
+            route = "dsh_host_surfaces?serverUrl={serverUrl}&username={username}&password={password}&serverName={serverName}&serverId={serverId}",
+            arguments = listOf(
+                navArgument("serverUrl") { type = NavType.StringType },
+                navArgument("username") { type = NavType.StringType },
+                navArgument("password") { type = NavType.StringType },
+                navArgument("serverName") { type = NavType.StringType },
+                navArgument("serverId") { type = NavType.StringType },
+            )
+        ) {
+            DshHostSurfacesScreen(
+                onNavigateBack = { navController.popBackStack() },
             )
         }
 

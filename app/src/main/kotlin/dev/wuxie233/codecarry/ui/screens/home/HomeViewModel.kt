@@ -191,6 +191,7 @@ class HomeViewModel @Inject constructor(
                     current.copy(
                         connectedServerIds = nonDshConnected + ready,
                         connectingServerIds = nonDshConnecting + connecting,
+                        serverSettingsReadyIds = (current.serverSettingsReadyIds - current.servers.filter { it.type == ServerType.DSH }.map { it.id }.toSet()) + ready,
                         connectionErrors = current.connectionErrors.filterKeys { key ->
                             current.servers.find { it.id == key }?.type != ServerType.DSH
                         } + errors,
@@ -350,6 +351,10 @@ class HomeViewModel @Inject constructor(
                     return@launch
                 }
 
+                if (server.type == ServerType.DSH) {
+                    _uiState.update { it.copy(serverSettingsReadyIds = it.serverSettingsReadyIds + serverId) }
+                    return@launch
+                }
                 if (server.type != ServerType.OPENCODE) {
                     _uiState.update { it.copy(serverSettingsReadyIds = it.serverSettingsReadyIds - serverId) }
                     return@launch

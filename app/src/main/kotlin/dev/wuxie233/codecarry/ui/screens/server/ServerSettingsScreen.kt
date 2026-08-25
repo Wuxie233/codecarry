@@ -22,10 +22,13 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
 import dev.wuxie233.codecarry.R
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -33,8 +36,12 @@ import dev.wuxie233.codecarry.R
 fun ServerSettingsScreen(
     onNavigateBack: () -> Unit,
     onOpenProviders: () -> Unit,
-    onOpenModels: () -> Unit
+    onOpenModels: () -> Unit,
+    onOpenDshHostSurfaces: () -> Unit = {},
+    dshHostSurfacesViewModel: DshHostSurfacesViewModel = hiltViewModel(),
 ) {
+    val dshState by dshHostSurfacesViewModel.uiState.collectAsState()
+    val showDshHostSurfaces = dshState.isDsh
     Scaffold(
         topBar = {
             TopAppBar(
@@ -67,6 +74,15 @@ fun ServerSettingsScreen(
                 icon = { Icon(Icons.Default.Tune, contentDescription = null) },
                 onClick = onOpenModels,
             )
+            if (showDshHostSurfaces) {
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f))
+                ServerSettingsEntry(
+                    title = stringResource(R.string.dsh_host_surfaces_title),
+                    description = stringResource(R.string.dsh_host_surfaces_desc),
+                    icon = { Icon(Icons.Default.Tune, contentDescription = null) },
+                    onClick = onOpenDshHostSurfaces,
+                )
+            }
         }
     }
 }
