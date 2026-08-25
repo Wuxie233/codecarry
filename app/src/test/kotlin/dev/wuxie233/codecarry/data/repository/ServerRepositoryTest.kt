@@ -5,8 +5,6 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import dev.wuxie233.codecarry.data.api.OpenCodeApi
 import dev.wuxie233.codecarry.data.api.OpenCodeFileNotFoundException
-import dev.wuxie233.codecarry.data.api.PiApi
-import dev.wuxie233.codecarry.data.api.PiStackApi
 import dev.wuxie233.codecarry.data.api.ServerConnection
 import dev.wuxie233.codecarry.domain.model.McpConfigLoadState
 import dev.wuxie233.codecarry.domain.model.ServerType
@@ -86,7 +84,6 @@ class ServerRepositoryTest {
         val repository = ServerRepository(
             dataStore = dataStore,
             api = OpenCodeApi(HttpClient(OkHttp), json),
-            piApi = unusedPiApi(),
             json = json,
         )
 
@@ -102,55 +99,6 @@ class ServerRepositoryTest {
         assertEquals(true, server.autoConnect)
         assertEquals(123456789L, server.lastConnected)
         assertEquals(true, server.isHealthy)
-    }
-
-    @Test
-    fun piRoundtableServerWithTokenRoundTripsThroughRepository() = runTest {
-        val repository = newRepository(
-            api = OpenCodeApi(HttpClient(OkHttp), json),
-            scope = backgroundScope,
-        )
-
-        val saved = repository.addServer(
-            url = "https://pi.example.test/",
-            type = ServerType.PI_ROUNDTABLE,
-            username = "opencode",
-            password = null,
-            token = "pi-token-123",
-            name = "Pi Roundtable",
-            autoConnect = true,
-        )
-        val reread = repository.getServer(saved.id)!!
-
-        assertEquals(saved.id, reread.id)
-        assertEquals(ServerType.PI_ROUNDTABLE, reread.type)
-        assertEquals("https://pi.example.test", reread.url)
-        assertEquals("opencode", reread.username)
-        assertEquals(null, reread.password)
-        assertEquals("pi-token-123", reread.token)
-        assertEquals("Pi Roundtable", reread.name)
-        assertEquals(true, reread.autoConnect)
-    }
-
-    @Test
-    fun piStackServerPersistsNormalizedControlUrl() = runTest {
-        val repository = newRepository(
-            api = OpenCodeApi(HttpClient(OkHttp), json),
-            scope = backgroundScope,
-        )
-
-        val saved = repository.addServer(
-            url = "https://pi.example.test/",
-            type = ServerType.PI_STACK,
-            token = "pi-token-123",
-        )
-
-        assertEquals("https://pi.example.test/control", saved.url)
-        assertEquals("https://pi.example.test/control", repository.getServer(saved.id)!!.url)
-
-        repository.updateServer(saved.copy(url = "https://pi.example.test/custom-control/"))
-
-        assertEquals("https://pi.example.test/custom-control", repository.getServer(saved.id)!!.url)
     }
 
     @Test
@@ -237,7 +185,6 @@ class ServerRepositoryTest {
         val repository = ServerRepository(
             dataStore = dataStore,
             api = OpenCodeApi(HttpClient(OkHttp), json),
-            piApi = unusedPiApi(),
             json = json,
         )
 
@@ -258,36 +205,7 @@ class ServerRepositoryTest {
     }
 
     @Test
-    fun piRoundtableHealthUsesAuthenticatedRoundtablesEndpointAndAvoidsOpenCodeGlobalHealth() = runTest {
-        val captured = mutableListOf<HttpRequestData>()
-        val repository = healthRepository(captured) { request ->
-            when (request.url.encodedPath) {
-                "/roundtables" -> respondJson("""[]""")
-                "/global/health" -> error("Pi health must not call OpenCode /global/health")
-                else -> error("Unexpected request: ${request.method.value} ${request.url}")
-            }
-        }
-        val server = repository.addServer(
-            url = "https://pi.wuxie233.com",
-            type = ServerType.PI_ROUNDTABLE,
-            token = "test-bearer-token",
-            name = "Pi Roundtable",
-        )
-
-        val healthy = repository.checkServerHealth(server)
-        val reread = repository.getServer(server.id)!!
-
-        assertTrue(healthy)
-        assertEquals(listOf("/roundtables"), captured.map { it.url.encodedPath })
-        assertEquals(HttpMethod.Get, captured.single().method)
-        assertEquals("Bearer test-bearer-token", captured.single().headers[HttpHeaders.Authorization])
-        assertFalse(captured.any { it.url.encodedPath == "/global/health" })
-        assertTrue(reread.isHealthy)
-        assertTrue(reread.lastConnected != null)
-    }
-
-    @Test
-    fun openCodeHealthStillUsesGlobalHealthEndpoint() = runTest {
+    fun PLACEHOLDER_NEXTopenCodeHealthStillUsesGlobalHealthEndpoint() = runTest {
         val captured = mutableListOf<HttpRequestData>()
         val repository = healthRepository(captured) { request ->
             when (request.url.encodedPath) {
@@ -310,65 +228,6 @@ class ServerRepositoryTest {
         assertEquals(listOf("/global/health"), captured.map { it.url.encodedPath })
         assertTrue(reread.isHealthy)
         assertEquals("Basic b3BlbmNvZGU6dGVzdC1wYXNzd29yZA==", captured.single().headers[HttpHeaders.Authorization])
-    }
-
-    @Test
-    fun piRoundtableHealthFailureMarksServerUnhealthyAndReturnsFalse() = runTest {
-        val captured = mutableListOf<HttpRequestData>()
-        val repository = healthRepository(captured) { request ->
-            when (request.url.encodedPath) {
-                "/roundtables" -> respond(status = HttpStatusCode.Unauthorized, content = ByteReadChannel(""))
-                "/global/health" -> error("Pi health must not call OpenCode /global/health")
-                else -> error("Unexpected request: ${request.method.value} ${request.url}")
-            }
-        }
-        val server = repository.addServer(
-            url = "https://pi.wuxie233.com",
-            type = ServerType.PI_ROUNDTABLE,
-            token = "test-bearer-token",
-        )
-
-        val healthy = repository.checkServerHealth(server.copy(isHealthy = true))
-        val reread = repository.getServer(server.id)!!
-
-        assertFalse(healthy)
-        assertEquals(listOf("/roundtables"), captured.map { it.url.encodedPath })
-        assertEquals("Bearer test-bearer-token", captured.single().headers[HttpHeaders.Authorization])
-        assertFalse(reread.isHealthy)
-    }
-
-    @Test
-    fun piStackHealthUsesAuthenticatedCapabilityProbeAndPreservesBasePath() = runTest {
-        val captured = mutableListOf<HttpRequestData>()
-        val repository = healthRepository(captured) { request ->
-            when (request.url.encodedPath) {
-                "/control/v1/capabilities" -> respondJson(
-                    """
-                    {"protocolVersion":1,"worker":{"generation":"generation-1","epoch":1,"startedAt":"now","active":true},
-                     "data":{"protocolVersion":1,"permissions":{"supported":false,"pending":[]},
-                     "runtime":{"prompt":true,"abort":true,"retry":false,"sessionPatch":[]},
-                     "questions":{"reply":true,"reject":true}}}
-                    """.trimIndent()
-                )
-                else -> error("Unexpected request: ${request.method.value} ${request.url}")
-            }
-        }
-        val server = repository.addServer(
-            url = "https://pi.example.test/control/",
-            type = ServerType.PI_STACK,
-            token = "control-token",
-            name = "Pi Stack",
-        )
-
-        val health = repository.checkHealth(server).getOrThrow()
-        val reread = repository.getServer(server.id)!!
-
-        assertTrue(health.healthy)
-        assertEquals("1", health.version)
-        assertEquals("/control/v1/capabilities", captured.single().url.encodedPath)
-        assertEquals("Bearer control-token", captured.single().headers[HttpHeaders.Authorization])
-        assertTrue(reread.isHealthy)
-        assertTrue(reread.lastConnected != null)
     }
 
     @Test
@@ -528,7 +387,6 @@ class ServerRepositoryTest {
         return ServerRepository(
             dataStore = dataStore,
             api = api,
-            piApi = unusedPiApi(),
             json = json,
         )
     }
@@ -539,7 +397,6 @@ class ServerRepositoryTest {
             produceFile = { tmpFolder.newFile("server_repo_prefs_${System.nanoTime()}.preferences_pb") },
         ),
         api = OpenCodeApi(HttpClient(OkHttp), json),
-        piApi = unusedPiApi(),
         json = json,
     )
 
@@ -561,18 +418,10 @@ class ServerRepositoryTest {
         return ServerRepository(
             dataStore = dataStore,
             api = OpenCodeApi(client, json),
-            piApi = PiApi(client, json),
             json = json,
-            piStackApi = PiStackApi(client, json),
         )
     }
 
-    private fun unusedPiApi(): PiApi {
-        val client = HttpClient(MockEngine { error("Unexpected Pi API request") }) {
-            install(ContentNegotiation) { json(json) }
-        }
-        return PiApi(client, json)
-    }
 
     private fun newApi(
         captured: MutableList<HttpRequestData>,
@@ -641,5 +490,22 @@ class ServerRepositoryTest {
 
         private val validMcpFileContent =
             """{"type":"file","content":"{\"mcpServers\":{\"filesystem\":{\"command\":\"npx\"}}}"}"""
+    }
+
+    @Test
+    fun dropsArchivedBackendTypesOnReadAndDoesNotRestoreThem() {
+        val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+        val raw = """
+        [
+          {"id":"keep","type":"OPENCODE","url":"http://oc.example","username":"opencode"},
+          {"id":"codex","type":"CODEX","url":"wss://codex.example"},
+          {"id":"pi","type":"PI_ROUNDTABLE","url":"https://pi.example","token":"t"},
+          {"id":"stack","type":"PI_STACK","url":"https://stack.example/control"}
+        ]
+        """.trimIndent()
+        val (kept, dropped) = decodePersistedServers(json, raw)
+        assertTrue(dropped)
+        assertEquals(listOf("keep"), kept.map { it.id })
+        assertEquals(listOf(ServerType.OPENCODE), kept.map { it.type })
     }
 }

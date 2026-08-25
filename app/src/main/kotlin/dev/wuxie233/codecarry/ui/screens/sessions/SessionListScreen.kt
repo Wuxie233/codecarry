@@ -418,7 +418,7 @@ fun SessionListScreen(
                                 },
                                 projectControls = if (uiState.viewMode == SessionListViewMode.PROJECTS) {
                                     {
-                                        if (!uiState.isPiStack || uiState.supportsSessionArchive || uiState.supportsSessionRestore) {
+                                        if (uiState.supportsSessionArchive || uiState.supportsSessionRestore) {
                                             SessionScopeSegmentedControl(
                                                 currentScope = uiState.scope,
                                                 archivedCount = uiState.archivedCount,
@@ -1082,7 +1082,7 @@ private fun OpenProjectDialog(
         homeDir = home
         currentDir = home
         isLoading = true
-        listing = viewModel.browseDirectories(if (viewModel.isPiStack) null else home)
+        listing = viewModel.browseDirectories(home)
         currentDir = listing?.path ?: home
         isLoading = false
     }
@@ -1125,7 +1125,7 @@ private fun OpenProjectDialog(
 
     /** Shorten an absolute path by replacing home prefix with ~ */
     fun tildeReplace(path: String): String {
-        return directoryDisplayPath(path, homeDir, useTilde = !viewModel.isPiStack)
+        return directoryDisplayPath(path, homeDir, useTilde = true)
     }
 
     Dialog(
@@ -1160,7 +1160,7 @@ private fun OpenProjectDialog(
                 }
 
                 // Search field (OpenCode only; Pi Stack has canonical browse but no search capability).
-                if (!viewModel.isPiStack) {
+                if (true) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1231,7 +1231,7 @@ private fun OpenProjectDialog(
 
                 // Breadcrumb / current path (when not searching)
                 if (!isSearching && currentDir != null) {
-                    val parent = if (listing != null) listing?.parent else parentDirectory(currentDir ?: "/")
+                    val parent = listing?.parent
                     val canGoUp = parent != null
                     Row(
                         modifier = Modifier
@@ -1356,7 +1356,7 @@ private fun OpenProjectDialog(
                         }
                     }
 
-                    if (!viewModel.isPiStack && isAmoled) {
+                    if (isAmoled) {
                         Surface(
                             modifier = Modifier
                                 .align(Alignment.BottomEnd)
@@ -1382,7 +1382,7 @@ private fun OpenProjectDialog(
                                 )
                             }
                         }
-                    } else if (!viewModel.isPiStack) {
+                    } else if (true) {
                         FloatingActionButton(
                             onClick = {
                                 showCreateFolderDialog = true

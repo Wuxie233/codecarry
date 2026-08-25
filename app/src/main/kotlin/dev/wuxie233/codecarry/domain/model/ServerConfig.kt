@@ -1,32 +1,10 @@
 package dev.wuxie233.codecarry.domain.model
 
 import kotlinx.serialization.Serializable
-import java.net.URI
 
 @Serializable
 enum class ServerType {
     OPENCODE,
-    CODEX,
-    PI_ROUNDTABLE,
-    PI_STACK,
-}
-
-internal fun normalizePiStackControlUrl(url: String): String {
-    val trimmed = url.trim().trimEnd('/')
-    return runCatching {
-        val uri = URI(trimmed)
-        require(uri.scheme in setOf("http", "https") && uri.host != null)
-        val path = uri.rawPath.orEmpty().trimEnd('/')
-        URI(
-            uri.scheme,
-            null,
-            uri.host,
-            uri.port,
-            path.ifEmpty { "/control" },
-            null,
-            null,
-        ).toString()
-    }.getOrDefault(trimmed)
 }
 
 /**
@@ -39,7 +17,7 @@ data class ServerConfig(
     val url: String, // e.g. http://192.168.1.100:4096
     val username: String = "opencode",
     val password: String? = null,
-    val token: String? = null, // Pi token or Codex app-server bearer token
+    val token: String? = null,
     val name: String? = null, // User-friendly name
     val autoConnect: Boolean = false,
     val lastConnected: Long? = null,

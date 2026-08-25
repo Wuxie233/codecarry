@@ -14,8 +14,6 @@ import dev.wuxie233.codecarry.R
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.wuxie233.codecarry.data.api.OpenCodeApi
-import dev.wuxie233.codecarry.data.api.PiStackApiErrorKind
-import dev.wuxie233.codecarry.data.api.PiStackApiException
 import dev.wuxie233.codecarry.data.api.ProviderCatalogResponse
 import dev.wuxie233.codecarry.data.api.ProvidersResponse
 import dev.wuxie233.codecarry.data.api.ServerConnection
@@ -26,7 +24,6 @@ import dev.wuxie233.codecarry.domain.model.ServerConfig
 import dev.wuxie233.codecarry.domain.model.ServerType
 import dev.wuxie233.codecarry.domain.model.ConnectionPhase
 import dev.wuxie233.codecarry.service.OpenCodeConnectionService
-import dev.wuxie233.codecarry.service.mergeCodexConnectionErrors
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -69,15 +66,7 @@ internal fun serverConnectionIntent(context: Context, serverId: String): Intent 
  * flattening every failure (including 401 auth errors) into a generic
  * "Server is not responding".
  */
-internal fun healthCheckErrorMessage(error: Throwable?): String = when {
-    error is PiStackApiException && error.kind == PiStackApiErrorKind.Auth ->
-        "Authentication failed. Check the access token."
-
-    error is PiStackApiException && error.kind == PiStackApiErrorKind.Protocol ->
-        error.message ?: "Server protocol mismatch"
-
-    else -> "Server is not responding"
-}
+internal fun healthCheckErrorMessage(error: Throwable?): String = "Server is not responding"
 
 internal val serverConnectionIntentExtraKeys: Set<String> = setOf(
     OpenCodeConnectionService.EXTRA_SERVER_ID,
@@ -290,16 +279,7 @@ class HomeViewModel @Inject constructor(
             launch {
                 service.connectionErrors.collect { errors ->
                     _uiState.update { state ->
-                        val codexIds = state.servers
-                            .filter { server -> server.type == ServerType.CODEX }
-                            .mapTo(mutableSetOf(), ServerConfig::id)
-                        state.copy(
-                            connectionErrors = mergeCodexConnectionErrors(
-                                current = state.connectionErrors,
-                                codexServerIds = codexIds,
-                                codexErrors = errors,
-                            ),
-                        )
+                        state.copy(connectionErrors = errors)
                     }
                 }
             }
@@ -465,12 +445,8 @@ class HomeViewModel @Inject constructor(
 
         viewModelScope.launch {
             try {
-                val healthResult = if (server.type == ServerType.CODEX) {
-                    null
-                } else {
-                    serverRepository.checkHealth(server)
-                }
-                if (healthResult != null && healthResult.isFailure) {
+                val healthResult = serverRepository.checkHealth(server)
+                if (healthResult.isFailure) {
                     val message = healthCheckErrorMessage(healthResult.exceptionOrNull())
                     _uiState.update {
                         it.copy(

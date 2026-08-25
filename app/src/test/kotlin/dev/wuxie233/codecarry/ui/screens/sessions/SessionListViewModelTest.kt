@@ -5,8 +5,6 @@ import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import dev.wuxie233.codecarry.data.api.OpenCodeApi
-import dev.wuxie233.codecarry.data.api.PiStackApi
-import dev.wuxie233.codecarry.data.transport.PiStackTransportFactory
 import dev.wuxie233.codecarry.data.diagnostics.AppEventDiagnosticsGenerator
 import dev.wuxie233.codecarry.data.diagnostics.DiagnosticsLogRepository
 import dev.wuxie233.codecarry.data.preferences.SessionFilter
@@ -236,20 +234,6 @@ class SessionListViewModelTest {
 
         assertTrue(isProjectGroupVisible(group, showHiddenProjects = false))
         assertTrue(computeSessionListEmptyState(0, 1, registeredProjectCount = 1).hasAnySessions)
-    }
-
-    @Test
-    fun `server directory parent fallback handles root and canonical paths`() {
-        assertEquals(null, parentDirectory("/"))
-        assertEquals("/srv/projects", parentDirectory("/srv/projects/app/"))
-    }
-
-    @Test
-    fun `Pi Stack status mapping preserves active and terminal presentation`() {
-        assertEquals(SessionStatus.Busy, BackendSessionState.BUSY.toSessionStatus())
-        assertTrue(BackendSessionState.ERROR.toSessionStatus() is SessionStatus.Retry)
-        assertEquals(SessionStatus.Idle, BackendSessionState.ENDED.toSessionStatus())
-        assertEquals(SessionStatus.Idle, BackendSessionState.AWAITING_SKIP.toSessionStatus())
     }
 
     @Test
@@ -667,16 +651,9 @@ class SessionListViewModelTest {
             preferencesRepo = sessionListPreferencesRepository(),
             settingsRepository = settingsRepository(),
             appEventDiagnosticsGenerator = AppEventDiagnosticsGenerator(diagnosticsRepository),
-            piStackTransportFactory = piStackTransportFactory(),
         ).also { viewModels.add(it) }
     }
 
-    private fun piStackTransportFactory(): PiStackTransportFactory {
-        val client = HttpClient(MockEngine { respond("{}") }) {
-            install(ContentNegotiation) { json(json) }
-        }
-        return PiStackTransportFactory(PiStackApi(client, json))
-    }
 
     private fun sessionListApi(
         createResponseBody: String = """{"id":"ses_created_1","directory":"/work/project","time":{}}""",

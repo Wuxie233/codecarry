@@ -11,7 +11,6 @@ import androidx.compose.runtime.key
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
-import dev.wuxie233.codecarry.domain.model.Roundtable
 
 internal const val ChatResponseDockTag = "chat-response-dock"
 internal const val ChatComposerPrimaryTag = "chat-composer-primary"
@@ -20,7 +19,6 @@ internal val ChatComposerPrimaryMinWidth = 160.dp
 
 internal enum class ChatResponseDockKind {
     Retry,
-    Roundtable,
     Permission,
     Question,
 }
@@ -32,34 +30,14 @@ internal data class ChatResponseDockItem(
     val key: String = "${kind.name.lowercase()}:${ownershipId.orEmpty()}"
 }
 
-internal enum class RoundtableDockAction {
-    Skip,
-    Continue,
-}
-
 internal fun buildChatResponseDockItems(
     hasRetry: Boolean,
-    roundtableStatus: Roundtable.Status?,
-    hasAwaitingSkip: Boolean,
     permissionIds: List<String>,
     questionIds: List<String>,
 ): List<ChatResponseDockItem> = buildList {
     if (hasRetry) add(ChatResponseDockItem(ChatResponseDockKind.Retry))
-    if (
-        roundtableStatus == Roundtable.Status.AwaitingCommand || hasAwaitingSkip
-    ) {
-        add(ChatResponseDockItem(ChatResponseDockKind.Roundtable))
-    }
     permissionIds.forEach { add(ChatResponseDockItem(ChatResponseDockKind.Permission, it)) }
     questionIds.forEach { add(ChatResponseDockItem(ChatResponseDockKind.Question, it)) }
-}
-
-internal fun roundtableDockActions(
-    status: Roundtable.Status?,
-    hasAwaitingSkip: Boolean,
-): List<RoundtableDockAction> = buildList {
-    if (hasAwaitingSkip) add(RoundtableDockAction.Skip)
-    if (status == Roundtable.Status.AwaitingCommand) add(RoundtableDockAction.Continue)
 }
 
 internal fun Modifier.chatComposerPrimaryWidth(): Modifier =

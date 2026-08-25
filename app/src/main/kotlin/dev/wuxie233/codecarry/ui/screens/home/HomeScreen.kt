@@ -122,8 +122,6 @@ internal fun shouldShowServerDisconnect(isConnected: Boolean, isConnecting: Bool
 @Composable
 fun HomeScreen(
     onNavigateToSessions: (serverUrl: String, username: String, password: String, serverName: String, serverId: String, serverType: ServerType) -> Unit = { _, _, _, _, _, _ -> },
-    onNavigateToCodexThreads: (serverId: String) -> Unit = {},
-    onNavigateToRoundtables: (serverUrl: String, token: String, serverName: String, serverId: String) -> Unit = { _, _, _, _ -> },
     onNavigateToServerSettings: (serverUrl: String, username: String, password: String, serverName: String, serverId: String) -> Unit = { _, _, _, _, _ -> },
     onNavigateToSettings: () -> Unit = {},
     onNavigateToAbout: () -> Unit = {},
@@ -350,7 +348,7 @@ fun HomeScreen(
                         }
 
                         items(remoteServers, key = { it.id }) { server ->
-                            if (server.type == ServerType.OPENCODE) {
+
                                 OpenCodeServerRow(
                                     server = server,
                                     isConnected = server.id in uiState.connectedServerIds,
@@ -382,54 +380,7 @@ fun HomeScreen(
                                     onEdit = { viewModel.showEditServerDialog(server) },
                                     onDelete = { viewModel.deleteServer(server.id) },
                                 )
-                            } else ServerCard(
-                                server = server,
-                                isConnected = server.id in uiState.connectedServerIds,
-                                isConnecting = server.id in uiState.connectingServerIds,
-                                connectionPhase = uiState.connectionPhases[server.id],
-                                connectionError = uiState.connectionErrors[server.id],
-                                showServerSettings = server.id in uiState.serverSettingsReadyIds,
-                                onConnect = { requestNotificationPermissionAndConnect(server.id) },
-                                onDisconnect = { viewModel.disconnectFromServer(server.id) },
-                                onOpenSessions = {
-                                    when (server.type) {
-                                        ServerType.OPENCODE -> onNavigateToSessions(
-                                            server.url,
-                                            server.username,
-                                            server.password ?: "",
-                                            server.displayName,
-                                            server.id,
-                                            server.type,
-                                        )
-                                        ServerType.PI_STACK -> onNavigateToSessions(
-                                            server.url,
-                                            "",
-                                            server.token.orEmpty(),
-                                            server.displayName,
-                                            server.id,
-                                            server.type,
-                                        )
-                                        ServerType.CODEX -> onNavigateToCodexThreads(server.id)
-                                        ServerType.PI_ROUNDTABLE -> onNavigateToRoundtables(
-                                            server.url,
-                                            server.token.orEmpty(),
-                                            server.displayName,
-                                            server.id,
-                                        )
-                                    }
-                                },
-                                onServerSettings = {
-                                    onNavigateToServerSettings(
-                                        server.url,
-                                        server.username,
-                                        server.password ?: "",
-                                        server.displayName,
-                                        server.id
-                                    )
-                                },
-                                onEdit = { viewModel.showEditServerDialog(server) },
-                                onDelete = { viewModel.deleteServer(server.id) }
-                            )
+
                         }
                     }
                 }
@@ -1642,12 +1593,7 @@ internal fun ServerCard(
                         Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
                         Text(
-                            when (server.type) {
-                                ServerType.OPENCODE -> stringResource(R.string.sessions_title)
-                                ServerType.CODEX -> stringResource(R.string.codex_threads_title)
-                                ServerType.PI_ROUNDTABLE -> stringResource(R.string.roundtable_center_title)
-                                ServerType.PI_STACK -> stringResource(R.string.sessions_title)
-                            },
+                            stringResource(R.string.sessions_title),
                             maxLines = 1,
                         )
                     }

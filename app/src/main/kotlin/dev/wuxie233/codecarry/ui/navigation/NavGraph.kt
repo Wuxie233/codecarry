@@ -36,14 +36,8 @@ import dev.wuxie233.codecarry.domain.model.ServerConfig
 import dev.wuxie233.codecarry.domain.model.ServerType
 import dev.wuxie233.codecarry.domain.model.Session
 import dev.wuxie233.codecarry.ui.screens.chat.ChatScreen
-import dev.wuxie233.codecarry.ui.screens.codex.CodexChatScreen
-import dev.wuxie233.codecarry.ui.screens.codex.CodexThreadListScreen
 import dev.wuxie233.codecarry.ui.screens.diagnostics.DiagnosticsScreen
 import dev.wuxie233.codecarry.ui.screens.home.HomeScreen
-import dev.wuxie233.codecarry.ui.screens.roundtable.RoundtableCastingScreen
-import dev.wuxie233.codecarry.ui.screens.roundtable.RoundtableCenterScreen
-import dev.wuxie233.codecarry.ui.screens.roundtable.PersonaLibraryScreen
-import dev.wuxie233.codecarry.ui.screens.roundtable.RoundtableSummaryScreen
 import dev.wuxie233.codecarry.ui.screens.about.AboutScreen
 import dev.wuxie233.codecarry.ui.screens.sessions.SessionListScreen
 import dev.wuxie233.codecarry.ui.screens.settings.SettingsScreen
@@ -189,21 +183,6 @@ fun NavGraph(
             // Consume the event so it's not replayed on recomposition
             deepLinkFlow.resetReplayCache()
             val currentRoute = navController.currentDestination?.route
-            if (deepLink.codexServerId.isNotBlank() && deepLink.codexThreadId.isNotBlank()) {
-                val route = Screen.CodexChat.createRoute(deepLink.codexServerId, deepLink.codexThreadId)
-                val currentServerId = navController.currentBackStackEntry?.arguments
-                    ?.getString("serverId")?.let(::decodeRouteArg)
-                val currentThreadId = navController.currentBackStackEntry?.arguments
-                    ?.getString("threadId")?.let(::decodeRouteArg)
-                if (currentRoute?.startsWith("codex_chat") == true &&
-                    currentServerId == deepLink.codexServerId && currentThreadId == deepLink.codexThreadId
-                ) {
-                    return@collect
-                }
-                if (currentRoute?.startsWith("codex_chat") == true) navController.popBackStack()
-                navController.navigate(route) { launchSingleTop = true }
-                return@collect
-            }
             if (BuildConfig.DEBUG) Log.d(TAG, "Deep-link received: sessionPath=${deepLink.sessionPath}, sessionId=${deepLink.sessionId}, currentRoute=$currentRoute, useNativeUi=$useNativeUi")
             
             if (useNativeUi) {
@@ -285,14 +264,6 @@ fun NavGraph(
                 onNavigateToSessions = { serverUrl, username, password, serverName, serverId, serverType ->
                     navController.navigate(
                         Screen.SessionList.createRoute(serverUrl, username, password, serverName, serverId, serverType.name)
-                    )
-                },
-                onNavigateToCodexThreads = { serverId ->
-                    navController.navigate(Screen.CodexThreads.createRoute(serverId))
-                },
-                onNavigateToRoundtables = { _, _, _, serverId ->
-                    navController.navigate(
-                        Screen.RoundtableCenter.createRoute(serverId)
                     )
                 },
                 onNavigateToServerSettings = { serverUrl, username, password, serverName, serverId ->
@@ -494,134 +465,6 @@ fun NavGraph(
                     navController.popBackStack()
                 }
             )
-        }
-
-        composable(
-            route = "codex_threads?serverId={serverId}",
-            arguments = listOf(navArgument("serverId") { type = NavType.StringType }),
-        ) { backStackEntry ->
-            val serverId = decodeRouteArg(backStackEntry.arguments?.getString("serverId"))
-            CodexThreadListScreen(
-                onNavigateBack = { navController.popBackStack() },
-                onOpenThread = { threadId ->
-                    navController.navigate(Screen.CodexChat.createRoute(serverId, threadId))
-                },
-            )
-        }
-
-        composable(
-            route = "codex_chat?serverId={serverId}&threadId={threadId}",
-            arguments = listOf(
-                navArgument("serverId") { type = NavType.StringType },
-                navArgument("threadId") { type = NavType.StringType },
-            ),
-        ) {
-            CodexChatScreen(onNavigateBack = { navController.popBackStack() })
-        }
-
-        composable(
-            route = "roundtable_center?serverId={serverId}",
-            arguments = listOf(
-                navArgument("serverId") { type = NavType.StringType },
-            )
-        ) { backStackEntry ->
-            val serverId = decodeRouteArg(backStackEntry.arguments?.getString("serverId"))
-            val manualSetupRequested by backStackEntry.savedStateHandle
-                .getStateFlow("openManualSetup", false)
-                .collectAsState()
-            val refreshRequested by backStackEntry.savedStateHandle
-                .getStateFlow("refreshRoundtables", false)
-                .collectAsState()
-            RoundtableCenterScreen(
-                onNavigateBack = { navController.popBackStack() },
-                onOpenRoundtable = { target ->
-                    navController.navigate(
-                        Screen.Chat.createRoute(
-                            serverUrl = target.serverUrl,
-                            username = "pi",
-                            password = target.token,
-                            serverName = target.serverName,
-                            serverId = target.serverId,
-                            sessionId = target.roundtableId,
-                            serverType = ServerType.PI_ROUNDTABLE.name,
-                        )
-                    )
-                },
-                onOpenCasting = { castingId ->
-                    navController.navigate(Screen.RoundtableCasting.createRoute(serverId, castingId))
-                },
-                onOpenSummary = { roundtableId ->
-                    navController.navigate(Screen.RoundtableSummary.createRoute(serverId, roundtableId))
-                },
-                onOpenPersonaLibrary = {
-                    navController.navigate(Screen.PersonaLibrary.createRoute(serverId))
-                },
-                onCreateRoundtable = {
-                    navController.navigate(Screen.RoundtableCasting.createRoute(serverId))
-                },
-                openManualSetup = manualSetupRequested,
-                onManualSetupConsumed = {
-                    backStackEntry.savedStateHandle["openManualSetup"] = false
-                },
-                refreshRequested = refreshRequested,
-                onRefreshConsumed = {
-                    backStackEntry.savedStateHandle["refreshRoundtables"] = false
-                },
-            )
-        }
-
-        composable(
-            route = "roundtable_casting?serverId={serverId}&castingId={castingId}",
-            arguments = listOf(
-                navArgument("serverId") { type = NavType.StringType },
-                navArgument("castingId") { type = NavType.StringType; defaultValue = "" },
-            )
-        ) {
-            RoundtableCastingScreen(
-                onNavigateBack = {
-                    navController.previousBackStackEntry?.savedStateHandle?.set("refreshRoundtables", true)
-                    navController.popBackStack()
-                },
-                onConfirmedRoundtable = { target ->
-                    val route = Screen.Chat.createRoute(
-                        serverUrl = target.serverUrl,
-                        username = "pi",
-                        password = target.token,
-                        serverName = target.serverName,
-                        serverId = target.serverId,
-                        sessionId = target.roundtableId,
-                        serverType = ServerType.PI_ROUNDTABLE.name,
-                    )
-                    navController.previousBackStackEntry?.savedStateHandle?.set("refreshRoundtables", true)
-                    navController.popBackStack()
-                    navController.navigate(route)
-                },
-                onManualSetup = {
-                    navController.previousBackStackEntry?.savedStateHandle?.set("openManualSetup", true)
-                    navController.popBackStack()
-                },
-            )
-        }
-
-        composable(
-            route = "persona_library?serverId={serverId}",
-            arguments = listOf(
-                navArgument("serverId") { type = NavType.StringType },
-            )
-        ) {
-            PersonaLibraryScreen(
-                onNavigateBack = { navController.popBackStack() }
-            )
-        }
-
-        composable(
-            route = "roundtable_summary?serverId={serverId}&roundtableId={roundtableId}",
-            arguments = listOf(
-                navArgument("serverId") { type = NavType.StringType },
-                navArgument("roundtableId") { type = NavType.StringType },
-            )
-        ) {
-            RoundtableSummaryScreen(onNavigateBack = { navController.popBackStack() })
         }
 
         // ============ Chat Screen (native) ============

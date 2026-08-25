@@ -7,7 +7,6 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import androidx.test.core.app.ApplicationProvider
 import dev.wuxie233.codecarry.data.api.OpenCodeApi
-import dev.wuxie233.codecarry.data.api.PiApi
 import dev.wuxie233.codecarry.data.preferences.SessionListPreferencesRepository
 import dev.wuxie233.codecarry.data.repository.DraftRepository
 import dev.wuxie233.codecarry.data.repository.EventReducer
@@ -205,7 +204,6 @@ class ChatViewModelRetryNowTest {
         ),
         eventReducer = eventReducer,
         api = api,
-        piApi = piApi(),
         json = json,
         draftRepository = draftRepository(),
         sessionListPreferencesRepository = sessionListPreferencesRepository(),
@@ -234,11 +232,6 @@ class ChatViewModelRetryNowTest {
         }
         return OpenCodeApi(HttpClient(engine) { install(ContentNegotiation) { json(json) } }, json)
     }
-
-    private fun piApi(): PiApi = PiApi(
-        HttpClient(MockEngine { respondJson("{}") }) { install(ContentNegotiation) { json(json) } },
-        json,
-    )
 
     private fun draftRepository(): DraftRepository {
         val filesDir = tmpFolder.newFolder("drafts-${System.nanoTime()}")

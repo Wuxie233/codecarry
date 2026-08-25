@@ -45,49 +45,12 @@ sealed class Screen(val route: String) {
         }
     }
 
-    data object CodexThreads : Screen("codex_threads") {
-        fun createRoute(serverId: String): String =
-            "codex_threads?serverId=${URLEncoder.encode(serverId, "UTF-8")}"
-    }
-
-    data object CodexChat : Screen("codex_chat") {
-        fun createRoute(serverId: String, threadId: String): String =
-            "codex_chat?serverId=${URLEncoder.encode(serverId, "UTF-8")}&threadId=${URLEncoder.encode(threadId, "UTF-8")}"
-    }
-
-    data object RoundtableCenter : Screen("roundtable_center") {
-        fun createRoute(serverId: String): String {
-            val encodedServerId = URLEncoder.encode(serverId, "UTF-8")
-            return "roundtable_center?serverId=$encodedServerId"
-        }
-    }
 
 
-    data object RoundtableCasting : Screen("roundtable_casting") {
-        fun createRoute(serverId: String, castingId: String = ""): String {
-            val encodedServerId = URLEncoder.encode(serverId, "UTF-8")
-            val encodedCastingId = URLEncoder.encode(castingId, "UTF-8")
-            return "roundtable_casting?serverId=$encodedServerId&castingId=$encodedCastingId"
-        }
-    }
 
-    data object RoundtableSummary : Screen("roundtable_summary") {
-        fun createRoute(
-            serverId: String,
-            roundtableId: String,
-        ): String {
-            val encodedServerId = URLEncoder.encode(serverId, "UTF-8")
-            val encodedRoundtableId = URLEncoder.encode(roundtableId, "UTF-8")
-            return "roundtable_summary?serverId=$encodedServerId&roundtableId=$encodedRoundtableId"
-        }
-    }
 
-    data object PersonaLibrary : Screen("persona_library") {
-        fun createRoute(serverId: String): String {
-            val encodedServerId = URLEncoder.encode(serverId, "UTF-8")
-            return "persona_library?serverId=$encodedServerId"
-        }
-    }
+
+
     data object Chat : Screen("chat") {
         fun createRoute(
             serverUrl: String,

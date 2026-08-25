@@ -27,7 +27,6 @@ import androidx.compose.ui.unit.dp
 import dev.wuxie233.codecarry.R
 import dev.wuxie233.codecarry.domain.model.ServerConfig
 import dev.wuxie233.codecarry.domain.model.ServerType
-import dev.wuxie233.codecarry.domain.model.normalizePiStackControlUrl
 
 /**
  * Parse and validate a server URL string.
@@ -40,12 +39,12 @@ import dev.wuxie233.codecarry.domain.model.normalizePiStackControlUrl
  *
  * Returns the normalized URL (with scheme) or null if invalid.
  */
-internal fun validateAndNormalizeUrl(input: String, serverType: ServerType): String? {
+internal fun validateAndNormalizeUrl(input: String, serverType: ServerType = ServerType.OPENCODE): String? {
     val trimmed = input.trim()
     if (trimmed.isBlank()) return null
 
-    val allowedSchemes = if (serverType == ServerType.CODEX) setOf("ws", "wss") else setOf("http", "https")
-    val defaultScheme = if (serverType == ServerType.CODEX) "wss" else "http"
+    val allowedSchemes = setOf("http", "https")
+    val defaultScheme = "http"
     val suppliedScheme = trimmed.substringBefore("://", missingDelimiterValue = "")
     val withScheme = if (suppliedScheme !in allowedSchemes) {
         if ("://" in trimmed) return null
@@ -57,10 +56,9 @@ internal fun validateAndNormalizeUrl(input: String, serverType: ServerType): Str
     return try {
         val uri = java.net.URI(withScheme)
         if (uri.scheme !in allowedSchemes || uri.host.isNullOrBlank()) return null
-        if (serverType == ServerType.CODEX && uri.scheme == "ws" && !uri.host.isCodexLoopbackHost()) return null
         if (uri.port != -1 && uri.port !in 1..65535) return null
         if (uri.userInfo != null || uri.query != null || uri.fragment != null) return null
-        val normalizedUrl = java.net.URI(
+        java.net.URI(
             uri.scheme,
             null,
             uri.host,
@@ -69,14 +67,10 @@ internal fun validateAndNormalizeUrl(input: String, serverType: ServerType): Str
             null,
             null,
         ).toString().trimEnd('/')
-        if (serverType == ServerType.PI_STACK) normalizePiStackControlUrl(normalizedUrl) else normalizedUrl
     } catch (e: Exception) {
         null
     }
 }
-
-private fun String.isCodexLoopbackHost(): Boolean =
-    removeSurrounding("[", "]").lowercase() in setOf("localhost", "127.0.0.1", "::1")
 
 private fun deriveServerNameFromUrl(normalizedUrl: String): String {
     return try {
@@ -113,7 +107,6 @@ fun ServerDialog(
     var url by remember { mutableStateOf(server?.url ?: "http://") }
     var username by remember { mutableStateOf(server?.username ?: "opencode") }
     var password by remember { mutableStateOf(server?.password ?: "") }
-    var token by remember { mutableStateOf(server?.token ?: "") }
     var passwordVisible by remember { mutableStateOf(false) }
     var autoConnect by remember { mutableStateOf(server?.autoConnect ?: false) }
 
@@ -123,7 +116,6 @@ fun ServerDialog(
     val urlLabel = stringResource(R.string.server_url)
     val usernameLabel = stringResource(R.string.server_username)
     val passwordLabel = stringResource(R.string.server_password)
-    val tokenLabel = stringResource(R.string.server_token)
     val passwordToggleDescription = stringResource(
         if (passwordVisible) R.string.server_password_hide else R.string.server_password_show
     )
@@ -197,41 +189,6 @@ fun ServerDialog(
                             .semantics { contentDescription = nameLabel }
                     )
 
-                    val serverTypeOptions = listOf(
-                        ServerType.OPENCODE,
-                        ServerType.CODEX,
-                        ServerType.PI_ROUNDTABLE,
-                        ServerType.PI_STACK,
-                    )
-                    Text(
-                        text = stringResource(R.string.server_type),
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                        serverTypeOptions.forEachIndexed { index, option ->
-                            SegmentedButton(
-                                selected = serverType == option,
-                                onClick = {
-                                    if (server == null && (url == "http://" || url == "ws://" || url == "wss://")) {
-                                        url = if (option == ServerType.CODEX) "wss://" else "http://"
-                                    }
-                                    serverType = option
-                                    urlError = null
-                                },
-                                shape = SegmentedButtonDefaults.itemShape(index = index, count = serverTypeOptions.size),
-                                label = {
-                                    Text(stringResource(when (option) {
-                                            ServerType.OPENCODE -> R.string.server_type_opencode
-                                            ServerType.CODEX -> R.string.server_type_codex
-                                            ServerType.PI_ROUNDTABLE -> R.string.server_type_pi_roundtable
-                                            ServerType.PI_STACK -> R.string.server_type_pi_stack
-                                    }))
-                                },
-                            )
-                        }
-                    }
-
                     OutlinedTextField(
                         value = url,
                         onValueChange = {
@@ -240,14 +197,14 @@ fun ServerDialog(
                         },
                         label = { Text(urlLabel) },
                         placeholder = {
-                            Text(stringResource(if (serverType == ServerType.CODEX) R.string.server_codex_url_hint else R.string.server_url_hint))
+                            Text(stringResource(R.string.server_url_hint))
                         },
                         isError = urlError != null,
                         supportingText = if (urlError != null) {
                             { Text(urlError!!) }
                         } else {
                             {
-                                Text(stringResource(if (serverType == ServerType.CODEX) R.string.server_codex_url_example else R.string.server_url_example))
+                                Text(stringResource(R.string.server_url_example))
                             }
                         },
                         keyboardOptions = KeyboardOptions(
@@ -260,76 +217,45 @@ fun ServerDialog(
                             .semantics { contentDescription = urlLabel }
                     )
 
-                    if (serverType == ServerType.OPENCODE) {
-                        Text(
-                            text = stringResource(R.string.server_authentication_section),
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        OutlinedTextField(
-                            value = username,
-                            onValueChange = { username = it },
-                            label = { Text(usernameLabel) },
-                            placeholder = { Text(stringResource(R.string.server_username_hint)) },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .semantics { contentDescription = usernameLabel }
-                        )
+                    Text(
+                        text = stringResource(R.string.server_authentication_section),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    OutlinedTextField(
+                        value = username,
+                        onValueChange = { username = it },
+                        label = { Text(usernameLabel) },
+                        placeholder = { Text(stringResource(R.string.server_username_hint)) },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .semantics { contentDescription = usernameLabel }
+                    )
 
-                        OutlinedTextField(
-                            value = password,
-                            onValueChange = { password = it },
-                            label = { Text(passwordLabel) },
-                            visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                            keyboardOptions = KeyboardOptions(
-                                keyboardType = KeyboardType.Password,
-                                imeAction = ImeAction.Done
-                            ),
-                            trailingIcon = {
-                                IconButton(onClick = { passwordVisible = !passwordVisible }) {
-                                    Icon(
-                                        imageVector = if (passwordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                                        contentDescription = passwordToggleDescription
-                                    )
-                                }
-                            },
-                            singleLine = true,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .semantics { contentDescription = passwordLabel }
-                        )
-                    } else {
-                        OutlinedTextField(
-                            value = token,
-                            onValueChange = { token = it },
-                            label = {
-                                Text(stringResource(if (serverType == ServerType.CODEX) R.string.server_codex_token else R.string.server_token))
-                            },
-                            placeholder = {
-                                Text(stringResource(if (serverType == ServerType.CODEX) R.string.server_codex_token_hint else R.string.server_token_hint))
-                            },
-                            visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                            trailingIcon = {
-                                IconButton(onClick = { passwordVisible = !passwordVisible }) {
-                                    Icon(
-                                        imageVector = if (passwordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                                        contentDescription = passwordToggleDescription,
-                                    )
-                                }
-                            },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(
-                                keyboardType = KeyboardType.Password,
-                                imeAction = ImeAction.Done,
-                                autoCorrectEnabled = false,
-                            ),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .semantics { contentDescription = tokenLabel }
-                        )
-                    }
+                    OutlinedTextField(
+                        value = password,
+                        onValueChange = { password = it },
+                        label = { Text(passwordLabel) },
+                        visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Password,
+                            imeAction = ImeAction.Done
+                        ),
+                        trailingIcon = {
+                            IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                                Icon(
+                                    imageVector = if (passwordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                    contentDescription = passwordToggleDescription
+                                )
+                            }
+                        },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .semantics { contentDescription = passwordLabel }
+                    )
 
                     Surface(
                         shape = RoundedCornerShape(if (serverType == ServerType.OPENCODE) 8.dp else 12.dp),
@@ -400,8 +326,8 @@ fun ServerDialog(
                                     normalizedUrl,
                                     serverType,
                                     username.ifBlank { "opencode" },
-                                    password.takeIf { serverType == ServerType.OPENCODE },
-                                    token.trim().takeIf { serverType != ServerType.OPENCODE && it.isNotBlank() },
+                                    password.takeIf { it.isNotBlank() },
+                                    null,
                                     autoConnect
                                 )
                             }

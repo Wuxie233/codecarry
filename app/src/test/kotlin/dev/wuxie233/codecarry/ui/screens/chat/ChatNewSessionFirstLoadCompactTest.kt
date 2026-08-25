@@ -4,7 +4,6 @@ import android.content.ContextWrapper
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.lifecycle.SavedStateHandle
 import dev.wuxie233.codecarry.data.api.OpenCodeApi
-import dev.wuxie233.codecarry.data.api.PiApi
 import dev.wuxie233.codecarry.data.preferences.SessionListPreferencesRepository
 import dev.wuxie233.codecarry.data.repository.DraftRepository
 import dev.wuxie233.codecarry.data.repository.EventReducer
@@ -239,19 +238,6 @@ class ChatNewSessionFirstLoadCompactTest {
         return OpenCodeApi(client, json)
     }
 
-    private fun mockPiApi(): PiApi {
-        val engine = MockEngine {
-            respond(
-                content = ByteReadChannel("{}"),
-                status = HttpStatusCode.OK,
-                headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
-            )
-        }
-        val client = HttpClient(engine) {
-            install(ContentNegotiation) { json(json) }
-        }
-        return PiApi(client, json)
-    }
 
     private fun draftRepository(): DraftRepository {
         val filesDir = tmpFolder.newFolder("drafts-${System.nanoTime()}")
@@ -291,7 +277,6 @@ class ChatNewSessionFirstLoadCompactTest {
             savedStateHandle = savedStateHandle,
             eventReducer = eventReducer,
             api = api,
-            piApi = mockPiApi(),
             json = json,
             draftRepository = draftRepository,
             sessionListPreferencesRepository = sessionListPreferencesRepository,

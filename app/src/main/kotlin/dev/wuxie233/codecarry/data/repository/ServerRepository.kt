@@ -7,10 +7,6 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import dev.wuxie233.codecarry.data.api.OpenCodeApi
 import dev.wuxie233.codecarry.data.api.OpenCodeFileNotFoundException
-import dev.wuxie233.codecarry.data.api.PiApi
-import dev.wuxie233.codecarry.data.api.PiConnection
-import dev.wuxie233.codecarry.data.api.PiStackApi
-import dev.wuxie233.codecarry.data.api.PiStackConnection
 import dev.wuxie233.codecarry.data.api.McpRuntimeStatusResult
 import dev.wuxie233.codecarry.data.api.ServerConnection
 import dev.wuxie233.codecarry.domain.model.McpConfig
@@ -23,12 +19,17 @@ import dev.wuxie233.codecarry.domain.model.McpSource
 import dev.wuxie233.codecarry.domain.model.ServerConfig
 import dev.wuxie233.codecarry.domain.model.ServerHealth
 import dev.wuxie233.codecarry.domain.model.ServerType
-import dev.wuxie233.codecarry.domain.model.normalizePiStackControlUrl
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.jsonPrimitive
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -46,9 +47,7 @@ private const val RUNTIME_SOURCE_SENTINEL = "<runtime>"
 class ServerRepository @Inject constructor(
     private val dataStore: DataStore<Preferences>,
     private val api: OpenCodeApi,
-    private val piApi: PiApi,
     private val json: Json,
-    private val piStackApi: PiStackApi? = null,
 ) {
 
     private val serversKey = stringPreferencesKey(SERVERS_KEY)
@@ -56,13 +55,15 @@ class ServerRepository @Inject constructor(
     /**
      * Get all saved servers as Flow
      */
-    val servers: Flow<List<ServerConfig>> = dataStore.data.map { preferences ->
-        val serversJson = preferences[serversKey] ?: "[]"
-        try {
-            json.decodeFromString<List<ServerConfig>>(serversJson)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to decode servers", e)
-            emptyList()
+    val servers: Flow<List<ServerConfig>> = flow {
+        dataStore.data.collect { preferences ->
+            val serversJson = preferences[serversKey] ?: "[]"
+            val (decoded, dropped) = decodePersistedServers(json, serversJson)
+            if (dropped) {
+                saveServers(decoded)
+            } else {
+                emit(decoded)
+            }
         }
     }
 
@@ -86,7 +87,7 @@ class ServerRepository @Inject constructor(
         val server = ServerConfig(
             id = UUID.randomUUID().toString(),
             type = type,
-            url = if (type == ServerType.PI_STACK) normalizePiStackControlUrl(url) else url.trimEnd('/'),
+            url = url.trimEnd('/'),
             username = username,
             password = password,
             token = token,
@@ -109,13 +110,8 @@ class ServerRepository @Inject constructor(
      */
     suspend fun updateServer(server: ServerConfig) {
         val currentServers = servers.firstOrNull() ?: emptyList()
-        val normalizedServer = if (server.type == ServerType.PI_STACK) {
-            server.copy(url = normalizePiStackControlUrl(server.url))
-        } else {
-            server
-        }
         val updatedServers = currentServers.map {
-            if (it.id == server.id) normalizedServer else it
+            if (it.id == server.id) server else it
         }
 
         saveServers(updatedServers)
@@ -145,22 +141,6 @@ class ServerRepository @Inject constructor(
                 ServerType.OPENCODE -> {
                     val conn = ServerConnection.from(server.url, server.username, server.password)
                     api.getHealth(conn)
-                }
-
-                ServerType.CODEX -> {
-                    throw IllegalStateException("Codex health is managed by CodexConnectionManager")
-                }
-
-                ServerType.PI_ROUNDTABLE -> {
-                    val conn = PiConnection.from(server.url, server.token)
-                    piApi.listRoundtables(conn)
-                    ServerHealth(healthy = true)
-                }
-
-                ServerType.PI_STACK -> {
-                    val conn = PiStackConnection.from(server.url, server.token)
-                    requireNotNull(piStackApi) { "Pi Stack API is unavailable" }.getCapabilities(conn)
-                    ServerHealth(healthy = true, version = "1")
                 }
             }
 
@@ -493,6 +473,35 @@ class ServerRepository @Inject constructor(
 
         return rememberedEmpty ?: McpConfigLoadState.NotFound(candidateReads.map { it.path })
     }
+}
+
+
+internal fun decodePersistedServers(json: Json, serversJson: String): Pair<List<ServerConfig>, Boolean> {
+    val element = runCatching { json.parseToJsonElement(serversJson) }.getOrElse {
+        return emptyList<ServerConfig>() to (serversJson.isNotBlank() && serversJson != "[]")
+    }
+    val array = element as? JsonArray ?: return emptyList<ServerConfig>() to true
+    val kept = mutableListOf<ServerConfig>()
+    var dropped = false
+    for (item in array) {
+        val obj = item as? JsonObject
+        if (obj == null) {
+            dropped = true
+            continue
+        }
+        val typeName = obj["type"]?.jsonPrimitive?.contentOrNull ?: ServerType.OPENCODE.name
+        if (typeName != ServerType.OPENCODE.name) {
+            dropped = true
+            continue
+        }
+        val decoded = runCatching { json.decodeFromJsonElement(ServerConfig.serializer(), item) }.getOrNull()
+        if (decoded == null) {
+            dropped = true
+            continue
+        }
+        kept += decoded
+    }
+    return kept to dropped
 }
 
 class McpAuthRequiredException(

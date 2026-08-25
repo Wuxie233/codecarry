@@ -3,7 +3,4 @@
     <cache-path
         name="app_updates"
         path="app-updates/" />
-    <cache-path
-        name="roundtable_summary"
-        path="roundtable-summary/" />
 </paths>

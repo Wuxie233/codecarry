@@ -1,7 +1,5 @@
 package dev.wuxie233.codecarry.ui.screens.home
 
-import dev.wuxie233.codecarry.data.api.PiStackApiErrorKind
-import dev.wuxie233.codecarry.data.api.PiStackApiException
 import dev.wuxie233.codecarry.data.api.ProviderCatalogResponse
 import dev.wuxie233.codecarry.data.api.ProviderInfo
 import dev.wuxie233.codecarry.data.api.ProviderModel
@@ -25,54 +23,6 @@ class HomeViewModelTest {
     @Test
     fun `connection service intent contains only server identity`() {
         assertEquals(setOf("server_id"), serverConnectionIntentExtraKeys)
-    }
-
-    @Test
-    fun `Codex endpoints require TLS outside loopback`() {
-        assertEquals("wss://codex.example.com", validateAndNormalizeUrl("codex.example.com", ServerType.CODEX))
-        assertEquals("ws://127.0.0.1:8765", validateAndNormalizeUrl("ws://127.0.0.1:8765", ServerType.CODEX))
-        assertEquals("ws://localhost:8765", validateAndNormalizeUrl("ws://localhost:8765", ServerType.CODEX))
-        assertEquals(null, validateAndNormalizeUrl("ws://192.168.1.20:8765", ServerType.CODEX))
-    }
-
-    @Test
-    fun `Pi Stack origin URLs use control endpoint while custom paths are preserved`() {
-        assertEquals(
-            "https://pi.example.test/control",
-            validateAndNormalizeUrl("https://pi.example.test/", ServerType.PI_STACK),
-        )
-        assertEquals(
-            "https://pi.example.test/custom-control",
-            validateAndNormalizeUrl("https://pi.example.test/custom-control/", ServerType.PI_STACK),
-        )
-    }
-
-    @Test
-    fun `health check auth failure surfaces authentication error instead of generic not responding`() {
-        val authError = PiStackApiException(
-            kind = PiStackApiErrorKind.Auth,
-            message = "Bearer authentication failed.",
-            status = 401,
-            code = "auth_invalid",
-        )
-
-        assertEquals(
-            "Authentication failed. Check the access token.",
-            healthCheckErrorMessage(authError),
-        )
-    }
-
-    @Test
-    fun `health check protocol failure surfaces protocol message`() {
-        val protocolError = PiStackApiException(
-            kind = PiStackApiErrorKind.Protocol,
-            message = "capabilities protocolVersion is not 1",
-        )
-
-        assertEquals(
-            "capabilities protocolVersion is not 1",
-            healthCheckErrorMessage(protocolError),
-        )
     }
 
     @Test

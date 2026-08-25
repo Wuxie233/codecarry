@@ -128,7 +128,6 @@ import dev.wuxie233.codecarry.data.api.PromptPart
 import dev.wuxie233.codecarry.data.api.ProviderInfo
 import dev.wuxie233.codecarry.data.api.ProviderModel
 import dev.wuxie233.codecarry.MainActivity
-import dev.wuxie233.codecarry.domain.transport.PiTransportEvent
 import dev.wuxie233.codecarry.ui.theme.CodeTypography
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
@@ -255,44 +254,6 @@ internal data class PiInShortContent(
     val highlight: String?,
     val markdown: String,
 )
-
-private data class RoundtableComposerSuggestion(
-    val id: String,
-    val title: String,
-    val subtitle: String,
-    val insertText: String,
-)
-
-private fun buildRoundtableComposerSuggestions(
-    query: String,
-    roster: List<Roundtable.RoleSummary>,
-): List<RoundtableComposerSuggestion> {
-    val normalizedQuery = query.trim().lowercase()
-    val roleSuggestions = roster.map { role ->
-        val roleLabel = listOf(role.name, role.role)
-            .filter { it.isNotBlank() }
-            .joinToString(" · ")
-        RoundtableComposerSuggestion(
-            id = "role:${role.id}",
-            title = "@${role.name}",
-            subtitle = role.role.ifBlank { roleLabel },
-            insertText = "@${role.name} ",
-        )
-    }
-    val actionSuggestions = listOf(
-        RoundtableComposerSuggestion("action:continue", "Continue", "Ask the moderator to advance", "Please continue the roundtable discussion."),
-        RoundtableComposerSuggestion("action:deepen", "Deepen", "Ask for more detail", "Please go deeper on the current disagreement."),
-        RoundtableComposerSuggestion("action:stop", "Stop", "Ask the moderator to close", "Please stop the roundtable and summarize."),
-        RoundtableComposerSuggestion("action:summarize", "Summarize", "Ask for consensus and disagreements", "Please summarize the current consensus, disagreements, and next step."),
-    )
-    return (roleSuggestions + actionSuggestions)
-        .filter { suggestion ->
-            normalizedQuery.isEmpty() ||
-                suggestion.title.lowercase().contains(normalizedQuery) ||
-                suggestion.subtitle.lowercase().contains(normalizedQuery)
-        }
-        .take(10)
-}
 
 internal fun piSenderIdentity(message: Message.Assistant?): PiSenderIdentity? {
     if (message == null) return null
@@ -1273,7 +1234,7 @@ fun ChatScreen(
     var actionMenuMessage by remember { mutableStateOf<ChatMessage?>(null) }
     var restoreConfirmMessage by remember { mutableStateOf<ChatMessage?>(null) }
     var forkFromMessageInFlight by remember { mutableStateOf(false) }
-    var isTerminalMode by rememberSaveable { mutableStateOf(startInTerminalMode && !uiState.isPiStack) }
+    var isTerminalMode by rememberSaveable { mutableStateOf(startInTerminalMode ) }
     var terminalCtrlLatched by rememberSaveable { mutableStateOf(false) }
     var terminalAltLatched by rememberSaveable { mutableStateOf(false) }
     var terminalVirtualCtrlDown by remember { mutableStateOf(false) }
@@ -1326,23 +1287,7 @@ fun ChatScreen(
     // Pending send action: stored so the confirm dialog can trigger it
     var pendingSendAction by remember { mutableStateOf<(() -> Unit)?>(null) }
     var inputMode by rememberSaveable { mutableStateOf(ChatInputMode.NORMAL.name) }
-    val isShellMode = !uiState.isPiStack && inputMode == ChatInputMode.SHELL.name
-    var roundtablePendingCommand by remember { mutableStateOf<String?>(null) }
-    var roundtableSupplementMode by remember { mutableStateOf(false) }
-
-    fun submitRoundtableCommand(key: String, block: ((Boolean) -> Unit) -> Unit) {
-        if (roundtablePendingCommand != null) return
-        roundtablePendingCommand = key
-        block { roundtablePendingCommand = null }
-    }
-
-    LaunchedEffect(uiState.isPiStack) {
-        if (uiState.isPiStack) {
-            isTerminalMode = false
-            inputMode = ChatInputMode.NORMAL.name
-            showSubagentDrawer = false
-        }
-    }
+    val isShellMode = inputMode == ChatInputMode.SHELL.name
 
 
     BackHandler(enabled = isTerminalMode) {
@@ -1818,28 +1763,11 @@ fun ChatScreen(
 
 
     val messageCount = uiState.messages.size
-    var collapsedRoundNumbers by remember { mutableStateOf<Set<Int>>(emptySet()) }
-    val roundMarkers = remember(uiState.roundtableEvents) { buildRoundMarkers(uiState.roundtableEvents) }
-    val messageRoundNumbers = remember(uiState.messages, roundMarkers) { mapMessageRounds(uiState.messages, roundMarkers) }
     val markdownPlanningState = remember { ChatMessageRowPlanningState() }
     val messageRows = remember(uiState.messages) {
         planChatMessageRows(uiState.messages, markdownPlanningState)
     }
 
-    fun jumpToRoundtableRound(roundNumber: Int) {
-        coroutineScope.launch {
-            val itemIndex = timelineIndexForRound(
-                roundNumber = roundNumber,
-                hasOlderMessages = uiState.hasOlderMessages,
-                hasRoster = uiState.isPiRoundtable,
-                roundMarkers = roundMarkers,
-                messages = uiState.messages,
-                rows = messageRows,
-            )
-            listState.animateScrollToItem(itemIndex.coerceAtLeast(0))
-            followTailState = ChatFollowTailPolicy.onManualNavigation(followTailState)
-        }
-    }
     val autoFollowTarget = remember(uiState.messages, messageRows) {
         chatAutoFollowTarget(uiState.messages, messageRows)
     }
@@ -1847,9 +1775,9 @@ fun ChatScreen(
     val isBusy = uiState.sessionStatus is SessionStatus.Busy
     val sessionBusyForMessageActions = uiState.sessionStatus !is SessionStatus.Idle || uiState.isSending || forkFromMessageInFlight
     val sessionReadyForMessageActions = !uiState.isLoading &&
-        (uiState.isPiRoundtable || uiState.error == null) &&
+        (uiState.error == null) &&
         viewModel.sessionId.isNotBlank() &&
-        (!uiState.isPiStack || uiState.supportsFork)
+        (!uiState.supportsFork)
     LaunchedEffect(messageCount, autoFollowTarget) {
         val transition = ChatFollowTailPolicy.onContentChanged(
             state = followTailState,
@@ -1872,8 +1800,8 @@ fun ChatScreen(
     val runningSubagentCount = uiState.subagents.count(ChatSubagentItem::isRunning)
     val showSubagentContext = showSubagentDrawer &&
         !isTerminalMode &&
-        !uiState.isPiRoundtable &&
-        !uiState.isPiStack
+        
+        true
     ChatAdaptiveShell(
         windowSizeClass = windowSizeClass,
         contextVisible = showSubagentContext,
@@ -1891,13 +1819,7 @@ fun ChatScreen(
                         add(stringResource(R.string.chat_cost_format, String.format("%.4f", uiState.totalCost)))
                     }
                 }
-                val backendLabel = stringResource(
-                    when {
-                        uiState.isPiRoundtable -> R.string.server_type_pi_roundtable
-                        uiState.isPiStack -> R.string.server_type_pi_stack
-                        else -> R.string.server_type_opencode
-                    },
-                )
+                val backendLabel = stringResource(R.string.server_type_opencode)
                 val statusLabel = stringResource(
                     when (uiState.sessionStatus) {
                         is SessionStatus.Idle -> R.string.session_status_idle
@@ -1905,7 +1827,7 @@ fun ChatScreen(
                         is SessionStatus.Retry -> R.string.sessions_retrying
                     },
                 )
-                val showOverflow = !uiState.isPiStack || uiState.supportsSessionCreate || uiState.supportsFork ||
+                val showOverflow = !uiState.supportsSessionCreate || uiState.supportsFork ||
                     uiState.supportsCompact || uiState.supportsCommands || uiState.supportsRename
                 ChatHeader(
                     title = uiState.sessionTitle,
@@ -1914,9 +1836,9 @@ fun ChatScreen(
                     statusLabel = statusLabel,
                     usageSummary = usageParts.takeIf { it.isNotEmpty() }?.joinToString(" · "),
                     canStop = uiState.sessionStatus.isInterruptible && uiState.supportsAbort,
-                    showSubagents = !uiState.isPiRoundtable && !uiState.isPiStack,
+                    showSubagents = true,
                     runningSubagentCount = runningSubagentCount,
-                    showTerminal = !uiState.isPiStack,
+                    showTerminal = true,
                     showOverflow = showOverflow,
                     onNavigateBack = onNavigateBack,
                     onStop = { viewModel.abortSession() },
@@ -1933,9 +1855,9 @@ fun ChatScreen(
                         ) {
                             ChatHeaderCompactOverflowActions(
                                 density = headerDensity,
-                                showSubagents = !uiState.isPiRoundtable && !uiState.isPiStack,
+                                showSubagents = true,
                                 runningSubagentCount = runningSubagentCount,
-                                showTerminal = !uiState.isPiStack,
+                                showTerminal = true,
                                 onToggleSubagents = {
                                     showMenu = false
                                     showSubagentDrawer = !showSubagentDrawer
@@ -1945,7 +1867,7 @@ fun ChatScreen(
                                     isTerminalMode = true
                                 },
                             )
-                            if (!uiState.isPiStack) DropdownMenuItem(
+                            if (true) DropdownMenuItem(
                                 text = { Text(stringResource(R.string.menu_copy_web_link)) },
                                 onClick = {
                                     showMenu = false
@@ -2029,7 +1951,7 @@ fun ChatScreen(
                                     Icon(Icons.Default.RateReview, contentDescription = null)
                                 },
                             )
-                            if (!uiState.isPiStack) {
+                            if (true) {
                             // Show Share or Unshare depending on current share status
                             if (uiState.shareUrl != null) {
                                 DropdownMenuItem(
@@ -2095,7 +2017,7 @@ fun ChatScreen(
                                     Icon(Icons.Default.Edit, contentDescription = null)
                                 }
                             )
-                            if (!uiState.isPiStack) DropdownMenuItem(
+                            if (true) DropdownMenuItem(
                                 text = { Text(stringResource(R.string.menu_export_session)) },
                                 onClick = {
                                     showMenu = false
@@ -2122,18 +2044,14 @@ fun ChatScreen(
             } else ""
 
             if (!isTerminalMode) {
-                val composerIsSending = uiState.isSending &&
-                    (uiState.isPiStack || uiState.isPiRoundtable || isShellMode)
+                val composerIsSending = uiState.isSending && isShellMode
                 val sendDisabledReasonResId = when {
                     composerIsSending -> R.string.chat_send_disabled_sending
-                    (uiState.isPiStack && !uiState.supportsPrompt) ||
-                        viewModel.sessionId.isBlank() || (isShellMode && isBusy) -> R.string.chat_send_disabled_not_ready
+                    viewModel.sessionId.isBlank() || (isShellMode && isBusy) -> R.string.chat_send_disabled_not_ready
                     else -> null
                 }
                 val responseDockItems = buildChatResponseDockItems(
                     hasRetry = uiState.sessionStatus is SessionStatus.Retry,
-                    roundtableStatus = uiState.roundtable?.status,
-                    hasAwaitingSkip = uiState.runState.awaitingSkip != null,
                     permissionIds = uiState.pendingPermissions.map { it.id },
                     questionIds = uiState.pendingQuestions.map { it.id },
                 )
@@ -2148,18 +2066,6 @@ fun ChatScreen(
                                     isRetryingNow = uiState.isRetryingNow,
                                     onRetryNow = { viewModel.retrySessionNow() },
                                     onStop = { viewModel.abortSession() },
-                                    modifier = Modifier.padding(horizontal = 12.dp),
-                                )
-                            }
-                            ChatResponseDockKind.Roundtable -> if (uiState.isPiRoundtable) {
-                                RoundtableContextControls(
-                                    status = uiState.roundtable?.status,
-                                    awaitingSkip = uiState.runState.awaitingSkip,
-                                    pendingCommand = roundtablePendingCommand,
-                                    supplementActive = roundtableSupplementMode,
-                                    onContinue = { submitRoundtableCommand("continue") { onDone -> viewModel.continueRoundtable(onDone) } },
-                                    onSkip = { submitRoundtableCommand("skip") { onDone -> viewModel.skipAwaitingPersona(onDone) } },
-                                    onSupplement = { roundtableSupplementMode = !roundtableSupplementMode },
                                     modifier = Modifier.padding(horizontal = 12.dp),
                                 )
                             }
@@ -2190,7 +2096,7 @@ fun ChatScreen(
                         ChatInputBar(
                 textFieldValue = inputText,
                 onTextFieldValueChange = { newValue ->
-                    val shouldAutoShell = !uiState.isPiStack && !isShellMode && newValue.text.startsWith("!")
+                    val shouldAutoShell =  !isShellMode && newValue.text.startsWith("!")
                     val normalizedValue = if (shouldAutoShell) {
                         val stripped = newValue.text.drop(1).trimStart()
                         val newCursor = (newValue.selection.start - 1).coerceAtLeast(0)
@@ -2215,7 +2121,7 @@ fun ChatScreen(
                     val cursorPos = normalizedValue.selection.start
                     val textBefore = normalizedValue.text.substring(0, cursorPos)
                     val atMatch = Regex("@(\\S*)$").find(textBefore)
-                    if (atMatch != null && !uiState.isPiRoundtable && !uiState.isPiStack) {
+                    if (atMatch != null && true) {
                         val query = atMatch.groupValues[1]
                         viewModel.searchFilesForMention(query)
                     } else {
@@ -2288,44 +2194,6 @@ fun ChatScreen(
                             }
                             return@doSend
                         }
-                        if (uiState.isPiRoundtable && roundtableSupplementMode) {
-                            val supplementText = rawText.trim()
-                            if (supplementText.isBlank()) {
-                                coroutineScope.launch {
-                                    snackbarHostState.showSnackbar(context.getString(R.string.chat_pi_supplement_empty))
-                                }
-                                return@doSend
-                            }
-                            if (attachments.isNotEmpty()) {
-                                coroutineScope.launch {
-                                    snackbarHostState.showSnackbar(context.getString(R.string.chat_pi_supplement_attachments_unsupported))
-                                }
-                                return@doSend
-                            }
-                            if (roundtablePendingCommand != null) {
-                                coroutineScope.launch {
-                                    snackbarHostState.showSnackbar(context.getString(R.string.chat_pi_supplement_pending))
-                                }
-                                return@doSend
-                            }
-                            submitRoundtableCommand("supplement") { onDone ->
-                                viewModel.supplementRoundtableGuidance(supplementText) { ok ->
-                                    onDone(ok)
-                                    if (ok) {
-                                        inputText = TextFieldValue("")
-                                        roundtableSupplementMode = false
-                                        viewModel.clearConfirmedPaths()
-                                        viewModel.clearFileSearch()
-                                        viewModel.clearDraft()
-                                    } else {
-                                        coroutineScope.launch {
-                                            snackbarHostState.showSnackbar(context.getString(R.string.chat_send_failed_draft_kept))
-                                        }
-                                    }
-                                }
-                            }
-                            return@doSend
-                        }
                         // Build prompt parts: split text around confirmed @file mentions
                         val allParts = buildPromptParts(rawText, confirmedFilePaths, viewModel.getSessionDirectory())
                         // Add image attachments
@@ -2375,7 +2243,7 @@ fun ChatScreen(
                 sendDisabledReasonResId = sendDisabledReasonResId,
                 messages = uiState.messages,
                 attachments = if (uiState.supportsAttachments) attachments else emptyList(),
-                onAttach = { imagePickerLauncher.launch(if (uiState.isPiStack) "*/*" else "image/*") },
+                onAttach = { imagePickerLauncher.launch("image/*") },
                 supportsAttachments = uiState.supportsAttachments,
                 onRemoveAttachment = { index ->
                     if (index in attachments.indices) {
@@ -2389,7 +2257,7 @@ fun ChatScreen(
                 modelLabel = if (uiState.supportsModelSelection) modelLabel else "",
                 selectedProviderId = uiState.selectedProviderId,
                 onModelClick = { showModelPicker = true },
-                agents = if (uiState.isPiStack) emptyList() else uiState.agents,
+                agents = uiState.agents,
                 selectedAgent = uiState.selectedAgent,
                 onAgentClick = { showAgentPicker = true },
                 variantNames = if (uiState.supportsThinkingSelection) uiState.variantNames else emptyList(),
@@ -2517,10 +2385,6 @@ fun ChatScreen(
                         }
                     }
                 },
-                isPiRoundtable = uiState.isPiRoundtable,
-                isPiStack = uiState.isPiStack,
-                activeRoster = uiState.activeRoster,
-                roundtableSupplementMode = roundtableSupplementMode,
                 contextWindow = uiState.contextWindow,
                 lastContextTokens = uiState.lastContextTokens
             )
@@ -2846,7 +2710,7 @@ fun ChatScreen(
                         )
                     }
                 }
-                !uiState.isPiRoundtable && uiState.error != null && uiState.messages.isEmpty() -> {
+                 uiState.error != null && uiState.messages.isEmpty() -> {
                     Column(
                         modifier = Modifier
                             .align(Alignment.Center)
@@ -2935,19 +2799,6 @@ fun ChatScreen(
                             }
                         }
 
-                        if (uiState.isPiRoundtable) {
-                            item(key = "roundtable_roster_strip") {
-                                Box(modifier = Modifier.padding(bottom = messageSpacing)) {
-                                    RoundtableCompactRosterStrip(
-                                        roster = uiState.activeRoster,
-                                        roleStates = uiState.runState.roleStates,
-                                        status = uiState.roundtable?.status,
-                                        modifier = Modifier,
-                                    )
-                                }
-                            }
-                        }
-
                         itemsIndexed(
                             messageRows,
                             key = { _, row -> row.key }
@@ -2958,24 +2809,6 @@ fun ChatScreen(
                                 messageRow.position == ChatMessageSegmentPosition.First
                             val nextBelongsToSameMessage = messageRows.getOrNull(rowIndex + 1)
                                 ?.chatMessage?.message?.id == chatMessage.message.id
-                            val roundNumber = messageRoundNumbers[chatMessage.message.id]
-                            val previousRoundNumber = uiState.messages.getOrNull(index - 1)?.message?.id?.let { messageRoundNumbers[it] }
-                            if (isFirstMessageRow && uiState.isPiRoundtable && roundNumber != null && roundNumber != previousRoundNumber) {
-                                RoundDivider(
-                                    roundNumber = roundNumber,
-                                    isCollapsed = roundNumber in collapsedRoundNumbers,
-                                    onToggle = {
-                                        collapsedRoundNumbers = if (roundNumber in collapsedRoundNumbers) {
-                                            collapsedRoundNumbers - roundNumber
-                                        } else {
-                                            collapsedRoundNumbers + roundNumber
-                                        }
-                                    },
-                                )
-                            }
-                            if (roundNumber != null && roundNumber in collapsedRoundNumbers) {
-                                return@itemsIndexed
-                            }
                             // Detect compaction trigger messages (user messages with Part.Compaction)
                             val isCompactionTrigger = isFirstMessageRow && chatMessage.isUser &&
                                 chatMessage.parts.any { it is Part.Compaction }
@@ -3143,7 +2976,7 @@ fun ChatScreen(
         },
     )
 
-    if (!showSubagentDrawer && !isTerminalMode && !uiState.isPiRoundtable && !uiState.isPiStack) {
+    if (!showSubagentDrawer && !isTerminalMode && true) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -3205,7 +3038,7 @@ fun ChatScreen(
     if (showVariantPicker) {
         val defaultKey = "__default__"
         val options = buildList {
-            if (!uiState.isPiStack) {
+            if (true) {
                 add(
                     ChoicePickerOption(
                         key = defaultKey,
@@ -3227,7 +3060,7 @@ fun ChatScreen(
             options = options,
             selectedKey = uiState.selectedVariant ?: options.firstOrNull()?.key.orEmpty(),
             onSelect = {
-                viewModel.selectVariant(if (uiState.isPiStack) it else it.takeUnless { key -> key == defaultKey })
+                viewModel.selectVariant(it.takeUnless { key -> key == defaultKey })
                 showVariantPicker = false
             },
             onDismiss = { showVariantPicker = false },
@@ -3244,8 +3077,8 @@ fun ChatScreen(
                 selectedMessageStreaming = selectedMessageStreaming,
                 sessionBusy = sessionBusyForMessageActions,
                 sessionReady = sessionReadyForMessageActions,
-                supportsFork = !uiState.isPiStack || uiState.supportsFork,
-                supportsRestore = !uiState.isPiStack,
+                supportsFork = !uiState.supportsFork,
+                supportsRestore = true,
             ),
             onActionSelected = { action ->
                 actionMenuMessage = null
@@ -7368,10 +7201,6 @@ private fun ChatInputBar(
     onSlashCommand: (SlashCommand) -> Unit = {},
     inputMode: ChatInputMode = ChatInputMode.NORMAL,
     onInputModeChange: (ChatInputMode) -> Unit = {},
-    isPiRoundtable: Boolean = false,
-    isPiStack: Boolean = false,
-    roundtableSupplementMode: Boolean = false,
-    activeRoster: List<Roundtable.RoleSummary> = emptyList(),
     contextWindow: Int = 0,
     lastContextTokens: Int = 0,
     modifier: Modifier = Modifier,
@@ -7388,8 +7217,6 @@ private fun ChatInputBar(
     }
     val placeholder = when {
         isShellMode -> stringResource(R.string.chat_shell_placeholder)
-        isPiRoundtable && roundtableSupplementMode -> stringResource(R.string.chat_pi_supplement_hint)
-        isPiRoundtable -> stringResource(R.string.chat_pi_speak_hint)
         else -> stringResource(placeholderHintResIds[hintIndex.intValue])
     }
 
@@ -7404,12 +7231,8 @@ private fun ChatInputBar(
 
     // Build merged slash commands: client commands + server commands (deduplicated)
     val clientCmds = clientCommands()
-    val allCommands = remember(commands, clientCmds, isPiStack) {
-        if (isPiStack) {
-            commands.map { SlashCommand(it.name.removePrefix("/"), it.description, "server", it.source) }
-        } else {
-            mergeSlashCommands(clientCmds, commands)
-        }
+    val allCommands = remember(commands, clientCmds) {
+        mergeSlashCommands(clientCmds, commands)
     }
 
     // Slash command suggestions
@@ -7422,14 +7245,6 @@ private fun ChatInputBar(
     } else emptyList()
     val cursorPos = textFieldValue.selection.start.coerceIn(0, text.length)
     val textBeforeCursor = text.substring(0, cursorPos)
-    val roundtableAtMatch = if (!isShellMode && isPiRoundtable) {
-        Regex("@(\\S*)$").find(textBeforeCursor)
-    } else {
-        null
-    }
-    val roundtableComposerSuggestions = roundtableAtMatch
-        ?.let { match -> buildRoundtableComposerSuggestions(match.groupValues[1], activeRoster) }
-        ?: emptyList()
 
     Column(
         modifier = modifier
@@ -7522,63 +7337,6 @@ private fun ChatInputBar(
                                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                                 )
                             }
-                        }
-                    }
-                }
-            }
-        }
-
-        AnimatedVisibility(
-            visible = roundtableComposerSuggestions.isNotEmpty(),
-            enter = fadeIn(),
-            exit = fadeOut()
-        ) {
-            val configuration = LocalConfiguration.current
-            val maxHeight = (configuration.screenHeightDp * 0.4f).dp
-
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = maxHeight)
-                    .background(if (isAmoled) Color.Black else MaterialTheme.colorScheme.surfaceContainerHigh)
-                    .padding(vertical = 4.dp)
-            ) {
-                items(roundtableComposerSuggestions, key = { it.id }) { suggestion ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                val matchStart = roundtableAtMatch?.range?.first ?: cursorPos
-                                val replacement = suggestion.insertText
-                                val newText = text.substring(0, matchStart) + replacement + text.substring(cursorPos)
-                                val newCursor = matchStart + replacement.length
-                                onTextFieldValueChange(TextFieldValue(newText, TextRange(newCursor)))
-                            }
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Groups,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp),
-                            tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
-                        )
-                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            Text(
-                                text = suggestion.title,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Text(
-                                text = suggestion.subtitle,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
                         }
                     }
                 }
@@ -7742,7 +7500,7 @@ private fun ChatInputBar(
             verticalArrangement = Arrangement.spacedBy(2.dp)
         ) {
             // Agent + Model + Variant + Attach selector row — small, subtle
-            if (!isPiRoundtable && (modelLabel.isNotEmpty() || agents.size > 1 || variantNames.isNotEmpty() || supportsAttachments)) {
+            if (modelLabel.isNotEmpty() || agents.size > 1 || variantNames.isNotEmpty() || supportsAttachments) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -7998,52 +7756,6 @@ private fun ChatInputBar(
                 }
             }
 
-            AnimatedVisibility(
-                visible = isPiRoundtable && roundtableSupplementMode,
-                enter = fadeIn(),
-                exit = fadeOut(),
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 4.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(
-                            if (isAmoled) {
-                                Color.Black
-                            } else {
-                                MaterialTheme.colorScheme.surfaceContainerHigh
-                            }
-                        )
-                        .then(
-                            if (isAmoled) {
-                                Modifier.border(
-                                    width = 1.dp,
-                                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
-                                    shape = RoundedCornerShape(10.dp),
-                                )
-                            } else {
-                                Modifier
-                            }
-                        )
-                        .padding(horizontal = 10.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.EditNote,
-                        contentDescription = null,
-                        modifier = Modifier.size(14.dp),
-                        tint = MaterialTheme.colorScheme.primary,
-                    )
-                    Text(
-                        text = stringResource(R.string.chat_pi_supplement_hint),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-
             // Input row
             Row(
                 verticalAlignment = Alignment.Bottom,
@@ -8201,380 +7913,6 @@ private fun ChatInputBar(
                 )
             }
         }
-    }
-}
-
-private data class RoundMarker(
-    val roundNumber: Int,
-    val sequence: Long,
-)
-
-private fun buildRoundMarkers(events: List<PiTransportEvent>): List<RoundMarker> {
-    return events.filterIsInstance<PiTransportEvent.RoundStart>()
-        .sortedBy { it.envelope.sequence }
-        .mapIndexed { index, event -> RoundMarker(roundNumber = index + 1, sequence = event.envelope.sequence) }
-}
-
-private fun mapMessageRounds(
-    messages: List<ChatMessage>,
-    markers: List<RoundMarker>,
-): Map<String, Int> {
-    if (markers.isEmpty()) return emptyMap()
-    return messages.associate { message ->
-        val created = message.message.time.created
-        val round = markers.lastOrNull { marker -> marker.sequence <= created }?.roundNumber ?: markers.first().roundNumber
-        message.message.id to round
-    }
-}
-
-private fun timelineIndexForRound(
-    roundNumber: Int,
-    hasOlderMessages: Boolean,
-    hasRoster: Boolean,
-    roundMarkers: List<RoundMarker>,
-    messages: List<ChatMessage>,
-    rows: List<ChatMessageRow>,
-): Int {
-    val marker = roundMarkers.firstOrNull { it.roundNumber == roundNumber }
-        ?: return timelineLeadingItemCount(hasOlderMessages, hasRoster)
-    val messageIndex = messages.indexOfFirst { it.message.time.created >= marker.sequence }.coerceAtLeast(0)
-    return timelineIndexForMessage(rows, messageIndex, hasOlderMessages, hasRoster)
-}
-
-@Composable
-private fun RoundtableContextControls(
-    status: Roundtable.Status?,
-    awaitingSkip: PiTransportEvent.AwaitingSkip?,
-    pendingCommand: String?,
-    supplementActive: Boolean,
-    onContinue: () -> Unit,
-    onSkip: () -> Unit,
-    onSupplement: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val actions = roundtableDockActions(status, awaitingSkip != null)
-    if (actions.isEmpty()) return
-
-    Column(
-        modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        if (RoundtableDockAction.Skip in actions && awaitingSkip != null) {
-            RoundtableSkipBanner(
-                awaitingSkip = awaitingSkip,
-                pendingCommand = pendingCommand,
-                onSkip = onSkip,
-            )
-        }
-        if (RoundtableDockAction.Continue in actions) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                val supplementColors = if (supplementActive) {
-                    ButtonDefaults.filledTonalButtonColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = MaterialTheme.colorScheme.onPrimary,
-                    )
-                } else {
-                    ButtonDefaults.filledTonalButtonColors()
-                }
-                FilledTonalButton(
-                    onClick = onSupplement,
-                    enabled = pendingCommand == null,
-                    colors = supplementColors,
-                    modifier = Modifier.heightIn(min = 48.dp),
-                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
-                ) {
-                    Icon(Icons.Default.EditNote, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text(stringResource(R.string.chat_pi_supplement))
-                }
-                FilledTonalButton(
-                    onClick = onContinue,
-                    enabled = pendingCommand == null,
-                    modifier = Modifier.heightIn(min = 48.dp),
-                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
-                ) {
-                    Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text(stringResource(R.string.chat_pi_continue_short))
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun RoundtableSkipBanner(
-    awaitingSkip: PiTransportEvent.AwaitingSkip,
-    pendingCommand: String?,
-    onSkip: () -> Unit,
-) {
-    val isAmoled = isAmoledTheme()
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(14.dp),
-        color = if (isAmoled) Color.Black else MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.72f),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = if (isAmoled) 0.62f else 0.32f)),
-        tonalElevation = if (isAmoled) 0.dp else 1.dp,
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Icon(
-                Icons.Default.ReportProblem,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.error,
-                modifier = Modifier.size(18.dp),
-            )
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(
-                    text = stringResource(R.string.chat_pi_skip_waiting_title, awaitingSkip.personaId),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = if (isAmoled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onErrorContainer,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = awaitingSkip.reason,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (isAmoled) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.82f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            TextButton(
-                onClick = onSkip,
-                enabled = pendingCommand == null,
-                modifier = Modifier.heightIn(min = 48.dp),
-            ) { Text(stringResource(R.string.chat_pi_skip_action)) }
-        }
-    }
-}
-
-@Composable
-private fun RoundtableCompactRosterStrip(
-    roster: List<Roundtable.RoleSummary>,
-    roleStates: List<PiRoleRunState>,
-    status: Roundtable.Status?,
-    modifier: Modifier = Modifier,
-) {
-    val isAmoled = isAmoledTheme()
-    val statusLabel = stringResource(roundtableChatStatusLabelRes(status ?: Roundtable.Status.Unknown))
-    val activeRole = roleStates.firstOrNull { role -> role.liveState != PiRoleLiveState.Idle }
-    Surface(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        color = if (isAmoled) Color.Black else MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.72f),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isAmoled) 0.65f else 0.28f)),
-        tonalElevation = if (isAmoled) 0.dp else 1.dp,
-    ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                LazyRow(
-                    modifier = Modifier.weight(1f),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    items(roster, key = { it.id }) { role ->
-                        RoundtableRosterAvatar(
-                            role = role,
-                            runState = roleStates.firstOrNull { it.personaId == role.id },
-                        )
-                    }
-                }
-                Surface(
-                    shape = RoundedCornerShape(999.dp),
-                    color = roundtableStatusContainerColor(status, isAmoled),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isAmoled) 0.58f else 0.22f)),
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(7.dp)
-                                .background(roundtableStatusColor(status), CircleShape),
-                        )
-                        Text(
-                            text = statusLabel,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-            }
-            activeRole?.let { role ->
-                val label = roundtableRoleStateLabelText(role)
-                if (label != null) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(start = 12.dp, end = 12.dp, bottom = 9.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        PulsingDotsIndicator(dotSize = 4.dp, dotSpacing = 3.dp, color = roundtableRoleStateColor(role))
-                        Text(
-                            text = stringResource(R.string.chat_pi_role_state, role.name, label),
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun RoundtableRosterAvatar(
-    role: Roundtable.RoleSummary,
-    runState: PiRoleRunState?,
-) {
-    val accent = piSenderAccentColor(PiSenderIdentity(role.id, role.name, null, role.role, role.colorSeed))
-    val hasState = runState != null && roundtableRoleHasIndicator(runState)
-    val liveState = runState?.liveState ?: PiRoleLiveState.Idle
-    val isLive = liveState != PiRoleLiveState.Idle
-    Box(
-        modifier = Modifier.size(36.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Surface(
-            modifier = Modifier.fillMaxSize(),
-            shape = CircleShape,
-            color = accent.copy(alpha = if (isLive) 0.28f else 0.18f),
-            border = BorderStroke(if (isLive) 2.dp else 1.dp, accent.copy(alpha = if (isLive) 0.95f else 0.6f)),
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Text(
-                    text = role.name.firstOrNull()?.uppercaseChar()?.toString() ?: "?",
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = accent,
-                    maxLines = 1,
-                )
-            }
-        }
-        if (runState != null && hasState) {
-            val stateColor = roundtableRoleStateColor(runState)
-            if (isLive) {
-                BreathingCircleIndicator(
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .border(1.5.dp, MaterialTheme.colorScheme.surface, CircleShape),
-                    size = 12.dp,
-                    color = stateColor,
-                )
-            } else {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .size(11.dp)
-                        .background(stateColor, CircleShape)
-                        .border(1.5.dp, MaterialTheme.colorScheme.surface, CircleShape),
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun roundtableRoleStateLabelText(role: PiRoleRunState): String? = when {
-    role.awaitingSkip != null -> stringResource(R.string.chat_pi_role_awaiting_skip)
-    role.error != null -> stringResource(R.string.chat_pi_role_error)
-    role.fallback != null -> stringResource(R.string.chat_pi_role_fallback)
-    role.retry != null -> stringResource(
-        R.string.chat_pi_role_retry,
-        role.retry.attempt,
-        role.retry.maxAttempts?.toString() ?: "?",
-    )
-    role.liveState == PiRoleLiveState.Speaking -> stringResource(R.string.chat_pi_role_speaking)
-    role.liveState == PiRoleLiveState.Thinking -> stringResource(R.string.chat_pi_role_thinking)
-    else -> null
-}
-
-private fun roundtableRoleHasIndicator(role: PiRoleRunState): Boolean =
-    role.awaitingSkip != null || role.error != null || role.fallback != null || role.retry != null || role.liveState != PiRoleLiveState.Idle
-
-private fun roundtableRoleStateColor(role: PiRoleRunState): Color = when {
-    role.awaitingSkip != null -> Color(0xFFF5A742)
-    role.error != null -> Color(0xFFE06C75)
-    role.fallback != null -> Color(0xFF56B6C2)
-    role.retry != null -> Color(0xFF9D7CD8)
-    role.liveState == PiRoleLiveState.Speaking -> Color(0xFF7FD88F)
-    role.liveState == PiRoleLiveState.Thinking -> Color(0xFF56B6C2)
-    else -> Color(0xFF7FD88F)
-}
-
-@Composable
-private fun roundtableStatusContainerColor(status: Roundtable.Status?, isAmoled: Boolean): Color = when (status) {
-    Roundtable.Status.Running -> MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = if (isAmoled) 0.22f else 0.62f)
-    Roundtable.Status.AwaitingCommand,
-    Roundtable.Status.AwaitingSkip,
-    Roundtable.Status.Paused -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = if (isAmoled) 0.24f else 0.7f)
-    Roundtable.Status.Error -> MaterialTheme.colorScheme.errorContainer.copy(alpha = if (isAmoled) 0.28f else 0.72f)
-    else -> if (isAmoled) Color.Black else MaterialTheme.colorScheme.surfaceContainerHigh
-}
-
-@Composable
-private fun roundtableStatusColor(status: Roundtable.Status?): Color = when (status) {
-    Roundtable.Status.Running -> MaterialTheme.colorScheme.tertiary
-    Roundtable.Status.AwaitingCommand,
-    Roundtable.Status.AwaitingSkip,
-    Roundtable.Status.Paused -> MaterialTheme.colorScheme.primary
-    Roundtable.Status.Error -> MaterialTheme.colorScheme.error
-    else -> MaterialTheme.colorScheme.outline
-}
-
-private fun roundtableChatStatusLabelRes(status: Roundtable.Status): Int = when (status) {
-    Roundtable.Status.Running -> R.string.roundtable_status_running
-    Roundtable.Status.Paused,
-    Roundtable.Status.AwaitingCommand,
-    Roundtable.Status.AwaitingSkip -> R.string.roundtable_status_paused
-    Roundtable.Status.Casting -> R.string.roundtable_status_casting
-    Roundtable.Status.Archived -> R.string.roundtable_status_archived
-    Roundtable.Status.Completed -> R.string.roundtable_status_ended
-    Roundtable.Status.Error -> R.string.roundtable_status_error
-    Roundtable.Status.Unknown -> R.string.roundtable_status_unknown
-}
-
-@Composable
-private fun RoundDivider(
-    roundNumber: Int,
-    isCollapsed: Boolean,
-    onToggle: () -> Unit,
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onToggle).padding(vertical = 4.dp, horizontal = 20.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        HorizontalDivider(modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
-        AssistChip(
-            onClick = onToggle,
-            label = { Text("Round $roundNumber") },
-            leadingIcon = {
-                Icon(
-                    imageVector = if (isCollapsed) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowUp,
-                    contentDescription = null,
-                    modifier = Modifier.size(16.dp),
-                )
-            },
-        )
-        HorizontalDivider(modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
     }
 }
 

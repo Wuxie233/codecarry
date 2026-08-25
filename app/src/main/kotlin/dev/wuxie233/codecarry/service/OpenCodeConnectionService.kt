@@ -16,26 +16,13 @@ import dev.wuxie233.codecarry.BuildConfig
 import dev.wuxie233.codecarry.MainActivity
 import dev.wuxie233.codecarry.R
 import dev.wuxie233.codecarry.data.api.OpenCodeApi
-import dev.wuxie233.codecarry.data.api.PiApi
 import dev.wuxie233.codecarry.data.api.SseClient
-import dev.wuxie233.codecarry.data.codex.CodexClientConnectionState
-import dev.wuxie233.codecarry.data.codex.CodexConnectionManager
-import dev.wuxie233.codecarry.data.codex.CodexManagedConnection
-import dev.wuxie233.codecarry.data.codex.CodexServerRequest
-import dev.wuxie233.codecarry.data.codex.CodexThreadKey
-import dev.wuxie233.codecarry.data.codex.ScopedCodexNotification
-import dev.wuxie233.codecarry.data.codex.requestKey
 import dev.wuxie233.codecarry.data.preferences.SessionListPreferencesRepository
 import dev.wuxie233.codecarry.data.repository.EventReducer
 import dev.wuxie233.codecarry.data.repository.LocalServerManager
 import dev.wuxie233.codecarry.data.repository.ServerRepository
 import dev.wuxie233.codecarry.data.repository.SettingsRepository
 import dev.wuxie233.codecarry.data.transport.OpenCodeTransport
-import dev.wuxie233.codecarry.data.transport.PiRoundtableTransport
-import dev.wuxie233.codecarry.data.transport.PiStackTransport
-import dev.wuxie233.codecarry.data.transport.PiStackTransportFactory
-import dev.wuxie233.codecarry.data.api.PiStackSseFrame
-import dev.wuxie233.codecarry.data.repository.PiStackEventResult
 import dev.wuxie233.codecarry.domain.model.Message
 import dev.wuxie233.codecarry.domain.model.Part
 import dev.wuxie233.codecarry.domain.model.ConnectionPhase
@@ -44,7 +31,6 @@ import dev.wuxie233.codecarry.domain.model.ServerType
 import dev.wuxie233.codecarry.domain.model.SessionStatus
 import dev.wuxie233.codecarry.domain.model.SseEvent
 import dev.wuxie233.codecarry.domain.transport.AgentTransport
-import dev.wuxie233.codecarry.domain.transport.PiTransportEvent
 import dev.wuxie233.codecarry.domain.transport.TransportEvent
 import dev.wuxie233.codecarry.domain.transport.TransportRoom
 import dagger.hilt.android.AndroidEntryPoint
@@ -58,7 +44,6 @@ import kotlinx.coroutines.flow.update
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
-import kotlinx.serialization.json.Json
 
 private const val TAG = "OpenCodeService"
 private const val NOTIFICATION_CHANNEL_ID = "opencode_connection"
@@ -82,14 +67,6 @@ private data class ServerConnectionState(
     val sseJob: Job,
     val isConnected: Boolean = false,
     val projectDirectories: List<String>? = null,
-)
-
-private data class PiStackConnectionState(
-    val config: ServerConfig,
-    val transport: PiStackTransport,
-    val connectionId: Long,
-    val job: Job,
-    val isConnected: Boolean = false,
 )
 
 internal class ForegroundStatusRefreshObserver(
@@ -194,13 +171,7 @@ class OpenCodeConnectionService : Service() {
     lateinit var api: OpenCodeApi
 
     @Inject
-    lateinit var piApi: PiApi
-
-    @Inject
     lateinit var sseClient: SseClient
-
-    @Inject
-    lateinit var json: Json
 
     @Inject
     lateinit var eventReducer: EventReducer
@@ -214,21 +185,11 @@ class OpenCodeConnectionService : Service() {
     @Inject
     lateinit var serverRepository: ServerRepository
 
-    @Inject
-    lateinit var codexConnectionManager: CodexConnectionManager
-
-    @Inject
-    lateinit var piStackTransportFactory: PiStackTransportFactory
-
     private val binder = LocalBinder()
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /** All active/pending server connections keyed by serverId. */
     private val connections = mutableMapOf<String, ServerConnectionState>()
-    private val piStackConnections = mutableMapOf<String, PiStackConnectionState>()
-    private var nextPiStackConnectionId = 0L
-    private val codexConnections = CodexOwnershipRegistry()
-    private val codexConnectionErrors = ConcurrentHashMap<String, String>()
 
     private var notificationWatchdogJob: Job? = null
     private var foregroundStatusRefreshJob: Job? = null
@@ -255,14 +216,9 @@ class OpenCodeConnectionService : Service() {
 
     /** Dedup response-ready notifications per server/session by last assistant message ID. */
     private val lastNotifiedAssistantMessageBySession = ConcurrentHashMap<String, String>()
-    private val postedPiNotificationKeys = ConcurrentHashMap.newKeySet<String>()
-    private val postedPiStackCompletionKeys = ConcurrentHashMap.newKeySet<String>()
-    private val postedPiStackQuestionKeys = ConcurrentHashMap.newKeySet<String>()
 
     /** Dedup permission notifications fired from the connect-time bootstrap, keyed by server/request. */
     private val postedPermissionRequestIds = ConcurrentHashMap.newKeySet<String>()
-    private val handledCodexTurns = BoundedNotificationKeys(capacity = 512)
-    private val postedCodexRequestIds = ConcurrentHashMap<String, Int>()
     private val manuallyDisconnectedServerIds = ConcurrentHashMap.newKeySet<String>()
 
     inner class LocalBinder : Binder() {
@@ -277,9 +233,6 @@ class OpenCodeConnectionService : Service() {
         createNotificationChannels()
         ProcessLifecycleOwner.get().lifecycle.addObserver(foregroundStatusRefreshObserver)
 
-        serviceScope.launch { observeCodexConnections() }
-        serviceScope.launch { observeCodexNotifications() }
-        serviceScope.launch { observeActiveCodexThreads() }
         serviceScope.launch {
             autoConnectConfiguredServers()
         }
@@ -354,14 +307,6 @@ class OpenCodeConnectionService : Service() {
     }
 
     private fun connectInternal(server: ServerConfig) {
-        if (server.type == ServerType.CODEX) {
-            connectCodex(server)
-            return
-        }
-        if (server.type == ServerType.PI_STACK) {
-            connectPiStack(server)
-            return
-        }
         if (connections.containsKey(server.id)) {
             if (BuildConfig.DEBUG) Log.d(TAG, "Already connected to server ${server.id}, skipping")
             return
@@ -404,23 +349,6 @@ class OpenCodeConnectionService : Service() {
         if (BuildConfig.DEBUG) Log.d(TAG, "Disconnecting server $serverId")
         manuallyDisconnectedServerIds.add(serverId)
 
-        if (codexConnections.current(serverId) != null) {
-            disconnectCodex(serverId)
-            return
-        }
-
-        piStackConnections.remove(serverId)?.let { state ->
-            state.job.cancel()
-            clearPiStackNotificationDedup(serverId)
-            _connectedServerIds.update { it - serverId }
-            _connectingServerIds.update { it - serverId }
-            _connectionPhases.update { it - serverId }
-            _connectionErrors.update { it - serverId }
-            eventReducer.clearForServer(serverId)
-            finishDisconnect()
-            return
-        }
-
         val state = connections.remove(serverId) ?: return
         state.sseJob.cancel()
         clearOpenCodeNotificationDedup(serverId)
@@ -456,8 +384,6 @@ class OpenCodeConnectionService : Service() {
         val visibleServerIds = connections.values
             .filterNot { isLocalServer(it.config) }
             .map { it.config.id }
-            .plus(codexConnections.snapshot().keys)
-            .plus(piStackConnections.keys)
 
         if (visibleServerIds.isEmpty()) {
             updatePersistentNotification()
@@ -475,21 +401,10 @@ class OpenCodeConnectionService : Service() {
         for ((_, state) in connections) {
             state.sseJob.cancel()
         }
-        piStackConnections.values.forEach { it.job.cancel() }
-        val codexOwners = codexConnections.clear()
-        val serverIds = connections.keys.toList() + codexOwners.map { it.config.id } + piStackConnections.keys
+        val serverIds = connections.keys.toList()
         connections.clear()
-        piStackConnections.clear()
         lastNotifiedAssistantMessageBySession.clear()
         postedPermissionRequestIds.clear()
-        postedPiStackCompletionKeys.clear()
-        postedPiStackQuestionKeys.clear()
-        codexOwners.forEach { owner ->
-            owner.connectJob.cancel()
-            codexConnectionManager.releasePersistent(owner.config.id)
-        }
-        codexConnectionErrors.clear()
-        cancelAllCodexRequestNotifications()
 
         _connectedServerIds.value = emptySet()
         _connectingServerIds.value = emptySet()
@@ -539,284 +454,8 @@ class OpenCodeConnectionService : Service() {
         return serverId in _connectedServerIds.value
     }
 
-    private fun connectCodex(server: ServerConfig) {
-        val owner = codexConnections.register(server) { generation ->
-            serviceScope.launch(start = CoroutineStart.LAZY) {
-                try {
-                    codexConnectionManager.connect(server)
-                } catch (error: CancellationException) {
-                    throw error
-                } catch (error: Throwable) {
-                    if (codexConnections.isCurrent(server.id, generation)) {
-                        codexConnectionErrors[server.id] = error.message ?: "Codex connection failed"
-                        publishCodexConnectionStates(codexConnectionManager.connections.value)
-                    }
-                }
-            }
-        } ?: return
-        ensureForegroundStarted()
-        acquireWakeLock()
-        _connectingServerIds.update { it + server.id }
-        updateConnectionPhase(server.id, ConnectionPhase.OpeningLiveUpdates)
-        owner.connectJob.start()
-        updatePersistentNotification()
-        startNotificationWatchdog()
-    }
-
-    private fun connectPiStack(server: ServerConfig) {
-        if (piStackConnections.containsKey(server.id)) return
-        ensureForegroundStarted()
-        acquireWakeLock()
-        val transport = piStackTransportFactory.create(server)
-        val connectionId = ++nextPiStackConnectionId
-        val job = startPiStackConnection(server, transport, connectionId)
-        piStackConnections[server.id] = PiStackConnectionState(server, transport, connectionId, job)
-        _connectingServerIds.update { it + server.id }
-        updateConnectionPhase(server.id, ConnectionPhase.RestoringActivity)
-        job.start()
-        updatePersistentNotification()
-        startNotificationWatchdog()
-    }
-
-    private fun finishDisconnect() {
-        if (!hasManagedConnections()) {
-            releaseWakeLock()
-            notificationWatchdogJob?.cancel()
-            notificationWatchdogJob = null
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            foregroundStarted = false
-            stopSelf()
-        } else {
-            updatePersistentNotification()
-        }
-    }
-
-    private fun disconnectCodex(serverId: String) {
-        val owned = codexConnections.remove(serverId) ?: return
-        owned.connectJob.cancel()
-        codexConnectionErrors.remove(serverId)
-        cancelCodexRequestNotifications(serverId)
-        codexConnectionManager.releasePersistent(serverId)
-        _connectedServerIds.update { it - serverId }
-        _connectingServerIds.update { it - serverId }
-        _connectionPhases.update { it - serverId }
-        _connectionErrors.update { it - serverId }
-        if (!hasManagedConnections()) {
-            releaseWakeLock()
-            notificationWatchdogJob?.cancel()
-            notificationWatchdogJob = null
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            foregroundStarted = false
-            stopSelf()
-        } else {
-            updatePersistentNotification()
-        }
-    }
-
-    private suspend fun observeCodexConnections() {
-        codexConnectionManager.connections.collect { managed ->
-            publishCodexConnectionStates(managed)
-            reconcileCodexRequestNotifications(managed)
-        }
-    }
-
-    private fun publishCodexConnectionStates(managed: Map<String, CodexManagedConnection>) {
-        val owned = codexConnections.snapshot()
-        val ownedIds = owned.keys
-        val states = ownedIds.associateWith { id -> codexServiceConnectionState(managed[id]) }
-        val connected = states.filterValues(CodexServiceConnectionState::connected).keys
-        val connecting = states.filterValues(CodexServiceConnectionState::connecting).keys
-        managed.forEach { (id, connection) ->
-            if (id !in ownedIds) return@forEach
-            val failed = connection.state as? CodexClientConnectionState.Failed
-            if (failed != null) codexConnectionErrors[id] = failed.error.message ?: "Codex connection failed"
-            if (connection.state is CodexClientConnectionState.Connected) codexConnectionErrors.remove(id)
-        }
-        _connectionErrors.update { errors ->
-            errors.filterKeys { it !in ownedIds } + codexConnectionErrors.filterKeys { it in ownedIds }
-        }
-        val nonCodexConnected = _connectedServerIds.value - ownedIds
-        val nonCodexConnecting = _connectingServerIds.value - ownedIds
-        _connectedServerIds.value = nonCodexConnected + connected
-        _connectingServerIds.value = nonCodexConnecting + connecting
-        _connectionPhases.update { phases ->
-            phases.filterKeys { it !in ownedIds } + connecting.associateWith { id ->
-                if (codexConnectionErrors.containsKey(id)) {
-                    ConnectionPhase.WaitingToRetry
-                } else {
-                    ConnectionPhase.OpeningLiveUpdates
-                }
-            }
-        }
-        val currentOwnedIds = codexConnections.snapshot().keys
-        val removedIds = ownedIds - currentOwnedIds
-        if (removedIds.isNotEmpty()) {
-            _connectedServerIds.update { it - removedIds }
-            _connectingServerIds.update { it - removedIds }
-            _connectionPhases.update { it - removedIds }
-            _connectionErrors.update { it - removedIds }
-        }
-        if (foregroundStarted) updatePersistentNotification()
-    }
-
-    private suspend fun observeCodexNotifications() {
-        codexConnectionManager.notificationEvents.collect { event ->
-            val owned = codexConnections.current(event.serverId) ?: return@collect
-            val currentId = codexConnectionManager.connections.value[event.serverId]?.connectionId
-            if (currentId != event.connectionId) return@collect
-            if (!codexConnections.isCurrent(event.serverId, owned.generation)) return@collect
-            maybeShowCodexTurnNotification(owned.config, event)
-        }
-    }
-
-    private suspend fun maybeShowCodexTurnNotification(
-        server: ServerConfig,
-        event: ScopedCodexNotification,
-    ) {
-        val threadId = event.notification.threadId ?: return
-        val turn = event.notification.turn ?: return
-        val decision = codexTurnNotificationDecision(
-            serverId = event.serverId,
-            notification = event.notification,
-            activeThreads = codexConnectionManager.activeThreads.value,
-            notificationsEnabled = settingsRepository.notificationsEnabled.first(),
-        )
-        if (decision == CodexTurnNotificationDecision.IGNORE) return
-        val turnKey = "${event.serverId}:${event.connectionId}:$threadId:${turn.id}"
-        if (!handledCodexTurns.add(turnKey)) return
-        when (decision) {
-            CodexTurnNotificationDecision.IGNORE -> Unit
-            CodexTurnNotificationDecision.SUPPRESS_ACTIVE -> {
-                cancelCodexResponseNotification(event.serverId, threadId)
-                return
-            }
-            CodexTurnNotificationDecision.POST -> Unit
-        }
-        delay(150)
-        if (CodexThreadKey(event.serverId, threadId) in codexConnectionManager.activeThreads.value) {
-            cancelCodexResponseNotification(event.serverId, threadId)
-            return
-        }
-        showCodexResponseNotification(server, threadId)
-    }
-
-    private suspend fun observeActiveCodexThreads() {
-        codexConnectionManager.activeThreads.collect { active ->
-            active.forEach { key -> cancelCodexResponseNotification(key.serverId, key.threadId) }
-        }
-    }
-
-    private suspend fun reconcileCodexRequestNotifications(managed: Map<String, CodexManagedConnection>) {
-        val currentKeys = mutableSetOf<String>()
-        val ownedSnapshot = codexConnections.snapshot()
-        for ((serverId, owned) in ownedSnapshot) {
-            val requests = managed[serverId]?.pendingRequests.orEmpty()
-            for (request in requests) {
-                if (request.notificationKind() == null) continue
-                val key = "$serverId:${request.id.requestKey()}"
-                currentKeys += key
-                if (postedCodexRequestIds.containsKey(key)) continue
-                if (!settingsRepository.notificationsEnabled.first()) continue
-                if (!codexConnections.isCurrent(serverId, owned.generation)) continue
-                val id = CodexNotificationIdentity.requestId(serverId, request)
-                postedCodexRequestIds[key] = id
-                showCodexRequestNotification(owned.config, request, id)
-            }
-        }
-        val removed = postedCodexRequestIds.keys - currentKeys
-        removed.forEach { key ->
-            val serverId = key.substringBefore(':')
-            postedCodexRequestIds.remove(key)?.let { id -> dismissCodexChildNotification(serverId, id) }
-        }
-    }
-
-    private suspend fun showCodexResponseNotification(server: ServerConfig, threadId: String) {
-        val thread = codexConnectionManager.get(server.id)?.events?.value?.threads?.get(threadId)
-        val body = thread?.name?.takeIf(String::isNotBlank)
-            ?: thread?.preview?.lineSequence()?.firstOrNull()?.take(80)
-            ?: getString(R.string.notification_new_session)
-        val id = CodexNotificationIdentity.responseReadyId(server.id, threadId)
-        val silent = settingsRepository.silentNotifications.first()
-        val channel = if (silent) NOTIFICATION_CHANNEL_TASKS_SILENT_ID else NOTIFICATION_CHANNEL_TASKS_ID
-        val notification = NotificationCompat.Builder(this, channel)
-            .setContentTitle(getString(R.string.notification_response_ready))
-            .setContentText(body)
-            .setSubText(server.displayName)
-            .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentIntent(createCodexThreadPendingIntent(server.id, threadId, id))
-            .setAutoCancel(true)
-            .setPriority(if (silent) NotificationCompat.PRIORITY_LOW else NotificationCompat.PRIORITY_HIGH)
-            .setGroup(SessionNotificationIdentity.serverGroup(server.id))
-            .build()
-        notificationManager.notify(id, notification)
-        showServerGroupSummary(server)
-    }
-
-    private fun showCodexRequestNotification(server: ServerConfig, request: CodexServerRequest, id: Int) {
-        val threadId = request.params["threadId"]?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.content } ?: return
-        val notification = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_PERMISSIONS_ID)
-            .setContentTitle(request.notificationTitle())
-            .setContentText(server.displayName)
-            .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentIntent(createCodexThreadPendingIntent(server.id, threadId, id))
-            .setAutoCancel(true)
-            .setOnlyAlertOnce(true)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setDefaults(NotificationCompat.DEFAULT_ALL)
-            .setGroup(SessionNotificationIdentity.serverGroup(server.id))
-            .build()
-        notificationManager.notify(id, notification)
-        showServerGroupSummary(server)
-    }
-
-    private fun createCodexThreadPendingIntent(serverId: String, threadId: String, requestCode: Int): PendingIntent {
-        val intent = Intent(this, MainActivity::class.java).apply {
-            action = ACTION_OPEN_CODEX_THREAD
-            data = android.net.Uri.Builder()
-                .scheme("ocremote")
-                .authority("codex")
-                .appendPath(serverId)
-                .appendPath("thread")
-                .appendPath(threadId)
-                .build()
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
-            putExtra(EXTRA_SERVER_ID, serverId)
-            putExtra(EXTRA_THREAD_ID, threadId)
-        }
-        return PendingIntent.getActivity(
-            this,
-            requestCode,
-            intent,
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-        )
-    }
-
-    private fun cancelCodexResponseNotification(serverId: String, threadId: String) {
-        dismissCodexChildNotification(serverId, CodexNotificationIdentity.responseReadyId(serverId, threadId))
-    }
-
-    private fun cancelCodexRequestNotifications(serverId: String) {
-        postedCodexRequestIds.keys.filter { it.startsWith("$serverId:") }.forEach { key ->
-            postedCodexRequestIds.remove(key)?.let { id -> dismissCodexChildNotification(serverId, id) }
-        }
-    }
-
-    private fun cancelAllCodexRequestNotifications() {
-        postedCodexRequestIds.values.forEach(notificationManager::cancel)
-        postedCodexRequestIds.clear()
-    }
-
-    private fun dismissCodexChildNotification(serverId: String, childId: Int) {
-        val children = notificationManager.activeNotifications
-            .filter { active -> active.notification.flags and Notification.FLAG_GROUP_SUMMARY == 0 }
-            .map { active -> active.id to active.notification.group }
-        val cancelSummary = shouldCancelServerSummary(children, serverId, childId)
-        notificationManager.cancel(childId)
-        if (cancelSummary) notificationManager.cancel(SessionNotificationIdentity.serverSummaryId(serverId))
-    }
-
     private fun hasManagedConnections(): Boolean =
-        connections.isNotEmpty() || piStackConnections.isNotEmpty() || !codexConnections.isEmpty()
+        connections.isNotEmpty()
 
     // ============ Notification Watchdog ============
 
@@ -926,10 +565,6 @@ class OpenCodeConnectionService : Service() {
                                 }
                                 when (transportEvent) {
                                     is TransportEvent.OpenCode -> processEvent(server, transportEvent.event)
-                                    is TransportEvent.Pi -> {
-                                        eventReducer.processEvent(transportEvent, server.id)
-                                        maybeShowPiNotification(server, transportEvent.event)
-                                    }
                                 }
                                 if (streamJustOpened) {
                                     // Start snapshots only after the stream is live and its first event
@@ -967,128 +602,6 @@ class OpenCodeConnectionService : Service() {
                 delay(delayMs)
             }
         }
-    }
-
-    private fun startPiStackConnection(
-        server: ServerConfig,
-        transport: PiStackTransport,
-        connectionId: Long,
-    ): Job = serviceScope.launch(start = CoroutineStart.LAZY) {
-        var attempt = 0
-        var repairRequired = eventReducer.piStackCursor(server.id) == null
-        while (isActive && isCurrentPiStackConnection(server.id, connectionId, transport)) {
-            attempt++
-            try {
-                if (repairRequired) {
-                    updateConnectionPhase(server.id, ConnectionPhase.RestoringActivity)
-                    repairPiStackSnapshot(server, transport, connectionId)
-                    repairRequired = false
-                }
-                val cursor = eventReducer.piStackCursor(server.id)
-                    ?: throw PiStackResyncRequired("Pi Stack snapshot did not install a cursor")
-                updateConnectionPhase(server.id, ConnectionPhase.OpeningLiveUpdates)
-                transport.events(cursor.eventId).collect { frame ->
-                    if (!isCurrentPiStackConnection(server.id, connectionId, transport)) return@collect
-                    when (frame) {
-                        is PiStackSseFrame.Connected -> {
-                            if (frame.generation != eventReducer.piStackCursor(server.id)?.generation) {
-                                throw PiStackResyncRequired("Pi Stack generation changed")
-                            }
-                            updatePiStackConnected(server.id, connectionId, true)
-                            attempt = 0
-                        }
-                        is PiStackSseFrame.ResyncRequired -> throw PiStackResyncRequired("Pi Stack requested snapshot repair")
-                        is PiStackSseFrame.Event -> when (eventReducer.applyPiStackEvent(frame.event, server.id)) {
-                            is PiStackEventResult.Applied -> processPiStackEvent(server, frame.event, connectionId)
-                            PiStackEventResult.IgnoredDuplicate -> Unit
-                            is PiStackEventResult.ResyncRequired -> throw PiStackResyncRequired("Pi Stack cursor gap or generation mismatch")
-                        }
-                    }
-                }
-                updatePiStackConnected(server.id, connectionId, false)
-            } catch (error: CancellationException) {
-                throw error
-            } catch (error: PiStackResyncRequired) {
-                repairRequired = true
-                Log.w(TAG, "[${server.displayName}] Pi Stack snapshot repair required: ${error.message}")
-                updatePiStackConnected(server.id, connectionId, false)
-            } catch (error: Exception) {
-                Log.w(TAG, "[${server.displayName}] Pi Stack live connection needs retry: ${error.message}")
-                updatePiStackConnected(server.id, connectionId, false)
-            }
-            if (!isCurrentPiStackConnection(server.id, connectionId, transport)) break
-            updateConnectionPhase(server.id, ConnectionPhase.WaitingToRetry)
-            delay(calculateBackoff(attempt))
-        }
-    }
-
-    private suspend fun repairPiStackSnapshot(
-        server: ServerConfig,
-        transport: PiStackTransport,
-        connectionId: Long,
-    ) {
-        val snapshot = transport.snapshot()
-        if (!isCurrentPiStackConnection(server.id, connectionId, transport)) return
-        eventReducer.applyPiStackSnapshot(
-            serverId = server.id,
-            cursor = snapshot.cursor,
-            sessions = snapshot.data.sessions,
-            questions = snapshot.data.questions,
-            notifications = snapshot.data.notifications,
-        )
-    }
-
-    private fun isCurrentPiStackConnection(serverId: String, connectionId: Long, transport: PiStackTransport): Boolean {
-        val current = piStackConnections[serverId]
-        return current?.connectionId == connectionId && current.transport === transport
-    }
-
-    private fun updatePiStackConnected(serverId: String, connectionId: Long, connected: Boolean) {
-        val state = piStackConnections[serverId] ?: return
-        if (state.connectionId != connectionId) return
-        piStackConnections[serverId] = state.copy(isConnected = connected)
-        if (connected) {
-            _connectingServerIds.update { it - serverId }
-            _connectedServerIds.update { it + serverId }
-            _connectionPhases.update { it - serverId }
-            _connectionErrors.update { it - serverId }
-        } else {
-            _connectedServerIds.update { it - serverId }
-            _connectingServerIds.update { it + serverId }
-        }
-        updatePersistentNotification()
-    }
-
-    private fun processPiStackEvent(server: ServerConfig, event: dev.wuxie233.codecarry.data.api.PiStackEventDto, connectionId: Long) {
-        if (event.type == "question.created") {
-            val questionId = event.scope.questionId ?: return
-            val sessionId = event.scope.sessionId ?: return
-            val key = "${server.id}:${event.generation}:$questionId"
-            if (postedPiStackQuestionKeys.add(key) && !isChildSession(sessionId)) {
-                val question = eventReducer.questionsByServer.value[server.id]
-                    .orEmpty()[sessionId].orEmpty().firstOrNull { it.id == questionId }
-                showQuestionNotification(server, sessionId, question?.questions?.firstOrNull()?.question.orEmpty())
-            }
-        }
-        if (event.type in setOf("question.replied", "question.rejected", "question.expired")) {
-            event.scope.sessionId?.let { sessionId ->
-                notificationManager.cancel(eventNotificationId(server.id, sessionId, 2000))
-            }
-        }
-        val decision = decidePiStackCompletion(json, event) ?: return
-        if (eventReducer.activeSessionId.value == decision.sessionId || isChildSession(decision.sessionId)) return
-        val key = "${server.id}:${decision.eventKey}"
-        if (!postedPiStackCompletionKeys.add(key)) return
-        serviceScope.launch {
-            if (!settingsRepository.notificationsEnabled.first()) return@launch
-            if (!isCurrentPiStackConnection(server.id, connectionId, piStackConnections[server.id]?.transport ?: return@launch)) return@launch
-            showTaskCompleteNotification(server, decision.sessionId)
-        }
-    }
-
-    private fun clearPiStackNotificationDedup(serverId: String) {
-        postedPiStackCompletionKeys.removeAll { it.startsWith("$serverId:") }
-        postedPiStackQuestionKeys.removeAll { it.startsWith("$serverId:") }
     }
 
     private fun currentServerPermissionIds(serverId: String): Set<String> {
@@ -1329,17 +842,6 @@ class OpenCodeConnectionService : Service() {
         }
     }
 
-    private fun maybeShowPiNotification(server: ServerConfig, event: PiTransportEvent) {
-        val decision = decidePiNotification(event) ?: return
-        val scopedKey = "${server.id}:${decision.eventKey}"
-        if (!postedPiNotificationKeys.add(scopedKey)) return
-
-        serviceScope.launch {
-            if (!settingsRepository.notificationsEnabled.first()) return@launch
-            showPiRoundtableNotification(server, decision)
-        }
-    }
-
     private fun maybeMarkSessionUnread(sessionId: String, previousStatus: dev.wuxie233.codecarry.domain.model.SessionStatus?) {
         if (isChildSession(sessionId)) return
         if (previousStatus !is dev.wuxie233.codecarry.domain.model.SessionStatus.Busy && previousStatus !is dev.wuxie233.codecarry.domain.model.SessionStatus.Retry) {
@@ -1359,12 +861,8 @@ class OpenCodeConnectionService : Service() {
         return Pair(session?.title, session?.directory)
     }
 
-    private fun createTransport(server: ServerConfig): AgentTransport = when (server.type) {
-        ServerType.OPENCODE -> OpenCodeTransport(server, api, sseClient)
-        ServerType.CODEX -> error("Codex app-server connections are owned by CodexConnectionManager")
-        ServerType.PI_ROUNDTABLE -> PiRoundtableTransport(server, piApi, json)
-        ServerType.PI_STACK -> error("Pi Stack connections use PiStackTransport")
-    }
+    private fun createTransport(server: ServerConfig): AgentTransport =
+        OpenCodeTransport(server, api, sseClient)
 
     private fun List<TransportRoom>.openCodeSessions(): List<dev.wuxie233.codecarry.domain.model.Session> =
         mapNotNull { room -> (room as? TransportRoom.OpenCode)?.session }
@@ -1514,7 +1012,6 @@ class OpenCodeConnectionService : Service() {
 
     companion object {
         const val ACTION_OPEN_SESSION = "dev.wuxie233.codecarry.OPEN_SESSION"
-        const val ACTION_OPEN_CODEX_THREAD = "dev.wuxie233.codecarry.OPEN_CODEX_THREAD"
         const val ACTION_PERMISSION_REPLY = "dev.wuxie233.codecarry.PERMISSION_REPLY"
         const val ACTION_DISCONNECT = "dev.wuxie233.codecarry.DISCONNECT"
         const val ACTION_DISCONNECT_ALL = "dev.wuxie233.codecarry.DISCONNECT_ALL"
@@ -1525,7 +1022,6 @@ class OpenCodeConnectionService : Service() {
         const val EXTRA_SERVER_NAME = "server_name"
         const val EXTRA_SESSION_PATH = "session_path"
         const val EXTRA_SESSION_ID = "sessionId"
-        const val EXTRA_THREAD_ID = "thread_id"
         const val EXTRA_PERMISSION_REQUEST_ID = "permission_request_id"
         const val EXTRA_PERMISSION_REPLY_VALUE = "permission_reply_value"
         const val PERMISSION_REPLY_ONCE = "once"
@@ -1619,10 +1115,7 @@ class OpenCodeConnectionService : Service() {
 
         val visibleConnections = connections.values
             .filterNot { isLocalServer(it.config) }
-            .map { it.config to it.isConnected } +
-            codexConnections.snapshot().values.map { owned ->
-                owned.config to (owned.config.id in _connectedServerIds.value)
-            } + piStackConnections.values.map { state -> state.config to state.isConnected }
+            .map { it.config to it.isConnected }
         val serverCount = visibleConnections.size
         val connectedCount = visibleConnections.count { it.second }
 
@@ -1804,33 +1297,6 @@ class OpenCodeConnectionService : Service() {
         showServerGroupSummary(server)
     }
 
-    private suspend fun showPiRoundtableNotification(server: ServerConfig, decision: PiNotificationDecision) {
-        val silent = settingsRepository.silentNotifications.first()
-        val channelId = if (silent) NOTIFICATION_CHANNEL_TASKS_SILENT_ID else NOTIFICATION_CHANNEL_TASKS_ID
-        val notifId = (server.id + decision.eventKey).hashCode()
-        val builder = NotificationCompat.Builder(this, channelId)
-            .setContentTitle(decision.title)
-            .setContentText(decision.message)
-            .setSubText(server.displayName)
-            .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentIntent(createAppPendingIntent(notifId))
-            .setAutoCancel(true)
-            .setPriority(if (silent) NotificationCompat.PRIORITY_LOW else NotificationCompat.PRIORITY_HIGH)
-            .setGroup(SessionNotificationIdentity.serverGroup(server.id))
-
-        if (!silent) {
-            builder.setDefaults(NotificationCompat.DEFAULT_ALL)
-                .setVibrate(longArrayOf(0, 500, 200, 500))
-        }
-
-        notificationManager.notify(notifId, builder.build())
-        showServerGroupSummary(server)
-    }
-
-    /**
-     * Post a group summary notification for a server so Android bundles
-     * event notifications from the same server together.
-     */
     private fun showServerGroupSummary(server: ServerConfig) {
         val summaryId = SessionNotificationIdentity.serverSummaryId(server.id)
         val summary = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_TASKS_SILENT_ID)

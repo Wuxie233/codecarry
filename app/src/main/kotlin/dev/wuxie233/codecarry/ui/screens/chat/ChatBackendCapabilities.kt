@@ -1,6 +1,5 @@
 package dev.wuxie233.codecarry.ui.screens.chat
 
-import dev.wuxie233.codecarry.data.api.PiStackCapabilitiesDto
 import dev.wuxie233.codecarry.domain.model.ServerType
 
 internal data class ChatBackendCapabilities(
@@ -14,31 +13,11 @@ internal data class ChatBackendCapabilities(
 
 internal fun chatBackendCapabilities(
     serverType: ServerType,
-    piStack: PiStackCapabilitiesDto? = null,
-): ChatBackendCapabilities = when (serverType) {
-    ServerType.PI_STACK -> ChatBackendCapabilities(
-        attachments = piStack?.runtime?.attachments == true,
-        fileMentions = false,
-        modelAndAgentSelection = piStack?.models?.select == true,
-        sessionExtras = piStack?.runtime?.compact == true || piStack?.runtime?.fork == true ||
-            "title" in piStack?.runtime?.sessionPatch.orEmpty(),
-        shellAndTerminal = false,
-        slashCommands = piStack?.runtime?.commands == true,
-    )
-    ServerType.PI_ROUNDTABLE -> ChatBackendCapabilities(
-        attachments = true,
-        fileMentions = false,
-        modelAndAgentSelection = false,
-        sessionExtras = true,
-        shellAndTerminal = true,
-        slashCommands = true,
-    )
-    ServerType.OPENCODE, ServerType.CODEX -> ChatBackendCapabilities(
-        attachments = true,
-        fileMentions = true,
-        modelAndAgentSelection = true,
-        sessionExtras = true,
-        shellAndTerminal = true,
-        slashCommands = true,
-    )
-}
+): ChatBackendCapabilities = ChatBackendCapabilities(
+    attachments = true,
+    fileMentions = true,
+    modelAndAgentSelection = true,
+    sessionExtras = true,
+    shellAndTerminal = true,
+    slashCommands = true,
+)

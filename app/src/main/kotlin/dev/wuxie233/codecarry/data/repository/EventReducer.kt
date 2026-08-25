@@ -3,26 +3,13 @@ package dev.wuxie233.codecarry.data.repository
 import android.util.Log
 import dev.wuxie233.codecarry.BuildConfig
 import dev.wuxie233.codecarry.domain.model.*
-import dev.wuxie233.codecarry.domain.transport.PiTransportEvent
 import dev.wuxie233.codecarry.domain.transport.TransportEvent
-import dev.wuxie233.codecarry.data.api.PiStackEventCursorDto
-import dev.wuxie233.codecarry.data.api.PiStackEventDto
-import dev.wuxie233.codecarry.data.api.PiStackNotificationDto
-import dev.wuxie233.codecarry.data.api.PiStackQuestionDto
-import dev.wuxie233.codecarry.data.api.PiStackQuestionResolutionDto
-import dev.wuxie233.codecarry.data.api.PiStackSessionDto
-import dev.wuxie233.codecarry.data.api.PiStackSessionState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import javax.inject.Inject
 import javax.inject.Singleton
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonNull
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 
 private const val TAG = "EventReducer"
 
@@ -96,41 +83,6 @@ class EventReducer @Inject constructor() {
     private val _projectInfo = MutableStateFlow<Project?>(null)
     val projectInfo: StateFlow<Project?> = _projectInfo.asStateFlow()
 
-    private val _serverRoundtables = MutableStateFlow<Map<String, Set<String>>>(emptyMap())
-
-    private val _roundtables = MutableStateFlow<Map<String, Roundtable>>(emptyMap())
-    val roundtables: StateFlow<Map<String, Roundtable>> = _roundtables.asStateFlow()
-
-    private val _roundtableMessages = MutableStateFlow<Map<String, List<Message>>>(emptyMap())
-    val roundtableMessages: StateFlow<Map<String, List<Message>>> = _roundtableMessages.asStateFlow()
-
-    private val _roundtableParts = MutableStateFlow<Map<String, List<Part>>>(emptyMap())
-    val roundtableParts: StateFlow<Map<String, List<Part>>> = _roundtableParts.asStateFlow()
-
-    private val _roundtableEvents = MutableStateFlow<Map<String, List<PiTransportEvent>>>(emptyMap())
-    val roundtableEvents: StateFlow<Map<String, List<PiTransportEvent>>> = _roundtableEvents.asStateFlow()
-
-    private val piTurnInfo = mutableMapOf<String, PiTurnInfo>()
-    private val processedPiEvents = mutableSetOf<PiEventKey>()
-    private val piStackCursorGuard = PiStackCursorGuard()
-    private val piStackJson = Json { ignoreUnknownKeys = true }
-
-    private val _piStackSessionStatesByServer = MutableStateFlow<Map<String, Map<String, PiStackSessionState>>>(emptyMap())
-    val piStackSessionStatesByServer: StateFlow<Map<String, Map<String, PiStackSessionState>>> =
-        _piStackSessionStatesByServer.asStateFlow()
-
-    private val _piStackNotificationsByServer = MutableStateFlow<Map<String, Map<String, PiStackNotificationDto>>>(emptyMap())
-    val piStackNotificationsByServer: StateFlow<Map<String, Map<String, PiStackNotificationDto>>> =
-        _piStackNotificationsByServer.asStateFlow()
-
-    private val _piStackMessagesByServer = MutableStateFlow<Map<String, Map<String, List<Message>>>>(emptyMap())
-    val piStackMessagesByServer: StateFlow<Map<String, Map<String, List<Message>>>> =
-        _piStackMessagesByServer.asStateFlow()
-
-    private val _piStackPartsByServer = MutableStateFlow<Map<String, Map<String, List<Part>>>>(emptyMap())
-    val piStackPartsByServer: StateFlow<Map<String, Map<String, List<Part>>>> =
-        _piStackPartsByServer.asStateFlow()
-    
     // ============ Event Processing ============
     
     /**
@@ -176,349 +128,9 @@ class EventReducer @Inject constructor() {
     fun processEvent(event: TransportEvent, serverId: String) {
         when (event) {
             is TransportEvent.OpenCode -> processEvent(event.event, serverId)
-            is TransportEvent.Pi -> processPiEvent(event.event, serverId)
         }
     }
 
-    internal fun piStackCursor(serverId: String): PiStackCursor? = piStackCursorGuard.cursor(serverId)
-
-    internal fun applyPiStackEvent(event: PiStackEventDto, serverId: String): PiStackEventResult {
-        val result = piStackCursorGuard.evaluate(serverId, event)
-        if (result !is PiStackEventResult.Applied) return result
-
-        when (event.type) {
-            "session.created", "session.adopted" -> {
-                val session = piStackJson.decodeFromJsonElement(PiStackSessionDto.serializer(), event.payload)
-                applyPiStackSession(serverId, session)
-            }
-            "session.updated" -> applyPiStackSessionPatch(serverId, event)
-            "operation.accepted" -> event.scope.sessionId?.let { sessionId ->
-                applyPiStackSessionState(serverId, sessionId, PiStackSessionState.Busy)
-            }
-            "operation.settled" -> event.scope.sessionId?.let { sessionId ->
-                val outcome = event.payload.jsonObject["outcome"]?.jsonPrimitive?.contentOrNull
-                applyPiStackSessionState(
-                    serverId,
-                    sessionId,
-                    if (outcome == "failed") PiStackSessionState.Error else PiStackSessionState.Idle,
-                )
-            }
-            "message.started", "message.completed" -> mergePiStackMessage(serverId, decodePiStackMessage(piStackJson, event))
-            "message.delta" -> decodePiStackMessageDelta(piStackJson, event).let { (messageId, partId, delta) ->
-                _parts.update { current -> appendPartDelta(current, messageId, partId, delta) }
-                _piStackPartsByServer.update { current ->
-                    val serverParts = current[serverId].orEmpty()
-                    current + (serverId to appendPartDelta(serverParts, messageId, partId, delta))
-                }
-            }
-            "tool.started", "tool.updated", "tool.completed" -> decodePiStackTool(piStackJson, event).let { (_, part) ->
-                _parts.update { current -> upsertPart(current, part) }
-                _piStackPartsByServer.update { current ->
-                    val serverParts = current[serverId].orEmpty()
-                    current + (serverId to upsertPart(serverParts, part))
-                }
-            }
-            "question.created" -> {
-                val question = piStackJson.decodeFromJsonElement(PiStackQuestionDto.serializer(), event.payload)
-                handleQuestionAsked(question.toQuestionAsked(), serverId)
-            }
-            "question.replied", "question.rejected", "question.expired" -> {
-                val questionId = event.payload.jsonObject["questionId"]?.jsonPrimitive?.contentOrNull
-                    ?: event.scope.questionId
-                if (questionId != null) removeQuestion(serverId, questionId)
-            }
-            "notification.created" -> {
-                val notification = piStackJson.decodeFromJsonElement(PiStackNotificationDto.serializer(), event.payload)
-                _piStackNotificationsByServer.update { current ->
-                    current + (serverId to (current[serverId].orEmpty() + (notification.id to notification)))
-                }
-            }
-            "notification.read" -> event.scope.notificationId?.let { notificationId ->
-                _piStackNotificationsByServer.update { current ->
-                    val remaining = current[serverId].orEmpty() - notificationId
-                    if (remaining.isEmpty()) current - serverId else current + (serverId to remaining)
-                }
-            }
-        }
-        piStackCursorGuard.advance(serverId, event)
-        return result
-    }
-
-    internal fun applyPiStackSnapshot(
-        serverId: String,
-        cursor: PiStackEventCursorDto,
-        sessions: List<PiStackSessionDto>,
-        questions: List<PiStackQuestionDto>,
-        notifications: List<PiStackNotificationDto>,
-    ) {
-        val previousIds = _serverSessions.value[serverId].orEmpty()
-        val nextIds = sessions.mapTo(mutableSetOf(), PiStackSessionDto::id)
-        (previousIds - nextIds).forEach { sessionId -> removeSessionForServer(serverId, sessionId) }
-        sessions.forEach { applyPiStackSession(serverId, it) }
-        _questionsByServer.update { current ->
-            val pending = questions
-                .filter { it.status == "pending" || it.status == "resolution_pending_delivery" }
-                .map(PiStackQuestionDto::toQuestionAsked)
-                .groupBy(SseEvent.QuestionAsked::sessionId)
-            if (pending.isEmpty()) current - serverId else current + (serverId to pending)
-        }
-        _piStackNotificationsByServer.update { current ->
-            val unread = notifications.filterNot(PiStackNotificationDto::read).associateBy(PiStackNotificationDto::id)
-            if (unread.isEmpty()) current - serverId else current + (serverId to unread)
-        }
-        piStackCursorGuard.installSnapshot(serverId, cursor)
-    }
-
-    fun replacePiStackSessions(serverId: String, sessions: List<PiStackSessionDto>) {
-        val previousIds = _serverSessions.value[serverId].orEmpty()
-        val nextIds = sessions.mapTo(mutableSetOf(), PiStackSessionDto::id)
-        (previousIds - nextIds).forEach { sessionId -> removeSessionForServer(serverId, sessionId) }
-        sessions.forEach { applyPiStackSession(serverId, it) }
-    }
-
-    fun applyPiStackQuestionResolution(serverId: String, result: PiStackQuestionResolutionDto) {
-        if (dev.wuxie233.codecarry.service.shouldRemovePiStackQuestion(result)) {
-            removeQuestion(serverId, result.question.id)
-        }
-    }
-
-    private fun applyPiStackSession(serverId: String, session: PiStackSessionDto) {
-        handleSessionUpdated(SseEvent.SessionUpdated(session.toSession()), serverId)
-        _piStackSessionStatesByServer.update { current ->
-            current + (serverId to (current[serverId].orEmpty() + (session.id to session.stateKind)))
-        }
-        handleSessionStatus(SseEvent.SessionStatus(session.id, session.stateKind.toSessionStatus()), serverId)
-    }
-
-    private fun applyPiStackSessionPatch(serverId: String, event: PiStackEventDto) {
-        val sessionId = event.scope.sessionId ?: return
-        val state = event.payload.jsonObject["state"]?.jsonPrimitive?.contentOrNull
-        val current = _serverSessionDetails.value[serverId]?.get(sessionId)
-        val title = event.payload.jsonObject["title"]?.let { value ->
-            if (value is JsonNull) null else value.jsonPrimitive.contentOrNull
-        } ?: current?.title
-        if (current != null) handleSessionUpdated(SseEvent.SessionUpdated(current.copy(title = title)), serverId)
-        state?.toPiStackSessionState()?.let { sessionState ->
-            applyPiStackSessionState(serverId, sessionId, sessionState)
-        }
-    }
-
-    private fun applyPiStackSessionState(serverId: String, sessionId: String, state: PiStackSessionState) {
-        _piStackSessionStatesByServer.update { states ->
-            states + (serverId to (states[serverId].orEmpty() + (sessionId to state)))
-        }
-        handleSessionStatus(SseEvent.SessionStatus(sessionId, state.toSessionStatus()), serverId)
-    }
-
-    private fun mergePiStackMessage(serverId: String, message: MessageWithParts) {
-        _messages.update { current -> upsertMessage(current, message.info.sessionId, message.info) }
-        _parts.update { current -> message.parts.fold(current, ::upsertPart) }
-        _piStackMessagesByServer.update { current ->
-            val serverMessages = current[serverId].orEmpty()
-            current + (serverId to upsertMessage(serverMessages, message.info.sessionId, message.info))
-        }
-        _piStackPartsByServer.update { current ->
-            val serverParts = current[serverId].orEmpty()
-            current + (serverId to message.parts.fold(serverParts, ::upsertPart))
-        }
-    }
-
-    private fun removeSessionForServer(serverId: String, sessionId: String) {
-        val session = _serverSessionDetails.value[serverId]?.get(sessionId) ?: return
-        handleSessionDeleted(SseEvent.SessionDeleted(session), serverId)
-        _piStackSessionStatesByServer.update { current ->
-            val remaining = current[serverId].orEmpty() - sessionId
-            if (remaining.isEmpty()) current - serverId else current + (serverId to remaining)
-        }
-    }
-
-    private fun processPiEvent(event: PiTransportEvent, serverId: String) {
-        val roundtableId = event.envelope.roundId
-        val eventKey = PiEventKey(roundtableId, event.envelope.eventId)
-        if (!processedPiEvents.add(eventKey)) return
-        trackRoundtable(serverId, roundtableId)
-        appendRoundtableEvent(roundtableId, event)
-
-        when (event) {
-            is PiTransportEvent.RoundStart -> updateRoundtable(
-                event = event,
-                status = Roundtable.Status.Running,
-                topic = event.topic,
-                rosterSummary = event.participantIds.joinToString(", "),
-                incrementRound = true,
-            )
-            is PiTransportEvent.AgentTurnStart -> handlePiAgentTurnStart(event)
-            is PiTransportEvent.MessageDelta -> handlePiMessageDelta(event)
-            is PiTransportEvent.MessageEnd -> handlePiMessageEnd(event)
-            is PiTransportEvent.ModeratorSynthesis -> handlePiModeratorSynthesis(event)
-            is PiTransportEvent.AgentRetry -> updateRoundtable(event, Roundtable.Status.Running)
-            is PiTransportEvent.AgentFallback -> updateRoundtable(event, Roundtable.Status.Running)
-            is PiTransportEvent.AgentError -> updateRoundtable(event, Roundtable.Status.Error)
-            is PiTransportEvent.AwaitingSkip -> updateRoundtable(event, Roundtable.Status.AwaitingSkip)
-            is PiTransportEvent.AwaitingCommand -> updateRoundtable(event, Roundtable.Status.AwaitingCommand)
-            is PiTransportEvent.RoundEnd -> updateRoundtable(
-                event = event,
-                status = Roundtable.Status.Completed,
-                completedAt = event.envelope.ts,
-            )
-            is PiTransportEvent.Error -> updateRoundtable(event, Roundtable.Status.Error)
-        }
-    }
-
-    private fun trackRoundtable(serverId: String, roundtableId: String) {
-        _serverRoundtables.update { current ->
-            val existing = current[serverId] ?: emptySet()
-            current + (serverId to (existing + roundtableId))
-        }
-    }
-
-    private fun appendRoundtableEvent(roundtableId: String, event: PiTransportEvent) {
-        _roundtableEvents.update { current ->
-            val events = (current[roundtableId].orEmpty() + event)
-                .sortedWith(compareBy<PiTransportEvent> { it.envelope.sequence }.thenBy { it.envelope.eventId })
-            current + (roundtableId to events)
-        }
-    }
-
-    private fun updateRoundtable(
-        event: PiTransportEvent,
-        status: Roundtable.Status,
-        topic: String? = null,
-        rosterSummary: String? = null,
-        incrementRound: Boolean = false,
-        completedAt: String? = null,
-    ) {
-        val roundtableId = event.envelope.roundId
-        _roundtables.update { current ->
-            val existing = current[roundtableId]
-            val time = existing?.time ?: Roundtable.Time(created = event.envelope.ts)
-            val updated = (existing ?: Roundtable(id = roundtableId)).copy(
-                topic = topic ?: existing?.topic,
-                status = status,
-                roundCount = if (incrementRound) (existing?.roundCount ?: 0) + 1 else existing?.roundCount ?: 0,
-                rosterSummary = rosterSummary ?: existing?.rosterSummary,
-                time = time.copy(updated = event.envelope.ts, completed = completedAt ?: time.completed),
-            )
-            current + (roundtableId to updated)
-        }
-    }
-
-    private fun handlePiAgentTurnStart(event: PiTransportEvent.AgentTurnStart) {
-        updateRoundtable(event, Roundtable.Status.Running)
-        val turnId = event.envelope.turnId ?: return
-        piTurnInfo[turnId] = PiTurnInfo(
-            roundtableId = event.envelope.roundId,
-            turnId = turnId,
-            providerId = event.providerId,
-            modelId = event.model,
-            author = event.envelope.author,
-            actionTag = event.actionTag,
-            startedSequence = event.envelope.sequence,
-        )
-        ensurePiMessage(event.envelope.roundId, turnId, event.envelope.sequence, event.envelope.author)
-        ensurePiTextPart(event.envelope.roundId, turnId)
-    }
-
-    private fun handlePiMessageDelta(event: PiTransportEvent.MessageDelta) {
-        updateRoundtable(event, Roundtable.Status.Running)
-        val turnId = event.envelope.turnId ?: return
-        ensurePiMessage(event.envelope.roundId, turnId, event.envelope.sequence, event.envelope.author)
-        ensurePiTextPart(event.envelope.roundId, turnId)
-        _roundtableParts.update { current ->
-            appendPartDelta(current, messageId = turnId, partId = piTextPartId(turnId), delta = event.chunk)
-        }
-    }
-
-    private fun handlePiMessageEnd(event: PiTransportEvent.MessageEnd) {
-        updateRoundtable(event, Roundtable.Status.Running)
-        val turnId = event.envelope.turnId ?: return
-        ensurePiMessage(event.envelope.roundId, turnId, event.envelope.sequence, event.envelope.author, finish = event.finishReason)
-        ensurePiTextPart(event.envelope.roundId, turnId)
-        _roundtableParts.update { current ->
-            upsertPart(
-                current,
-                Part.Text(
-                    id = piTextPartId(turnId),
-                    sessionId = event.envelope.roundId,
-                    messageId = turnId,
-                    text = event.assembledText,
-                )
-            )
-        }
-        _roundtableMessages.update { current ->
-            upsertMessage(current, event.envelope.roundId, piAssistantMessage(event.envelope.roundId, turnId, event.envelope.sequence, event.envelope.author, finish = event.finishReason))
-        }
-    }
-
-    private fun handlePiModeratorSynthesis(event: PiTransportEvent.ModeratorSynthesis) {
-        updateRoundtable(event, Roundtable.Status.Running)
-        val messageId = event.envelope.turnId ?: "moderator-${event.envelope.eventId}"
-        _roundtableMessages.update { current ->
-            upsertMessage(current, event.envelope.roundId, piAssistantMessage(event.envelope.roundId, messageId, event.envelope.sequence, event.envelope.author, finish = "stop"))
-        }
-        _roundtableParts.update { current ->
-            upsertPart(
-                current,
-                Part.Text(
-                    id = piTextPartId(messageId),
-                    sessionId = event.envelope.roundId,
-                    messageId = messageId,
-                    text = event.markdownBody,
-                )
-            )
-        }
-    }
-
-    private fun ensurePiMessage(roundtableId: String, turnId: String, sequence: Long, author: dev.wuxie233.codecarry.domain.transport.PiAuthor, finish: String? = null) {
-        _roundtableMessages.update { current ->
-            val exists = current[roundtableId].orEmpty().any { message -> message.id == turnId }
-            if (exists && finish == null) current else upsertMessage(current, roundtableId, piAssistantMessage(roundtableId, turnId, sequence, author, finish))
-        }
-    }
-
-    private fun ensurePiTextPart(roundtableId: String, turnId: String) {
-        _roundtableParts.update { current ->
-            val partId = piTextPartId(turnId)
-            val exists = current[turnId].orEmpty().any { part -> part.id == partId }
-            if (exists) current else upsertPart(
-                current,
-                Part.Text(
-                    id = partId,
-                    sessionId = roundtableId,
-                    messageId = turnId,
-                )
-            )
-        }
-    }
-
-    private fun piAssistantMessage(
-        roundtableId: String,
-        turnId: String,
-        sequence: Long,
-        author: dev.wuxie233.codecarry.domain.transport.PiAuthor,
-        finish: String? = null,
-    ): Message.Assistant {
-        val turn = piTurnInfo[turnId]
-        return Message.Assistant(
-            id = turnId,
-            sessionId = roundtableId,
-            time = TimeInfo(created = turn?.startedSequence ?: sequence, completed = if (finish == null) null else sequence),
-            modelId = turn?.modelId,
-            providerId = turn?.providerId,
-            finish = finish,
-            senderId = author.id,
-            senderName = author.name,
-            mbti = author.mbti,
-            senderRole = author.role,
-            colorSeed = author.colorSeed,
-            actionTag = turn?.actionTag,
-        )
-    }
-
-    private fun piTextPartId(turnId: String): String = "$turnId-text"
-    
-    // ============ Server Events ============
-    
     private fun handleServerConnected() {
         if (BuildConfig.DEBUG) Log.d(TAG, "Server connected")
     }
@@ -997,45 +609,6 @@ class EventReducer @Inject constructor() {
         sessionStatusRevisions[sessionId] = nextSessionStatusRevision.incrementAndGet()
     }
 
-    fun setRoundtables(serverId: String, roundtables: List<Roundtable>) {
-        val roundtableIds = roundtables.map { it.id }.toSet()
-        _serverRoundtables.update { current ->
-            val existing = current[serverId] ?: emptySet()
-            current + (serverId to (existing + roundtableIds))
-        }
-        _roundtables.update { current ->
-            current + roundtables.associateBy { it.id }
-        }
-    }
-
-    fun appendRoundtableUserMessage(roundtableId: String, text: String, createdAt: Long = System.currentTimeMillis()) {
-        val trimmed = text.trim()
-        if (trimmed.isBlank()) return
-        val messageId = "local-user-$createdAt-${trimmed.hashCode()}"
-        _roundtableMessages.update { current ->
-            upsertMessage(
-                current,
-                roundtableId,
-                Message.User(
-                    id = messageId,
-                    sessionId = roundtableId,
-                    time = TimeInfo(created = createdAt, completed = createdAt),
-                ),
-            )
-        }
-        _roundtableParts.update { current ->
-            upsertPart(
-                current,
-                Part.Text(
-                    id = "$messageId-text",
-                    sessionId = roundtableId,
-                    messageId = messageId,
-                    text = trimmed,
-                ),
-            )
-        }
-    }
-
     fun setActiveSessionId(sessionId: String?) {
         _activeSessionId.value = sessionId
     }
@@ -1107,18 +680,6 @@ class EventReducer @Inject constructor() {
         _todos.value = emptyMap()
         _vcsBranch.value = null
         _projectInfo.value = null
-        _serverRoundtables.value = emptyMap()
-        _roundtables.value = emptyMap()
-        _roundtableMessages.value = emptyMap()
-        _roundtableParts.value = emptyMap()
-        _roundtableEvents.value = emptyMap()
-        piTurnInfo.clear()
-        processedPiEvents.clear()
-        piStackCursorGuard.clearAll()
-        _piStackSessionStatesByServer.value = emptyMap()
-        _piStackNotificationsByServer.value = emptyMap()
-        _piStackMessagesByServer.value = emptyMap()
-        _piStackPartsByServer.value = emptyMap()
     }
     
     /**
@@ -1127,24 +688,16 @@ class EventReducer @Inject constructor() {
      */
     fun clearForServer(serverId: String) {
         val sessionIds = _serverSessions.value[serverId] ?: emptySet()
-        val roundtableIds = _serverRoundtables.value[serverId] ?: emptySet()
         _permissionsByServer.update { it - serverId }
         _questionsByServer.update { it - serverId }
-        _piStackSessionStatesByServer.update { it - serverId }
-        _piStackNotificationsByServer.update { it - serverId }
-        _piStackMessagesByServer.update { it - serverId }
-        _piStackPartsByServer.update { it - serverId }
-        piStackCursorGuard.clear(serverId)
         _serverSessionDetails.update { it - serverId }
-        if (sessionIds.isEmpty() && roundtableIds.isEmpty()) {
+        if (sessionIds.isEmpty()) {
             _serverSessions.update { it - serverId }
-            _serverRoundtables.update { it - serverId }
             return
         }
         
         // Remove the server's session tracking
         _serverSessions.update { it - serverId }
-        _serverRoundtables.update { it - serverId }
         val sessionIdsOwnedElsewhere = _serverSessions.value.values.flatten().toSet()
         val orphanedSessionIds = sessionIds - sessionIdsOwnedElsewhere
         
@@ -1167,24 +720,11 @@ class EventReducer @Inject constructor() {
         _messages.update { it - orphanedSessionIds }
         _parts.update { it - messageIds }
 
-        val roundtableMessageIds = _roundtableMessages.value
-            .filterKeys { it in roundtableIds }
-            .values
-            .flatten()
-            .map { it.id }
-            .toSet()
-        _roundtables.update { it - roundtableIds }
-        _roundtableMessages.update { it - roundtableIds }
-        _roundtableParts.update { it - roundtableMessageIds }
-        _roundtableEvents.update { it - roundtableIds }
-        piTurnInfo.keys.removeAll(roundtableMessageIds)
-        processedPiEvents.removeAll { event -> event.roundtableId in roundtableIds }
-
         if (_activeSessionId.value in orphanedSessionIds) {
             _activeSessionId.value = null
         }
 
-        if (BuildConfig.DEBUG) Log.d(TAG, "Clearing state for server $serverId (${sessionIds.size} sessions, ${roundtableIds.size} roundtables)")
+        if (BuildConfig.DEBUG) Log.d(TAG, "Clearing state for server $serverId (${sessionIds.size} sessions)")
     }
     
     // ============ Todo Events ============
@@ -1204,30 +744,4 @@ class EventReducer @Inject constructor() {
     private fun handleProjectUpdated(event: SseEvent.ProjectUpdated) {
         _projectInfo.value = event.info
     }
-}
-
-private data class PiTurnInfo(
-    val roundtableId: String,
-    val turnId: String,
-    val providerId: String,
-    val modelId: String,
-    val author: dev.wuxie233.codecarry.domain.transport.PiAuthor,
-    val actionTag: String?,
-    val startedSequence: Long,
-)
-
-private data class PiEventKey(
-    val roundtableId: String,
-    val eventId: Long,
-)
-
-private fun String.toPiStackSessionState(): PiStackSessionState = when (this) {
-    "idle" -> PiStackSessionState.Idle
-    "busy" -> PiStackSessionState.Busy
-    "retry" -> PiStackSessionState.Retry
-    "awaiting_command" -> PiStackSessionState.AwaitingCommand
-    "awaiting_skip" -> PiStackSessionState.AwaitingSkip
-    "ended" -> PiStackSessionState.Ended
-    "error" -> PiStackSessionState.Error
-    else -> PiStackSessionState.Unknown
 }

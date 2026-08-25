@@ -4,7 +4,6 @@ import android.content.ContextWrapper
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.lifecycle.SavedStateHandle
 import dev.wuxie233.codecarry.data.api.OpenCodeApi
-import dev.wuxie233.codecarry.data.api.PiApi
 import dev.wuxie233.codecarry.data.api.PromptPart
 import dev.wuxie233.codecarry.data.preferences.SessionListPreferencesRepository
 import dev.wuxie233.codecarry.data.repository.DraftRepository
@@ -226,7 +225,6 @@ class ChatViewModelOptimisticBusyTest {
         ),
         eventReducer = reducer,
         api = api,
-        piApi = mockPiApi(),
         json = json,
         draftRepository = draftRepository(),
         sessionListPreferencesRepository = sessionListPreferencesRepository(),
@@ -268,16 +266,6 @@ class ChatViewModelOptimisticBusyTest {
         headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
     )
 
-    private fun mockPiApi(): PiApi {
-        val engine = MockEngine {
-            respond(
-                content = ByteReadChannel("{}"),
-                status = HttpStatusCode.OK,
-                headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
-            )
-        }
-        return PiApi(HttpClient(engine) { install(ContentNegotiation) { json(json) } }, json)
-    }
 
     private fun draftRepository(): DraftRepository {
         val filesDir = tmpFolder.newFolder("drafts-${System.nanoTime()}")

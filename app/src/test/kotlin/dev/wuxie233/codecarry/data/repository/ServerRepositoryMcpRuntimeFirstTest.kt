@@ -2,7 +2,6 @@ package dev.wuxie233.codecarry.data.repository
 
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import dev.wuxie233.codecarry.data.api.OpenCodeApi
-import dev.wuxie233.codecarry.data.api.PiApi
 import dev.wuxie233.codecarry.data.api.ServerConnection
 import dev.wuxie233.codecarry.domain.model.McpConfigLoadState
 import dev.wuxie233.codecarry.domain.model.McpSource
@@ -177,17 +176,10 @@ class ServerRepositoryMcpRuntimeFirstTest {
         return ServerRepository(
             dataStore = dataStore,
             api = api,
-            piApi = unusedPiApi(),
             json = json,
         )
     }
 
-    private fun unusedPiApi(): PiApi {
-        val client = HttpClient(MockEngine { error("Unexpected Pi API request") }) {
-            install(ContentNegotiation) { json(json) }
-        }
-        return PiApi(client, json)
-    }
 
     private fun newApi(
         captured: MutableList<HttpRequestData>,

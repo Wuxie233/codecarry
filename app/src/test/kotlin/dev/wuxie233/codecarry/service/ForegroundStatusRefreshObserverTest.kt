@@ -37,8 +37,6 @@ class ForegroundStatusRefreshObserverTest {
     fun `foreground reconciliation selects only connected OpenCode servers`() {
         assertTrue(shouldReconcileForegroundStatus(ServerType.OPENCODE, isConnected = true))
         assertFalse(shouldReconcileForegroundStatus(ServerType.OPENCODE, isConnected = false))
-        assertFalse(shouldReconcileForegroundStatus(ServerType.CODEX, isConnected = true))
-        assertFalse(shouldReconcileForegroundStatus(ServerType.PI_ROUNDTABLE, isConnected = true))
     }
 
     @Test
@@ -47,8 +45,6 @@ class ForegroundStatusRefreshObserverTest {
             Target("open-a", ServerType.OPENCODE, true),
             Target("open-b", ServerType.OPENCODE, true),
             Target("open-offline", ServerType.OPENCODE, false),
-            Target("codex", ServerType.CODEX, true),
-            Target("pi", ServerType.PI_ROUNDTABLE, true),
         )
         val reconciled = mutableSetOf<String>()
 
