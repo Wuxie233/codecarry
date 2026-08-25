@@ -530,6 +530,19 @@ class EventReducer @Inject constructor() {
      * Load initial session list for a server.
      * Registers all session IDs as belonging to the given serverId.
      */
+    fun replaceSessions(serverId: String, sessions: List<Session>) {
+        val previousIds = _serverSessions.value[serverId].orEmpty()
+        val sessionIds = sessions.map { it.id }.toSet()
+        _serverSessions.update { current -> current + (serverId to sessionIds) }
+        _serverSessionDetails.update { current ->
+            current + (serverId to sessions.associateBy(Session::id))
+        }
+        _sessions.update { current ->
+            val kept = current.filterNot { it.id in previousIds || it.id in sessionIds }
+            (kept + sessions).distinctBy { it.id }.sortedByDescending { it.time.updated }
+        }
+    }
+
     fun setSessions(serverId: String, sessions: List<Session>) {
         val sessionIds = sessions.map { it.id }.toSet()
         _serverSessions.update { current ->

@@ -30,6 +30,7 @@ import dev.wuxie233.codecarry.data.dsh.DshQuestionAnswer
 import dev.wuxie233.codecarry.data.dsh.DshQuestionAnswerItem
 import dev.wuxie233.codecarry.data.dsh.DshRpcError
 import dev.wuxie233.codecarry.data.dsh.DshRpcResult
+import dev.wuxie233.codecarry.data.dsh.dshMessageSeq
 import dev.wuxie233.codecarry.data.dsh.dshPromptRequest
 import dev.wuxie233.codecarry.data.dsh.dshQueueItemText
 import dev.wuxie233.codecarry.data.dsh.foldDshHistory
@@ -71,7 +72,7 @@ import java.util.UUID
 import javax.inject.Inject
 
 private const val TAG = "ChatViewModel"
-private const val PI_STACK_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024
+private const val DSH_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024
 
 private fun decodeRouteArg(value: String?): String {
     val raw = value.orEmpty()
@@ -134,6 +135,7 @@ data class ChatUiState(
     val supportsThinkingSelection: Boolean = false,
     val supportsCompact: Boolean = false,
     val supportsFork: Boolean = false,
+    val supportsRestore: Boolean = true,
     val supportsCommands: Boolean = false,
     val supportsRename: Boolean = false,
     val supportsSessionCreate: Boolean = false,
@@ -498,6 +500,7 @@ class ChatViewModel @Inject constructor(
             supportsThinkingSelection = true,
             supportsCompact = !isDsh,
             supportsFork = true,
+            supportsRestore = !isDsh,
             supportsCommands = true,
             supportsRename = true,
             supportsSessionCreate = true,
@@ -591,7 +594,7 @@ class ChatViewModel @Inject constructor(
 
     private fun applyDshState(state: DshEventState) {
         val mapped = mapDshEventStateToSessions(state)
-        eventReducer.setSessions(serverId, mapped.sessions)
+        eventReducer.replaceSessions(serverId, mapped.sessions)
         mapped.statuses.forEach { (id, status) ->
             eventReducer.updateSessionStatus(id, status)
         }
@@ -600,8 +603,9 @@ class ChatViewModel @Inject constructor(
             val folded = foldDshHistory(sessionId, snapshot.events)
             eventReducer.setMessages(sessionId, folded)
             sessionDirectory = snapshot.cwd?.takeIf { it.isNotBlank() } ?: sessionDirectory
-            _hasOlderMessages.value = snapshot.events.isNotEmpty() &&
-                snapshot.events.minOf { it.seq } > 0
+            viewModelScope.launch {
+                eventReducer.setMessages(sessionId, resolveDshAttachments(folded))
+            }
         }
         eventReducer.setPermissions(
             serverId,
@@ -650,11 +654,32 @@ class ChatViewModel @Inject constructor(
                 projections = history.projections,
                 replace = false,
             )
-            _hasOlderMessages.value = history.hasMore
+            if (beforeSeq == null) {
+                _hasOlderMessages.value = history.hasMore
+            } else if (!history.hasMore) {
+                _hasOlderMessages.value = false
+            }
             applyDshState(dshReducer.state.value)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to load DSH history", e)
             if (beforeSeq == null) _error.value = e.message ?: "Failed to load messages"
+        }
+    }
+
+    private suspend fun resolveDshAttachments(messages: List<MessageWithParts>): List<MessageWithParts> {
+        return messages.map { message ->
+            val parts = message.parts.map { part ->
+                val file = part as? Part.File ?: return@map part
+                val attachmentId = file.url?.removePrefix("dsh-attachment:") ?: return@map part
+                if (attachmentId == file.url) return@map part
+                runCatching {
+                    val fetched = dshApi.sessionAttachment(dshConn, sessionId, attachmentId)
+                    if (fetched.data.length * 3 / 4 > DSH_ATTACHMENT_MAX_BYTES) part else {
+                        file.copy(url = "data:${fetched.attachment.mediaType};base64,${fetched.data}")
+                    }
+                }.getOrDefault(part)
+            }
+            message.copy(parts = parts)
         }
     }
 
@@ -1196,7 +1221,7 @@ class ChatViewModel @Inject constructor(
 
     private fun sendParts(parts: List<PromptPart>, onResult: (Boolean) -> Unit = {}) {
         if (isDsh) {
-            sendDshParts(parts, steer = uiState.value.sessionStatus is SessionStatus.Busy, onResult)
+            enqueueDshSend(parts, onResult)
             return
         }
         val model = if (_selectedProviderId.value != null && _selectedModelId.value != null) {
@@ -1217,10 +1242,10 @@ class ChatViewModel @Inject constructor(
 
     fun retryPendingSend() {
         if (isDsh) {
-            val failed = pendingOpenCodeSends.firstOrNull() ?: return
+            if (pendingOpenCodeSends.isEmpty()) return
             _pendingSendError.value = null
             _error.value = null
-            sendDshParts(failed.parts, steer = uiState.value.sessionStatus is SessionStatus.Busy)
+            drainPendingDshSends()
             return
         }
         if (pendingOpenCodeSends.isEmpty()) return
@@ -1233,7 +1258,7 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    private fun sendDshParts(parts: List<PromptPart>, steer: Boolean, onResult: (Boolean) -> Unit = {}) {
+    private fun enqueueDshSend(parts: List<PromptPart>, onResult: (Boolean) -> Unit = {}) {
         pendingOpenCodeSends.addLast(
             PendingOpenCodeSend(
                 parts = parts.toList(),
@@ -1244,19 +1269,31 @@ class ChatViewModel @Inject constructor(
         )
         _pendingSendCount.value = pendingOpenCodeSends.size
         onResult(true)
-        viewModelScope.launch {
+        if (_pendingSendError.value == null) drainPendingDshSends()
+    }
+
+    private fun drainPendingDshSends() {
+        if (pendingOpenCodeDrain?.isActive == true || pendingOpenCodeSends.isEmpty()) return
+        pendingOpenCodeDrain = viewModelScope.launch {
             _isSending.value = true
             try {
-                val request = dshPromptRequest(parts, steer)
-                dshApi.sessionPrompt(dshConn, sessionId, request.mode, request.content)
-                pendingOpenCodeSends.removeFirstOrNull()
-                _pendingSendCount.value = pendingOpenCodeSends.size
-                _pendingSendError.value = null
-                eventReducer.updateSessionStatus(sessionId, SessionStatus.Busy)
-            } catch (error: Exception) {
-                Log.e(TAG, "Failed to send DSH prompt", error)
-                _pendingSendError.value = error.message ?: "Failed to send queued message"
-                _error.value = _pendingSendError.value
+                while (pendingOpenCodeSends.isNotEmpty() && _pendingSendError.value == null) {
+                    val head = pendingOpenCodeSends.first()
+                    try {
+                        val steer = uiState.value.sessionStatus is SessionStatus.Busy
+                        val request = dshPromptRequest(head.parts, steer)
+                        dshApi.sessionPrompt(dshConn, sessionId, request.mode, request.content)
+                        pendingOpenCodeSends.removeFirst()
+                        _pendingSendCount.value = pendingOpenCodeSends.size
+                        _pendingSendError.value = null
+                        eventReducer.updateSessionStatus(sessionId, SessionStatus.Busy)
+                    } catch (error: Exception) {
+                        Log.e(TAG, "Failed to send DSH prompt", error)
+                        _pendingSendError.value = error.message ?: "Failed to send queued message"
+                        _error.value = _pendingSendError.value
+                        break
+                    }
+                }
             } finally {
                 _isSending.value = false
             }
@@ -1576,6 +1613,10 @@ class ChatViewModel @Inject constructor(
 
     /** Undo the last user message in the session, restoring its text to the input field. */
     fun undoMessage(onResult: (Boolean) -> Unit) {
+        if (isDsh) {
+            onResult(false)
+            return
+        }
         viewModelScope.launch {
             try {
                 // Find the last user message (before any existing revert point)
@@ -1599,6 +1640,10 @@ class ChatViewModel @Inject constructor(
 
     /** Revert to a specific user message by ID, optionally restoring its text to the input field. */
     fun revertMessage(messageId: String, revertedText: String? = null, onResult: (Boolean) -> Unit) {
+        if (isDsh) {
+            onResult(false)
+            return
+        }
         viewModelScope.launch {
             try {
                 api.revertSession(conn, sessionId, messageId)
@@ -1681,7 +1726,7 @@ class ChatViewModel @Inject constructor(
                     sessionLoaded.await()
                 }
                 if (isDsh) {
-                    val atSeq = messageId?.substringAfterLast('-')?.toLongOrNull()
+                    val atSeq = messageId?.let(::dshMessageSeq)
                     val forked = dshApi.sessionFork(dshConn, sessionId, atSeq)
                     val session = Session(
                         id = forked.sessionId,

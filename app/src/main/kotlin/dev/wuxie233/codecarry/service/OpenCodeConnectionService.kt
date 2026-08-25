@@ -429,7 +429,7 @@ class OpenCodeConnectionService : Service() {
     private suspend fun autoConnectConfiguredServers() {
         try {
             val autoConnectServers = serverRepository.servers.first().filter {
-                it.autoConnect
+                it.autoConnect && it.type == ServerType.OPENCODE
             }
             if (autoConnectServers.isEmpty()) return
             Log.i(TAG, "Auto-connecting ${autoConnectServers.size} server(s)")

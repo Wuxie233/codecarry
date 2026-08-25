@@ -132,9 +132,6 @@ enum class BackendSessionState {
     IDLE,
     BUSY,
     RETRY,
-    AWAITING_COMMAND,
-    AWAITING_SKIP,
-    ENDED,
     ERROR,
     UNKNOWN,
 }
@@ -708,7 +705,7 @@ class SessionListViewModel @Inject constructor(
 
     private fun applyDshState(state: DshEventState) {
         val mapped = mapDshEventStateToSessions(state)
-        eventReducer.setSessions(serverId, mapped.sessions)
+        eventReducer.replaceSessions(serverId, mapped.sessions)
         mapped.statuses.forEach { (id, status) -> eventReducer.updateSessionStatus(id, status) }
         mapped.sessions.forEach { session ->
             eventReducer.setPermissions(serverId, session.id, state.pendingApprovalsFor(session.id).map(::mapDshApproval))

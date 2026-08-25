@@ -57,6 +57,18 @@ fun dshPromptRequest(parts: List<PromptPart>, steer: Boolean): DshPromptRequest 
                                 part.filename?.let { put("name", it) }
                             },
                         )
+                    } else {
+                        val mention = part.path?.takeIf { it.isNotBlank() }
+                            ?: part.filename?.takeIf { it.isNotBlank() }
+                            ?: part.url?.removePrefix("file:///")?.takeIf { it.isNotBlank() }
+                        if (!mention.isNullOrBlank()) {
+                            add(
+                                buildJsonObject {
+                                    put("type", "text")
+                                    put("text", mention)
+                                },
+                            )
+                        }
                     }
                 }
             }
@@ -100,6 +112,9 @@ fun DshSessionEventDto.toSessionEvent(): DshSessionEvent = DshSessionEvent(
     raw = JsonObject(emptyMap()),
 )
 
+fun dshMessageSeq(messageId: String): Long? =
+    messageId.substringAfterLast('-', missingDelimiterValue = "").toLongOrNull()
+
 fun foldDshHistory(sessionId: String, events: List<DshSessionEvent>): List<MessageWithParts> {
     val ordered = events.sortedBy { it.seq }
     val messages = linkedMapOf<String, MessageWithParts>()
@@ -126,8 +141,9 @@ fun foldDshHistory(sessionId: String, events: List<DshSessionEvent>): List<Messa
                     removeRange(start, end)
                 }
                 val message = userMessage(sessionId, event) ?: continue
-                messages[message.info.id] = message
-                seqToMessageId[event.seq] = message.info.id
+                val messageId = dshFoldedMessageId(event.seq, message.info.id)
+                messages[messageId] = message.copy(info = (message.info as Message.User).copy(id = messageId))
+                seqToMessageId[event.seq] = messageId
             }
             "assistant/chunk" -> {
                 val data = event.data?.obj() ?: continue
@@ -151,10 +167,23 @@ fun foldDshHistory(sessionId: String, events: List<DshSessionEvent>): List<Messa
                     seqToMessageId.entries.removeAll { it.value == stream.messageId }
                 }
                 val message = assistantMessage(sessionId, event) ?: continue
-                messages[message.info.id] = message
-                seqToMessageId[event.seq] = message.info.id
-                message.parts.filterIsInstance<Part.Tool>().forEach { tool ->
-                    if (tool.callId.isNotBlank()) toolOwners[tool.callId] = message.info.id
+                val messageId = dshFoldedMessageId(event.seq, message.info.id)
+                val remapped = message.copy(
+                    info = (message.info as Message.Assistant).copy(id = messageId),
+                    parts = message.parts.map { part ->
+                        when (part) {
+                            is Part.Text -> part.copy(messageId = messageId)
+                            is Part.Reasoning -> part.copy(messageId = messageId)
+                            is Part.File -> part.copy(messageId = messageId)
+                            is Part.Tool -> part.copy(messageId = messageId)
+                            else -> part
+                        }
+                    },
+                )
+                messages[messageId] = remapped
+                seqToMessageId[event.seq] = messageId
+                remapped.parts.filterIsInstance<Part.Tool>().forEach { tool ->
+                    if (tool.callId.isNotBlank()) toolOwners[tool.callId] = messageId
                 }
             }
             "tool/call" -> {
@@ -385,6 +414,9 @@ private fun contentBlocksToParts(sessionId: String, messageId: String, content: 
         }
     }
 }
+
+private fun dshFoldedMessageId(seq: Long, rawId: String): String =
+    if (rawId.endsWith("-$seq")) rawId else "$rawId-$seq"
 
 private fun currentAssistantId(messages: Map<String, MessageWithParts>, data: JsonObject): String? {
     val turn = data.long("turn")

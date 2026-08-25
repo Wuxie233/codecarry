@@ -41,6 +41,11 @@ fun DshHostSurfacesScreen(
     var workspacePath by remember { mutableStateOf("") }
     var folderName by remember { mutableStateOf("") }
     var parentSessionId by remember { mutableStateOf("") }
+    var sessionId by remember { mutableStateOf("") }
+    var goalObjective by remember { mutableStateOf("") }
+    var settingsNs by remember { mutableStateOf("") }
+    var settingsPatch by remember { mutableStateOf("[]") }
+    var subagentPrompt by remember { mutableStateOf("") }
 
     Scaffold(
         topBar = {
@@ -154,9 +159,46 @@ fun DshHostSurfacesScreen(
 
             if (catalog?.canListPresets == true) {
                 DshSurfaceSection(stringResource(R.string.dsh_host_surfaces_presets)) {
+                    OutlinedTextField(
+                        value = sessionId,
+                        onValueChange = { sessionId = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text(stringResource(R.string.dsh_host_surfaces_session_id)) },
+                    )
                     uiState.presets?.presets.orEmpty().forEach { preset ->
                         val label = preset.name ?: preset.id
-                        Text(label, style = MaterialTheme.typography.bodyMedium)
+                        TextButton(
+                            onClick = { viewModel.selectPreset(sessionId.trim(), preset.id) },
+                            enabled = sessionId.isNotBlank() && catalog.canSelectPreset,
+                        ) {
+                            Text("${stringResource(R.string.dsh_host_surfaces_select_preset)}: $label")
+                        }
+                    }
+                }
+            }
+
+            if (catalog?.canManageGoals == true) {
+                DshSurfaceSection(stringResource(R.string.dsh_host_surfaces_goals)) {
+                    OutlinedTextField(
+                        value = sessionId,
+                        onValueChange = { sessionId = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text(stringResource(R.string.dsh_host_surfaces_session_id)) },
+                    )
+                    OutlinedTextField(
+                        value = goalObjective,
+                        onValueChange = { goalObjective = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text(stringResource(R.string.dsh_host_surfaces_goal_objective)) },
+                    )
+                    TextButton(
+                        onClick = { viewModel.createGoal(sessionId.trim(), goalObjective.trim()) },
+                        enabled = sessionId.isNotBlank() && goalObjective.isNotBlank(),
+                    ) {
+                        Text(stringResource(R.string.dsh_host_surfaces_create_goal))
+                    }
+                    uiState.lastGoal?.let { goal ->
+                        Text("${goal.ref.id} r${goal.ref.revision}", style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
@@ -172,7 +214,30 @@ fun DshHostSurfacesScreen(
             if (catalog?.canMutateSettings == true) {
                 DshSurfaceSection(stringResource(R.string.dsh_host_surfaces_settings)) {
                     uiState.settings?.namespaces.orEmpty().forEach { ns ->
-                        Text("${ns.ns} r${ns.revision}", style = MaterialTheme.typography.bodyMedium)
+                        TextButton(onClick = { settingsNs = ns.ns }) {
+                            Text("${ns.ns} r${ns.revision}")
+                        }
+                    }
+                    OutlinedTextField(
+                        value = settingsNs,
+                        onValueChange = { settingsNs = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text(stringResource(R.string.dsh_host_surfaces_settings_ns)) },
+                    )
+                    OutlinedTextField(
+                        value = settingsPatch,
+                        onValueChange = { settingsPatch = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text(stringResource(R.string.dsh_host_surfaces_settings_patch)) },
+                    )
+                    TextButton(
+                        onClick = { viewModel.mutateSettings(settingsNs.trim(), settingsPatch) },
+                        enabled = settingsNs.isNotBlank() && settingsPatch.isNotBlank(),
+                    ) {
+                        Text(stringResource(R.string.dsh_host_surfaces_settings_mutate))
+                    }
+                    uiState.lastSettings?.let { view ->
+                        Text("${view.ns} r${view.revision}", style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
@@ -210,8 +275,26 @@ fun DshHostSurfacesScreen(
                     ) {
                         Text(stringResource(R.string.dsh_host_surfaces_load_subagents))
                     }
+                    OutlinedTextField(
+                        value = subagentPrompt,
+                        onValueChange = { subagentPrompt = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text(stringResource(R.string.dsh_host_surfaces_subagent_prompt)) },
+                    )
                     uiState.subagents?.entries.orEmpty().forEach { entry ->
                         Text("${entry.id} · ${entry.mode ?: entry.reason.orEmpty()}", style = MaterialTheme.typography.bodySmall)
+                        TextButton(
+                            onClick = { viewModel.promptSubagent(parentSessionId.trim(), entry.id, subagentPrompt.trim()) },
+                            enabled = parentSessionId.isNotBlank() && subagentPrompt.isNotBlank(),
+                        ) {
+                            Text(stringResource(R.string.dsh_host_surfaces_send_prompt))
+                        }
+                        TextButton(
+                            onClick = { viewModel.interruptSubagent(parentSessionId.trim(), entry.id) },
+                            enabled = parentSessionId.isNotBlank(),
+                        ) {
+                            Text(stringResource(R.string.dsh_host_surfaces_interrupt))
+                        }
                     }
                 }
             }

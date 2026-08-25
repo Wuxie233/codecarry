@@ -255,30 +255,9 @@ internal data class PiInShortContent(
     val markdown: String,
 )
 
-internal fun piSenderIdentity(message: Message.Assistant?): PiSenderIdentity? {
-    if (message == null) return null
-    val hasSenderFields = listOf(
-        message.senderId,
-        message.senderName,
-        message.mbti,
-        message.senderRole,
-        message.colorSeed,
-    ).any { !it.isNullOrBlank() }
-    if (!hasSenderFields) return null
-
-    val fallbackName = message.senderId?.takeIf { it.isNotBlank() } ?: "Pi"
-    val name = message.senderName?.takeIf { it.isNotBlank() } ?: fallbackName
-    val seed = message.colorSeed?.takeIf { it.isNotBlank() }
-        ?: message.senderId?.takeIf { it.isNotBlank() }
-        ?: name
-
-    return PiSenderIdentity(
-        id = message.senderId?.takeIf { it.isNotBlank() },
-        name = name,
-        mbti = message.mbti?.takeIf { it.isNotBlank() },
-        role = message.senderRole?.takeIf { it.isNotBlank() },
-        colorSeed = seed,
-    )
+internal fun piSenderIdentity(@Suppress("UNUSED_PARAMETER") message: Message.Assistant?): PiSenderIdentity? {
+    // Roundtable sender chrome was product-deleted in 1.9.0.
+    return null
 }
 
 internal fun piSenderAccentColor(identity: PiSenderIdentity): Color =
@@ -981,9 +960,9 @@ private fun buildPromptParts(
     return parts
 }
 
-private const val PI_STACK_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024
+private const val ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024
 
-internal fun readAttachmentBytes(input: java.io.InputStream, maxBytes: Int = PI_STACK_ATTACHMENT_MAX_BYTES): ByteArray? {
+internal fun readAttachmentBytes(input: java.io.InputStream, maxBytes: Int = ATTACHMENT_MAX_BYTES): ByteArray? {
     require(maxBytes >= 0)
     val output = java.io.ByteArrayOutputStream(minOf(maxBytes, 64 * 1024))
     val buffer = ByteArray(16 * 1024)
@@ -1096,7 +1075,7 @@ private suspend fun buildAttachmentFromUri(
     val sizeHint = runCatching {
         contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length }
     }.getOrNull()
-    if (sizeHint != null && sizeHint > PI_STACK_ATTACHMENT_MAX_BYTES) return@withContext null
+    if (sizeHint != null && sizeHint > ATTACHMENT_MAX_BYTES) return@withContext null
     val bytes = contentResolver.openInputStream(uri)?.use { readAttachmentBytes(it) } ?: return@withContext null
     val originalFilename = uri.lastPathSegment?.substringAfterLast('/') ?: "image.png"
 
@@ -3094,8 +3073,8 @@ fun ChatScreen(
                 selectedMessageStreaming = selectedMessageStreaming,
                 sessionBusy = sessionBusyForMessageActions,
                 sessionReady = sessionReadyForMessageActions,
-                supportsFork = !uiState.supportsFork,
-                supportsRestore = true,
+                supportsFork = uiState.supportsFork,
+                supportsRestore = uiState.supportsRestore,
             ),
             onActionSelected = { action ->
                 actionMenuMessage = null

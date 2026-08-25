@@ -1,6 +1,8 @@
 package dev.wuxie233.codecarry.data.dsh
 
 import io.ktor.client.HttpClient
+import io.ktor.client.plugins.HttpTimeout
+import io.ktor.client.plugins.timeout
 import io.ktor.client.plugins.websocket.webSocketSession
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
@@ -793,6 +795,10 @@ class KtorDshDownlink private constructor(
             val session = httpClient.webSocketSession {
                 method = HttpMethod.Get
                 url(url)
+                timeout {
+                    requestTimeoutMillis = HttpTimeout.INFINITE_TIMEOUT_MS
+                    socketTimeoutMillis = HttpTimeout.INFINITE_TIMEOUT_MS
+                }
             }
             return KtorDshDownlink(session)
         }

@@ -17,8 +17,12 @@ import dev.wuxie233.codecarry.data.dsh.DshSettingsDescribeValue
 import dev.wuxie233.codecarry.data.dsh.DshSkillCatalogValue
 import dev.wuxie233.codecarry.data.dsh.DshSubagentCatalog
 import dev.wuxie233.codecarry.data.dsh.DshSystemPromptListValue
+import dev.wuxie233.codecarry.data.dsh.DshGoalRefValue
+import dev.wuxie233.codecarry.data.dsh.DshSettingsNamespaceView
 import dev.wuxie233.codecarry.data.dsh.DshWorkspaceCreateValue
 import dev.wuxie233.codecarry.data.dsh.DshWorkspaceListValue
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import dev.wuxie233.codecarry.data.dsh.dshHostSurfaceCatalog
 import dev.wuxie233.codecarry.data.repository.ServerRepository
 import dev.wuxie233.codecarry.domain.model.ServerType
@@ -46,6 +50,8 @@ data class DshHostSurfacesUiState(
     val models: DshLlmModelsValue? = null,
     val subagents: DshSubagentCatalog? = null,
     val systemPrompt: DshSystemPromptListValue? = null,
+    val lastGoal: DshGoalRefValue? = null,
+    val lastSettings: DshSettingsNamespaceView? = null,
 )
 
 @HiltViewModel
@@ -96,6 +102,51 @@ class DshHostSurfacesViewModel @Inject constructor(
         }
     }
 
+    fun selectPreset(sessionId: String, presetId: String) {
+        viewModelScope.launch {
+            runCatching { requireController().agentPresetSelect(sessionId, presetId) }
+                .onSuccess { refresh() }
+                .onFailure { error -> _uiState.update { it.copy(error = error.message) } }
+        }
+    }
+
+    fun createGoal(sessionId: String, objective: String) {
+        viewModelScope.launch {
+            runCatching { requireController().goalCreate(sessionId, objective) }
+                .onSuccess { goal -> _uiState.update { it.copy(lastGoal = goal, error = null) } }
+                .onFailure { error -> _uiState.update { it.copy(error = error.message) } }
+        }
+    }
+
+    fun mutateSettings(ns: String, patchJson: String) {
+        viewModelScope.launch {
+            val ops = runCatching { Json.parseToJsonElement(patchJson) }.getOrNull()
+            val array = ops as? JsonArray ?: run {
+                _uiState.update { it.copy(error = "Settings patch must be a JSON array") }
+                return@launch
+            }
+            runCatching { requireController().settingsMutate(ns, array) }
+                .onSuccess { view -> _uiState.update { it.copy(lastSettings = view, error = null) } }
+                .onFailure { error -> _uiState.update { it.copy(error = error.message) } }
+        }
+    }
+
+    fun promptSubagent(parentSessionId: String, childSessionId: String, text: String) {
+        viewModelScope.launch {
+            runCatching { requireController().subagentPrompt(parentSessionId, childSessionId, text) }
+                .onSuccess { loadSubagents(parentSessionId) }
+                .onFailure { error -> _uiState.update { it.copy(error = error.message) } }
+        }
+    }
+
+    fun interruptSubagent(parentSessionId: String, childSessionId: String) {
+        viewModelScope.launch {
+            runCatching { requireController().subagentInterrupt(parentSessionId, childSessionId) }
+                .onSuccess { loadSubagents(parentSessionId) }
+                .onFailure { error -> _uiState.update { it.copy(error = error.message) } }
+        }
+    }
+
     fun loadSubagents(parentSessionId: String) {
         viewModelScope.launch {
             runCatching { requireController().subagentList(parentSessionId) }
@@ -125,7 +176,17 @@ class DshHostSurfacesViewModel @Inject constructor(
             val workspaces = if (catalog.canManageWorkspaces) host.listWorkspaces() else null
             val directory = if (catalog.canBrowseHost) host.listDirectory() else null
             val skills = if (catalog.can("skill.catalog")) host.skillCatalog() else null
-            val git = if (catalog.canDescribeGit) runCatching { host.gitDescribe() }.getOrNull() else null
+            val git = if (catalog.canDescribeGit) {
+                val workspaceId = workspaces?.items?.firstOrNull()?.workspaceId
+                val sessionId = workspaces?.items?.firstOrNull()?.sessionIds?.firstOrNull()
+                if (workspaceId != null || sessionId != null) {
+                    runCatching { host.gitDescribe(sessionId = sessionId, workspaceId = workspaceId) }.getOrNull()
+                } else {
+                    null
+                }
+            } else {
+                null
+            }
             val presets = if (catalog.canListPresets) host.agentPresetList() else null
             val automation = if (catalog.canManageAutomation) host.automationList() else null
             val settings = if (catalog.can("settings.describe")) host.settingsDescribe() else null
@@ -147,6 +208,8 @@ class DshHostSurfacesViewModel @Inject constructor(
                 models = models,
                 systemPrompt = systemPrompt,
                 subagents = _uiState.value.subagents,
+                lastGoal = _uiState.value.lastGoal,
+                lastSettings = _uiState.value.lastSettings,
             )
         }.onSuccess { next ->
             _uiState.value = next

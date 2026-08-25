@@ -705,6 +705,17 @@
     <string name="dsh_host_surfaces_subagents">Subagents</string>
     <string name="dsh_host_surfaces_parent_session">Parent session id</string>
     <string name="dsh_host_surfaces_load_subagents">Load subagents</string>
+    <string name="dsh_host_surfaces_session_id">Session id</string>
+    <string name="dsh_host_surfaces_select_preset">Select preset</string>
+    <string name="dsh_host_surfaces_goals">Goals</string>
+    <string name="dsh_host_surfaces_goal_objective">Objective</string>
+    <string name="dsh_host_surfaces_create_goal">Create goal</string>
+    <string name="dsh_host_surfaces_settings_ns">Namespace</string>
+    <string name="dsh_host_surfaces_settings_patch">JSON patch</string>
+    <string name="dsh_host_surfaces_settings_mutate">Mutate settings</string>
+    <string name="dsh_host_surfaces_subagent_prompt">Prompt</string>
+    <string name="dsh_host_surfaces_send_prompt">Send to subagent</string>
+    <string name="dsh_host_surfaces_interrupt">Interrupt</string>
 
     <!-- Common -->
     <string name="loading">Loading…</string>

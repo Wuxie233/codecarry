@@ -4,6 +4,7 @@ import dev.wuxie233.codecarry.data.api.PromptPart
 import dev.wuxie233.codecarry.domain.model.Message
 import dev.wuxie233.codecarry.domain.model.Part
 import dev.wuxie233.codecarry.domain.model.ToolState
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -66,7 +67,7 @@ class DshChatFoldTest {
         )
         val foldedLive = foldDshHistory("s1", live)
         assertEquals(2, foldedLive.size)
-        assertEquals("a1", foldedLive.last().info.id)
+        assertEquals("a1-3", foldedLive.last().info.id)
         assertEquals("hi there", (foldedLive.last().parts.single() as Part.Text).text)
     }
 
@@ -119,7 +120,7 @@ class DshChatFoldTest {
             ),
         )
         val folded = foldDshHistory("s1", events)
-        assertEquals(listOf("u2"), folded.map { it.info.id })
+        assertEquals(listOf("u2-3"), folded.map { it.info.id })
         assertEquals("rewritten", (folded.single().parts.single() as Part.Text).text)
     }
 
@@ -183,5 +184,43 @@ class DshChatFoldTest {
         val slash = dshPromptRequest(listOf(PromptPart(type = "text", text = "/rename New")), steer = false)
         assertEquals(true, slash.isSlashCommand)
         assertEquals("queue", slash.mode)
+    }
+
+    @Test
+    fun `file mention parts become text so DSH prompt keeps the path`() {
+        val request = dshPromptRequest(
+            listOf(
+                PromptPart(type = "text", text = "look at"),
+                PromptPart(type = "file", path = "src/Main.kt", url = "file:///work/src/Main.kt", filename = "Main.kt"),
+            ),
+            steer = false,
+        )
+        assertEquals(2, request.content.size)
+        assertEquals("look at", (request.content[0] as kotlinx.serialization.json.JsonObject).getValue("text").toString().trim('"'))
+        assertEquals("src/Main.kt", (request.content[1] as kotlinx.serialization.json.JsonObject).getValue("text").toString().trim('"'))
+    }
+
+    @Test
+    fun `folded user ids retain seq for rewrite and fork`() {
+        val folded = foldDshHistory(
+            "s1",
+            listOf(
+                DshSessionEvent(
+                    type = "user/message",
+                    seq = 12,
+                    time = 10,
+                    data = buildJsonObject {
+                        put("id", "u1")
+                        put("content", buildJsonArray {
+                            add(buildJsonObject { put("type", "text"); put("text", "hello") })
+                        })
+                        put("source", buildJsonObject { put("kind", "user") })
+                    },
+                    surfaceOp = JsonPrimitive("append"),
+                ),
+            ),
+        )
+        assertEquals("u1-12", folded.single().info.id)
+        assertEquals(12L, dshMessageSeq(folded.single().info.id))
     }
 }

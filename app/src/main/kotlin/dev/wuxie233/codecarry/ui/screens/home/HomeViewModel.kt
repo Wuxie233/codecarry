@@ -155,11 +155,19 @@ class HomeViewModel @Inject constructor(
             serviceBinder = null
             sseObserverJob?.cancel()
             sseObserverJob = null
-            _uiState.update {
-                it.copy(
-                    connectedServerIds = emptySet(),
-                    connectingServerIds = emptySet(),
-                    connectionPhases = emptyMap(),
+            _uiState.update { current ->
+                val dshConnected = current.connectedServerIds.filter { id ->
+                    current.servers.find { it.id == id }?.type == ServerType.DSH
+                }.toSet()
+                val dshConnecting = current.connectingServerIds.filter { id ->
+                    current.servers.find { it.id == id }?.type == ServerType.DSH
+                }.toSet()
+                current.copy(
+                    connectedServerIds = dshConnected,
+                    connectingServerIds = dshConnecting,
+                    connectionPhases = current.connectionPhases.filterKeys { id ->
+                        current.servers.find { it.id == id }?.type == ServerType.DSH
+                    },
                 )
             }
         }
@@ -270,7 +278,12 @@ class HomeViewModel @Inject constructor(
         val ids = service.connectedServerIds.value
         if (ids.isNotEmpty()) {
             if (BuildConfig.DEBUG) Log.d(TAG, "Restoring connected state from service: serverIds=$ids")
-            _uiState.update { it.copy(connectedServerIds = ids) }
+            _uiState.update { current ->
+                val dshConnected = current.connectedServerIds.filter { id ->
+                    current.servers.find { it.id == id }?.type == ServerType.DSH
+                }.toSet()
+                current.copy(connectedServerIds = ids + dshConnected)
+            }
         }
     }
 
@@ -284,20 +297,31 @@ class HomeViewModel @Inject constructor(
             launch {
                 service.connectedServerIds.collect { ids ->
                     if (BuildConfig.DEBUG) Log.d(TAG, "Service connected server IDs changed: $ids")
-                    _uiState.update {
-                        it.copy(
-                            connectedServerIds = ids,
-                            serverSettingsReadyIds = it.serverSettingsReadyIds.intersect(ids),
-                            connectionPhases = it.connectionPhases - ids,
+                    _uiState.update { current ->
+                        val dshConnected = current.connectedServerIds.filter { id ->
+                            current.servers.find { it.id == id }?.type == ServerType.DSH
+                        }.toSet()
+                        val merged = ids + dshConnected
+                        current.copy(
+                            connectedServerIds = merged,
+                            serverSettingsReadyIds = current.serverSettingsReadyIds.filter { id ->
+                                current.servers.find { it.id == id }?.type == ServerType.DSH || id in merged
+                            }.toSet(),
+                            connectionPhases = current.connectionPhases - ids,
                         )
                     }
-                    refreshServerSettingsAvailability(ids)
+                    refreshServerSettingsAvailability(_uiState.value.connectedServerIds)
                 }
             }
             launch {
                 service.connectingServerIds.collect { ids ->
                     if (BuildConfig.DEBUG) Log.d(TAG, "Service connecting server IDs changed: $ids")
-                    _uiState.update { state -> state.copy(connectingServerIds = ids) }
+                    _uiState.update { state ->
+                        val dshConnecting = state.connectingServerIds.filter { id ->
+                            state.servers.find { it.id == id }?.type == ServerType.DSH
+                        }.toSet()
+                        state.copy(connectingServerIds = ids + dshConnecting)
+                    }
                 }
             }
             launch {
@@ -313,7 +337,10 @@ class HomeViewModel @Inject constructor(
             launch {
                 service.connectionErrors.collect { errors ->
                     _uiState.update { state ->
-                        state.copy(connectionErrors = errors)
+                        val dshErrors = state.connectionErrors.filterKeys { id ->
+                            state.servers.find { it.id == id }?.type == ServerType.DSH
+                        }
+                        state.copy(connectionErrors = errors + dshErrors)
                     }
                 }
             }
@@ -328,6 +355,13 @@ class HomeViewModel @Inject constructor(
                         servers = servers,
                         isLoading = false
                     )
+                }
+                servers.filter { it.type == ServerType.DSH && it.autoConnect }.forEach { server ->
+                    if (server.id !in _uiState.value.connectedServerIds &&
+                        server.id !in _uiState.value.connectingServerIds
+                    ) {
+                        connectToServer(server.id)
+                    }
                 }
                 refreshServerSettingsAvailability(_uiState.value.connectedServerIds)
             }

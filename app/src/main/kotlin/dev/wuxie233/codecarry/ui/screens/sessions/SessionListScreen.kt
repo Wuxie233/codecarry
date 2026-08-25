@@ -1883,20 +1883,7 @@ private fun SessionRow(
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
                         )
 
-                        // Pi Stack has richer server states than OpenCode's shared status model.
                         when (item.backendState) {
-                            BackendSessionState.AWAITING_COMMAND -> SessionStateLabel(
-                                text = stringResource(R.string.sessions_status_awaiting_command),
-                                color = MaterialTheme.colorScheme.secondary,
-                            )
-                            BackendSessionState.AWAITING_SKIP -> SessionStateLabel(
-                                text = stringResource(R.string.sessions_status_awaiting_skip),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            BackendSessionState.ENDED -> SessionStateLabel(
-                                text = stringResource(R.string.sessions_status_ended),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
                             BackendSessionState.ERROR -> SessionStateLabel(
                                 text = stringResource(R.string.sessions_status_error),
                                 color = MaterialTheme.colorScheme.error,
