@@ -498,6 +498,7 @@ class ServerRepositoryTest {
         val raw = """
         [
           {"id":"keep","type":"OPENCODE","url":"http://oc.example","username":"opencode"},
+          {"id":"dsh","type":"DSH","url":"http://192.168.1.8:3080"},
           {"id":"codex","type":"CODEX","url":"wss://codex.example"},
           {"id":"pi","type":"PI_ROUNDTABLE","url":"https://pi.example","token":"t"},
           {"id":"stack","type":"PI_STACK","url":"https://stack.example/control"}
@@ -505,7 +506,7 @@ class ServerRepositoryTest {
         """.trimIndent()
         val (kept, dropped) = decodePersistedServers(json, raw)
         assertTrue(dropped)
-        assertEquals(listOf("keep"), kept.map { it.id })
-        assertEquals(listOf(ServerType.OPENCODE), kept.map { it.type })
+        assertEquals(listOf("keep", "dsh"), kept.map { it.id })
+        assertEquals(listOf(ServerType.OPENCODE, ServerType.DSH), kept.map { it.type })
     }
 }

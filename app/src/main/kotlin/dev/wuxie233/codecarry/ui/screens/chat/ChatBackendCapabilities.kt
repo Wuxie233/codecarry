@@ -13,11 +13,21 @@ internal data class ChatBackendCapabilities(
 
 internal fun chatBackendCapabilities(
     serverType: ServerType,
-): ChatBackendCapabilities = ChatBackendCapabilities(
-    attachments = true,
-    fileMentions = true,
-    modelAndAgentSelection = true,
-    sessionExtras = true,
-    shellAndTerminal = true,
-    slashCommands = true,
-)
+): ChatBackendCapabilities = when (serverType) {
+    ServerType.OPENCODE -> ChatBackendCapabilities(
+        attachments = true,
+        fileMentions = true,
+        modelAndAgentSelection = true,
+        sessionExtras = true,
+        shellAndTerminal = true,
+        slashCommands = true,
+    )
+    ServerType.DSH -> ChatBackendCapabilities(
+        attachments = true,
+        fileMentions = true,
+        modelAndAgentSelection = true,
+        sessionExtras = true,
+        shellAndTerminal = false,
+        slashCommands = true,
+    )
+}

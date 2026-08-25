@@ -104,8 +104,13 @@
     <string name="server_name">服务器名称</string>
     <string name="server_name_hint">我的 OpenCode 服务器</string>
     <string name="server_name_required">名称不能为空</string>
+    <string name="server_type">服务器类型</string>
+    <string name="server_type_opencode">OpenCode</string>
+    <string name="server_type_dsh">DSH</string>
     <string name="server_type_codex">Codex</string>
     <string name="server_url_example">例如：http://192.168.0.10:4096 或 https://my-server:443</string>
+    <string name="server_dsh_url_hint">http://192.168.1.8:3080</string>
+    <string name="server_dsh_url_example">仅 HTTP(S)。局域网需把服务权威加入 DSH trustedHosts。不需要令牌。</string>
     <string name="server_codex_url_hint">wss://codex.example.com</string>
     <string name="server_codex_url_example">远程连接请使用 wss://；ws:// 仅限环回地址</string>
     <string name="server_codex_token">App-server 令牌</string>

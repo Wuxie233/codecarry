@@ -17,6 +17,9 @@ import dev.wuxie233.codecarry.data.api.OpenCodeApi
 import dev.wuxie233.codecarry.data.api.ProviderCatalogResponse
 import dev.wuxie233.codecarry.data.api.ProvidersResponse
 import dev.wuxie233.codecarry.data.api.ServerConnection
+import dev.wuxie233.codecarry.data.dsh.DshConnection
+import dev.wuxie233.codecarry.data.dsh.DshConnectionManager
+import dev.wuxie233.codecarry.data.dsh.DshGenerationStatus
 import dev.wuxie233.codecarry.data.repository.LocalServerManager
 import dev.wuxie233.codecarry.data.repository.ServerRepository
 import dev.wuxie233.codecarry.data.repository.SettingsRepository
@@ -30,6 +33,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -124,6 +128,7 @@ class HomeViewModel @Inject constructor(
     private val api: OpenCodeApi,
     private val localServerManager: LocalServerManager,
     private val settingsRepository: SettingsRepository,
+    private val dshConnectionManager: DshConnectionManager,
 ) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow(HomeUiState())
@@ -164,7 +169,35 @@ class HomeViewModel @Inject constructor(
         loadServers()
         bindToService()
         observeSettings()
+        observeDshConnections()
         refreshLocalRuntimeState()
+    }
+
+    private fun observeDshConnections() {
+        viewModelScope.launch {
+            dshConnectionManager.states.collect { states ->
+                val ready = states.filterValues { it.isReady }.keys
+                val connecting = states.filterValues { it.status == DshGenerationStatus.Connecting }.keys
+                val errors = states.mapNotNull { (id, state) ->
+                    state.error?.takeIf { state.status == DshGenerationStatus.Failed }?.let { id to it }
+                }.toMap()
+                _uiState.update { current ->
+                    val nonDshConnected = current.connectedServerIds.filter { id ->
+                        current.servers.find { it.id == id }?.type != ServerType.DSH
+                    }.toSet()
+                    val nonDshConnecting = current.connectingServerIds.filter { id ->
+                        current.servers.find { it.id == id }?.type != ServerType.DSH
+                    }.toSet()
+                    current.copy(
+                        connectedServerIds = nonDshConnected + ready,
+                        connectingServerIds = nonDshConnecting + connecting,
+                        connectionErrors = current.connectionErrors.filterKeys { key ->
+                            current.servers.find { it.id == key }?.type != ServerType.DSH
+                        } + errors,
+                    )
+                }
+            }
+        }
     }
 
     private fun observeSettings() {
@@ -441,6 +474,11 @@ class HomeViewModel @Inject constructor(
                 connectionPhases = it.connectionPhases + (serverId to ConnectionPhase.CheckingServer),
                 connectionErrors = it.connectionErrors - serverId
             )
+        }
+
+        if (server.type == ServerType.DSH) {
+            dshConnectionManager.connect(server.id, DshConnection.from(server.url))
+            return
         }
 
         viewModelScope.launch {
@@ -877,6 +915,10 @@ class HomeViewModel @Inject constructor(
     }
 
     private fun disconnectConfiguredServer(server: ServerConfig) {
+        if (server.type == ServerType.DSH) {
+            dshConnectionManager.disconnect(server.id)
+            return
+        }
         val service = serviceBinder?.getService()
         if (service != null) {
             service.disconnect(server.id)

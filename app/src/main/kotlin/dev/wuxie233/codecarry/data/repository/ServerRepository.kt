@@ -142,6 +142,9 @@ class ServerRepository @Inject constructor(
                     val conn = ServerConnection.from(server.url, server.username, server.password)
                     api.getHealth(conn)
                 }
+                ServerType.DSH -> {
+                    ServerHealth(healthy = true, version = "dsh")
+                }
             }
 
             // Update server health status
@@ -490,7 +493,7 @@ internal fun decodePersistedServers(json: Json, serversJson: String): Pair<List<
             continue
         }
         val typeName = obj["type"]?.jsonPrimitive?.contentOrNull ?: ServerType.OPENCODE.name
-        if (typeName != ServerType.OPENCODE.name) {
+        if (typeName !in setOf(ServerType.OPENCODE.name, ServerType.DSH.name)) {
             dropped = true
             continue
         }

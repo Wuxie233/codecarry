@@ -89,12 +89,15 @@
     <string name="server_name_required">Name is required</string>
     <string name="server_type">Server type</string>
     <string name="server_type_opencode">OpenCode</string>
+    <string name="server_type_dsh">DSH</string>
     <string name="server_type_codex">Codex</string>
     <string name="server_type_pi_roundtable">Pi Roundtable</string>
     <string name="server_type_pi_stack">Pi Stack</string>
     <string name="server_url">Server URL</string>
     <string name="server_url_hint">http://192.168.1.100:4096</string>
     <string name="server_url_example">e.g. http://192.168.0.10:4096 or https://my-server:443</string>
+    <string name="server_dsh_url_hint">http://192.168.1.8:3080</string>
+    <string name="server_dsh_url_example">HTTP(S) only. LAN needs the serving authority in DSH trustedHosts. No token.</string>
     <string name="server_codex_url_hint">wss://codex.example.com</string>
     <string name="server_codex_url_example">Use wss:// remotely; ws:// is limited to loopback</string>
     <string name="server_username">Username</string>

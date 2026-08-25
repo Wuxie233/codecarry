@@ -169,6 +169,31 @@ fun ServerDialog(
                         style = MaterialTheme.typography.headlineSmall
                     )
 
+                    val serverTypeOptions = listOf(ServerType.OPENCODE, ServerType.DSH)
+                    Text(
+                        text = stringResource(R.string.server_type),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                        serverTypeOptions.forEachIndexed { index, option ->
+                            SegmentedButton(
+                                selected = serverType == option,
+                                onClick = {
+                                    serverType = option
+                                    urlError = null
+                                },
+                                shape = SegmentedButtonDefaults.itemShape(index = index, count = serverTypeOptions.size),
+                                label = {
+                                    Text(stringResource(when (option) {
+                                        ServerType.OPENCODE -> R.string.server_type_opencode
+                                        ServerType.DSH -> R.string.server_type_dsh
+                                    }))
+                                },
+                            )
+                        }
+                    }
+
                     if (serverType == ServerType.OPENCODE) {
                         Text(
                             text = stringResource(R.string.server_connection_section),
@@ -197,14 +222,18 @@ fun ServerDialog(
                         },
                         label = { Text(urlLabel) },
                         placeholder = {
-                            Text(stringResource(R.string.server_url_hint))
+                            Text(stringResource(
+                                if (serverType == ServerType.DSH) R.string.server_dsh_url_hint else R.string.server_url_hint
+                            ))
                         },
                         isError = urlError != null,
                         supportingText = if (urlError != null) {
                             { Text(urlError!!) }
                         } else {
                             {
-                                Text(stringResource(R.string.server_url_example))
+                                Text(stringResource(
+                                    if (serverType == ServerType.DSH) R.string.server_dsh_url_example else R.string.server_url_example
+                                ))
                             }
                         },
                         keyboardOptions = KeyboardOptions(
@@ -217,6 +246,7 @@ fun ServerDialog(
                             .semantics { contentDescription = urlLabel }
                     )
 
+                    if (serverType == ServerType.OPENCODE) {
                     Text(
                         text = stringResource(R.string.server_authentication_section),
                         style = MaterialTheme.typography.labelLarge,
@@ -256,6 +286,7 @@ fun ServerDialog(
                             .fillMaxWidth()
                             .semantics { contentDescription = passwordLabel }
                     )
+                    }
 
                     Surface(
                         shape = RoundedCornerShape(if (serverType == ServerType.OPENCODE) 8.dp else 12.dp),
@@ -325,8 +356,8 @@ fun ServerDialog(
                                     finalName,
                                     normalizedUrl,
                                     serverType,
-                                    username.ifBlank { "opencode" },
-                                    password.takeIf { it.isNotBlank() },
+                                    if (serverType == ServerType.DSH) "" else username.ifBlank { "opencode" },
+                                    if (serverType == ServerType.DSH) null else password.takeIf { it.isNotBlank() },
                                     null,
                                     autoConnect
                                 )

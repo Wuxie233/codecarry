@@ -19,7 +19,12 @@ import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.plugins.logging.*
 import io.ktor.client.plugins.websocket.*
 import io.ktor.serialization.kotlinx.json.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.serialization.json.Json
+import dev.wuxie233.codecarry.data.dsh.DshApiClient
+import dev.wuxie233.codecarry.data.dsh.DshConnectionManager
 import javax.inject.Singleton
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "opencode_prefs")
@@ -100,4 +105,17 @@ object NetworkModule {
     fun provideDataStore(@ApplicationContext context: Context): DataStore<Preferences> {
         return context.dataStore
     }
+
+    @Provides
+    @Singleton
+    fun provideDshApiClient(httpClient: HttpClient, json: Json): DshApiClient =
+        DshApiClient(httpClient, json)
+
+    @Provides
+    @Singleton
+    fun provideDshConnectionManager(client: DshApiClient): DshConnectionManager =
+        DshConnectionManager(
+            client = client,
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+        )
 }
