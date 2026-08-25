@@ -486,6 +486,18 @@ class EventReducer @Inject constructor() {
         }
     }
 
+    fun setPermissions(serverId: String, sessionId: String, permissions: List<SseEvent.PermissionAsked>) {
+        _permissionsByServer.update { current ->
+            val serverPermissions = current[serverId].orEmpty()
+            val updated = if (permissions.isEmpty()) {
+                serverPermissions - sessionId
+            } else {
+                serverPermissions + (sessionId to permissions)
+            }
+            if (updated.isEmpty()) current - serverId else current + (serverId to updated)
+        }
+    }
+
     private fun <T> updateServerSessionRequests(
         current: Map<String, Map<String, List<T>>>,
         serverId: String,

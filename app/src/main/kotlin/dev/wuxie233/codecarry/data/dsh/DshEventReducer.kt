@@ -7,7 +7,10 @@ import kotlinx.coroutines.flow.update
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.put
 
 data class DshPendingApproval(
     val rpcId: String,
@@ -172,6 +175,101 @@ class DshEventReducer(
 
     fun clearPending() {
         _state.update { it.copy(pendingApprovals = emptyMap(), pendingQuestions = emptyMap()) }
+    }
+
+    fun mergeHistory(
+        sessionId: String,
+        events: List<DshSessionEvent>,
+        projections: DshProjectionsBlock? = null,
+        replace: Boolean = false,
+    ) {
+        _state.update { current ->
+            current.updateSession(sessionId) { session ->
+                val merged = if (replace) {
+                    events.sortedBy { it.seq }
+                } else {
+                    (session.events + events)
+                        .associateBy { it.seq }
+                        .toSortedMap()
+                        .values
+                        .toList()
+                }
+                val nextProjections = if (projections == null) {
+                    session.projections
+                } else {
+                    val asOf = projections.asOfSeq
+                    val updated = session.projections.toMutableMap()
+                    projections.values.forEach { (key, value) ->
+                        val existing = updated[key]
+                        if (existing == null || existing.first <= asOf) {
+                            updated[key] = asOf to value
+                        }
+                    }
+                    updated
+                }
+                session.copy(
+                    lastSeq = maxOf(session.lastSeq, merged.maxOfOrNull { it.seq } ?: session.lastSeq),
+                    events = merged,
+                    projections = nextProjections,
+                    blank = if (merged.any { it.type == "turn/start" }) false else session.blank,
+                )
+            }
+        }
+    }
+
+    fun applySessionList(items: List<DshSessionSummary>) {
+        _state.update { current ->
+            var next = current
+            items.forEach { item ->
+                next = next.updateSession(item.sessionId) { session ->
+                    val nextProjections = if (item.projections == null) {
+                        session.projections
+                    } else {
+                        val asOf = item.projections.asOfSeq
+                        val updated = session.projections.toMutableMap()
+                        item.projections.values.forEach { (key, value) ->
+                            val existing = updated[key]
+                            if (existing == null || existing.first <= asOf) {
+                                updated[key] = asOf to value
+                            }
+                        }
+                        updated
+                    }
+                    session.copy(
+                        blank = item.blank,
+                        running = item.running,
+                        parentSessionId = item.parentSessionId ?: session.parentSessionId,
+                        origin = item.origin ?: session.origin,
+                        cwd = item.cwd ?: session.cwd,
+                        agentPreset = item.agentPreset ?: session.agentPreset,
+                        projections = nextProjections,
+                    )
+                }
+            }
+            next
+        }
+    }
+
+    fun applyWorkspaceList(value: DshWorkspaceListValue) {
+        _state.update { current ->
+            current.copy(
+                workspaces = value.items.associate { item ->
+                    item.workspaceId to buildJsonObject {
+                        put("workspaceId", item.workspaceId)
+                        put("path", item.path)
+                        put("title", item.title)
+                        put("createdAt", item.createdAt)
+                        put("updatedAt", item.updatedAt)
+                        put("sessionIds", buildJsonArray {
+                            item.sessionIds.forEach { add(JsonPrimitive(it)) }
+                        })
+                    }
+                },
+                workspaceOrder = value.items.map { it.workspaceId },
+                archivedSessionIds = value.archivedSessionIds.toSet(),
+                hiddenWorkspaceIds = value.hiddenWorkspaceIds.toSet(),
+            )
+        }
     }
 
     private fun DshEventState.updateSession(

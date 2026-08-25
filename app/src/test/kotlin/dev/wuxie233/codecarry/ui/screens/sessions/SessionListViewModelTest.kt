@@ -5,6 +5,8 @@ import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import dev.wuxie233.codecarry.data.api.OpenCodeApi
+import dev.wuxie233.codecarry.data.dsh.unusedDshApi
+import dev.wuxie233.codecarry.data.dsh.unusedDshConnectionManager
 import dev.wuxie233.codecarry.data.diagnostics.AppEventDiagnosticsGenerator
 import dev.wuxie233.codecarry.data.diagnostics.DiagnosticsLogRepository
 import dev.wuxie233.codecarry.data.preferences.SessionFilter
@@ -651,6 +653,8 @@ class SessionListViewModelTest {
             preferencesRepo = sessionListPreferencesRepository(),
             settingsRepository = settingsRepository(),
             appEventDiagnosticsGenerator = AppEventDiagnosticsGenerator(diagnosticsRepository),
+            dshApi = unusedDshApi(json),
+            dshConnectionManager = unusedDshConnectionManager(testScope.backgroundScope, json),
         ).also { viewModels.add(it) }
     }
 

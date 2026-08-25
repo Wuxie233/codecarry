@@ -7,6 +7,8 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import androidx.test.core.app.ApplicationProvider
 import dev.wuxie233.codecarry.data.api.OpenCodeApi
+import dev.wuxie233.codecarry.data.dsh.unusedDshApi
+import dev.wuxie233.codecarry.data.dsh.unusedDshConnectionManager
 import dev.wuxie233.codecarry.data.preferences.SessionListPreferencesRepository
 import dev.wuxie233.codecarry.data.repository.DraftRepository
 import dev.wuxie233.codecarry.data.repository.EventReducer
@@ -208,6 +210,8 @@ class ChatViewModelRetryNowTest {
         draftRepository = draftRepository(),
         sessionListPreferencesRepository = sessionListPreferencesRepository(),
         settingsRepository = settingsRepository(),
+        dshApi = unusedDshApi(json),
+        dshConnectionManager = unusedDshConnectionManager(testScope.backgroundScope, json),
     ).also(viewModels::add)
 
     private fun openCodeApi(

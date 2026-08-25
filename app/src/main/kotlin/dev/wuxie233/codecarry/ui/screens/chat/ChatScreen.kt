@@ -1234,7 +1234,10 @@ fun ChatScreen(
     var actionMenuMessage by remember { mutableStateOf<ChatMessage?>(null) }
     var restoreConfirmMessage by remember { mutableStateOf<ChatMessage?>(null) }
     var forkFromMessageInFlight by remember { mutableStateOf(false) }
-    var isTerminalMode by rememberSaveable { mutableStateOf(startInTerminalMode ) }
+    var isTerminalMode by rememberSaveable { mutableStateOf(startInTerminalMode) }
+    LaunchedEffect(uiState.supportsTerminal) {
+        if (!uiState.supportsTerminal) isTerminalMode = false
+    }
     var terminalCtrlLatched by rememberSaveable { mutableStateOf(false) }
     var terminalAltLatched by rememberSaveable { mutableStateOf(false) }
     var terminalVirtualCtrlDown by remember { mutableStateOf(false) }
@@ -1819,7 +1822,9 @@ fun ChatScreen(
                         add(stringResource(R.string.chat_cost_format, String.format("%.4f", uiState.totalCost)))
                     }
                 }
-                val backendLabel = stringResource(R.string.server_type_opencode)
+                val backendLabel = stringResource(
+                    if (uiState.isDsh) R.string.server_type_dsh else R.string.server_type_opencode
+                )
                 val statusLabel = stringResource(
                     when (uiState.sessionStatus) {
                         is SessionStatus.Idle -> R.string.session_status_idle
@@ -1838,7 +1843,7 @@ fun ChatScreen(
                     canStop = uiState.sessionStatus.isInterruptible && uiState.supportsAbort,
                     showSubagents = true,
                     runningSubagentCount = runningSubagentCount,
-                    showTerminal = true,
+                    showTerminal = uiState.supportsTerminal,
                     showOverflow = showOverflow,
                     onNavigateBack = onNavigateBack,
                     onStop = { viewModel.abortSession() },
@@ -1857,7 +1862,7 @@ fun ChatScreen(
                                 density = headerDensity,
                                 showSubagents = true,
                                 runningSubagentCount = runningSubagentCount,
-                                showTerminal = true,
+                                showTerminal = uiState.supportsTerminal,
                                 onToggleSubagents = {
                                     showMenu = false
                                     showSubagentDrawer = !showSubagentDrawer
@@ -1867,7 +1872,7 @@ fun ChatScreen(
                                     isTerminalMode = true
                                 },
                             )
-                            if (true) DropdownMenuItem(
+                            if (!uiState.isDsh) DropdownMenuItem(
                                 text = { Text(stringResource(R.string.menu_copy_web_link)) },
                                 onClick = {
                                     showMenu = false
@@ -1935,7 +1940,7 @@ fun ChatScreen(
                                     Icon(Icons.Default.Compress, contentDescription = null)
                                 }
                             )
-                            if (uiState.supportsCommands) DropdownMenuItem(
+                            if (uiState.supportsCommands && !uiState.isDsh) DropdownMenuItem(
                                 text = { Text(stringResource(R.string.menu_review_changes)) },
                                 onClick = {
                                     showMenu = false
@@ -1951,7 +1956,7 @@ fun ChatScreen(
                                     Icon(Icons.Default.RateReview, contentDescription = null)
                                 },
                             )
-                            if (true) {
+                            if (!uiState.isDsh) {
                             // Show Share or Unshare depending on current share status
                             if (uiState.shareUrl != null) {
                                 DropdownMenuItem(
@@ -2017,7 +2022,7 @@ fun ChatScreen(
                                     Icon(Icons.Default.Edit, contentDescription = null)
                                 }
                             )
-                            if (true) DropdownMenuItem(
+                            if (!uiState.isDsh) DropdownMenuItem(
                                 text = { Text(stringResource(R.string.menu_export_session)) },
                                 onClick = {
                                     showMenu = false
@@ -2077,6 +2082,7 @@ fun ChatScreen(
                                         onOnce = { viewModel.replyToPermission(permission.id, "once") },
                                         onAlways = { viewModel.replyToPermission(permission.id, "always") },
                                         onReject = { viewModel.replyToPermission(permission.id, "reject") },
+                                        alwaysAvailable = uiState.permissionAlwaysAvailable,
                                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
                                     )
                                 }
@@ -2093,10 +2099,17 @@ fun ChatScreen(
                         }
                     },
                     composerContent = {
+                        if (uiState.queuedPrompts.isNotEmpty()) {
+                            DshQueueDock(
+                                items = uiState.queuedPrompts,
+                                onSteer = { viewModel.updateDshQueue(it, "steer") },
+                                onRemove = { viewModel.updateDshQueue(it, "remove") },
+                            )
+                        }
                         ChatInputBar(
                 textFieldValue = inputText,
                 onTextFieldValueChange = { newValue ->
-                    val shouldAutoShell =  !isShellMode && newValue.text.startsWith("!")
+                    val shouldAutoShell = uiState.supportsShell && !isShellMode && newValue.text.startsWith("!")
                     val normalizedValue = if (shouldAutoShell) {
                         val stripped = newValue.text.drop(1).trimStart()
                         val newCursor = (newValue.selection.start - 1).coerceAtLeast(0)
@@ -2121,7 +2134,7 @@ fun ChatScreen(
                     val cursorPos = normalizedValue.selection.start
                     val textBefore = normalizedValue.text.substring(0, cursorPos)
                     val atMatch = Regex("@(\\S*)$").find(textBefore)
-                    if (atMatch != null && true) {
+                    if (atMatch != null) {
                         val query = atMatch.groupValues[1]
                         viewModel.searchFilesForMention(query)
                     } else {
@@ -2233,11 +2246,15 @@ fun ChatScreen(
                 },
                 inputMode = if (isShellMode) ChatInputMode.SHELL else ChatInputMode.NORMAL,
                 onInputModeChange = {
-                    inputMode = it.name
-                    if (it == ChatInputMode.SHELL) {
-                        viewModel.clearFileSearch()
+                    if (uiState.supportsShell || it != ChatInputMode.SHELL) {
+                        inputMode = it.name
+                        if (it == ChatInputMode.SHELL) {
+                            viewModel.clearFileSearch()
+                        }
                     }
                 },
+                supportsShell = uiState.supportsShell,
+                supportsCompact = uiState.supportsCompact,
                 isSending = composerIsSending,
                 isBusy = uiState.sessionStatus is SessionStatus.Busy,
                 sendDisabledReasonResId = sendDisabledReasonResId,
@@ -7080,6 +7097,7 @@ private fun PermissionCard(
     onOnce: () -> Unit,
     onAlways: () -> Unit,
     onReject: () -> Unit,
+    alwaysAvailable: Boolean = true,
     modifier: Modifier = Modifier,
 ) {
     val isAmoled = isAmoledTheme()
@@ -7148,12 +7166,56 @@ private fun PermissionCard(
                 ) {
                     Text(stringResource(R.string.permission_allow_once), maxLines = 1)
                 }
-                Button(
-                    onClick = { performHaptic(hapticView, hapticOn); onAlways() },
+                if (alwaysAvailable) {
+                    Button(
+                        onClick = { performHaptic(hapticView, hapticOn); onAlways() },
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)
+                    ) {
+                        Text(stringResource(R.string.permission_allow_always), maxLines = 1)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DshQueueDock(
+    items: List<ChatQueueItem>,
+    onSteer: (String) -> Unit,
+    onRemove: (String) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        items.forEach { item ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f))
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    text = item.text.ifBlank { item.placement },
+                    style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.weight(1f),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)
-                ) {
-                    Text(stringResource(R.string.permission_allow_always), maxLines = 1)
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (item.placement != "steering") {
+                    TextButton(onClick = { onSteer(item.id) }) {
+                        Text(stringResource(R.string.chat_queue_steer))
+                    }
+                }
+                TextButton(onClick = { onRemove(item.id) }) {
+                    Text(stringResource(R.string.chat_queue_remove))
                 }
             }
         }
@@ -7201,6 +7263,8 @@ private fun ChatInputBar(
     onSlashCommand: (SlashCommand) -> Unit = {},
     inputMode: ChatInputMode = ChatInputMode.NORMAL,
     onInputModeChange: (ChatInputMode) -> Unit = {},
+    supportsShell: Boolean = true,
+    supportsCompact: Boolean = true,
     contextWindow: Int = 0,
     lastContextTokens: Int = 0,
     modifier: Modifier = Modifier,
@@ -7230,7 +7294,13 @@ private fun ChatInputBar(
     var previewAttachmentIndex by remember { mutableStateOf(-1) }
 
     // Build merged slash commands: client commands + server commands (deduplicated)
-    val clientCmds = clientCommands()
+    val clientCmds = clientCommands().filter { cmd ->
+        when (cmd.name) {
+            "shell" -> supportsShell
+            "compact", "share", "unshare", "undo", "redo" -> supportsCompact
+            else -> true
+        }
+    }
     val allCommands = remember(commands, clientCmds) {
         mergeSlashCommands(clientCmds, commands)
     }
@@ -7865,9 +7935,11 @@ private fun ChatInputBar(
                                 }
                             },
                             onLongClick = {
-                                onInputModeChange(
-                                    if (isShellMode) ChatInputMode.NORMAL else ChatInputMode.SHELL
-                                )
+                                if (supportsShell || isShellMode) {
+                                    onInputModeChange(
+                                        if (isShellMode) ChatInputMode.NORMAL else ChatInputMode.SHELL
+                                    )
+                                }
                             }
                         ),
                     contentAlignment = Alignment.Center

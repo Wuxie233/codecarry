@@ -278,6 +278,9 @@
     <string name="chat_send_disabled_pending">请先处理待回应的请求</string>
     <string name="chat_send_disabled_sending">正在发送…</string>
     <string name="chat_send_failed_draft_kept">发送失败，草稿已保留</string>
+    <string name="chat_queue_steer">插入本轮</string>
+    <string name="chat_queue_remove">移除</string>
+    <string name="sessions_rehome_action">移动主目录</string>
     <string name="chat_loading_messages">正在加载消息…</string>
     <string name="chat_status_edits">%1$d 次编辑</string>
     <string name="chat_status_edits_plural">%1$d 次编辑</string>

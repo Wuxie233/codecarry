@@ -10,6 +10,14 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.wuxie233.codecarry.data.api.FileNode
 import dev.wuxie233.codecarry.data.api.OpenCodeApi
 import dev.wuxie233.codecarry.data.api.ServerConnection
+import dev.wuxie233.codecarry.data.dsh.DshApiClient
+import dev.wuxie233.codecarry.data.dsh.DshConnection
+import dev.wuxie233.codecarry.data.dsh.DshConnectionManager
+import dev.wuxie233.codecarry.data.dsh.DshEventState
+import dev.wuxie233.codecarry.data.dsh.DshGenerationStatus
+import dev.wuxie233.codecarry.data.dsh.mapDshApproval
+import dev.wuxie233.codecarry.data.dsh.mapDshEventStateToSessions
+import dev.wuxie233.codecarry.data.dsh.mapDshQuestion
 import dev.wuxie233.codecarry.data.diagnostics.AppEventBreadcrumb
 import dev.wuxie233.codecarry.data.diagnostics.AppEventDiagnosticsGenerator
 import dev.wuxie233.codecarry.data.diagnostics.AppEventName
@@ -116,6 +124,8 @@ data class SessionListUiState(
     val supportsDirectorySearch: Boolean = true,
     val supportsDirectoryCreation: Boolean = true,
     val supportsMcp: Boolean = true,
+    val supportsRehome: Boolean = false,
+    val isDsh: Boolean = false,
 )
 
 enum class BackendSessionState {
@@ -402,6 +412,8 @@ class SessionListViewModel @Inject constructor(
     private val preferencesRepo: SessionListPreferencesRepository,
     private val settingsRepository: SettingsRepository,
     private val appEventDiagnosticsGenerator: AppEventDiagnosticsGenerator,
+    private val dshApi: DshApiClient,
+    private val dshConnectionManager: DshConnectionManager,
 ) : ViewModel() {
 
     val serverUrl: String = decodeRouteArg(savedStateHandle.get<String>("serverUrl"))
@@ -414,6 +426,9 @@ class SessionListViewModel @Inject constructor(
     }.getOrDefault(ServerType.OPENCODE)
     private val conn = ServerConnection.from(serverUrl, username, password.ifEmpty { null })
     val currentConnection: ServerConnection = conn
+    private val isDsh: Boolean = serverType == ServerType.DSH
+    private val dshConn = DshConnection.from(serverUrl)
+    private val dshReducer = dshConnectionManager.reducer(serverId)
 
     private val _error = MutableStateFlow<String?>(null)
     private val _isLoading = MutableStateFlow(true)
@@ -627,7 +642,7 @@ class SessionListViewModel @Inject constructor(
         val supportsSessionRename = true
         val supportsSessionArchive = true
         val supportsSessionRestore = true
-        val supportsSessionDelete = true
+        val supportsSessionDelete = !isDsh
 
         SessionListUiState(
             serverName = serverName,
@@ -658,10 +673,12 @@ class SessionListViewModel @Inject constructor(
             supportsSessionRestore = supportsSessionRestore,
             supportsSessionDelete = supportsSessionDelete,
             supportsSessionCreate = true,
-            supportsProjectRegister = true,
-            supportsDirectorySearch = true,
+            supportsProjectRegister = !isDsh,
+            supportsDirectorySearch = !isDsh,
             supportsDirectoryCreation = true,
-            supportsMcp = true,
+            supportsMcp = !isDsh,
+            supportsRehome = isDsh,
+            isDsh = isDsh,
         )
     }.stateIn(
         viewModelScope,
@@ -672,9 +689,40 @@ class SessionListViewModel @Inject constructor(
     init {
         loadHomeDir()
         loadSessions()
+        if (isDsh) {
+            viewModelScope.launch {
+                dshReducer.state.collect { applyDshState(it) }
+            }
+            viewModelScope.launch {
+                dshConnectionManager.states.collect { states ->
+                    if (states[serverId]?.status == DshGenerationStatus.Ready) {
+                        loadSessions()
+                    }
+                }
+            }
+        }
         viewModelScope.launch {
             preferencesRepo.setFilter(SessionFilter.ALL)
         }
+    }
+
+    private fun applyDshState(state: DshEventState) {
+        val mapped = mapDshEventStateToSessions(state)
+        eventReducer.setSessions(serverId, mapped.sessions)
+        mapped.statuses.forEach { (id, status) -> eventReducer.updateSessionStatus(id, status) }
+        mapped.sessions.forEach { session ->
+            eventReducer.setPermissions(serverId, session.id, state.pendingApprovalsFor(session.id).map(::mapDshApproval))
+            eventReducer.setQuestions(serverId, session.id, state.pendingQuestionsFor(session.id).map(::mapDshQuestion))
+        }
+        _projects.value = mapped.sessions
+            .filter { it.parentId == null }
+            .map { it.directory }
+            .distinct()
+            .map { directory ->
+                Project(id = directory, worktree = directory, name = directory.substringAfterLast('/').ifBlank { directory })
+            }
+        val home = dshConnectionManager.states.value[serverId]?.describe?.home
+        if (!home.isNullOrBlank()) _homeDir.value = home
     }
 
     fun loadSessions() {
@@ -682,6 +730,14 @@ class SessionListViewModel @Inject constructor(
             _isLoading.value = true
             if (!isCreatingSession) _error.value = null
             try {
+                if (isDsh) {
+                    val workspaces = dshApi.workspaceList(dshConn)
+                    dshReducer.applyWorkspaceList(workspaces)
+                    val sessions = dshApi.sessionList(dshConn)
+                    dshReducer.applySessionList(sessions.items)
+                    applyDshState(dshReducer.state.value)
+                    return@launch
+                }
                 val projects = api.listProjects(conn)
                 _projects.value = projects
 
@@ -718,6 +774,10 @@ class SessionListViewModel @Inject constructor(
     }
 
     private fun loadProjects() {
+        if (isDsh) {
+            applyDshState(dshReducer.state.value)
+            return
+        }
         viewModelScope.launch {
             try {
                 val projects = api.listProjects(conn)
@@ -748,6 +808,26 @@ class SessionListViewModel @Inject constructor(
                 )
                 _filter.value = SessionFilter.ALL
                 _scopeOverride.value = SessionScope.INBOX
+                if (isDsh) {
+                    val created = dshApi.sessionCreate(dshConn, cwd = directory)
+                    val createdDirectory = directory ?: dshConnectionManager.states.value[serverId]?.describe?.cwd.orEmpty()
+                    val normalizedSession = Session(
+                        id = created.sessionId,
+                        directory = createdDirectory,
+                        time = Session.Time(
+                            created = System.currentTimeMillis(),
+                            updated = System.currentTimeMillis(),
+                        ),
+                    )
+                    eventReducer.setSessions(serverId, listOf(normalizedSession))
+                    persistCreateNewEvent(
+                        name = AppEventName.CREATE_NEW_SUCCESS,
+                        directory = normalizedSession.directory,
+                        sessionId = normalizedSession.id,
+                    )
+                    _navigateToSession.tryEmit(normalizedSession)
+                    return@launch
+                }
                 val session = api.createSession(conn, directory = directory)
                 if (session.id.isBlank()) {
                     throw IllegalStateException("Failed to create session: blank session id")
@@ -821,6 +901,7 @@ class SessionListViewModel @Inject constructor(
     }
 
     fun deleteSession(sessionId: String) {
+        if (isDsh) return
         viewModelScope.launch {
             try {
                 val success = api.deleteSession(conn, sessionId)
@@ -942,7 +1023,10 @@ class SessionListViewModel @Inject constructor(
             try {
                 coroutineScope {
                     targetIds.map { sessionId ->
-                        async { api.archiveSession(conn, sessionId) }
+                        async {
+                            if (isDsh) dshApi.workspaceArchiveSession(dshConn, sessionId)
+                            else api.archiveSession(conn, sessionId)
+                        }
                     }.awaitAll()
                 }
                 loadSessions()
@@ -957,7 +1041,8 @@ class SessionListViewModel @Inject constructor(
         viewModelScope.launch {
             val title = serverScopedSessions().firstOrNull { it.id == sessionId }?.title.orEmpty()
             try {
-                api.archiveSession(conn, sessionId)
+                if (isDsh) dshApi.workspaceArchiveSession(dshConn, sessionId)
+                else api.archiveSession(conn, sessionId)
                 loadSessions()
                 _undoState.send(UndoAction.Archive(sessionId = sessionId, title = title))
             } catch (e: Exception) {
@@ -972,7 +1057,8 @@ class SessionListViewModel @Inject constructor(
         viewModelScope.launch {
             val title = serverScopedSessions().firstOrNull { it.id == sessionId }?.title.orEmpty()
             try {
-                api.restoreSession(conn, sessionId)
+                if (isDsh) dshApi.workspaceUnarchiveSession(dshConn, sessionId)
+                else api.restoreSession(conn, sessionId)
                 loadSessions()
                 _undoState.send(UndoAction.Restore(sessionId = sessionId, title = title))
             } catch (e: Exception) {
@@ -989,6 +1075,7 @@ class SessionListViewModel @Inject constructor(
     }
 
     fun deleteSelected() {
+        if (isDsh) return
         viewModelScope.launch {
             val ids = _selectedIds.value
             if (ids.isEmpty()) return@launch
@@ -1013,10 +1100,24 @@ class SessionListViewModel @Inject constructor(
         }
     }
 
+    fun rehomeSession(sessionId: String, path: String) {
+        if (!isDsh) return
+        viewModelScope.launch {
+            try {
+                dshApi.sessionRehome(dshConn, sessionId, path)
+                loadSessions()
+            } catch (e: Exception) {
+                logErrorCompat(TAG, "Failed to rehome session $sessionId", e)
+                _error.value = e.message ?: "Failed to move session"
+            }
+        }
+    }
+
     fun renameSession(sessionId: String, newTitle: String) {
         viewModelScope.launch {
             try {
-                api.updateSession(conn, sessionId, newTitle)
+                if (isDsh) dshApi.sessionRename(dshConn, sessionId, newTitle)
+                else api.updateSession(conn, sessionId, newTitle)
                 if (BuildConfig.DEBUG) Log.d(TAG, "Renamed session $sessionId to '$newTitle'")
                 loadSessions()
             } catch (e: Exception) {
@@ -1032,6 +1133,12 @@ class SessionListViewModel @Inject constructor(
     suspend fun getHomeDirectory(): String {
         _homeDir.value?.let { return it }
         return try {
+            if (isDsh) {
+                val home = dshConnectionManager.states.value[serverId]?.describe?.home
+                    ?: dshApi.hostListDirectory(dshConn).home
+                _homeDir.value = home
+                return home
+            }
             val paths = api.getServerPaths(conn)
             val home = paths.home
             _homeDir.value = home
@@ -1046,6 +1153,11 @@ class SessionListViewModel @Inject constructor(
     /** List directories in a given path on the server. */
     suspend fun listDirectories(directory: String): List<FileNode> {
         return try {
+            if (isDsh) {
+                return dshApi.hostListDirectory(dshConn, directory).entries.map { entry ->
+                    FileNode(name = entry.name, path = entry.path, type = "directory", absolute = entry.path)
+                }
+            }
             val nodes = api.listDirectory(conn, path = "", directory = directory)
             nodes.filter { it.type == "directory" }
         } catch (e: Exception) {
@@ -1078,6 +1190,12 @@ class SessionListViewModel @Inject constructor(
     /** Search for directories matching a query, scoped to a base directory. */
     suspend fun searchDirectories(query: String, directory: String): List<String> {
         return try {
+            if (isDsh) {
+                val listing = dshApi.hostListDirectory(dshConn, directory)
+                return listing.entries
+                    .filter { query.isBlank() || it.name.contains(query, ignoreCase = true) }
+                    .map { it.path }
+            }
             api.findFiles(conn, query = query, type = "directory", directory = directory, limit = 50)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to search directories", e)
@@ -1097,6 +1215,10 @@ class SessionListViewModel @Inject constructor(
                 "/$sanitized"
             } else {
                 "${parentDirectory.trimEnd('/')}/$sanitized"
+            }
+
+            if (isDsh) {
+                return@runCatching dshApi.hostCreateDirectory(dshConn, parentDirectory, sanitized).path
             }
 
             val tempSession = api.createSession(

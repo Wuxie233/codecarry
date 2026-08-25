@@ -216,6 +216,8 @@ fun SessionListScreen(
     var showRenameDialog by remember { mutableStateOf(false) }
     var renameSessionId by remember { mutableStateOf("") }
     var renameText by remember { mutableStateOf("") }
+    var showRehomeDialog by remember { mutableStateOf(false) }
+    var rehomeSessionId by remember { mutableStateOf("") }
 
     // Delete confirmation dialog state
     var showDeleteDialog by remember { mutableStateOf(false) }
@@ -634,11 +636,16 @@ fun SessionListScreen(
                                             onSubagentClick = { sessionId, directory ->
                                                 onNavigateToChat(sessionId, false, directory)
                                             },
+                                            onRehome = {
+                                                rehomeSessionId = item.session.id
+                                                showRehomeDialog = true
+                                            },
                                             supportsManagement = uiState.supportsSessionManagement,
                                             supportsRename = uiState.supportsSessionRename,
                                             supportsArchive = uiState.supportsSessionArchive,
                                             supportsRestore = uiState.supportsSessionRestore,
                                             supportsDelete = uiState.supportsSessionDelete,
+                                            supportsRehome = uiState.supportsRehome,
                                         )
                              }
                          }
@@ -785,6 +792,18 @@ fun SessionListScreen(
         }
     }
 
+    if (showRehomeDialog) {
+        OpenProjectDialog(
+            viewModel = viewModel,
+            projects = uiState.projects,
+            onSelect = { directory ->
+                showRehomeDialog = false
+                viewModel.rehomeSession(rehomeSessionId, directory)
+            },
+            onDismiss = { showRehomeDialog = false },
+        )
+    }
+
     // Delete confirmation dialog
     if (showDeleteDialog) {
         BasicAlertDialog(onDismissRequest = { showDeleteDialog = false }) {
@@ -843,11 +862,13 @@ private fun SessionRowWithSubagents(
     onRestore: () -> Unit,
     onDelete: () -> Unit,
     onSubagentClick: (sessionId: String, directory: String) -> Unit,
+    onRehome: () -> Unit = {},
     supportsManagement: Boolean = true,
     supportsRename: Boolean = true,
     supportsArchive: Boolean = true,
     supportsRestore: Boolean = true,
     supportsDelete: Boolean = true,
+    supportsRehome: Boolean = false,
 ) {
     val hasRunning = subagents.running.isNotEmpty()
     val hasHistorical = subagents.historical.isNotEmpty()
@@ -870,11 +891,13 @@ private fun SessionRowWithSubagents(
             onArchive = onArchive,
             onRestore = onRestore,
             onDelete = onDelete,
+            onRehome = onRehome,
             supportsManagement = supportsManagement,
             supportsRename = supportsRename,
             supportsArchive = supportsArchive,
             supportsRestore = supportsRestore,
             supportsDelete = supportsDelete,
+            supportsRehome = supportsRehome,
         )
 
         if (hasRunning) {
@@ -1689,6 +1712,7 @@ private fun NewSessionQuickDialog(
 
 internal enum class SessionRowMenuAction {
     RENAME,
+    REHOME,
     ARCHIVE,
     RESTORE,
     DELETE,
@@ -1700,9 +1724,11 @@ internal fun sessionRowMenuActions(
     supportsArchive: Boolean = true,
     supportsRestore: Boolean = true,
     supportsDelete: Boolean = true,
+    supportsRehome: Boolean = false,
 ): List<SessionRowMenuAction> {
     return buildList {
         if (supportsRename) add(SessionRowMenuAction.RENAME)
+        if (supportsRehome) add(SessionRowMenuAction.REHOME)
         if (isArchived && supportsRestore) add(SessionRowMenuAction.RESTORE)
         if (!isArchived && supportsArchive) add(SessionRowMenuAction.ARCHIVE)
         if (supportsDelete) add(SessionRowMenuAction.DELETE)
@@ -1732,11 +1758,13 @@ private fun SessionRow(
     onArchive: () -> Unit,
     onRestore: () -> Unit,
     onDelete: () -> Unit,
+    onRehome: () -> Unit = {},
     supportsManagement: Boolean = true,
     supportsRename: Boolean = true,
     supportsArchive: Boolean = true,
     supportsRestore: Boolean = true,
     supportsDelete: Boolean = true,
+    supportsRehome: Boolean = false,
 ) {
     val isAmoled = isAmoledTheme()
     val dateFormat = remember { SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()) }
@@ -1971,6 +1999,7 @@ private fun SessionRow(
                                 supportsArchive = supportsArchive,
                                 supportsRestore = supportsRestore,
                                 supportsDelete = supportsDelete,
+                                supportsRehome = supportsRehome,
                             ).forEach { action ->
                                 when (action) {
                                     SessionRowMenuAction.RENAME -> DropdownMenuItem(
@@ -1978,6 +2007,13 @@ private fun SessionRow(
                                         onClick = {
                                             menuExpanded = false
                                             onRename()
+                                        },
+                                    )
+                                    SessionRowMenuAction.REHOME -> DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.sessions_rehome_action)) },
+                                        onClick = {
+                                            menuExpanded = false
+                                            onRehome()
                                         },
                                     )
                                     SessionRowMenuAction.ARCHIVE -> DropdownMenuItem(

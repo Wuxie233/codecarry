@@ -21,6 +21,22 @@ import dev.wuxie233.codecarry.data.api.ModelCapabilities
 import dev.wuxie233.codecarry.data.api.ModelLimit
 import dev.wuxie233.codecarry.data.api.toPermissionAsked
 import dev.wuxie233.codecarry.data.api.ServerConnection
+import dev.wuxie233.codecarry.data.dsh.DshApiClient
+import dev.wuxie233.codecarry.data.dsh.DshConnection
+import dev.wuxie233.codecarry.data.dsh.DshConnectionManager
+import dev.wuxie233.codecarry.data.dsh.DshEventState
+import dev.wuxie233.codecarry.data.dsh.DshGenerationStatus
+import dev.wuxie233.codecarry.data.dsh.DshQuestionAnswer
+import dev.wuxie233.codecarry.data.dsh.DshQuestionAnswerItem
+import dev.wuxie233.codecarry.data.dsh.DshRpcError
+import dev.wuxie233.codecarry.data.dsh.DshRpcResult
+import dev.wuxie233.codecarry.data.dsh.dshPromptRequest
+import dev.wuxie233.codecarry.data.dsh.dshQueueItemText
+import dev.wuxie233.codecarry.data.dsh.foldDshHistory
+import dev.wuxie233.codecarry.data.dsh.mapDshApproval
+import dev.wuxie233.codecarry.data.dsh.mapDshEventStateToSessions
+import dev.wuxie233.codecarry.data.dsh.mapDshQuestion
+import dev.wuxie233.codecarry.data.dsh.toSessionEvent
 import dev.wuxie233.codecarry.data.preferences.SessionListPreferencesRepository
 import dev.wuxie233.codecarry.data.repository.DraftRepository
 import dev.wuxie233.codecarry.data.repository.EventReducer
@@ -45,8 +61,11 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import java.net.URLDecoder
 import java.util.UUID
 import javax.inject.Inject
@@ -120,6 +139,17 @@ data class ChatUiState(
     val supportsCommands: Boolean = false,
     val supportsRename: Boolean = false,
     val supportsSessionCreate: Boolean = false,
+    val isDsh: Boolean = false,
+    val queuedPrompts: List<ChatQueueItem> = emptyList(),
+    val permissionAlwaysAvailable: Boolean = true,
+    val supportsShell: Boolean = false,
+    val supportsTerminal: Boolean = false,
+)
+
+data class ChatQueueItem(
+    val id: String,
+    val placement: String,
+    val text: String,
 )
 
 data class RevertedDraftPayload(
@@ -149,6 +179,8 @@ class ChatViewModel @Inject constructor(
     private val draftRepository: DraftRepository,
     private val sessionListPreferencesRepository: SessionListPreferencesRepository,
     private val settingsRepository: SettingsRepository,
+    private val dshApi: DshApiClient,
+    private val dshConnectionManager: DshConnectionManager,
 ) : ViewModel() {
 
     private val serverUrl: String = decodeRouteArg(savedStateHandle.get<String>("serverUrl"))
@@ -163,8 +195,12 @@ class ChatViewModel @Inject constructor(
     }.getOrDefault(ServerType.OPENCODE)
     private val isPiStack: Boolean = false
     private val isPiRoundtable: Boolean = false
+    private val isDsh: Boolean = serverType == ServerType.DSH
+    private val dshCapabilities = chatBackendCapabilities(serverType)
 
     private val conn = ServerConnection.from(serverUrl, username, password.ifEmpty { null })
+    private val dshConn = DshConnection.from(serverUrl)
+    private val dshReducer = dshConnectionManager.reducer(serverId)
 
     private val _isLoading = MutableStateFlow(true)
     private val _error = MutableStateFlow<String?>(null)
@@ -269,30 +305,34 @@ class ChatViewModel @Inject constructor(
     private val _hasOlderMessages = MutableStateFlow(false)
     /** Whether a "load older" request is in flight. */
     private val _isLoadingOlder = MutableStateFlow(false)
+    private val _dshQueueTick = MutableStateFlow(0L)
     val uiState: StateFlow<ChatUiState> = combine(
-        eventReducer.serverSessionDetails,
-        eventReducer.messages,
-        eventReducer.parts,
-        eventReducer.sessionStatuses,
-        eventReducer.permissionsByServer,
-        eventReducer.questionsByServer,
-        _isLoading,
-        _error,
-        _isSending,
-        _pendingSendCount,
-        _pendingSendError,
-        _isRetryingNow,
-        _selectedProviderId,
-        _selectedModelId,
-        _allProviders,
-        _providers,
-        _defaultModels,
-        _agents,
-        _selectedAgent,
-        _selectedVariant,
-        _commands,
-        _hasOlderMessages,
-        _isLoadingOlder,
+        listOf(
+            eventReducer.serverSessionDetails,
+            eventReducer.messages,
+            eventReducer.parts,
+            eventReducer.sessionStatuses,
+            eventReducer.permissionsByServer,
+            eventReducer.questionsByServer,
+            _isLoading,
+            _error,
+            _isSending,
+            _pendingSendCount,
+            _pendingSendError,
+            _isRetryingNow,
+            _selectedProviderId,
+            _selectedModelId,
+            _allProviders,
+            _providers,
+            _defaultModels,
+            _agents,
+            _selectedAgent,
+            _selectedVariant,
+            _commands,
+            _hasOlderMessages,
+            _isLoadingOlder,
+            _dshQueueTick,
+        )
     ) { args ->
         @Suppress("UNCHECKED_CAST")
         val sessionsByServer = args[0] as Map<String, Map<String, Session>>
@@ -326,6 +366,8 @@ class ChatViewModel @Inject constructor(
         val commands = args[20] as List<CommandInfo>
         val hasOlderMessages = args[21] as Boolean
         val isLoadingOlder = args[22] as Boolean
+        @Suppress("UNUSED_VARIABLE")
+        val dshQueueTick = args[23] as Long
 
         val session = allSessions.find { it.id == sessionId && it.id in currentServerSessionIds }
         val subagents = buildDirectChatSubagents(
@@ -460,11 +502,22 @@ class ChatViewModel @Inject constructor(
             supportsAbort = true,
             supportsModelSelection = true,
             supportsThinkingSelection = true,
-            supportsCompact = true,
+            supportsCompact = !isDsh,
             supportsFork = true,
             supportsCommands = true,
             supportsRename = true,
             supportsSessionCreate = true,
+            isDsh = isDsh,
+            queuedPrompts = if (isDsh) {
+                dshReducer.state.value.sessions[sessionId]?.queue.orEmpty().map { item ->
+                    ChatQueueItem(id = item.id, placement = item.placement, text = dshQueueItemText(item))
+                }
+            } else {
+                emptyList()
+            },
+            permissionAlwaysAvailable = !isDsh,
+            supportsShell = dshCapabilities.shellAndTerminal,
+            supportsTerminal = dshCapabilities.shellAndTerminal,
         )
     }.stateIn(
         viewModelScope,
@@ -506,14 +559,141 @@ class ChatViewModel @Inject constructor(
             // Load initial message count from settings, then load data
             viewModelScope.launch {
                 currentMessageLimit = settingsRepository.initialMessageCount.first()
-                if (routeDirectory != null) loadMessages()
-                loadSession()
+                if (isDsh) {
+                    observeDshState()
+                    loadDshSession()
+                } else {
+                    if (routeDirectory != null) loadMessages()
+                    loadSession()
+                }
             }
-            loadProviders()
-            loadAgents()
-            loadCommands()
+            if (isDsh) {
+                loadDshProviders()
+            } else {
+                loadProviders()
+                loadAgents()
+                loadCommands()
+            }
         }
 
+    }
+
+    private fun observeDshState() {
+        viewModelScope.launch {
+            dshReducer.state.collect { state ->
+                applyDshState(state)
+            }
+        }
+        viewModelScope.launch {
+            dshConnectionManager.states.collect { states ->
+                val generation = states[serverId]
+                if (generation?.status == DshGenerationStatus.Ready && generation.isReady) {
+                    loadDshHistory()
+                    loadDshProviders()
+                }
+            }
+        }
+    }
+
+    private fun applyDshState(state: DshEventState) {
+        val mapped = mapDshEventStateToSessions(state)
+        eventReducer.setSessions(serverId, mapped.sessions)
+        mapped.statuses.forEach { (id, status) ->
+            eventReducer.updateSessionStatus(id, status)
+        }
+        val snapshot = state.sessions[sessionId]
+        if (snapshot != null) {
+            val folded = foldDshHistory(sessionId, snapshot.events)
+            eventReducer.setMessages(sessionId, folded)
+            sessionDirectory = snapshot.cwd?.takeIf { it.isNotBlank() } ?: sessionDirectory
+            _hasOlderMessages.value = snapshot.events.isNotEmpty() &&
+                snapshot.events.minOf { it.seq } > 0
+        }
+        eventReducer.setPermissions(
+            serverId,
+            sessionId,
+            state.pendingApprovalsFor(sessionId).map(::mapDshApproval),
+        )
+        eventReducer.setQuestions(
+            serverId,
+            sessionId,
+            state.pendingQuestionsFor(sessionId).map(::mapDshQuestion),
+        )
+        _dshQueueTick.value = snapshot?.queue.orEmpty().size.toLong() +
+            (snapshot?.events?.lastOrNull()?.seq ?: 0L)
+    }
+
+    private suspend fun loadDshSession() {
+        try {
+            val list = dshApi.sessionList(dshConn)
+            dshReducer.applySessionList(list.items)
+            val workspaces = dshApi.workspaceList(dshConn)
+            dshReducer.applyWorkspaceList(workspaces)
+            val current = list.items.firstOrNull { it.sessionId == sessionId }
+            sessionDirectory = current?.cwd?.takeIf { it.isNotBlank() } ?: routeDirectory ?: sessionDirectory
+            loadDshHistory()
+            loadDshProviders()
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to load DSH session", e)
+            _error.value = e.message ?: "Failed to load session"
+        } finally {
+            sessionLoaded.complete(Unit)
+            _isLoading.value = false
+        }
+    }
+
+    private suspend fun loadDshHistory(beforeSeq: Long? = null) {
+        try {
+            val history = dshApi.sessionHistory(
+                connection = dshConn,
+                sessionId = sessionId,
+                beforeSeq = beforeSeq,
+                maxMessages = currentMessageLimit,
+            )
+            dshReducer.mergeHistory(
+                sessionId = sessionId,
+                events = history.events.map { it.event.toSessionEvent() },
+                projections = history.projections,
+                replace = false,
+            )
+            _hasOlderMessages.value = history.hasMore
+            applyDshState(dshReducer.state.value)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to load DSH history", e)
+            if (beforeSeq == null) _error.value = e.message ?: "Failed to load messages"
+        }
+    }
+
+    private fun loadDshProviders() {
+        viewModelScope.launch {
+            try {
+                val models = dshApi.sessionModels(dshConn, sessionId)
+                val providers = models.groups.map { group ->
+                    ProviderInfo(
+                        id = group.id,
+                        name = group.name,
+                        models = group.models.associate { model ->
+                            model.id to ProviderModel(
+                                id = model.id,
+                                providerId = group.id,
+                                name = model.name,
+                                variants = model.reasoning?.efforts?.associate { effort ->
+                                    effort.id to JsonPrimitive(effort.name)
+                                },
+                            )
+                        },
+                    )
+                }
+                _allProviders.value = providers
+                applyProviderFilter()
+                _selectedProviderId.value = models.current.provider
+                _selectedModelId.value = models.current.model
+                _selectedVariant.value = models.current.reasoningEffort
+                isModelExplicitlySelected = true
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to load DSH models", e)
+            }
+        }
     }
 
     private fun restoreDraft() {
@@ -575,6 +755,14 @@ class ChatViewModel @Inject constructor(
     }
 
     fun loadMessages() {
+        if (isDsh) {
+            viewModelScope.launch {
+                _isLoading.value = true
+                loadDshHistory()
+                _isLoading.value = false
+            }
+            return
+        }
         viewModelScope.launch {
             _isLoading.value = true
             _error.value = null
@@ -623,6 +811,15 @@ class ChatViewModel @Inject constructor(
      * The server returns the N most recent messages, so we simply request more.
      */
     fun loadOlderMessages() {
+        if (isDsh) {
+            viewModelScope.launch {
+                _isLoadingOlder.value = true
+                val before = dshReducer.state.value.sessions[sessionId]?.events?.minOfOrNull { it.seq }
+                loadDshHistory(beforeSeq = before)
+                _isLoadingOlder.value = false
+            }
+            return
+        }
         viewModelScope.launch {
             _isLoadingOlder.value = true
             currentMessageLimit *= 2
@@ -769,6 +966,17 @@ class ChatViewModel @Inject constructor(
     fun selectVariant(name: String?) {
         _selectedVariant.value = name
         saveDraft()
+        if (isDsh) {
+            val providerId = _selectedProviderId.value
+            val modelId = _selectedModelId.value
+            if (providerId != null && modelId != null) {
+                viewModelScope.launch {
+                    runCatching {
+                        dshApi.sessionSelectModel(dshConn, sessionId, providerId, modelId, name)
+                    }.onFailure { Log.e(TAG, "Failed to select DSH reasoning", it) }
+                }
+            }
+        }
     }
 
     private fun loadCommands() {
@@ -799,12 +1007,36 @@ class ChatViewModel @Inject constructor(
             _selectedVariant.value = if (idx == variants.lastIndex) null else variants[idx + 1]
         }
         saveDraft()
+        if (isDsh) {
+            val providerId = _selectedProviderId.value
+            val modelId = _selectedModelId.value
+            if (providerId != null && modelId != null) {
+                viewModelScope.launch {
+                    runCatching {
+                        dshApi.sessionSelectModel(dshConn, sessionId, providerId, modelId, _selectedVariant.value)
+                    }.onFailure { Log.e(TAG, "Failed to cycle DSH reasoning", it) }
+                }
+            }
+        }
     }
 
     fun selectModel(providerId: String, modelId: String) {
         _selectedProviderId.value = providerId
         _selectedModelId.value = modelId
         isModelExplicitlySelected = true
+        if (isDsh) {
+            viewModelScope.launch {
+                runCatching {
+                    dshApi.sessionSelectModel(
+                        dshConn,
+                        sessionId,
+                        providerId,
+                        modelId,
+                        _selectedVariant.value,
+                    )
+                }.onFailure { Log.e(TAG, "Failed to select DSH model", it) }
+            }
+        }
     }
 
     // ============ @ File Mention Search ============
@@ -819,6 +1051,23 @@ class ChatViewModel @Inject constructor(
     /** Search files and directories for @-mention autocomplete. Debounced by 200ms. */
     fun searchFilesForMention(query: String) {
         fileSearchJob?.cancel()
+        if (isDsh) {
+            fileSearchJob = viewModelScope.launch {
+                if (query.isNotEmpty()) delay(150)
+                try {
+                    val listing = dshApi.hostListDirectory(dshConn, sessionDirectory)
+                    val needle = query.trim()
+                    _fileSearchResults.value = listing.entries
+                        .filter { needle.isEmpty() || it.name.contains(needle, ignoreCase = true) }
+                        .take(15)
+                        .map { it.path }
+                } catch (e: Exception) {
+                    Log.e(TAG, "DSH file search failed", e)
+                    _fileSearchResults.value = emptyList()
+                }
+            }
+            return
+        }
         if (query.isEmpty()) {
             // Show recent/top files immediately with no debounce
             fileSearchJob = viewModelScope.launch {
@@ -952,6 +1201,10 @@ class ChatViewModel @Inject constructor(
     }
 
     private fun sendParts(parts: List<PromptPart>, onResult: (Boolean) -> Unit = {}) {
+        if (isDsh) {
+            sendDshParts(parts, steer = uiState.value.sessionStatus is SessionStatus.Busy, onResult)
+            return
+        }
         val model = if (_selectedProviderId.value != null && _selectedModelId.value != null) {
             ModelSelection(_selectedProviderId.value!!, _selectedModelId.value!!)
         } else null
@@ -969,6 +1222,13 @@ class ChatViewModel @Inject constructor(
     }
 
     fun retryPendingSend() {
+        if (isDsh) {
+            val failed = pendingOpenCodeSends.firstOrNull() ?: return
+            _pendingSendError.value = null
+            _error.value = null
+            sendDshParts(failed.parts, steer = uiState.value.sessionStatus is SessionStatus.Busy)
+            return
+        }
         if (pendingOpenCodeSends.isEmpty()) return
         _pendingSendError.value = null
         _error.value = null
@@ -976,6 +1236,50 @@ class ChatViewModel @Inject constructor(
             viewModelScope.launch { loadSession() }
         } else {
             drainPendingOpenCodeSends()
+        }
+    }
+
+    private fun sendDshParts(parts: List<PromptPart>, steer: Boolean, onResult: (Boolean) -> Unit = {}) {
+        pendingOpenCodeSends.addLast(
+            PendingOpenCodeSend(
+                parts = parts.toList(),
+                model = null,
+                agent = uiState.value.selectedAgent,
+                variant = _selectedVariant.value,
+            ),
+        )
+        _pendingSendCount.value = pendingOpenCodeSends.size
+        onResult(true)
+        viewModelScope.launch {
+            _isSending.value = true
+            try {
+                val request = dshPromptRequest(parts, steer)
+                dshApi.sessionPrompt(dshConn, sessionId, request.mode, request.content)
+                pendingOpenCodeSends.removeFirstOrNull()
+                _pendingSendCount.value = pendingOpenCodeSends.size
+                _pendingSendError.value = null
+                eventReducer.updateSessionStatus(sessionId, SessionStatus.Busy)
+            } catch (error: Exception) {
+                Log.e(TAG, "Failed to send DSH prompt", error)
+                _pendingSendError.value = error.message ?: "Failed to send queued message"
+                _error.value = _pendingSendError.value
+            } finally {
+                _isSending.value = false
+            }
+        }
+    }
+
+    fun updateDshQueue(itemId: String, action: String) {
+        if (!isDsh) return
+        viewModelScope.launch {
+            runCatching {
+                dshApi.sessionUpdateQueue(
+                    dshConn,
+                    sessionId,
+                    itemId,
+                    buildJsonObject { put("kind", action) },
+                )
+            }.onFailure { Log.e(TAG, "Failed to update DSH queue", it) }
         }
     }
 
@@ -1021,6 +1325,15 @@ class ChatViewModel @Inject constructor(
     fun replyToPermission(requestId: String, reply: String) {
         viewModelScope.launch {
             try {
+                if (isDsh) {
+                    val approval = dshReducer.state.value.pendingApprovals[requestId] ?: return@launch
+                    val outcome = when (reply) {
+                        "once", "always", "allowed-once" -> "allowed-once"
+                        else -> "rejected"
+                    }
+                    dshApi.answerApproval(dshConn, approval.rpcId, approval.sessionId, approval.approvalId, outcome)
+                    return@launch
+                }
                 api.replyToPermission(
                     conn = conn,
                     requestId = requestId,
@@ -1037,7 +1350,11 @@ class ChatViewModel @Inject constructor(
     fun abortSession() {
         viewModelScope.launch {
             val outcome: AbortOutcome = try {
-                val ok = api.abortSession(conn, sessionId, directory = sessionDirectory)
+                val ok = if (isDsh) {
+                    dshApi.sessionCancel(dshConn, sessionId).accepted
+                } else {
+                    api.abortSession(conn, sessionId, directory = sessionDirectory)
+                }
                 if (ok) AbortOutcome.Success else AbortOutcome.Unsuccessful
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to abort session", e)
@@ -1087,6 +1404,24 @@ class ChatViewModel @Inject constructor(
     fun replyToQuestion(requestId: String, answers: List<List<String>>) {
         viewModelScope.launch {
             try {
+                if (isDsh) {
+                    val pending = dshReducer.state.value.pendingQuestions[requestId] ?: return@launch
+                    val payload = DshQuestionAnswer(
+                        answers = pending.questions.mapIndexed { index, item ->
+                            DshQuestionAnswerItem(
+                                id = item.id,
+                                selected = answers.getOrNull(index).orEmpty(),
+                            )
+                        },
+                    )
+                    dshApi.answerQuestion(
+                        dshConn,
+                        pending.rpcId,
+                        pending.sessionId,
+                        json.encodeToJsonElement(DshQuestionAnswer.serializer(), payload),
+                    )
+                    return@launch
+                }
                 val success = api.replyToQuestion(
                     conn = conn,
                     requestId = requestId,
@@ -1109,6 +1444,15 @@ class ChatViewModel @Inject constructor(
     fun rejectQuestion(requestId: String) {
         viewModelScope.launch {
             try {
+                if (isDsh) {
+                    val pending = dshReducer.state.value.pendingQuestions[requestId] ?: return@launch
+                    dshApi.respond(
+                        dshConn,
+                        pending.rpcId,
+                        DshRpcResult(ok = false, error = DshRpcError("cancelled", "cancelled")),
+                    )
+                    return@launch
+                }
                 val success = api.rejectQuestion(conn = conn, requestId = requestId, directory = sessionDirectory)
                 if (success) {
                     // Optimistically remove the question card
@@ -1342,6 +1686,18 @@ class ChatViewModel @Inject constructor(
                 if (!sessionLoaded.isCompleted) {
                     sessionLoaded.await()
                 }
+                if (isDsh) {
+                    val atSeq = messageId?.substringAfterLast('-')?.toLongOrNull()
+                    val forked = dshApi.sessionFork(dshConn, sessionId, atSeq)
+                    val session = Session(
+                        id = forked.sessionId,
+                        directory = sessionDirectory.orEmpty(),
+                        time = Session.Time(created = System.currentTimeMillis(), updated = System.currentTimeMillis()),
+                    )
+                    eventReducer.setSessions(serverId, listOf(session))
+                    onResult(session)
+                    return@launch
+                }
                 val effectiveDirectory = ForkDirectoryResolver.resolve(
                     sessionDirectory = sessionDirectory,
                     sessionId = sessionId,
@@ -1378,6 +1734,11 @@ class ChatViewModel @Inject constructor(
     fun renameSession(title: String, onResult: (Boolean) -> Unit) {
         viewModelScope.launch {
             try {
+                if (isDsh) {
+                    dshApi.sessionRename(dshConn, sessionId, title)
+                    onResult(true)
+                    return@launch
+                }
                 api.updateSession(conn, sessionId, title)
                 if (BuildConfig.DEBUG) Log.d(TAG, "Renamed session $sessionId to $title")
                 onResult(true)
@@ -1392,6 +1753,13 @@ class ChatViewModel @Inject constructor(
     fun executeCommand(command: String, arguments: String = "", onResult: (Boolean) -> Unit) {
         viewModelScope.launch {
             try {
+                if (isDsh) {
+                    val text = "/" + command.removePrefix("/").trim() + if (arguments.isBlank()) "" else " $arguments"
+                    val request = dshPromptRequest(listOf(PromptPart(type = "text", text = text)), steer = false)
+                    dshApi.sessionPrompt(dshConn, sessionId, request.mode, request.content)
+                    onResult(true)
+                    return@launch
+                }
                 if (!sessionLoaded.isCompleted) {
                     sessionLoaded.await()
                 }
@@ -1532,6 +1900,17 @@ class ChatViewModel @Inject constructor(
                     sessionLoaded.await()
                 }
                 val requestedDirectory = sessionDirectory
+                if (isDsh) {
+                    val created = dshApi.sessionCreate(dshConn, cwd = requestedDirectory)
+                    val session = Session(
+                        id = created.sessionId,
+                        directory = requestedDirectory.orEmpty(),
+                        time = Session.Time(created = System.currentTimeMillis(), updated = System.currentTimeMillis()),
+                    )
+                    eventReducer.setSessions(serverId, listOf(session))
+                    onResult(session)
+                    return@launch
+                }
                 val session = api.createSession(conn, directory = requestedDirectory)
                 val normalizedSession = if (session.directory.isBlank() && !requestedDirectory.isNullOrBlank()) {
                     session.copy(directory = requestedDirectory)

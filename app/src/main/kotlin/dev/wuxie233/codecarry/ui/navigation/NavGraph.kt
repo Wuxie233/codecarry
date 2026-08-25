@@ -517,6 +517,7 @@ fun NavGraph(
             val sessionId = decodeRouteArg(backStackEntry.arguments?.getString("sessionId"))
             val openTerminal = backStackEntry.arguments?.getBoolean("openTerminal") ?: false
             val directory = decodeRouteArg(backStackEntry.arguments?.getString("directory"))
+            val serverType = decodeRouteArg(backStackEntry.arguments?.getString("serverType"))
 
             // Only pass shared images to the targeted session, then clear them
             val imagesForThisSession = if (pendingShareSessionId == sessionId && pendingShareUris.isNotEmpty()) {
@@ -538,6 +539,7 @@ fun NavGraph(
                         serverId = serverId,
                         sessionId = newSessionId,
                         directory = newSessionDirectory,
+                        serverType = serverType,
                     )
                     navController.navigate(route) {
                         launchSingleTop = shouldLaunchSingleTopChat(sessionId, newSessionId)

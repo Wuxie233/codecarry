@@ -160,4 +160,49 @@ class DshEventReducerTest {
         assertEquals("one", (reducer.state.value.workspaces.getValue("w1")["title"] as JsonPrimitive).content)
         assertFalse(reducer.state.value.sessions.containsKey("w1"))
     }
+
+    @Test
+    fun `mergeHistory concatenates then mux queue snapshot replaces`() {
+        val reducer = DshEventReducer()
+        reducer.mergeHistory(
+            sessionId = "s1",
+            events = listOf(DshSessionEvent(type = "user/message", seq = 1, time = 10)),
+        )
+        reducer.mergeHistory(
+            sessionId = "s1",
+            events = listOf(DshSessionEvent(type = "assistant/chunk", seq = 2, time = 11)),
+        )
+        reducer.applyMux(
+            "q1",
+            DshMuxFrame.SessionQueue(
+                sessionId = "s1",
+                items = listOf(DshQueuedInboxItem("m1", "queued", JsonObject(emptyMap()))),
+            ),
+        )
+        reducer.applyMux(
+            "q2",
+            DshMuxFrame.SessionQueue(
+                sessionId = "s1",
+                items = listOf(DshQueuedInboxItem("m2", "steering", JsonObject(emptyMap()))),
+            ),
+        )
+        val session = reducer.state.value.sessions.getValue("s1")
+        assertEquals(listOf(1L, 2L), session.events.map { it.seq })
+        assertEquals(listOf("m2"), session.queue.map { it.id })
+        assertEquals("steering", session.queue.single().placement)
+    }
+
+    @Test
+    fun `approval requested keeps host rpcId until resolved frame`() {
+        val reducer = DshEventReducer()
+        reducer.applyMux(
+            "host-rpc-1",
+            DshMuxFrame.ApprovalRequested("s1", "a1", "bash", reason = "needs sandbox"),
+        )
+        val pending = reducer.state.value.pendingApprovals.getValue("host-rpc-1")
+        assertEquals("host-rpc-1", pending.rpcId)
+        assertEquals("a1", pending.approvalId)
+        reducer.applyMux("resolved", DshMuxFrame.ApprovalResolved("s1", "a1", "allowed-once"))
+        assertTrue(reducer.state.value.pendingApprovals.isEmpty())
+    }
 }
