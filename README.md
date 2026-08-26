@@ -25,7 +25,7 @@ CodeCarry is an independently maintained Android client that connects developers
 - **Smart scroll behavior** — manual scroll disables auto-scroll; automatically re-enables when scrolled to bottom
 - **File mentions** — `@file` autocomplete with server-backed path search and quick insert
 - **Image support** — inline base64 images in chat
-- **Tool outputs** — expandable tool-call cards with selectable monospace output
+- **Process rows** — Think, Skill, and tool calls are independent timeline rows with expandable details; assistant prose has no Response bubble chrome
 - **Image preview & save** — open sent and draft images in fullscreen preview and save to device storage
 - **Shell output copy** — bash output blocks support text selection and one-tap copy (command + output)
 - **HTML error fallback modes** — switch long HTML error payloads between rendered page view and raw code view
