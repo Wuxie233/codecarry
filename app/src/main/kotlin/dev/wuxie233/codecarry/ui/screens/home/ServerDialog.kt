@@ -25,6 +25,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import dev.wuxie233.codecarry.R
+import dev.wuxie233.codecarry.data.dsh.dshPublicHostRequiresPassword
 import dev.wuxie233.codecarry.domain.model.ServerConfig
 import dev.wuxie233.codecarry.domain.model.ServerType
 
@@ -111,6 +112,7 @@ fun ServerDialog(
     var autoConnect by remember { mutableStateOf(server?.autoConnect ?: false) }
 
     var urlError by remember { mutableStateOf<String?>(null) }
+    var passwordError by remember { mutableStateOf<String?>(null) }
 
     val nameLabel = stringResource(R.string.server_name)
     val urlLabel = stringResource(R.string.server_url)
@@ -125,6 +127,7 @@ fun ServerDialog(
     val saveServerDescription = "$saveLabel ${if (server != null) editServerLabel else addServerLabel}"
     val urlRequiredText = urlLabel
     val urlInvalidText = stringResource(R.string.server_invalid_url)
+    val dshPasswordRequiredText = stringResource(R.string.server_dsh_password_required)
     val dialogMaxHeight = LocalConfiguration.current.screenHeightDp.dp * 0.9f
     val scrollState = rememberScrollState()
 
@@ -268,7 +271,10 @@ fun ServerDialog(
 
                     OutlinedTextField(
                         value = password,
-                        onValueChange = { password = it },
+                        onValueChange = {
+                            password = it
+                            passwordError = null
+                        },
                         label = {
                             Text(
                                 if (serverType == ServerType.DSH) {
@@ -290,6 +296,12 @@ fun ServerDialog(
                             )
                         },
                         visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                        isError = passwordError != null,
+                        supportingText = if (passwordError != null) {
+                            { Text(passwordError!!) }
+                        } else {
+                            null
+                        },
                         keyboardOptions = KeyboardOptions(
                             keyboardType = KeyboardType.Password,
                             imeAction = ImeAction.Done
@@ -368,8 +380,18 @@ fun ServerDialog(
                                 normalizedUrl == null -> urlInvalidText
                                 else -> null
                             }
+                            passwordError = if (
+                                serverType == ServerType.DSH &&
+                                normalizedUrl != null &&
+                                dshPublicHostRequiresPassword(normalizedUrl) &&
+                                password.isBlank()
+                            ) {
+                                dshPasswordRequiredText
+                            } else {
+                                null
+                            }
 
-                            if (urlError == null && normalizedUrl != null) {
+                            if (urlError == null && passwordError == null && normalizedUrl != null) {
                                 val finalName = name.trim().ifBlank {
                                     deriveServerNameFromUrl(normalizedUrl)
                                 }

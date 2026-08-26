@@ -76,6 +76,8 @@ class DshRpcTest {
         val passwordlessPublic = DshConnection.from("https://dsh.wuxie233.com")
         assertFalse(passwordlessPublic.isLoopback)
         assertFalse(DshMethods.availableOn(passwordlessPublic).contains("credentials.set"))
+        assertTrue(dshPublicHostRequiresPassword("https://dsh.wuxie233.com"))
+        assertFalse(dshPublicHostRequiresPassword("http://127.0.0.1:18790"))
     }
 
     @Test

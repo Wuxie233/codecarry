@@ -113,7 +113,8 @@
     <string name="server_dsh_url_example">仅 HTTP(S)。公网 dsh-auth 要填下面的密码。无密码的局域网需把权威加入 trustedHosts。</string>
     <string name="server_dsh_password">DSH 密码</string>
     <string name="server_dsh_password_hint">公网 dsh-auth 必填</string>
-    <string name="dsh_auth_failed">DSH 鉴权失败</string>
+    <string name="server_dsh_password_required">公网 DSH 需要填写 dsh-auth 密码</string>
+    <string name="dsh_auth_failed">DSH 鉴权失败。请编辑服务器并保存 dsh-auth 密码。</string>
     <string name="server_codex_url_hint">wss://codex.example.com</string>
     <string name="server_codex_url_example">远程连接请使用 wss://；ws:// 仅限环回地址</string>
     <string name="server_codex_token">App-server 令牌</string>

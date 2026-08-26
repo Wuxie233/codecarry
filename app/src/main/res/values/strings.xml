@@ -100,7 +100,8 @@
     <string name="server_dsh_url_example">HTTP(S) only. Public dsh-auth hosts need the password below. LAN without a password needs trustedHosts.</string>
     <string name="server_dsh_password">DSH password</string>
     <string name="server_dsh_password_hint">Required for dsh-auth public hosts</string>
-    <string name="dsh_auth_failed">DSH authentication failed</string>
+    <string name="server_dsh_password_required">Public DSH hosts need the dsh-auth password</string>
+    <string name="dsh_auth_failed">DSH authentication failed. Edit the server and save the dsh-auth password.</string>
     <string name="server_codex_url_hint">wss://codex.example.com</string>
     <string name="server_codex_url_example">Use wss:// remotely; ws:// is limited to loopback</string>
     <string name="server_username">Username</string>
