@@ -43,6 +43,7 @@ import dev.wuxie233.codecarry.data.repository.DraftRepository
 import dev.wuxie233.codecarry.data.repository.EventReducer
 import dev.wuxie233.codecarry.data.repository.SettingsRepository
 import dev.wuxie233.codecarry.domain.model.*
+import dev.wuxie233.codecarry.service.ForegroundResumeDispatcher
 import dev.wuxie233.codecarry.service.dismissResponseReadyNotification
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -181,6 +182,7 @@ class ChatViewModel @Inject constructor(
     private val settingsRepository: SettingsRepository,
     private val dshApi: DshApiClient,
     private val dshConnectionManager: DshConnectionManager,
+    private val foregroundResumeDispatcher: ForegroundResumeDispatcher,
 ) : ViewModel() {
 
     private val serverUrl: String = decodeRouteArg(savedStateHandle.get<String>("serverUrl"))
@@ -199,6 +201,9 @@ class ChatViewModel @Inject constructor(
     private val conn = ServerConnection.from(serverUrl, username, password.ifEmpty { null })
     private val dshConn = DshConnection.from(serverUrl, password.ifEmpty { null })
     private val dshReducer = dshConnectionManager.reducer(serverId)
+    private val foregroundResumeListener: () -> Unit = {
+        if (sessionId.isNotBlank()) refreshOpenSessionOnForeground()
+    }
 
     private val _isLoading = MutableStateFlow(true)
     private val _error = MutableStateFlow<String?>(null)
@@ -574,6 +579,7 @@ class ChatViewModel @Inject constructor(
                 loadAgents()
                 loadCommands()
             }
+            foregroundResumeDispatcher.addListener(foregroundResumeListener)
         }
 
     }
@@ -643,7 +649,7 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    private suspend fun loadDshHistory(beforeSeq: Long? = null) {
+    private suspend fun loadDshHistory(beforeSeq: Long? = null, silent: Boolean = false) {
         try {
             val history = dshApi.sessionHistory(
                 connection = dshConn,
@@ -665,7 +671,7 @@ class ChatViewModel @Inject constructor(
             applyDshState(dshReducer.state.value)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to load DSH history", e)
-            if (beforeSeq == null) _error.value = e.message ?: "Failed to load messages"
+            if (!silent && beforeSeq == null) _error.value = e.message ?: "Failed to load messages"
         }
     }
 
@@ -1216,10 +1222,33 @@ class ChatViewModel @Inject constructor(
     }
 
     override fun onCleared() {
+        foregroundResumeDispatcher.removeListener(foregroundResumeListener)
         eventReducer.clearActiveSessionId(sessionId)
         closeTerminalSession()
         super.onCleared()
         saveDraft()
+    }
+
+    private fun refreshOpenSessionOnForeground() {
+        viewModelScope.launch {
+            if (isDsh) {
+                if (dshConnectionManager.states.value[serverId]?.isReady == true) {
+                    loadDshHistory(silent = true)
+                }
+            } else {
+                runCatching { mergeOpenCodeHistorySilently() }
+            }
+        }
+    }
+
+    private suspend fun mergeOpenCodeHistorySilently() {
+        val messages = api.listMessages(
+            conn = conn,
+            sessionId = sessionId,
+            limit = currentMessageLimit,
+            directory = sessionDirectory,
+        )
+        eventReducer.mergeMessages(sessionId, messages)
     }
 
     /** Get the session directory for building file:// URLs */

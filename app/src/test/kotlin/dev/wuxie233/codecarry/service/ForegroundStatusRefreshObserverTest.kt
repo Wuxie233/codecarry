@@ -37,6 +37,7 @@ class ForegroundStatusRefreshObserverTest {
     fun `foreground reconciliation selects only connected OpenCode servers`() {
         assertTrue(shouldReconcileForegroundStatus(ServerType.OPENCODE, isConnected = true))
         assertFalse(shouldReconcileForegroundStatus(ServerType.OPENCODE, isConnected = false))
+        assertFalse(shouldReconcileForegroundStatus(ServerType.DSH, isConnected = true))
     }
 
     @Test
@@ -72,6 +73,18 @@ class ForegroundStatusRefreshObserverTest {
 
         assertEquals(null, noCache)
         assertEquals(listOf("/workspace/a"), cached)
+    }
+
+    @Test
+    fun `resume dispatcher notifies registered listeners only`() {
+        val dispatcher = ForegroundResumeDispatcher()
+        var openChat = 0
+        val listener = { openChat += 1 }
+        dispatcher.addListener(listener)
+        dispatcher.dispatch()
+        dispatcher.removeListener(listener)
+        dispatcher.dispatch()
+        assertEquals(1, openChat)
     }
 
     @Test

@@ -212,6 +212,7 @@ class ChatViewModelRetryNowTest {
         settingsRepository = settingsRepository(),
         dshApi = unusedDshApi(json),
         dshConnectionManager = unusedDshConnectionManager(testScope.backgroundScope, json),
+        foregroundResumeDispatcher = dev.wuxie233.codecarry.service.ForegroundResumeDispatcher(),
     ).also(viewModels::add)
 
     private fun openCodeApi(

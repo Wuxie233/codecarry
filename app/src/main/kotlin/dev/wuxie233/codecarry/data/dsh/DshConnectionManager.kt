@@ -13,6 +13,8 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicLong
 
+internal fun shouldRefreshForegroundDsh(isReady: Boolean): Boolean = isReady
+
 class DshConnectionManager(
     private val client: DshApiClient,
     private val scope: CoroutineScope,
@@ -21,6 +23,7 @@ class DshConnectionManager(
 ) {
     private val generations = AtomicLong(0)
     private val jobs = mutableMapOf<String, Job>()
+    private val connections = mutableMapOf<String, DshConnection>()
     private val _states = MutableStateFlow<Map<String, DshGenerationState>>(emptyMap())
     val states: StateFlow<Map<String, DshGenerationState>> = _states.asStateFlow()
 
@@ -30,6 +33,7 @@ class DshConnectionManager(
         reducers.getOrPut(serverId) { DshEventReducer() }
 
     fun connect(serverId: String, connection: DshConnection) {
+        connections[serverId] = connection
         jobs.remove(serverId)?.cancel()
         jobs[serverId] = scope.launch {
             var delayMs = reconnectInitialMillis
@@ -73,8 +77,45 @@ class DshConnectionManager(
 
     fun disconnect(serverId: String) {
         jobs.remove(serverId)?.cancel()
+        connections.remove(serverId)
         reducer(serverId).clearPending()
         setState(serverId, DshGenerationState(status = DshGenerationStatus.Disconnected))
+    }
+
+    fun refreshReadyCatalogs() {
+        scope.launch {
+            states.value.forEach { (serverId, state) ->
+                refreshReadyCatalog(serverId, state)
+            }
+        }
+    }
+
+    internal suspend fun refreshReadyCatalog(
+        serverId: String,
+        state: DshGenerationState? = states.value[serverId],
+    ) {
+        if (state == null || !shouldRefreshForegroundDsh(state.isReady)) return
+        val connection = connections[serverId] ?: return
+        val generation = state.generation
+        try {
+            val workspaces = client.workspaceList(connection)
+            val sessions = client.sessionList(connection)
+            if (states.value[serverId]?.generation != generation) return
+            reducer(serverId).applyWorkspaceList(workspaces)
+            reducer(serverId).applySessionList(sessions.items)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            val current = states.value[serverId]
+            if (current?.generation == generation && current.isReady) {
+                reconnect(serverId)
+            }
+        }
+    }
+
+    fun reconnect(serverId: String) {
+        val connection = connections[serverId] ?: return
+        connect(serverId, connection)
     }
 
     private suspend fun connectOnce(

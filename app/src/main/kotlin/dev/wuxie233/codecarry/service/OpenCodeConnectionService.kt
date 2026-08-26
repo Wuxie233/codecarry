@@ -16,6 +16,7 @@ import dev.wuxie233.codecarry.BuildConfig
 import dev.wuxie233.codecarry.MainActivity
 import dev.wuxie233.codecarry.R
 import dev.wuxie233.codecarry.data.api.OpenCodeApi
+import dev.wuxie233.codecarry.data.dsh.DshConnectionManager
 import dev.wuxie233.codecarry.data.api.SseClient
 import dev.wuxie233.codecarry.data.preferences.SessionListPreferencesRepository
 import dev.wuxie233.codecarry.data.repository.EventReducer
@@ -185,6 +186,12 @@ class OpenCodeConnectionService : Service() {
     @Inject
     lateinit var serverRepository: ServerRepository
 
+    @Inject
+    lateinit var dshConnectionManager: DshConnectionManager
+
+    @Inject
+    lateinit var foregroundResumeDispatcher: ForegroundResumeDispatcher
+
     private val binder = LocalBinder()
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -199,6 +206,8 @@ class OpenCodeConnectionService : Service() {
     private var foregroundStarted: Boolean = false
     private val foregroundStatusRefreshObserver = ForegroundStatusRefreshObserver {
         reconcileConnectedOpenCodeStatuses()
+        dshConnectionManager.refreshReadyCatalogs()
+        foregroundResumeDispatcher.dispatch()
     }
 
     /** Observable set of server IDs that are actually connected (SSE stream active). */
@@ -679,11 +688,32 @@ class OpenCodeConnectionService : Service() {
             val current = connections[server.id]
             if (current?.transport !== state.transport || current.isConnected.not()) return
             eventReducer.reconcileSessionStatuses(statuses, baseline)
+            mergeForegroundSessionList(state, projectDirectories)
             Log.i(TAG, "[${server.displayName}] Reconciled ${statuses.size} foreground session status(es)")
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
             Log.w(TAG, "[${server.displayName}] Foreground status reconcile failed: ${error.message}")
+        }
+    }
+
+    private suspend fun mergeForegroundSessionList(
+        state: ServerConnectionState,
+        projectDirectories: List<String>,
+    ) {
+        try {
+            val roots = state.transport.listRooms(rootsOnly = true)
+                .mapNotNull { (it as? TransportRoom.OpenCode)?.session }
+            if (roots.isNotEmpty()) eventReducer.setSessions(state.config.id, roots)
+            for (directory in projectDirectories) {
+                val scoped = state.transport.listRooms(directory = directory, rootsOnly = false)
+                    .mapNotNull { (it as? TransportRoom.OpenCode)?.session }
+                if (scoped.isNotEmpty()) eventReducer.setSessions(state.config.id, scoped)
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            Log.w(TAG, "[${state.config.displayName}] Foreground session list merge failed: ${error.message}")
         }
     }
 

@@ -233,6 +233,7 @@ class ChatViewModelOptimisticBusyTest {
         settingsRepository = settingsRepository(),
         dshApi = unusedDshApi(json),
         dshConnectionManager = unusedDshConnectionManager(testScope.backgroundScope, json),
+        foregroundResumeDispatcher = dev.wuxie233.codecarry.service.ForegroundResumeDispatcher(),
     )
 
     private fun mockApi(): OpenCodeApi {
