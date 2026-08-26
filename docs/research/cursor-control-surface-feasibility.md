@@ -99,14 +99,11 @@ OpenAI 兼容 CLI 包装（cursorpipe、cursor-agent-api-proxy、cursor-api-prox
 
 1.9 的教训直接适用：第三方/脆弱 transport 进 `ServerType` 后，删除成本是整条产品面。Cursor 只应接 **官方、有版本合同的面**（Cloud OpenAPI 或 `sdk.v1` 或 ACP）。
 
-## 6. 建议（工程默认，产品未确认）
+## 6. 产品偏好（2026-03-26 确认）
 
-若目标是“手机指挥 Cursor 干活”，优先：
-
-1. **Cloud Agents API 作为第一期**：无 sidecar、官方 HTTP、和 iOS 同源。Chat + session list + follow-up + cancel + model。PR/artifact 可第二期。
-2. **本机能力不要伪装成 Cloud**：若用户要改这台 Linux/Windows 上的未提交代码，第二期再加 sidecar（`cursor-sdk-bridge` 或自研薄 REST，协议跟 `sdk.v1`，不要 CDP）。
-3. **不要**把 cursor-local-remote / CursorRemote 嵌进 APK。最多当 sidecar 参考实现。
-4. **不要**碰 `api2.cursor.sh` protobuf。
+- 目标运行环境：**本机 agent**（像连 OpenCode/DSH：开发机跑 sidecar，改这台机器的工作区）。不是云 VM，也不是扫 IDE 窗口。
+- 下一步：**停在调查**。不写 spec、不新增 `ServerType.CURSOR`。
+- 工程默认因此改为：若以后做，第一期就是 sidecar + 官方 local 协议（`sdk.v1` bridge 或 `agent acp`），不要用 Cloud Agents API 冒充本机。
 
 ## 7. 来源
 
