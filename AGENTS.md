@@ -85,6 +85,9 @@ fork based on OC Remote; the Android namespace/applicationId is
   envelope is `{ rpcId, payload }`; mux/host frames are server-originated
   `server-request` text. Client sends no application data on those sockets.
   Reconnect reopens both sockets and refetches history. No SSE fallback.
+- DSH `assistant/message` already embeds `tool-call` blocks. A later mux
+  `tool/call` with the same `callId` must update that part, not append a
+  second one, or Chat renders two identical Shell/MCP rows.
 - DSH connect is HTTP(S) only. Password is optional: stock DSH has no auth,
   only Host plus `trustedHosts`. If `ServerConfig.password` is set, CodeCarry
   sends HTTP Basic (`Authorization: Basic` of `:<password>`) on unary POST,

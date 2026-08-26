@@ -263,6 +263,39 @@ class ChatMessageRowPlannerTest {
         assertEquals(1, rows.size)
         assertTrue(rows.single() is ChatMessageRow.Skill)
         assertEquals("editing-cordis-compositions", skillRowName((rows.single() as ChatMessageRow.Skill).part))
+    }
+
+    @Test
+    fun `duplicate tool parts with the same callId become one process row`() {
+        val message = ChatMessage(
+            message = Message.Assistant(id = "assistant-dup", sessionId = SessionId, time = TimeInfo(created = 1L)),
+            parts = listOf(
+                textPart("assistant-dup", "assistant-dup-text", "working"),
+                Part.Tool(
+                    id = "from-message",
+                    sessionId = SessionId,
+                    messageId = "assistant-dup",
+                    callId = "c1",
+                    tool = "bash",
+                ),
+                Part.Tool(
+                    id = "from-mux",
+                    sessionId = SessionId,
+                    messageId = "assistant-dup",
+                    callId = "c1",
+                    tool = "bash",
+                ),
+            ),
+        )
+
+        val rows = planChatMessageRows(listOf(message))
+
+        assertEquals(1, rows.filterIsInstance<ChatMessageRow.Tool>().size)
+        assertEquals("c1", rows.filterIsInstance<ChatMessageRow.Tool>().single().part.callId)
+    }
+
+    @Test
+    fun `skill name can be recovered from pending raw JSON`() {
         assertEquals(
             "grill-with-docs",
             skillRowName(

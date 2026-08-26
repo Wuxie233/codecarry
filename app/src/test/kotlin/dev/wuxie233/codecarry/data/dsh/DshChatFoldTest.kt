@@ -4,6 +4,9 @@ import dev.wuxie233.codecarry.data.api.PromptPart
 import dev.wuxie233.codecarry.domain.model.Message
 import dev.wuxie233.codecarry.domain.model.Part
 import dev.wuxie233.codecarry.domain.model.ToolState
+import dev.wuxie233.codecarry.ui.screens.chat.ChatMessage
+import dev.wuxie233.codecarry.ui.screens.chat.ChatMessageRow
+import dev.wuxie233.codecarry.ui.screens.chat.planChatMessageRows
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
@@ -170,6 +173,77 @@ class DshChatFoldTest {
         assertEquals("c1", tool.callId)
         assertTrue(tool.state is ToolState.Completed)
         assertEquals("ok", (tool.state as ToolState.Completed).output)
+    }
+
+    @Test
+    fun `assistant message tool-call then mux tool call does not duplicate the tool part`() {
+        val events = listOf(
+            DshSessionEvent(
+                type = "assistant/message",
+                seq = 1,
+                time = 10,
+                data = buildJsonObject {
+                    put("turn", 1)
+                    put("step", 1)
+                    put("message", buildJsonObject {
+                        put("id", "a1")
+                        put("content", buildJsonArray {
+                            add(buildJsonObject { put("type", "text"); put("text", "working") })
+                            add(buildJsonObject {
+                                put("type", "tool-call")
+                                put("id", "c1")
+                                put("name", "bash")
+                                put("arguments", """{"command":"ls"}""")
+                            })
+                        })
+                    })
+                },
+                surfaceOp = JsonPrimitive("append"),
+            ),
+            DshSessionEvent(
+                type = "tool/call",
+                seq = 2,
+                time = 11,
+                data = buildJsonObject {
+                    put("turn", 1)
+                    put("step", 1)
+                    put("callId", "c1")
+                    put("name", "bash")
+                    put("arguments", """{"command":"ls"}""")
+                },
+            ),
+            DshSessionEvent(
+                type = "tool/result",
+                seq = 3,
+                time = 12,
+                data = buildJsonObject {
+                    put("turn", 1)
+                    put("step", 1)
+                    put("callId", "c1")
+                    put("name", "bash")
+                    put("message", buildJsonObject {
+                        put("content", buildJsonArray {
+                            add(buildJsonObject { put("type", "text"); put("text", "ok") })
+                        })
+                    })
+                },
+            ),
+        )
+        val folded = foldDshHistory("s1", events)
+        val tools = folded.single().parts.filterIsInstance<Part.Tool>()
+        assertEquals(1, tools.size)
+        assertEquals("c1", tools.single().callId)
+        assertEquals("bash", tools.single().tool)
+        assertTrue(tools.single().state is ToolState.Completed)
+        val rows = planChatMessageRows(
+            listOf(
+                ChatMessage(
+                    message = folded.single().info,
+                    parts = folded.single().parts,
+                ),
+            ),
+        )
+        assertEquals(1, rows.filterIsInstance<ChatMessageRow.Tool>().size)
     }
 
     @Test

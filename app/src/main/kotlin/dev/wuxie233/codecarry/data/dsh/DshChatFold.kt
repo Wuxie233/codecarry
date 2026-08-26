@@ -193,6 +193,7 @@ fun foldDshHistory(sessionId: String, events: List<DshSessionEvent>): List<Messa
                 val ownerId = currentAssistantId(messages, data) ?: continue
                 toolOwners[callId] = ownerId
                 val owner = messages[ownerId] ?: continue
+                if (owner.parts.any { it is Part.Tool && it.callId == callId }) continue
                 messages[ownerId] = owner.copy(
                     parts = owner.parts + Part.Tool(
                         id = "dsh-tool-$callId",

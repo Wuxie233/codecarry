@@ -220,12 +220,14 @@ private fun planChatMessageRows(
     if (!hasIndependentProcessParts(chatMessage)) {
         return planTextOnlyRows(chatMessage, messageIndex, planningState, activeParts)
     }
+    val seenToolCallIds = mutableSetOf<String>()
     return chatMessage.parts.flatMapIndexed { partIndex, part ->
         when {
             part is Part.Reasoning && part.text.isNotBlank() -> {
                 listOf(ChatMessageRow.Think(chatMessage, messageIndex, partIndex, part))
             }
             part is Part.Tool && part.tool == "todoread" -> emptyList()
+            part is Part.Tool && !seenToolCallIds.add(part.callId.ifBlank { part.id }) -> emptyList()
             part is Part.Tool && part.tool == "skill" -> {
                 listOf(ChatMessageRow.Skill(chatMessage, messageIndex, partIndex, part))
             }
