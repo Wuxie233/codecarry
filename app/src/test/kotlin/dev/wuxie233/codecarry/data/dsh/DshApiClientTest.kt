@@ -101,6 +101,42 @@ class DshApiClientTest {
     }
 
     @Test
+    fun `passworded public host posts Basic and admits loopback-only methods`() = runTest {
+        val captured = mutableListOf<HttpRequestData>()
+        val authed = DshConnection.from("https://dsh.wuxie233.com", "secret")
+        val client = api(captured) { request ->
+            val envelope = json.parseToJsonElement((request.body as TextContent).text).jsonObject
+            """{"type":"server-response","rpcId":"${envelope.getValue("rpcId").jsonPrimitive.content}","result":{"ok":true,"value":{"version":"0.9","cwd":"/tmp","attachedSessions":0,"home":"/root","canOpenPath":true}}}"""
+        }
+        val describe = client.describe(authed)
+        assertEquals("0.9", describe.version)
+        assertEquals("Basic OnNlY3JldA==", captured.single().headers[HttpHeaders.Authorization])
+        client.call(authed, "credentials.describe")
+        assertEquals("/api/credentials.describe", captured.last().url.encodedPath)
+    }
+
+    @Test
+    fun `http 401 becomes DshAuthRequiredException`() = runTest {
+        val engine = MockEngine {
+            respond(
+                content = "Unauthorized",
+                status = io.ktor.http.HttpStatusCode.Unauthorized,
+                headers = headersOf(HttpHeaders.ContentType, "text/plain"),
+            )
+        }
+        val http = HttpClient(engine) {
+            install(ContentNegotiation) { json(json) }
+        }
+        val client = DshApiClient(http, json, downlinkFactory = unusedDownlinks())
+        try {
+            client.describe(DshConnection.from("https://dsh.wuxie233.com", "wrong"))
+            throw AssertionError("expected auth failure")
+        } catch (error: DshAuthRequiredException) {
+            assertTrue(error.message!!.contains("authentication failed"))
+        }
+    }
+
+    @Test
     fun `session prompt posts typed payload and decodes accepted command`() = runTest {
         val captured = mutableListOf<HttpRequestData>()
         val client = api(captured) { request ->

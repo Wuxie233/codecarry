@@ -197,7 +197,7 @@ class ChatViewModel @Inject constructor(
     private val dshCapabilities = chatBackendCapabilities(serverType)
 
     private val conn = ServerConnection.from(serverUrl, username, password.ifEmpty { null })
-    private val dshConn = DshConnection.from(serverUrl)
+    private val dshConn = DshConnection.from(serverUrl, password.ifEmpty { null })
     private val dshReducer = dshConnectionManager.reducer(serverId)
 
     private val _isLoading = MutableStateFlow(true)

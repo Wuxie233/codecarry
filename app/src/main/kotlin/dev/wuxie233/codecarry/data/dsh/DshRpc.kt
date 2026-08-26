@@ -120,18 +120,38 @@ class DshLoopbackUnavailableException(
     val method: String,
 ) : RuntimeException("method $method is loopback-only and unavailable for this Host")
 
+class DshAuthRequiredException(
+    message: String = "DSH authentication failed",
+) : RuntimeException(message)
+
 @Serializable
 data class DshConnection(
     val baseUrl: String,
+    val password: String? = null,
 ) {
     companion object {
-        fun from(url: String): DshConnection {
+        fun from(url: String, password: String? = null): DshConnection {
             val trimmed = url.trim().trimEnd('/')
-            return DshConnection(baseUrl = trimmed)
+            return DshConnection(
+                baseUrl = trimmed,
+                password = password?.takeIf { it.isNotBlank() },
+            )
         }
     }
 
-    val isLoopback: Boolean get() = isDshLoopbackUrl(baseUrl)
+    val hasBasicAuth: Boolean get() = !password.isNullOrBlank()
+
+    /**
+     * Loopback URL, or a password-authenticated public proxy that rewrites
+     * Host to loopback (dsh-auth). Passwordless LAN stays non-loopback.
+     */
+    val isLoopback: Boolean get() = isDshLoopbackUrl(baseUrl) || hasBasicAuth
+
+    val basicAuthorization: String? get() {
+        val secret = password ?: return null
+        val token = java.util.Base64.getEncoder().encodeToString(":$secret".toByteArray(Charsets.UTF_8))
+        return "Basic $token"
+    }
 }
 
 @Serializable

@@ -5,6 +5,7 @@ import dev.wuxie233.codecarry.data.api.ProviderInfo
 import dev.wuxie233.codecarry.data.api.ProviderModel
 import dev.wuxie233.codecarry.data.api.ProvidersResponse
 import dev.wuxie233.codecarry.domain.model.ServerType
+import dev.wuxie233.codecarry.data.dsh.DshAuthRequiredException
 import java.io.IOException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -29,6 +30,10 @@ class HomeViewModelTest {
     fun `health check transport failure keeps generic not responding message`() {
         assertEquals("Server is not responding", healthCheckErrorMessage(IOException("timeout")))
         assertEquals("Server is not responding", healthCheckErrorMessage(null))
+        assertEquals(
+            "DSH authentication failed for host.describe",
+            healthCheckErrorMessage(DshAuthRequiredException("DSH authentication failed for host.describe")),
+        )
     }
 
     @Test

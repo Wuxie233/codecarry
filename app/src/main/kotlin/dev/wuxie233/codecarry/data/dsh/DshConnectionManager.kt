@@ -45,6 +45,17 @@ class DshConnectionManager(
                 } else {
                     val error = connected.exceptionOrNull()
                     if (error is CancellationException) throw error
+                    if (error is DshAuthRequiredException) {
+                        setState(
+                            serverId,
+                            DshGenerationState(
+                                generation = generation,
+                                status = DshGenerationStatus.Failed,
+                                error = error.message,
+                            ),
+                        )
+                        return@launch
+                    }
                     setState(
                         serverId,
                         DshGenerationState(

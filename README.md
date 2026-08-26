@@ -115,7 +115,7 @@ opencode serve --port 4096 --hostname 0.0.0.0
 
 ### DeepSeek Harness
 
-Add a **DSH** server with an HTTP(S) URL only (for example `http://192.168.1.8:3080`). There is no token field. CodeCarry talks to `POST /api/<method>` and opens downlink-only WebSockets at `/api/events.mux` and `/api/events.host`. The DSH host must list the serving authority in `trustedHosts` for LAN access. Loopback-locked methods (native directory picker, credentials, document open, model discovery, preset authoring) stay hidden on non-loopback URLs.
+Add a **DSH** server with an HTTP(S) URL (for example `https://dsh.wuxie233.com` or `http://192.168.1.8:3080`). There is no token field. A public dsh-auth host needs the DSH password; CodeCarry sends HTTP Basic on unary POST and on the mux/host WebSocket handshakes. Passwordless LAN still needs the serving authority in `trustedHosts`, and loopback-locked methods stay hidden there. A passworded public host is treated like loopback because dsh-auth rewrites `Host` to `127.0.0.1:18790`.
 
 ## Building
 

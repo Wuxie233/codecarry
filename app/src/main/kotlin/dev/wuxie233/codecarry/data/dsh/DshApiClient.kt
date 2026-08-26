@@ -4,12 +4,15 @@ import io.ktor.client.HttpClient
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.timeout
 import io.ktor.client.plugins.websocket.webSocketSession
+import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.request.url
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
+import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
 import io.ktor.websocket.Frame
@@ -67,12 +70,16 @@ class DshApiClient(
         val response = try {
             httpClient.post("${connection.baseUrl}${DshRpc.unaryPath(method)}") {
                 contentType(ContentType.Application.Json)
+                connection.basicAuthorization?.let { header(HttpHeaders.Authorization, it) }
                 setBody(bodyText)
             }
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
             throw DshTransportException("transport failure for $method", error)
+        }
+        if (response.status == HttpStatusCode.Unauthorized) {
+            throw DshAuthRequiredException("DSH authentication failed for $method")
         }
         if (!response.status.isSuccess()) {
             throw DshTransportException("transport failure for $method: HTTP ${response.status.value}")
@@ -674,12 +681,16 @@ class DshApiClient(
         val response = try {
             httpClient.post("${connection.baseUrl}${DshRpc.RESPOND_PATH}") {
                 contentType(ContentType.Application.Json)
+                connection.basicAuthorization?.let { header(HttpHeaders.Authorization, it) }
                 setBody(bodyText)
             }
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
             throw DshTransportException("transport failure for /api/respond", error)
+        }
+        if (response.status == HttpStatusCode.Unauthorized) {
+            throw DshAuthRequiredException("DSH authentication failed for /api/respond")
         }
         if (!response.status.isSuccess()) {
             throw DshTransportException("transport failure for /api/respond: HTTP ${response.status.value}")
@@ -762,10 +773,18 @@ class KtorDshDownlinkFactory(
     private val httpClient: HttpClient,
 ) : DshDownlinkFactory {
     override suspend fun openMux(connection: DshConnection): DshDownlink =
-        KtorDshDownlink.open(httpClient, dshHttpToWebSocketUrl(connection.baseUrl, DshRpc.MUX_EVENTS_PATH))
+        KtorDshDownlink.open(
+            httpClient,
+            dshHttpToWebSocketUrl(connection.baseUrl, DshRpc.MUX_EVENTS_PATH),
+            connection.basicAuthorization,
+        )
 
     override suspend fun openHost(connection: DshConnection): DshDownlink =
-        KtorDshDownlink.open(httpClient, dshHttpToWebSocketUrl(connection.baseUrl, DshRpc.HOST_EVENTS_PATH))
+        KtorDshDownlink.open(
+            httpClient,
+            dshHttpToWebSocketUrl(connection.baseUrl, DshRpc.HOST_EVENTS_PATH),
+            connection.basicAuthorization,
+        )
 }
 
 class KtorDshDownlink private constructor(
@@ -791,10 +810,15 @@ class KtorDshDownlink private constructor(
     }
 
     companion object {
-        suspend fun open(httpClient: HttpClient, url: String): KtorDshDownlink {
+        suspend fun open(
+            httpClient: HttpClient,
+            url: String,
+            authorization: String? = null,
+        ): KtorDshDownlink {
             val session = httpClient.webSocketSession {
                 method = HttpMethod.Get
                 url(url)
+                authorization?.let { header(HttpHeaders.Authorization, it) }
                 timeout {
                     requestTimeoutMillis = HttpTimeout.INFINITE_TIMEOUT_MS
                     socketTimeoutMillis = HttpTimeout.INFINITE_TIMEOUT_MS

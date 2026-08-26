@@ -161,7 +161,7 @@ class DshHostSurfacesViewModel @Inject constructor(
             _uiState.value = DshHostSurfacesUiState(isDsh = false)
             return
         }
-        val connection = DshConnection.from(server.url)
+        val connection = DshConnection.from(server.url, server.password)
         val catalog = dshHostSurfaceCatalog(connection)
         controller = DshHostSurfaceController(api, connection, catalog)
         _uiState.value = DshHostSurfacesUiState(isDsh = true, catalog = catalog, isLoading = true)

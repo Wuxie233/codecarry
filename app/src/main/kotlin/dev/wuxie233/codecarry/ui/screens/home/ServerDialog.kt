@@ -246,12 +246,13 @@ fun ServerDialog(
                             .semantics { contentDescription = urlLabel }
                     )
 
-                    if (serverType == ServerType.OPENCODE) {
+                    if (serverType == ServerType.OPENCODE || serverType == ServerType.DSH) {
                     Text(
                         text = stringResource(R.string.server_authentication_section),
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    if (serverType == ServerType.OPENCODE) {
                     OutlinedTextField(
                         value = username,
                         onValueChange = { username = it },
@@ -263,11 +264,31 @@ fun ServerDialog(
                             .fillMaxWidth()
                             .semantics { contentDescription = usernameLabel }
                     )
+                    }
 
                     OutlinedTextField(
                         value = password,
                         onValueChange = { password = it },
-                        label = { Text(passwordLabel) },
+                        label = {
+                            Text(
+                                if (serverType == ServerType.DSH) {
+                                    stringResource(R.string.server_dsh_password)
+                                } else {
+                                    passwordLabel
+                                }
+                            )
+                        },
+                        placeholder = {
+                            Text(
+                                stringResource(
+                                    if (serverType == ServerType.DSH) {
+                                        R.string.server_dsh_password_hint
+                                    } else {
+                                        R.string.server_password_hint
+                                    }
+                                )
+                            )
+                        },
                         visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
                         keyboardOptions = KeyboardOptions(
                             keyboardType = KeyboardType.Password,
@@ -357,7 +378,7 @@ fun ServerDialog(
                                     normalizedUrl,
                                     serverType,
                                     if (serverType == ServerType.DSH) "" else username.ifBlank { "opencode" },
-                                    if (serverType == ServerType.DSH) null else password.takeIf { it.isNotBlank() },
+                                    password.takeIf { it.isNotBlank() },
                                     null,
                                     autoConnect
                                 )

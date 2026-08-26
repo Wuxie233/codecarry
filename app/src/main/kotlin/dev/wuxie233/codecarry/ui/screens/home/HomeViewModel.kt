@@ -17,6 +17,7 @@ import dev.wuxie233.codecarry.data.api.OpenCodeApi
 import dev.wuxie233.codecarry.data.api.ProviderCatalogResponse
 import dev.wuxie233.codecarry.data.api.ProvidersResponse
 import dev.wuxie233.codecarry.data.api.ServerConnection
+import dev.wuxie233.codecarry.data.dsh.DshAuthRequiredException
 import dev.wuxie233.codecarry.data.dsh.DshConnection
 import dev.wuxie233.codecarry.data.dsh.DshConnectionManager
 import dev.wuxie233.codecarry.data.dsh.DshGenerationStatus
@@ -70,7 +71,10 @@ internal fun serverConnectionIntent(context: Context, serverId: String): Intent 
  * flattening every failure (including 401 auth errors) into a generic
  * "Server is not responding".
  */
-internal fun healthCheckErrorMessage(error: Throwable?): String = "Server is not responding"
+internal fun healthCheckErrorMessage(error: Throwable?): String = when (error) {
+    is DshAuthRequiredException -> error.message ?: "DSH authentication failed"
+    else -> "Server is not responding"
+}
 
 internal val serverConnectionIntentExtraKeys: Set<String> = setOf(
     OpenCodeConnectionService.EXTRA_SERVER_ID,
@@ -516,7 +520,7 @@ class HomeViewModel @Inject constructor(
         }
 
         if (server.type == ServerType.DSH) {
-            dshConnectionManager.connect(server.id, DshConnection.from(server.url))
+            dshConnectionManager.connect(server.id, DshConnection.from(server.url, server.password))
             return
         }
 

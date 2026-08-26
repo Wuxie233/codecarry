@@ -85,11 +85,15 @@ fork based on OC Remote; the Android namespace/applicationId is
   envelope is `{ rpcId, payload }`; mux/host frames are server-originated
   `server-request` text. Client sends no application data on those sockets.
   Reconnect reopens both sockets and refetches history. No SSE fallback.
-- DSH connect is HTTP(S) only, no token. Reachability is Host plus
-  `trustedHosts`. Loopback-locked methods stay hidden on non-loopback URLs:
-  `host.pickDirectory`, `host.openPath`, `credentials.*`,
-  `settings.openDocument`, `llm.discoverModels`,
-  `agentPreset.read/copy/openDocument/remove`.
+- DSH connect is HTTP(S) only. Passwordless LAN uses Host plus `trustedHosts`.
+  A public dsh-auth host stores the password on `ServerConfig.password` and
+  sends HTTP Basic (`Authorization: Basic` of `:<password>`) on unary POST,
+  `/api/respond`, and mux/host WebSocket handshakes. That passworded public
+  connection is treated as loopback because dsh-auth rewrites Host to
+  `127.0.0.1:18790`, so loopback-only methods stay available. Passwordless
+  non-loopback URLs still hide: `host.pickDirectory`, `host.openPath`,
+  `credentials.*`, `settings.openDocument`, `llm.discoverModels`,
+  `agentPreset.read/copy/openDocument/remove`. A 401 is `DshAuthRequiredException`.
 - Answer DSH `approval/requested` and `question/requested` on unary
   `POST /api/respond` with the host `rpcId`. Pending requests survive screen
   collector timing and clear on disconnect or resolved frames. DSH approval

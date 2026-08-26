@@ -68,6 +68,14 @@ class DshRpcTest {
         assertTrue(isDshLoopbackUrl("http://[::1]:3080"))
         assertTrue(DshMethods.availableOn(loopback).containsAll(DshRpc.LOOPBACK_ONLY_METHODS))
         assertEquals(DshMethods.unary.size, DshMethods.availableOn(loopback).size)
+        val authedPublic = DshConnection.from("https://dsh.wuxie233.com", "secret")
+        assertTrue(authedPublic.hasBasicAuth)
+        assertTrue(authedPublic.isLoopback)
+        assertTrue(DshMethods.availableOn(authedPublic).containsAll(DshRpc.LOOPBACK_ONLY_METHODS))
+        assertEquals("Basic OnNlY3JldA==", authedPublic.basicAuthorization)
+        val passwordlessPublic = DshConnection.from("https://dsh.wuxie233.com")
+        assertFalse(passwordlessPublic.isLoopback)
+        assertFalse(DshMethods.availableOn(passwordlessPublic).contains("credentials.set"))
     }
 
     @Test

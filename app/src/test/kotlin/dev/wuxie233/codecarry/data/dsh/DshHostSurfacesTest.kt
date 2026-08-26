@@ -56,6 +56,16 @@ class DshHostSurfacesTest {
     }
 
     @Test
+    fun `passworded public host catalog keeps authoring methods`() {
+        val catalog = dshHostSurfaceCatalog(DshConnection.from("https://dsh.wuxie233.com", "secret"))
+        assertTrue(catalog.isLoopback)
+        assertTrue(catalog.loopbackOnlyHidden.isEmpty())
+        assertTrue(catalog.can("credentials.set"))
+        assertTrue(catalog.can("agentPreset.read"))
+        assertTrue(catalog.can("host.pickDirectory"))
+    }
+
+    @Test
     fun `controller consumes remaining unary domains through typed RPC`() = runTest {
         val captured = mutableListOf<String>()
         val controller = controller(captured) { request ->

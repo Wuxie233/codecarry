@@ -424,7 +424,7 @@ class SessionListViewModel @Inject constructor(
     private val conn = ServerConnection.from(serverUrl, username, password.ifEmpty { null })
     val currentConnection: ServerConnection = conn
     private val isDsh: Boolean = serverType == ServerType.DSH
-    private val dshConn = DshConnection.from(serverUrl)
+    private val dshConn = DshConnection.from(serverUrl, password.ifEmpty { null })
     private val dshReducer = dshConnectionManager.reducer(serverId)
 
     private val _error = MutableStateFlow<String?>(null)
