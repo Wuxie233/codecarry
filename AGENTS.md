@@ -85,14 +85,14 @@ fork based on OC Remote; the Android namespace/applicationId is
   envelope is `{ rpcId, payload }`; mux/host frames are server-originated
   `server-request` text. Client sends no application data on those sockets.
   Reconnect reopens both sockets and refetches history. No SSE fallback.
-- DSH connect is HTTP(S) only. Passwordless LAN uses Host plus `trustedHosts`.
-  A public dsh-auth host stores the password on `ServerConfig.password` and
+- DSH connect is HTTP(S) only. Password is optional: stock DSH has no auth,
+  only Host plus `trustedHosts`. If `ServerConfig.password` is set, CodeCarry
   sends HTTP Basic (`Authorization: Basic` of `:<password>`) on unary POST,
-  `/api/respond`, and mux/host WebSocket handshakes. That passworded public
-  connection is treated as loopback because dsh-auth rewrites Host to
-  `127.0.0.1:18790`, so loopback-only methods stay available. Passwordless
-  non-loopback URLs still hide: `host.pickDirectory`, `host.openPath`,
-  `credentials.*`, `settings.openDocument`, `llm.discoverModels`,
+  `/api/respond`, and mux/host WebSocket handshakes for a fronting proxy such
+  as dsh-auth. A passworded connection is treated as loopback because that
+  proxy rewrites Host to `127.0.0.1:18790`. Passwordless non-loopback URLs
+  still hide: `host.pickDirectory`, `host.openPath`, `credentials.*`,
+  `settings.openDocument`, `llm.discoverModels`,
   `agentPreset.read/copy/openDocument/remove`. A 401 is `DshAuthRequiredException`.
 - Answer DSH `approval/requested` and `question/requested` on unary
   `POST /api/respond` with the host `rpcId`. Pending requests survive screen

@@ -31,7 +31,7 @@ class HomeViewModelTest {
         assertEquals("Server is not responding", healthCheckErrorMessage(IOException("timeout")))
         assertEquals("Server is not responding", healthCheckErrorMessage(null))
         assertEquals(
-            "DSH authentication failed. Edit the server and save the dsh-auth password.",
+            "DSH authentication failed",
             healthCheckErrorMessage(DshAuthRequiredException("DSH authentication failed for host.describe")),
         )
     }

@@ -97,11 +97,10 @@
     <string name="server_url_hint">http://192.168.1.100:4096</string>
     <string name="server_url_example">e.g. http://192.168.0.10:4096 or https://my-server:443</string>
     <string name="server_dsh_url_hint">http://192.168.1.8:3080</string>
-    <string name="server_dsh_url_example">HTTP(S) only. Public dsh-auth hosts need the password below. LAN without a password needs trustedHosts.</string>
+    <string name="server_dsh_url_example">HTTP(S) only. Optional password is for a fronting auth proxy such as dsh-auth. LAN without a password needs trustedHosts.</string>
     <string name="server_dsh_password">DSH password</string>
-    <string name="server_dsh_password_hint">Required for dsh-auth public hosts</string>
-    <string name="server_dsh_password_required">Public DSH hosts need the dsh-auth password</string>
-    <string name="dsh_auth_failed">DSH authentication failed. Edit the server and save the dsh-auth password.</string>
+    <string name="server_dsh_password_hint">Optional. Only if an auth proxy sits in front of DSH</string>
+    <string name="dsh_auth_failed">DSH authentication failed</string>
     <string name="server_codex_url_hint">wss://codex.example.com</string>
     <string name="server_codex_url_example">Use wss:// remotely; ws:// is limited to loopback</string>
     <string name="server_username">Username</string>

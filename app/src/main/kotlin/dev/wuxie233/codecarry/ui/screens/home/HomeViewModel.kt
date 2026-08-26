@@ -21,7 +21,6 @@ import dev.wuxie233.codecarry.data.dsh.DshAuthRequiredException
 import dev.wuxie233.codecarry.data.dsh.DshConnection
 import dev.wuxie233.codecarry.data.dsh.DshConnectionManager
 import dev.wuxie233.codecarry.data.dsh.DshGenerationStatus
-import dev.wuxie233.codecarry.data.dsh.dshPublicHostRequiresPassword
 import dev.wuxie233.codecarry.data.repository.LocalServerManager
 import dev.wuxie233.codecarry.data.repository.ServerRepository
 import dev.wuxie233.codecarry.data.repository.SettingsRepository
@@ -73,7 +72,7 @@ internal fun serverConnectionIntent(context: Context, serverId: String): Intent 
  * "Server is not responding".
  */
 internal fun healthCheckErrorMessage(error: Throwable?): String = when (error) {
-    is DshAuthRequiredException -> "DSH authentication failed. Edit the server and save the dsh-auth password."
+    is DshAuthRequiredException -> "DSH authentication failed"
     else -> "Server is not responding"
 }
 
@@ -521,16 +520,6 @@ class HomeViewModel @Inject constructor(
         }
 
         if (server.type == ServerType.DSH) {
-            if (dshPublicHostRequiresPassword(server.url) && server.password.isNullOrBlank()) {
-                _uiState.update {
-                    it.copy(
-                        connectingServerIds = it.connectingServerIds - serverId,
-                        connectionPhases = it.connectionPhases - serverId,
-                        connectionErrors = it.connectionErrors + (serverId to s(R.string.server_dsh_password_required)),
-                    )
-                }
-                return
-            }
             dshConnectionManager.connect(server.id, DshConnection.from(server.url, server.password))
             return
         }

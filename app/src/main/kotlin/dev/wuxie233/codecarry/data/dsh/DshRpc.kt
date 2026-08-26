@@ -50,8 +50,6 @@ fun isDshLoopbackUrl(url: String): Boolean {
     }.getOrDefault(false)
 }
 
-fun dshPublicHostRequiresPassword(url: String): Boolean = !isDshLoopbackUrl(url)
-
 fun dshHttpToWebSocketUrl(httpUrl: String, path: String): String {
     val trimmed = httpUrl.trim().trimEnd('/')
     val wsBase = when {
