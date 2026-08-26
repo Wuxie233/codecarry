@@ -177,7 +177,7 @@ val LocalCodeWordWrap = compositionLocalOf { false }
 /** Whether compact message spacing is enabled. */
 val LocalCompactMessages = compositionLocalOf { false }
 
-/** Whether tool cards are collapsed by default. */
+/** Whether process rows (Think, Skill, tools) start expanded. */
 val LocalCollapseTools = compositionLocalOf { false }
 
 /** Whether haptic feedback is enabled. */
@@ -189,7 +189,7 @@ internal const val WidePlainTextTag = "wide-plain-text"
 val LocalImageSaveRequest = compositionLocalOf<(ByteArray, String, String?) -> Unit> { { _, _, _ -> } }
 
 @Composable
-private fun isAmoledTheme(): Boolean {
+internal fun isAmoledTheme(): Boolean {
     val colors = MaterialTheme.colorScheme
     return colors.background == Color.Black && colors.surface == Color.Black
 }
@@ -208,7 +208,7 @@ private fun toolOutputContainerColor(isAmoled: Boolean): Color {
  * Call from composable context or from a click lambda that has access to a View.
  */
 @Suppress("DEPRECATION")
-private fun performHaptic(view: android.view.View, enabled: Boolean) {
+internal fun performHaptic(view: android.view.View, enabled: Boolean) {
     if (enabled) {
         view.performHapticFeedback(
             android.view.HapticFeedbackConstants.CLOCK_TICK,
@@ -598,7 +598,7 @@ private fun clientCommands(): List<SlashCommand> {
 
 /** Pulsing dots loading indicator — 3 dots that scale up/down in sequence. */
 @Composable
-private fun PulsingDotsIndicator(
+internal fun PulsingDotsIndicator(
     modifier: Modifier = Modifier,
     dotSize: Dp = 10.dp,
     dotSpacing: Dp = 8.dp,
@@ -2878,44 +2878,66 @@ fun ChatScreen(
                                     bottom = if (nextBelongsToSameMessage) 1.dp else messageSpacing,
                                 ),
                             ) {
-                                ChatMessageBubble(
-                                    chatMessage = chatMessage,
-                                    showSenderHeader = isFirstMessageRow && !isSamePiSender(
-                                        current = chatMessage,
-                                        previous = uiState.messages.getOrNull(index - 1),
-                                    ),
-                                    segmentPosition = messageRow.position,
-                                    plannedBlock = (messageRow as? ChatMessageRow.TextChunk)?.markdown,
-                                    onRevert = if (chatMessage.isUser) {
-                                        {
-                                            val revertText = chatMessage.parts
-                                                .filterIsInstance<Part.Text>()
-                                                .joinToString("\n") { it.text }
-                                            viewModel.abortSession()
-                                            viewModel.revertMessage(chatMessage.message.id, revertText) { ok ->
-                                                coroutineScope.launch {
-                                                    snackbarHostState.showSnackbar(
-                                                        if (ok) context.getString(R.string.chat_message_reverted) else context.getString(R.string.chat_message_revert_failed)
-                                                    )
+                                when (messageRow) {
+                                    is ChatMessageRow.Think -> ThinkProcessRow(messageRow.part)
+                                    is ChatMessageRow.Skill -> SkillProcessRow(messageRow.part)
+                                    is ChatMessageRow.Tool -> PartContent(
+                                        part = messageRow.part,
+                                        textColor = MaterialTheme.colorScheme.onSurface,
+                                        isUser = false,
+                                    )
+                                    is ChatMessageRow.Content -> PartContent(
+                                        part = messageRow.part,
+                                        textColor = MaterialTheme.colorScheme.onSurface,
+                                        isUser = false,
+                                    )
+                                    is ChatMessageRow.Whole,
+                                    is ChatMessageRow.TextChunk -> ChatMessageBubble(
+                                        chatMessage = chatMessage,
+                                        showSenderHeader = isFirstMessageRow && !isSamePiSender(
+                                            current = chatMessage,
+                                            previous = uiState.messages.getOrNull(index - 1),
+                                        ),
+                                        segmentPosition = messageRow.position,
+                                        plannedBlock = (messageRow as? ChatMessageRow.TextChunk)?.markdown,
+                                        showAssistantMeta = when (messageRow) {
+                                            is ChatMessageRow.TextChunk ->
+                                                messageRow.position == ChatMessageSegmentPosition.Last ||
+                                                    messageRow.position == ChatMessageSegmentPosition.Single
+                                            is ChatMessageRow.Whole -> chatMessage.isAssistant
+                                            else -> false
+                                        },
+                                        onRevert = if (chatMessage.isUser) {
+                                            {
+                                                val revertText = chatMessage.parts
+                                                    .filterIsInstance<Part.Text>()
+                                                    .joinToString("\n") { it.text }
+                                                viewModel.abortSession()
+                                                viewModel.revertMessage(chatMessage.message.id, revertText) { ok ->
+                                                    coroutineScope.launch {
+                                                        snackbarHostState.showSnackbar(
+                                                            if (ok) context.getString(R.string.chat_message_reverted) else context.getString(R.string.chat_message_revert_failed)
+                                                        )
+                                                    }
                                                 }
                                             }
-                                        }
-                                    } else null,
-                                    onCopyText = {
-                                        val text = chatMessage.parts
-                                            .filterIsInstance<Part.Text>()
-                                            .joinToString("\n") { it.text }
-                                        if (text.isNotBlank()) {
-                                            clipboardManager.setText(
-                                                androidx.compose.ui.text.AnnotatedString(text)
-                                            )
-                                            coroutineScope.launch {
-                                                snackbarHostState.showSnackbar(context.getString(R.string.chat_copied_clipboard))
+                                        } else null,
+                                        onCopyText = {
+                                            val text = chatMessage.parts
+                                                .filterIsInstance<Part.Text>()
+                                                .joinToString("\n") { it.text }
+                                            if (text.isNotBlank()) {
+                                                clipboardManager.setText(
+                                                    androidx.compose.ui.text.AnnotatedString(text)
+                                                )
+                                                coroutineScope.launch {
+                                                    snackbarHostState.showSnackbar(context.getString(R.string.chat_copied_clipboard))
+                                                }
                                             }
-                                        }
-                                    },
-                                    onMessageActionsRequested = { actionMenuMessage = it }
-                                )
+                                        },
+                                        onMessageActionsRequested = { actionMenuMessage = it }
+                                    )
+                                }
                             }
                         }
 
@@ -4255,6 +4277,7 @@ private fun ChatMessageBubble(
     showSenderHeader: Boolean = true,
     segmentPosition: ChatMessageSegmentPosition = ChatMessageSegmentPosition.Single,
     plannedBlock: MarkdownRenderBlock? = null,
+    showAssistantMeta: Boolean = false,
     onRevert: (() -> Unit)? = null,
     onCopyText: (() -> Unit)? = null,
     onMessageActionsRequested: (ChatMessage) -> Unit = {},
@@ -4326,22 +4349,15 @@ private fun ChatMessageBubble(
         null
     }
 
-    // For assistant messages: split into "content" (text, reasoning, patch) and "steps" (tool calls, step markers)
     val contentParts: List<Part>
-    val stepParts: List<Part>
     if (!isUser) {
         contentParts = if (plannedBlock != null) emptyList() else visibleParts.filter { part ->
-            part is Part.Text || part is Part.Reasoning || part is Part.Patch ||
-                    part is Part.File || part is Part.Permission || part is Part.Question ||
-                    part is Part.Abort || part is Part.Retry
+            part is Part.Text
         }
-        stepParts = if (showsTop) visibleParts.filter { part ->
-            part is Part.Tool || part is Part.StepStart || part is Part.StepFinish
-        } else emptyList()
     } else {
         contentParts = visibleParts
-        stepParts = emptyList()
     }
+    val stepParts: List<Part> = emptyList()
 
     val hasRenderableUserPart = contentParts.any(::isBubbleRenderablePart)
     val hasRenderableUserContent = !isUser || hasRenderableUserPart || userFallbackText != null || userCommandLabel != null
@@ -4354,9 +4370,6 @@ private fun ChatMessageBubble(
         return
     }
 
-    val hasSteps = stepParts.isNotEmpty()
-    val autoExpand = LocalCollapseTools.current
-    var stepsExpanded by remember(autoExpand) { mutableStateOf(autoExpand) }
     val timeFormat = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
     val assistantMetaText = remember(assistantMessage?.modelId, assistantMessage?.time?.created) {
         assistantMessage?.let { message ->
@@ -4364,12 +4377,6 @@ private fun ChatMessageBubble(
             if (!message.modelId.isNullOrBlank()) "$timeText  ·  ${message.modelId}" else timeText
         }
     }
-
-    // Check if any tool is currently running (show spinner)
-    val hasRunningTool = stepParts.any { it is Part.Tool && it.state is ToolState.Running }
-    val hasAssistantText = plannedBlock != null || contentParts
-        .filterIsInstance<Part.Text>()
-        .any { part -> part.text.isNotBlank() && part.synthetic != true && part.ignored != true }
     val isLivePiSender = senderIdentity != null && assistantMessage?.finish == null
     val requestMessageActions = {
         performHaptic(hapticView, hapticOn)
@@ -4377,140 +4384,21 @@ private fun ChatMessageBubble(
     }
 
         val bubbleContent: @Composable () -> Unit = {
-        Surface(
-            shape = RoundedCornerShape(
-                topStart = if (!showsTop) 2.dp else if (isUser) 18.dp else 4.dp,
-                topEnd = if (!showsTop) 2.dp else if (isUser) 4.dp else 18.dp,
-                bottomStart = if (showsBottom) 18.dp else 2.dp,
-                bottomEnd = if (showsBottom) 18.dp else 2.dp
-            ),
-            color = backgroundColor,
-            border = bubbleBorder,
-            tonalElevation = if (isAmoled || isUser) 0.dp else 1.dp,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            val compact = LocalCompactMessages.current
-            val horizontalPadding = if (compact) 10.dp else 16.dp
-            val verticalPadding = if (compact) 8.dp else 14.dp
-            val edgePadding = 2.dp
+        val compact = LocalCompactMessages.current
+        val horizontalPadding = if (compact) 10.dp else 16.dp
+        val verticalPadding = if (compact) 8.dp else 14.dp
+        val edgePadding = 2.dp
+        val inner: @Composable () -> Unit = {
             Box(modifier = Modifier.fillMaxWidth()) {
                 Column(
                     modifier = Modifier.padding(
-                        start = horizontalPadding,
-                        top = if (showsTop) verticalPadding else edgePadding,
-                        end = horizontalPadding,
-                        bottom = if (showsBottom) verticalPadding else edgePadding,
+                        start = if (isUser) horizontalPadding else 4.dp,
+                        top = if (isUser && showsTop) verticalPadding else if (isUser) edgePadding else 2.dp,
+                        end = if (isUser) horizontalPadding else 4.dp,
+                        bottom = if (isUser && showsBottom) verticalPadding else if (isUser) edgePadding else 2.dp,
                     ),
                     verticalArrangement = Arrangement.spacedBy(if (compact) 4.dp else 10.dp)
                 ) {
-                    // "Response" header with provider icon and copy button — assistant messages only
-                    if (!isUser && showsTop) {
-                        val assistantMsg = assistantMessage
-                        if (senderIdentity != null && senderAccentColor != null) {
-                            PiSenderHeader(
-                                identity = senderIdentity,
-                                accentColor = senderAccentColor,
-                                textColor = textColor,
-                                showSenderHeader = showSenderHeader,
-                                actionTag = assistantMsg?.actionTag,
-                                liveLabel = if (hasAssistantText) {
-                                    stringResource(R.string.chat_pi_role_speaking)
-                                } else {
-                                    stringResource(R.string.chat_tool_thinking)
-                                },
-                                onCopyText = onCopyText?.takeIf { segmentPosition == ChatMessageSegmentPosition.Single }?.let { copy ->
-                                    { performHaptic(hapticView, hapticOn); copy() }
-                                },
-                            )
-                        } else {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(5.dp)
-                                ) {
-                                    if (assistantMsg?.providerId != null) {
-                                        ProviderIcon(
-                                            providerId = assistantMsg.providerId,
-                                            size = 12.dp,
-                                            tint = textColor.copy(alpha = 0.4f)
-                                        )
-                                    }
-                                    Text(
-                                        text = stringResource(R.string.chat_response),
-                                        style = MaterialTheme.typography.labelSmall.copy(
-                                            letterSpacing = 0.8.sp,
-                                            fontWeight = FontWeight.Medium
-                                        ),
-                                        color = textColor.copy(alpha = 0.4f)
-                                    )
-                                }
-                                if (onCopyText != null && segmentPosition == ChatMessageSegmentPosition.Single) {
-                                    Icon(
-                                        Icons.Default.ContentCopy,
-                                        contentDescription = stringResource(R.string.chat_copy),
-                                        modifier = Modifier
-                                            .size(15.dp)
-                                            .clickable { performHaptic(hapticView, hapticOn); onCopyText() },
-                                        tint = textColor.copy(alpha = 0.3f)
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    // Steps toggle (like WebUI "Show/Hide steps")
-                    if (hasSteps) {
-                        val stepsStatus = resolveStepsStatus(stepParts)
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickable { performHaptic(hapticView, hapticOn); stepsExpanded = !stepsExpanded }
-                                .padding(vertical = 4.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            if (hasRunningTool) {
-                                PulsingDotsIndicator(
-                                    dotSize = 5.dp,
-                                    dotSpacing = 3.dp,
-                                    color = MaterialTheme.colorScheme.tertiary
-                                )
-                            } else {
-                                Icon(
-                                    imageVector = if (stepsExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(16.dp),
-                                    tint = textColor.copy(alpha = 0.5f)
-                                )
-                            }
-                            Text(
-                                text = if (stepsExpanded) stringResource(R.string.chat_hide_steps) else stepsStatus,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = textColor.copy(alpha = 0.6f)
-                            )
-                        }
-
-                        // Expanded step parts
-                        AnimatedVisibility(visible = stepsExpanded) {
-                            Column(
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                for (part in stepParts) {
-                                    PartContent(
-                                        part = part,
-                                        textColor = textColor,
-                                        isUser = isUser
-                                    )
-                                }
-                            }
-                        }
-                    }
-
                     // Content parts (text, reasoning, patches, etc.)
                     // Group image file parts into a compact thumbnail row
                     val imageFiles = contentParts.filterIsInstance<Part.File>()
@@ -4593,32 +4481,14 @@ private fun ChatMessageBubble(
                         }
                     }
 
-                    if (!isUser && showsBottom && (assistantMetaText != null || segmentPosition == ChatMessageSegmentPosition.Last)) {
-                        Row(
+                    if (!isUser && showAssistantMeta && assistantMetaText != null) {
+                        Text(
+                            text = assistantMetaText,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f),
+                            textAlign = TextAlign.Start,
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.End,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            assistantMetaText?.let { meta ->
-                                Text(
-                                    text = meta,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f),
-                                    textAlign = TextAlign.End,
-                                    modifier = Modifier.weight(1f),
-                                )
-                            }
-                            if (segmentPosition == ChatMessageSegmentPosition.Last && onCopyText != null) {
-                                Icon(
-                                    Icons.Default.ContentCopy,
-                                    contentDescription = stringResource(R.string.chat_copy),
-                                    modifier = Modifier
-                                        .size(15.dp)
-                                        .clickable { performHaptic(hapticView, hapticOn); onCopyText() },
-                                    tint = textColor.copy(alpha = 0.3f),
-                                )
-                            }
-                        }
+                        )
                     }
 
                     // If text parts are absent but server provided a summary, render it.
@@ -4638,6 +4508,24 @@ private fun ChatMessageBubble(
                     )
                 }
             }
+        }
+        if (isUser) {
+            Surface(
+                shape = RoundedCornerShape(
+                    topStart = if (!showsTop) 2.dp else 18.dp,
+                    topEnd = if (!showsTop) 2.dp else 4.dp,
+                    bottomStart = if (showsBottom) 18.dp else 2.dp,
+                    bottomEnd = if (showsBottom) 18.dp else 2.dp,
+                ),
+                color = backgroundColor,
+                border = bubbleBorder,
+                tonalElevation = if (isAmoled) 0.dp else 1.dp,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                inner()
+            }
+        } else {
+            inner()
         }
     }
 
@@ -5127,7 +5015,7 @@ private fun RevertBanner(onRedo: () -> Unit) {
 }
 
 @Composable
-private fun PartContent(
+internal fun PartContent(
     part: Part,
     textColor: Color,
     isUser: Boolean = false

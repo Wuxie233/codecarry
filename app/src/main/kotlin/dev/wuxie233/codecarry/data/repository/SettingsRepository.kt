@@ -219,7 +219,7 @@ class SettingsRepository @Inject constructor(
     }
 
     /**
-     * Whether tool cards are collapsed by default. Default: false.
+     * Whether process rows (Think, Skill, tools) start expanded. Default: false.
      */
     val collapseTools: Flow<Boolean> = dataStore.data.map { preferences ->
         preferences[COLLAPSE_TOOLS_KEY] ?: false

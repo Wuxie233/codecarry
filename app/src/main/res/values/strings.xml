@@ -386,6 +386,8 @@
     <string name="chat_commands_hint">Type / to see available commands</string>
     <string name="chat_response">Response</string>
     <string name="chat_hide_steps">Hide steps</string>
+    <string name="chat_skill_row_title">Skill %1$s</string>
+    <string name="chat_skill_instructions">Instructions</string>
     <string name="chat_table_scroll_hint">Swipe left/right to see the full table</string>
     <string name="chat_pending_actions">%1$d action(s) waiting for your response</string>
     <string name="chat_pending_tap_to_view">Tap to view</string>
@@ -577,8 +579,8 @@
     <string name="settings_amoled_dark_desc">Pure black background for OLED screens</string>
     <string name="settings_compact_messages">Compact messages</string>
     <string name="settings_compact_messages_desc">Reduce spacing between messages</string>
-    <string name="settings_auto_expand_tools">Auto-expand tool results</string>
-    <string name="settings_auto_expand_tools_desc">Expand tool cards by default instead of collapsing</string>
+    <string name="settings_auto_expand_tools">Auto-expand process rows</string>
+    <string name="settings_auto_expand_tools_desc">Expand Think, Skill, and tool details by default instead of collapsing</string>
     <string name="settings_show_historical_subagents">Show historical subagents</string>
     <string name="settings_show_historical_subagents_desc">Also show idle subagents that worked earlier, not just currently active ones</string>
     <string name="settings_haptic_feedback">Haptic feedback</string>

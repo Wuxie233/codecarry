@@ -3,6 +3,8 @@ package dev.wuxie233.codecarry.ui.screens.chat
 import dev.wuxie233.codecarry.domain.model.Message
 import dev.wuxie233.codecarry.domain.model.Part
 import dev.wuxie233.codecarry.domain.model.TimeInfo
+import dev.wuxie233.codecarry.domain.model.ToolState
+import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -152,7 +154,7 @@ class ChatMessageRowPlannerTest {
     }
 
     @Test
-    fun `assistant with one text plus step parts expands without reordering content`() {
+    fun `assistant with one text plus step parts expands tools as independent rows`() {
         val message = assistantMessage(
             id = "assistant-steps",
             text = longMathText(),
@@ -164,15 +166,18 @@ class ChatMessageRowPlannerTest {
         )
 
         val rows = planChatMessageRows(listOf(message))
+        val chunks = rows.filterIsInstance<ChatMessageRow.TextChunk>()
+        val tools = rows.filterIsInstance<ChatMessageRow.Tool>()
 
-        assertTrue(rows.size > 1)
-        assertTrue(rows.all { it is ChatMessageRow.TextChunk })
-        assertTrue((rows.first() as ChatMessageRow.TextChunk).showsSteps)
-        assertTrue(rows.drop(1).none { (it as ChatMessageRow.TextChunk).showsSteps })
+        assertTrue(chunks.size > 1)
+        assertEquals(1, tools.size)
+        assertEquals("bash", tools.single().part.tool)
+        assertTrue(chunks.all { !it.showsSteps })
+        assertEquals(chunks + tools, rows)
     }
 
     @Test
-    fun `complex multi-content assistant remains one whole row`() {
+    fun `reasoning after long text becomes an independent think row`() {
         val message = assistantMessage(
             id = "assistant-complex",
             text = longMathText(),
@@ -187,9 +192,126 @@ class ChatMessageRowPlannerTest {
         )
 
         val rows = planChatMessageRows(listOf(message))
+        val think = rows.filterIsInstance<ChatMessageRow.Think>()
+
+        assertTrue(rows.filterIsInstance<ChatMessageRow.TextChunk>().size > 1)
+        assertEquals(1, think.size)
+        assertEquals("Reasoning must keep its original position.", think.single().part.text)
+        assertTrue(rows.last() is ChatMessageRow.Think)
+    }
+
+    @Test
+    fun `reasoning skill bash and text become independent rows in source order`() {
+        val message = ChatMessage(
+            message = Message.Assistant(id = "assistant-mix", sessionId = SessionId, time = TimeInfo(created = 1L)),
+            parts = listOf(
+                Part.Reasoning("think", SessionId, "assistant-mix", "Load the skill."),
+                Part.Tool(
+                    id = "skill-call",
+                    sessionId = SessionId,
+                    messageId = "assistant-mix",
+                    tool = "skill",
+                    state = ToolState.Completed(
+                        input = mapOf("name" to JsonPrimitive("grill-with-docs")),
+                        output = "<skill_content name=\"grill-with-docs\">body</skill_content>",
+                    ),
+                ),
+                Part.Tool(id = "bash-call", sessionId = SessionId, messageId = "assistant-mix", tool = "bash"),
+                textPart("assistant-mix", "assistant-mix-text", "Short answer without math."),
+            ),
+        )
+
+        val rows = planChatMessageRows(listOf(message))
+
+        assertEquals(
+            listOf("think", "skill", "tool", "text"),
+            rows.map { row ->
+                when (row) {
+                    is ChatMessageRow.Think -> "think"
+                    is ChatMessageRow.Skill -> "skill"
+                    is ChatMessageRow.Tool -> "tool"
+                    is ChatMessageRow.TextChunk -> "text"
+                    is ChatMessageRow.Whole -> "text"
+                    else -> row::class.simpleName
+                }
+            },
+        )
+        assertEquals("grill-with-docs", skillRowName((rows[1] as ChatMessageRow.Skill).part))
+        assertEquals("bash", (rows[2] as ChatMessageRow.Tool).part.tool)
+    }
+
+    @Test
+    fun `skill-only assistant is a skill row not a whole bubble`() {
+        val message = ChatMessage(
+            message = Message.Assistant(id = "assistant-skill", sessionId = SessionId, time = TimeInfo(created = 1L)),
+            parts = listOf(
+                Part.Tool(
+                    id = "skill-only",
+                    sessionId = SessionId,
+                    messageId = "assistant-skill",
+                    tool = "skill",
+                    state = ToolState.Completed(
+                        input = mapOf("name" to JsonPrimitive("editing-cordis-compositions")),
+                        output = "<skill_content name=\"editing-cordis-compositions\">",
+                    ),
+                ),
+            ),
+        )
+
+        val rows = planChatMessageRows(listOf(message))
+
+        assertEquals(1, rows.size)
+        assertTrue(rows.single() is ChatMessageRow.Skill)
+        assertEquals("editing-cordis-compositions", skillRowName((rows.single() as ChatMessageRow.Skill).part))
+        assertEquals(
+            "grill-with-docs",
+            skillRowName(
+                Part.Tool(
+                    id = "raw-skill",
+                    sessionId = SessionId,
+                    messageId = "assistant-skill",
+                    tool = "skill",
+                    state = ToolState.Pending(raw = """{"name":"grill-with-docs"}"""),
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun `user messages stay whole even with long text`() {
+        val message = ChatMessage(
+            message = Message.User(id = "user-skill", sessionId = SessionId, time = TimeInfo(created = 1L)),
+            parts = listOf(textPart("user-skill", "user-skill-text", "/skill:review")),
+        )
+
+        val rows = planChatMessageRows(listOf(message))
 
         assertEquals(1, rows.size)
         assertTrue(rows.single() is ChatMessageRow.Whole)
+    }
+
+    @Test
+    fun `todoread is omitted and mixed tool plus long text still chunks after the tool`() {
+        val message = assistantMessage(
+            id = "assistant-mixed-tool-text",
+            text = longMathText(),
+            extraParts = emptyList(),
+        ).let { chat ->
+            chat.copy(
+                parts = listOf(
+                    Part.Tool(id = "skip", sessionId = SessionId, messageId = chat.message.id, tool = "todoread"),
+                    Part.Tool(id = "bash", sessionId = SessionId, messageId = chat.message.id, tool = "bash"),
+                ) + chat.parts,
+            )
+        }
+
+        val rows = planChatMessageRows(listOf(message))
+
+        assertEquals(0, rows.count { it is ChatMessageRow.Skill })
+        assertEquals(listOf("bash"), rows.filterIsInstance<ChatMessageRow.Tool>().map { it.part.tool })
+        assertTrue(rows.filterIsInstance<ChatMessageRow.TextChunk>().size > 1)
+        assertTrue(rows.first() is ChatMessageRow.Tool)
+        assertTrue(rows.drop(1).all { it is ChatMessageRow.TextChunk })
     }
 
     @Test

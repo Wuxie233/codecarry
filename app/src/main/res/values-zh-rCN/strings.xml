@@ -274,6 +274,8 @@
     <string name="session_changes_deletions">-%1$d</string>
     <string name="chat_response">回复</string>
     <string name="chat_hide_steps">隐藏步骤</string>
+    <string name="chat_skill_row_title">Skill %1$s</string>
+    <string name="chat_skill_instructions">说明</string>
     <string name="chat_table_scroll_hint">左右滑动查看完整表格</string>
     <string name="chat_pending_actions">有 %1$d 项待你处理</string>
     <string name="chat_pending_tap_to_view">点击查看</string>
@@ -499,8 +501,8 @@
     <string name="settings_amoled_dark_desc">OLED 屏幕纯黑背景</string>
     <string name="settings_compact_messages">紧凑消息</string>
     <string name="settings_compact_messages_desc">减少消息间距</string>
-    <string name="settings_auto_expand_tools">工具结果自动展开</string>
-    <string name="settings_auto_expand_tools_desc">默认展开工具卡片而非收起</string>
+    <string name="settings_auto_expand_tools">过程行默认展开</string>
+    <string name="settings_auto_expand_tools_desc">默认展开 Think、Skill 和工具详情，而不是收起</string>
     <string name="settings_show_historical_subagents">显示历史子代理</string>
     <string name="settings_show_historical_subagents_desc">开启后也显示之前工作过但当前空闲的子代理，而不仅是正在工作的子代理</string>
     <string name="settings_haptic_feedback">触觉反馈</string>
