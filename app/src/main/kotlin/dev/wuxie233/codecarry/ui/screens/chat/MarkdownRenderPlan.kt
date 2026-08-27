@@ -337,8 +337,44 @@ private fun appendDocumentLinkDefinitions(
     }
 }
 
-private fun stableRenderBlockKey(kind: MarkdownRenderBlockKind, source: String): String =
+internal fun stableRenderBlockKey(kind: MarkdownRenderBlockKind, source: String): String =
     "${kind.name.lowercase()}-${source.hashCode().toUInt().toString(36)}-${source.length.toString(36)}"
+
+internal fun MarkdownRenderBlock.shiftRanges(parserDelta: Int, normalizedDelta: Int): MarkdownRenderBlock {
+    if (parserDelta == 0 && normalizedDelta == 0) return this
+    return copy(
+        semanticParserRange = semanticParserRange.shift(parserDelta),
+        semanticNormalizedRange = semanticNormalizedRange.shift(normalizedDelta),
+        parserRange = parserRange.shift(parserDelta),
+        normalizedRange = normalizedRange.shift(normalizedDelta),
+        math = math.map { placeholder ->
+            placeholder.copy(
+                parserRange = placeholder.parserRange.shift(parserDelta),
+                normalizedRange = placeholder.normalizedRange.shift(normalizedDelta),
+            )
+        },
+    )
+}
+
+internal fun MarkdownRenderBlock.extendSelectableSource(extra: String): MarkdownRenderBlock {
+    if (extra.isEmpty()) return this
+    val nextSource = source + extra
+    val occurrence = key.substringAfterLast('-')
+    return copy(
+        key = "${stableRenderBlockKey(kind, nextSource)}-$occurrence",
+        semanticParserRange = semanticParserRange.copy(
+            endExclusive = semanticParserRange.endExclusive + extra.length,
+        ),
+        semanticNormalizedRange = semanticNormalizedRange.copy(
+            endExclusive = semanticNormalizedRange.endExclusive + extra.length,
+        ),
+        parserRange = parserRange.copy(endExclusive = parserRange.endExclusive + extra.length),
+        normalizedRange = normalizedRange.copy(endExclusive = normalizedRange.endExclusive + extra.length),
+        semanticSource = semanticSource + extra,
+        source = nextSource,
+        renderSource = renderSource + extra,
+    )
+}
 
 private fun uniquifyRenderBlockKeys(blocks: List<MarkdownRenderBlock>): List<MarkdownRenderBlock> {
     val occurrences = mutableMapOf<String, Int>()

@@ -129,17 +129,16 @@ render-only table headers as original source.
 
 ## Streaming
 
-markdown-jvm 0.7.3 has no incremental parser. Project-level reconciliation
-compares the previous plan with a fresh parse:
+markdown-jvm 0.7.3 has no incremental parser. Streaming therefore keeps a
+completed prefix and only spends parser work on the open suffix:
 
-- Reuse the longest completed prefix whose type, original source slice, and
-  structural fingerprint match. Raw user text remains separately available as
-  the plan's `originalSource`; normalized ranges address the protected source
-  after raw-HTML preprocessing.
-- Preserve keys for that prefix.
-- Replace only the open suffix.
-- Allow the active tail to change type when syntax closes, for example prose to
-  table, list, quote, or fenced code.
+- If the source is still a prefix-preserving append into a selectable prose,
+  heading, or open fence, extend that last block in place and skip GFM.
+- Otherwise parse only the open suffix, shift its ranges, and keep prefix
+  block instances and keys.
+- Fall back to a full document parse when the prefix no longer matches, math
+  coordinates diverge, or the tail type must change (prose to table, list,
+  quote, or a closed fence).
 - Never reuse a key across different source content or interaction ownership.
 
 Stable keys combine part identity with a reconciled block identity. They do not

@@ -15,6 +15,7 @@ internal enum class ChatMessageSegmentPosition {
 
 internal class ChatMessageRowPlanningState {
     private val plansByPart = mutableMapOf<ChatMarkdownPartIdentity, MarkdownRenderPlan>()
+    private val rowsByMessage = mutableMapOf<String, CachedMessageRows>()
 
     internal fun previous(messageId: String, partId: String): MarkdownRenderPlan? =
         plansByPart[ChatMarkdownPartIdentity(messageId, partId)]
@@ -23,9 +24,52 @@ internal class ChatMessageRowPlanningState {
         plansByPart[ChatMarkdownPartIdentity(messageId, partId)] = plan
     }
 
-    internal fun retain(parts: Set<ChatMarkdownPartIdentity>) {
-        plansByPart.keys.retainAll(parts)
+    internal fun cachedRows(message: ChatMessage): List<ChatMessageRow>? {
+        val cached = rowsByMessage[message.message.id] ?: return null
+        if (cached.fingerprint != message.rowFingerprint()) return null
+        return cached.rows
     }
+
+    internal fun storeRows(message: ChatMessage, rows: List<ChatMessageRow>) {
+        rowsByMessage[message.message.id] = CachedMessageRows(message.rowFingerprint(), rows)
+    }
+
+    internal fun retain(parts: Set<ChatMarkdownPartIdentity>, messageIds: Set<String>) {
+        plansByPart.keys.retainAll(parts)
+        rowsByMessage.keys.retainAll(messageIds)
+    }
+}
+
+private data class CachedMessageRows(
+    val fingerprint: Int,
+    val rows: List<ChatMessageRow>,
+)
+
+private fun ChatMessage.rowFingerprint(): Int {
+    var hash = 17
+    hash = 31 * hash + message.id.hashCode()
+    hash = 31 * hash + parts.size
+    parts.forEach { part ->
+        hash = 31 * hash + part.id.hashCode()
+        hash = 31 * hash + part.javaClass.name.hashCode()
+        when (part) {
+            is Part.Text -> {
+                hash = 31 * hash + part.text.length
+                hash = 31 * hash + part.text.hashCode()
+            }
+            is Part.Reasoning -> {
+                hash = 31 * hash + part.text.length
+                hash = 31 * hash + part.text.hashCode()
+            }
+            is Part.Tool -> {
+                hash = 31 * hash + part.tool.hashCode()
+                hash = 31 * hash + part.callId.hashCode()
+                hash = 31 * hash + part.state.hashCode()
+            }
+            else -> hash = 31 * hash + part.hashCode()
+        }
+    }
+    return hash
 }
 
 internal data class ChatMarkdownPartIdentity(val messageId: String, val partId: String)
@@ -114,10 +158,39 @@ internal fun planChatMessageRows(
 ): List<ChatMessageRow> {
     val activeParts = mutableSetOf<ChatMarkdownPartIdentity>()
     val rows = messages.flatMapIndexed { messageIndex, chatMessage ->
-        planChatMessageRows(chatMessage, messageIndex, planningState, activeParts)
+        val cached = planningState?.cachedRows(chatMessage)
+        if (cached != null) {
+            cached.forEach { row ->
+                if (row is ChatMessageRow.TextChunk) {
+                    activeParts += ChatMarkdownPartIdentity(chatMessage.message.id, row.partId)
+                }
+            }
+            val rebased = cached.rebase(chatMessage, messageIndex)
+            if (rebased !== cached) planningState?.storeRows(chatMessage, rebased)
+            rebased
+        } else {
+            val planned = planChatMessageRows(chatMessage, messageIndex, planningState, activeParts)
+            planningState?.storeRows(chatMessage, planned)
+            planned
+        }
     }
-    planningState?.retain(activeParts)
+    planningState?.retain(activeParts, messages.mapTo(mutableSetOf()) { it.message.id })
     return rows
+}
+
+private fun List<ChatMessageRow>.rebase(chatMessage: ChatMessage, messageIndex: Int): List<ChatMessageRow> {
+    if (isEmpty()) return this
+    if (all { it.sourceMessageIndex == messageIndex && it.chatMessage === chatMessage }) return this
+    return map { row ->
+        when (row) {
+            is ChatMessageRow.Whole -> row.copy(chatMessage = chatMessage, sourceMessageIndex = messageIndex)
+            is ChatMessageRow.Think -> row.copy(chatMessage = chatMessage, sourceMessageIndex = messageIndex)
+            is ChatMessageRow.Skill -> row.copy(chatMessage = chatMessage, sourceMessageIndex = messageIndex)
+            is ChatMessageRow.Tool -> row.copy(chatMessage = chatMessage, sourceMessageIndex = messageIndex)
+            is ChatMessageRow.Content -> row.copy(chatMessage = chatMessage, sourceMessageIndex = messageIndex)
+            is ChatMessageRow.TextChunk -> row.copy(chatMessage = chatMessage, sourceMessageIndex = messageIndex)
+        }
+    }
 }
 
 internal fun timelineIndexForMessage(

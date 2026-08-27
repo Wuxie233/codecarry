@@ -13,6 +13,8 @@ internal data class SourceRange(
     val isEmpty: Boolean get() = length == 0
 
     fun slice(source: String): String = source.substring(start, endExclusive)
+
+    fun shift(delta: Int): SourceRange = if (delta == 0) this else SourceRange(start + delta, endExclusive + delta)
 }
 
 internal data class MarkdownDocument(

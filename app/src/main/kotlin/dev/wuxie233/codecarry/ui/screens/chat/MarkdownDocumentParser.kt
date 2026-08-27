@@ -9,11 +9,29 @@ import org.intellij.markdown.flavours.gfm.GFMFlavourDescriptor
 import org.intellij.markdown.flavours.gfm.GFMTokenTypes
 import org.intellij.markdown.parser.MarkdownParser
 
+internal object MarkdownParseMetrics {
+    var parseCount: Int = 0
+    var parseChars: Long = 0L
+
+    fun reset() {
+        parseCount = 0
+        parseChars = 0L
+    }
+
+    fun record(charCount: Int) {
+        parseCount += 1
+        parseChars += charCount.toLong()
+    }
+}
+
+private val gfmFlavour = GFMFlavourDescriptor()
+
 internal fun parseMarkdownDocument(source: String): MarkdownDocumentParseResult {
     return runCatching {
         val normalizedSource = preserveRawHtmlPayload(source)
         val mathPreprocessing = preprocessDocumentMath(normalizedSource)
-        val root = MarkdownParser(GFMFlavourDescriptor()).buildMarkdownTreeFromString(mathPreprocessing.parserSource)
+        MarkdownParseMetrics.record(mathPreprocessing.parserSource.length)
+        val root = MarkdownParser(gfmFlavour).buildMarkdownTreeFromString(mathPreprocessing.parserSource)
         astToMarkdownDocument(
             originalSource = source,
             normalizedSource = normalizedSource,

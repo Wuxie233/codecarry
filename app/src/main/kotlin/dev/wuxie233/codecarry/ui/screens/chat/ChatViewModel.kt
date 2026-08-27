@@ -34,7 +34,7 @@ import dev.wuxie233.codecarry.data.dsh.DshRpcResult
 import dev.wuxie233.codecarry.data.dsh.dshMessageSeq
 import dev.wuxie233.codecarry.data.dsh.dshPromptRequest
 import dev.wuxie233.codecarry.data.dsh.dshQueueItemText
-import dev.wuxie233.codecarry.data.dsh.foldDshHistory
+import dev.wuxie233.codecarry.data.dsh.DshHistoryFolder
 import dev.wuxie233.codecarry.data.dsh.mapDshApproval
 import dev.wuxie233.codecarry.data.dsh.mapDshEventStateToSessions
 import dev.wuxie233.codecarry.data.dsh.mapDshQuestion
@@ -171,6 +171,28 @@ data class ChatMessage(
     val isAssistant: Boolean get() = message is Message.Assistant
 }
 
+internal fun reuseStableChatMessages(
+    previous: List<ChatMessage>,
+    next: List<ChatMessage>,
+): List<ChatMessage> {
+    if (previous === next) return previous
+    if (next.isEmpty()) return next
+    val previousById = previous.associateBy { it.message.id }
+    var changed = previous.size != next.size
+    val reused = ArrayList<ChatMessage>(next.size)
+    for (candidate in next) {
+        val existing = previousById[candidate.message.id]
+        val keep = if (existing != null && existing.message == candidate.message && existing.parts == candidate.parts) {
+            existing
+        } else {
+            changed = true
+            candidate
+        }
+        reused += keep
+    }
+    return if (changed) reused else previous
+}
+
 @HiltViewModel
 class ChatViewModel @Inject constructor(
     @ApplicationContext private val appContext: Context,
@@ -235,6 +257,8 @@ class ChatViewModel @Inject constructor(
     private val dshResolvedAttachments = mutableMapOf<String, String>()
     private var dshAttachmentJob: Job? = null
     private var dshAppliedEventSeq: Long = -1
+    private val dshHistoryFolder = DshHistoryFolder()
+    private var lastBuiltChatMessages: List<ChatMessage> = emptyList()
     /** Signals when [loadSession] has finished (successfully or with error), so that terminal
      *  creation can wait for [sessionDirectory] to be populated. */
     private val sessionLoaded = CompletableDeferred<Unit>()
@@ -396,12 +420,15 @@ class ChatViewModel @Inject constructor(
             } else {
                 sorted
             }
-            suppressRepeatedPatchCards(visible.map { msg ->
-                ChatMessage(
-                    message = msg,
-                    parts = partsByMessage[msg.id] ?: emptyList()
-                )
-            })
+            reuseStableChatMessages(
+                lastBuiltChatMessages,
+                suppressRepeatedPatchCards(visible.map { msg ->
+                    ChatMessage(
+                        message = msg,
+                        parts = partsByMessage[msg.id] ?: emptyList()
+                    )
+                }),
+            ).also { lastBuiltChatMessages = it }
         }
 
         var effectiveProviderId = selProviderId
@@ -610,7 +637,7 @@ class ChatViewModel @Inject constructor(
         }
         val snapshot = state.sessions[sessionId]
         if (snapshot != null) {
-            val folded = foldDshHistory(sessionId, snapshot.events)
+            val folded = dshHistoryFolder.fold(sessionId, snapshot.events)
             val lastSeq = snapshot.events.maxOfOrNull { it.seq } ?: -1L
             eventReducer.setMessages(sessionId, applyCachedDshAttachments(folded))
             sessionDirectory = snapshot.cwd?.takeIf { it.isNotBlank() } ?: sessionDirectory
@@ -627,8 +654,10 @@ class ChatViewModel @Inject constructor(
             sessionId,
             state.pendingQuestionsFor(sessionId).map(::mapDshQuestion),
         )
-        _dshQueueTick.value = snapshot?.queue.orEmpty().size.toLong() +
-            (snapshot?.events?.lastOrNull()?.seq ?: 0L)
+        val queueTick = snapshot?.queue.orEmpty().hashCode().toLong()
+        if (_dshQueueTick.value != queueTick) {
+            _dshQueueTick.value = queueTick
+        }
     }
 
     private suspend fun loadDshSession() {
@@ -708,7 +737,7 @@ class ChatViewModel @Inject constructor(
             val current = dshReducer.state.value.sessions[sessionId] ?: return@launch
             val currentSeq = current.events.maxOfOrNull { it.seq } ?: -1L
             if (currentSeq < foldSeq) return@launch
-            eventReducer.setMessages(sessionId, applyCachedDshAttachments(foldDshHistory(sessionId, current.events)))
+            eventReducer.setMessages(sessionId, applyCachedDshAttachments(dshHistoryFolder.fold(sessionId, current.events)))
             dshAppliedEventSeq = currentSeq
         }
     }

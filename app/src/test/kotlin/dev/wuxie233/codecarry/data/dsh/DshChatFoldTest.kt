@@ -13,6 +13,7 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -296,5 +297,47 @@ class DshChatFoldTest {
         )
         assertEquals("u1-12", folded.single().info.id)
         assertEquals(12L, dshMessageSeq(folded.single().info.id))
+    }
+
+    @Test
+    fun `incremental folder appends later chunks without rebuilding earlier messages`() {
+        val folder = DshHistoryFolder()
+        val history = listOf(
+            DshSessionEvent(
+                type = "user/message",
+                seq = 1,
+                time = 10,
+                data = buildJsonObject {
+                    put("id", "u1")
+                    put("content", buildJsonArray {
+                        add(buildJsonObject { put("type", "text"); put("text", "hello") })
+                    })
+                    put("source", buildJsonObject { put("kind", "user") })
+                },
+                surfaceOp = JsonPrimitive("append"),
+            ),
+        )
+        val first = folder.fold("s1", history)
+        val user = first.single()
+
+        val live = history + DshSessionEvent(
+            type = "assistant/chunk",
+            seq = 2,
+            time = 11,
+            data = buildJsonObject {
+                put("turn", 1)
+                put("step", 1)
+                put("chunk", buildJsonObject {
+                    put("type", "text-delta")
+                    put("text", "hi")
+                })
+            },
+        )
+        val grown = folder.fold("s1", live)
+        assertSame(user, grown.first())
+        assertEquals("hi", (grown.last().parts.single() as Part.Text).text)
+
+        val grownAgain = folder.fold("s1", live)
+        assertSame(grown, grownAgain)
     }
 }

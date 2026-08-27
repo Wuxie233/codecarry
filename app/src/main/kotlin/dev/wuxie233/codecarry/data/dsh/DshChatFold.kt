@@ -116,37 +116,84 @@ fun dshMessageSeq(messageId: String): Long? =
     messageId.substringAfterLast('-', missingDelimiterValue = "").toLongOrNull()
 
 fun foldDshHistory(sessionId: String, events: List<DshSessionEvent>): List<MessageWithParts> {
-    val ordered = events.sortedBy { it.seq }
-    val messages = linkedMapOf<String, MessageWithParts>()
-    val seqToMessageId = mutableMapOf<Long, String>()
-    val streamByStep = mutableMapOf<String, StreamAssembler>()
-    val toolOwners = mutableMapOf<String, String>()
+    return DshHistoryFolder().fold(sessionId, events)
+}
 
-    fun removeRange(start: Long, end: Long) {
+class DshHistoryFolder {
+    private var sessionId: String? = null
+    private val messages = linkedMapOf<String, MessageWithParts>()
+    private val seqToMessageId = mutableMapOf<Long, String>()
+    private val streamByStep = mutableMapOf<String, StreamAssembler>()
+    private val toolOwners = mutableMapOf<String, String>()
+    private val appliedSeqs = mutableListOf<Long>()
+    private var snapshot: List<MessageWithParts> = emptyList()
+
+    fun fold(sessionId: String, events: List<DshSessionEvent>): List<MessageWithParts> {
+        val ordered = events.sortedBy { it.seq }
+        val seqs = ordered.map { it.seq }
+        if (this.sessionId != sessionId || !isPrefix(appliedSeqs, seqs)) {
+            reset(sessionId)
+            applyAll(ordered)
+        } else if (seqs.size > appliedSeqs.size) {
+            applyAll(ordered.subList(appliedSeqs.size, ordered.size))
+        } else {
+            return snapshot
+        }
+        appliedSeqs.clear()
+        appliedSeqs.addAll(seqs)
+        snapshot = messages.values.sortedWith(
+            compareBy<MessageWithParts> { it.info.time.created }.thenBy { it.info.id },
+        )
+        return snapshot
+    }
+
+    private fun reset(sessionId: String) {
+        this.sessionId = sessionId
+        messages.clear()
+        seqToMessageId.clear()
+        streamByStep.clear()
+        toolOwners.clear()
+        appliedSeqs.clear()
+        snapshot = emptyList()
+    }
+
+    private fun isPrefix(prefix: List<Long>, seqs: List<Long>): Boolean {
+        if (prefix.size > seqs.size) return false
+        return prefix.indices.all { prefix[it] == seqs[it] }
+    }
+
+    private fun removeRange(start: Long, end: Long) {
         val ids = seqToMessageId.filter { (seq, _) -> seq in start..end }.values.toSet()
         ids.forEach { messages.remove(it) }
         seqToMessageId.entries.removeAll { it.value in ids }
     }
 
-    for (event in ordered) {
+    private fun applyAll(events: List<DshSessionEvent>) {
+        for (event in events) {
+            apply(event)
+        }
+    }
+
+    private fun apply(event: DshSessionEvent) {
+        val sessionId = sessionId ?: return
         when (event.type) {
             "user/message" -> {
-                val op = parseDshSurfaceOp(event.surfaceOp) ?: continue
+                val op = parseDshSurfaceOp(event.surfaceOp) ?: return
                 val sourceKind = event.data?.obj()?.obj("source")?.str("kind")
                 val isUserRewrite = !op.append && sourceKind == "user"
-                if (!op.append && !isUserRewrite) continue
+                if (!op.append && !isUserRewrite) return
                 if (isUserRewrite) {
-                    val start = op.start ?: continue
-                    val end = op.end ?: continue
+                    val start = op.start ?: return
+                    val end = op.end ?: return
                     removeRange(start, end)
                 }
-                val message = userMessage(sessionId, event) ?: continue
+                val message = userMessage(sessionId, event) ?: return
                 val messageId = dshFoldedMessageId(event.seq, message.info.id)
                 messages[messageId] = message.copy(info = (message.info as Message.User).copy(id = messageId))
                 seqToMessageId[event.seq] = messageId
             }
             "assistant/chunk" -> {
-                val data = event.data?.obj() ?: continue
+                val data = event.data?.obj() ?: return
                 val key = stepKey(data)
                 val assembler = streamByStep.getOrPut(key) {
                     StreamAssembler(
@@ -160,13 +207,13 @@ fun foldDshHistory(sessionId: String, events: List<DshSessionEvent>): List<Messa
                 seqToMessageId[event.seq] = assembler.messageId
             }
             "assistant/message" -> {
-                val data = event.data?.obj() ?: continue
+                val data = event.data?.obj() ?: return
                 val stream = streamByStep.remove(stepKey(data))
                 if (stream != null) {
                     messages.remove(stream.messageId)
                     seqToMessageId.entries.removeAll { it.value == stream.messageId }
                 }
-                val message = assistantMessage(sessionId, event) ?: continue
+                val message = assistantMessage(sessionId, event) ?: return
                 val messageId = dshFoldedMessageId(event.seq, message.info.id)
                 val remapped = message.copy(
                     info = (message.info as Message.Assistant).copy(id = messageId),
@@ -187,13 +234,13 @@ fun foldDshHistory(sessionId: String, events: List<DshSessionEvent>): List<Messa
                 }
             }
             "tool/call" -> {
-                val data = event.data?.obj() ?: continue
+                val data = event.data?.obj() ?: return
                 val callId = data.str("callId").orEmpty()
-                if (callId.isBlank()) continue
-                val ownerId = currentAssistantId(messages, data) ?: continue
+                if (callId.isBlank()) return
+                val ownerId = currentAssistantId(messages, data) ?: return
                 toolOwners[callId] = ownerId
-                val owner = messages[ownerId] ?: continue
-                if (owner.parts.any { it is Part.Tool && it.callId == callId }) continue
+                val owner = messages[ownerId] ?: return
+                if (owner.parts.any { it is Part.Tool && it.callId == callId }) return
                 messages[ownerId] = owner.copy(
                     parts = owner.parts + Part.Tool(
                         id = "dsh-tool-$callId",
@@ -206,15 +253,15 @@ fun foldDshHistory(sessionId: String, events: List<DshSessionEvent>): List<Messa
                 )
             }
             "tool/result" -> {
-                val data = event.data?.obj() ?: continue
+                val data = event.data?.obj() ?: return
                 val resultMessage = data.obj("message")
                 val callId = data.str("callId")
                     ?: resultMessage?.arr("content")?.firstOrNull()
                         ?.let { it as? JsonObject }
                         ?.str("toolCallId")
-                    ?: continue
-                val ownerId = toolOwners[callId] ?: currentAssistantId(messages, data) ?: continue
-                val owner = messages[ownerId] ?: continue
+                    ?: return
+                val ownerId = toolOwners[callId] ?: currentAssistantId(messages, data) ?: return
+                val owner = messages[ownerId] ?: return
                 val output = toolResultText(resultMessage)
                 val isError = resultMessage?.bool("isError") == true || data.bool("isError")
                 val updatedParts = owner.parts.map { part ->
@@ -247,10 +294,6 @@ fun foldDshHistory(sessionId: String, events: List<DshSessionEvent>): List<Messa
             }
         }
     }
-
-    return messages.values.sortedWith(
-        compareBy<MessageWithParts> { it.info.time.created }.thenBy { it.info.id },
-    )
 }
 
 fun dshQueueItemText(item: DshQueuedInboxItem): String {

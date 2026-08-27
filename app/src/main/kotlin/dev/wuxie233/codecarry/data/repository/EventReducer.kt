@@ -481,6 +481,7 @@ class EventReducer @Inject constructor() {
     fun setQuestions(serverId: String, sessionId: String, questions: List<SseEvent.QuestionAsked>) {
         _questionsByServer.update { current ->
             val serverQuestions = current[serverId].orEmpty()
+            if (serverQuestions[sessionId].orEmpty() == questions) return@update current
             val updated = if (questions.isEmpty()) serverQuestions - sessionId else serverQuestions + (sessionId to questions)
             if (updated.isEmpty()) current - serverId else current + (serverId to updated)
         }
@@ -489,6 +490,7 @@ class EventReducer @Inject constructor() {
     fun setPermissions(serverId: String, sessionId: String, permissions: List<SseEvent.PermissionAsked>) {
         _permissionsByServer.update { current ->
             val serverPermissions = current[serverId].orEmpty()
+            if (serverPermissions[sessionId].orEmpty() == permissions) return@update current
             val updated = if (permissions.isEmpty()) {
                 serverPermissions - sessionId
             } else {
@@ -533,13 +535,23 @@ class EventReducer @Inject constructor() {
     fun replaceSessions(serverId: String, sessions: List<Session>) {
         val previousIds = _serverSessions.value[serverId].orEmpty()
         val sessionIds = sessions.map { it.id }.toSet()
-        _serverSessions.update { current -> current + (serverId to sessionIds) }
-        _serverSessionDetails.update { current ->
-            current + (serverId to sessions.associateBy(Session::id))
+        val nextDetails = sessions.associateBy(Session::id)
+        val currentDetails = _serverSessionDetails.value[serverId].orEmpty()
+        val idsUnchanged = previousIds == sessionIds
+        val detailsUnchanged = idsUnchanged && currentDetails.size == nextDetails.size &&
+            nextDetails.all { (id, session) -> currentDetails[id] == session }
+        if (!idsUnchanged) {
+            _serverSessions.update { current -> current + (serverId to sessionIds) }
+        }
+        if (!detailsUnchanged) {
+            _serverSessionDetails.update { current ->
+                current + (serverId to nextDetails)
+            }
         }
         _sessions.update { current ->
             val kept = current.filterNot { it.id in previousIds || it.id in sessionIds }
-            (kept + sessions).distinctBy { it.id }.sortedByDescending { it.time.updated }
+            val merged = (kept + sessions).distinctBy { it.id }.sortedByDescending { it.time.updated }
+            if (merged == current) current else merged
         }
     }
 
@@ -573,6 +585,7 @@ class EventReducer @Inject constructor() {
      */
     fun updateSessionStatus(sessionId: String, status: SessionStatus) {
         synchronized(sessionStatusLock) {
+            if (_sessionStatuses.value[sessionId] == status) return
             recordSessionStatusChange(sessionId)
             _sessionStatuses.update { it + (sessionId to status) }
         }
@@ -648,12 +661,24 @@ class EventReducer @Inject constructor() {
      * Load messages for a session
      */
     fun setMessages(sessionId: String, messages: List<MessageWithParts>) {
-        _messages.update { it + (sessionId to messages.map { msg -> msg.info }) }
-        
+        val nextInfos = messages.map { msg -> msg.info }
+        _messages.update { current ->
+            val existing = current[sessionId]
+            if (existing == nextInfos) current else current + (sessionId to nextInfos)
+        }
         val partsMap = messages.associate { msg ->
             msg.info.id to msg.parts.filter { it.isRenderablePart() }
         }
-        _parts.update { it + partsMap }
+        _parts.update { current ->
+            if (partsMap.all { (id, parts) -> current[id] == parts } &&
+                partsMap.keys.all { it in current } &&
+                current.keys.filter { id -> nextInfos.any { it.id == id } }.all { it in partsMap }
+            ) {
+                current
+            } else {
+                current + partsMap
+            }
+        }
     }
 
     /** Merge a REST history snapshot without replacing state that may have arrived live. */
