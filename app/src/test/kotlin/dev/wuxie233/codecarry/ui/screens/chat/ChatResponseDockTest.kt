@@ -51,6 +51,7 @@ class ChatResponseDockTest {
         assertTrue(dockIntegration.contains("onReject = { viewModel.replyToPermission(permission.id, \"reject\") }"))
         assertTrue(dockIntegration.contains("onSubmit = { answers -> viewModel.replyToQuestion(question.id, answers) }"))
         assertTrue(dockIntegration.contains("onReject = { viewModel.rejectQuestion(question.id) }"))
+        assertTrue(dockIntegration.contains("unlockToken = uiState.questionUnlockEpoch"))
         assertTrue(dockIntegration.contains("composerContent = {"))
         assertTrue(dockIntegration.contains("viewModel.updateDraftText(normalizedValue.text)"))
         assertTrue(dockIntegration.contains("attachments = if (uiState.supportsAttachments) attachments else emptyList()"))

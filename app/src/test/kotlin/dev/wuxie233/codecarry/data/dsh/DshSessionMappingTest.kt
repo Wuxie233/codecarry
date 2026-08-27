@@ -59,4 +59,34 @@ class DshSessionMappingTest {
         assertEquals("host-rpc", asked.id)
         assertEquals("bash", asked.permission)
     }
+
+    @Test
+    fun `single-select custom text is exclusive of selected labels`() {
+        val questions = listOf(
+            DshQuestionItem(
+                id = "target",
+                question = "Choose one",
+                options = listOf(DshQuestionOption("Code"), DshQuestionOption("Docs")),
+            ),
+        )
+        val answer = dshQuestionAnswer(questions, listOf(listOf("Release notes")))
+        assertEquals("target", answer.answers.single().id)
+        assertTrue(answer.answers.single().selected.isEmpty())
+        assertEquals("Release notes", answer.answers.single().custom)
+    }
+
+    @Test
+    fun `multi-select keeps labels and custom together`() {
+        val questions = listOf(
+            DshQuestionItem(
+                id = "signals",
+                question = "Pick",
+                multiSelect = true,
+                options = listOf(DshQuestionOption("Code"), DshQuestionOption("Docs")),
+            ),
+        )
+        val answer = dshQuestionAnswer(questions, listOf(listOf("Code", "Docs", "Release notes")))
+        assertEquals(listOf("Code", "Docs"), answer.answers.single().selected)
+        assertEquals("Release notes", answer.answers.single().custom)
+    }
 }

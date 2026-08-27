@@ -722,17 +722,26 @@ class DshApiClient(
         rpcId: String,
         sessionId: String,
         answers: JsonElement,
-    ): DshRpcReceipt = respond(
-        connection,
-        rpcId,
-        DshRpcResult(
-            ok = true,
-            value = buildJsonObject {
-                put("sessionId", sessionId)
-                put("answer", answers)
-            },
-        ),
-    )
+    ): DshRpcReceipt {
+        val receipt = respond(
+            connection,
+            rpcId,
+            DshRpcResult(
+                ok = true,
+                value = buildJsonObject {
+                    put("sessionId", sessionId)
+                    put("answer", answers)
+                },
+            ),
+        )
+        if (!receipt.accepted) {
+            throw DshRpcException(
+                rpcId,
+                DshRpcError("bad-response", receipt.reason ?: "question response rejected"),
+            )
+        }
+        return receipt
+    }
 
     fun muxFrames(downlink: DshDownlink): Flow<DshEnvelope<DshMuxFrame>> = flow {
         while (true) {

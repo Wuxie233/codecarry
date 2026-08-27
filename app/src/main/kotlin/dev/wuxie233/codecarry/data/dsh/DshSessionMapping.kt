@@ -89,6 +89,24 @@ fun mapDshQuestion(question: DshPendingQuestion): SseEvent.QuestionAsked =
         },
     )
 
+fun dshQuestionAnswer(
+    questions: List<DshQuestionItem>,
+    answers: List<List<String>>,
+): DshQuestionAnswer = DshQuestionAnswer(
+    answers = questions.mapIndexed { index, question ->
+        val labels = question.options.mapTo(mutableSetOf()) { it.label }
+        val raw = answers.getOrNull(index).orEmpty()
+        val selected = raw.filter { it in labels }.distinct()
+        val custom = raw.firstOrNull { it !in labels }?.trim()?.takeIf { it.isNotEmpty() }
+        val exclusiveCustom = custom != null && !question.multiSelect
+        DshQuestionAnswerItem(
+            id = question.id,
+            selected = if (exclusiveCustom) emptyList() else selected,
+            custom = custom,
+        )
+    },
+)
+
 private fun parseInstant(value: kotlinx.serialization.json.JsonElement?): Long? {
     val raw = (value as? JsonPrimitive)?.contentOrNull ?: return null
     raw.toLongOrNull()?.let { return it }

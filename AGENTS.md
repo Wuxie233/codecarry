@@ -98,9 +98,12 @@ fork based on OC Remote; the Android namespace/applicationId is
   `settings.openDocument`, `llm.discoverModels`,
   `agentPreset.read/copy/openDocument/remove`. A 401 is `DshAuthRequiredException`.
 - Answer DSH `approval/requested` and `question/requested` on unary
-  `POST /api/respond` with the host `rpcId`. Pending requests survive screen
-  collector timing and clear on disconnect or resolved frames. DSH approval
-  has no Always grant.
+  `POST /api/respond` with the host `rpcId`. Question answers must echo each
+  question `id` and put custom text in `custom`, never in `selected`.
+  Single-select custom and selected labels are mutually exclusive. A rejected
+  receipt (`accepted: false`) must surface an error and unlock the card.
+  Pending requests survive screen collector timing and clear on disconnect or
+  resolved frames. DSH approval has no Always grant.
 - `session.prompt` mode is `queue` or `steer`. A sole text block starting with
   `/` is a host slash command. DSH file mentions use `host.listDirectory`,
   not OpenCode `@file` search. DSH has no shell/terminal.

@@ -2072,6 +2072,7 @@ fun ChatScreen(
                                         question = question,
                                         onSubmit = { answers -> viewModel.replyToQuestion(question.id, answers) },
                                         onReject = { viewModel.rejectQuestion(question.id) },
+                                        unlockToken = uiState.questionUnlockEpoch,
                                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
                                     )
                                 }
@@ -7867,6 +7868,7 @@ private fun QuestionCard(
     question: SseEvent.QuestionAsked,
     onSubmit: (answers: List<List<String>>) -> Unit,
     onReject: () -> Unit,
+    unlockToken: Int = 0,
     modifier: Modifier = Modifier,
 ) {
     val isAmoled = isAmoledTheme()
@@ -7875,8 +7877,12 @@ private fun QuestionCard(
     val hapticView = LocalView.current
     val hapticOn = LocalHapticFeedbackEnabled.current
 
-    // Prevent multiple submissions
-    var submitted by rememberSaveable { mutableStateOf(false) }
+    // Prevent multiple submissions. Unlock if the host rejected the reply so
+    // the card is not left permanently disabled.
+    var submitted by rememberSaveable(question.id) { mutableStateOf(false) }
+    LaunchedEffect(unlockToken) {
+        if (unlockToken > 0) submitted = false
+    }
 
     // Track answers per question
     val answersPerQuestion = rememberSaveable(

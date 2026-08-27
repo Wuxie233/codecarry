@@ -28,9 +28,10 @@ import dev.wuxie233.codecarry.data.dsh.DshEventState
 import dev.wuxie233.codecarry.data.dsh.DshGenerationStatus
 import dev.wuxie233.codecarry.data.dsh.connectDshConversation
 import dev.wuxie233.codecarry.data.dsh.DshQuestionAnswer
-import dev.wuxie233.codecarry.data.dsh.DshQuestionAnswerItem
 import dev.wuxie233.codecarry.data.dsh.DshRpcError
+import dev.wuxie233.codecarry.data.dsh.DshRpcException
 import dev.wuxie233.codecarry.data.dsh.DshRpcResult
+import dev.wuxie233.codecarry.data.dsh.dshQuestionAnswer
 import dev.wuxie233.codecarry.data.dsh.dshMessageSeq
 import dev.wuxie233.codecarry.data.dsh.dshPromptRequest
 import dev.wuxie233.codecarry.data.dsh.dshQueueItemText
@@ -146,6 +147,7 @@ data class ChatUiState(
     val permissionAlwaysAvailable: Boolean = true,
     val supportsShell: Boolean = false,
     val supportsTerminal: Boolean = false,
+    val questionUnlockEpoch: Int = 0,
 )
 
 data class ChatQueueItem(
@@ -337,6 +339,7 @@ class ChatViewModel @Inject constructor(
     /** Whether a "load older" request is in flight. */
     private val _isLoadingOlder = MutableStateFlow(false)
     private val _dshQueueTick = MutableStateFlow(0L)
+    private val _questionUnlockEpoch = MutableStateFlow(0)
     val uiState: StateFlow<ChatUiState> = combine(
         listOf(
             eventReducer.serverSessionDetails,
@@ -363,6 +366,7 @@ class ChatViewModel @Inject constructor(
             _hasOlderMessages,
             _isLoadingOlder,
             _dshQueueTick,
+            _questionUnlockEpoch,
         )
     ) { args ->
         @Suppress("UNCHECKED_CAST")
@@ -399,6 +403,7 @@ class ChatViewModel @Inject constructor(
         val isLoadingOlder = args[22] as Boolean
         @Suppress("UNUSED_VARIABLE")
         val dshQueueTick = args[23] as Long
+        val questionUnlockEpoch = args[24] as Int
 
         val session = allSessions.find { it.id == sessionId && it.id in currentServerSessionIds }
         val subagents = buildDirectChatSubagents(
@@ -551,6 +556,7 @@ class ChatViewModel @Inject constructor(
             permissionAlwaysAvailable = !isDsh,
             supportsShell = dshCapabilities.shellAndTerminal,
             supportsTerminal = dshCapabilities.shellAndTerminal,
+            questionUnlockEpoch = questionUnlockEpoch,
         )
     }.stateIn(
         viewModelScope,
@@ -1524,21 +1530,17 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 if (isDsh) {
-                    val pending = dshReducer.state.value.pendingQuestions[requestId] ?: return@launch
-                    val payload = DshQuestionAnswer(
-                        answers = pending.questions.mapIndexed { index, item ->
-                            DshQuestionAnswerItem(
-                                id = item.id,
-                                selected = answers.getOrNull(index).orEmpty(),
-                            )
-                        },
-                    )
+                    val pending = dshReducer.state.value.pendingQuestions[requestId]
+                        ?: error("question $requestId is no longer pending")
+                    val payload = dshQuestionAnswer(pending.questions, answers)
                     dshApi.answerQuestion(
                         dshConn,
                         pending.rpcId,
                         pending.sessionId,
                         json.encodeToJsonElement(DshQuestionAnswer.serializer(), payload),
                     )
+                    dshReducer.removePendingQuestion(pending.rpcId)
+                    eventReducer.removeQuestion(serverId, requestId)
                     return@launch
                 }
                 val success = api.replyToQuestion(
@@ -1553,6 +1555,8 @@ class ChatViewModel @Inject constructor(
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to reply to question $requestId: ${e.javaClass.simpleName}: ${e.message}", e)
+                _error.value = e.message ?: "Failed to reply to question"
+                _questionUnlockEpoch.value += 1
             }
         }
     }
@@ -1564,12 +1568,21 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 if (isDsh) {
-                    val pending = dshReducer.state.value.pendingQuestions[requestId] ?: return@launch
-                    dshApi.respond(
+                    val pending = dshReducer.state.value.pendingQuestions[requestId]
+                        ?: error("question $requestId is no longer pending")
+                    val receipt = dshApi.respond(
                         dshConn,
                         pending.rpcId,
                         DshRpcResult(ok = false, error = DshRpcError("cancelled", "cancelled")),
                     )
+                    if (!receipt.accepted) {
+                        throw DshRpcException(
+                            pending.rpcId,
+                            DshRpcError("bad-response", receipt.reason ?: "question reject rejected"),
+                        )
+                    }
+                    dshReducer.removePendingQuestion(pending.rpcId)
+                    eventReducer.removeQuestion(serverId, requestId)
                     return@launch
                 }
                 val success = api.rejectQuestion(conn = conn, requestId = requestId, directory = sessionDirectory)
@@ -1579,6 +1592,8 @@ class ChatViewModel @Inject constructor(
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to reject question $requestId: ${e.javaClass.simpleName}: ${e.message}", e)
+                _error.value = e.message ?: "Failed to reject question"
+                _questionUnlockEpoch.value += 1
             }
         }
     }

@@ -276,6 +276,13 @@ class DshEventReducer(
         _state.update { it.withWorkspace(view) }
     }
 
+    fun removePendingQuestion(rpcId: String) {
+        _state.update { current ->
+            if (rpcId !in current.pendingQuestions) current
+            else current.copy(pendingQuestions = current.pendingQuestions - rpcId)
+        }
+    }
+
     private fun DshEventState.updateSession(
         sessionId: String,
         transform: (DshSessionSnapshot) -> DshSessionSnapshot,

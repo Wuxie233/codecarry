@@ -65,6 +65,20 @@ class DshEventReducerTest {
     }
 
     @Test
+    fun `optimistic question removal drops the pending rpc before mux resolved`() {
+        val reducer = DshEventReducer()
+        reducer.applyMux(
+            "question-rpc",
+            DshMuxFrame.QuestionRequested(
+                sessionId = "s1",
+                questions = listOf(DshQuestionItem(id = "q1", question = "Ship?")),
+            ),
+        )
+        reducer.removePendingQuestion("question-rpc")
+        assertTrue(reducer.state.value.pendingQuestions.isEmpty())
+    }
+
+    @Test
     fun `projection higher-seq wins`() {
         val reducer = DshEventReducer()
         reducer.applyMux("p1", DshMuxFrame.SessionProjection("s1", "title", JsonPrimitive("old"), 2))

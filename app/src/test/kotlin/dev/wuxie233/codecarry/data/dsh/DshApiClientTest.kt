@@ -13,8 +13,10 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -69,6 +71,34 @@ class DshApiClientTest {
         val body = json.parseToJsonElement((captured.single().body as TextContent).text).jsonObject
         assertEquals("client-response", body.getValue("type").jsonPrimitive.content)
         assertEquals("host-rpc", body.getValue("rpcId").jsonPrimitive.content)
+    }
+
+    @Test
+    fun `question answer posts nested answer envelope and rejects unaccepted receipts`() = runTest {
+        val captured = mutableListOf<HttpRequestData>()
+        val accepted = api(captured) { """{"accepted":true}""" }
+        val payload = json.encodeToJsonElement(
+            DshQuestionAnswer.serializer(),
+            dshQuestionAnswer(
+                listOf(DshQuestionItem(id = "q1", question = "Ship?", options = listOf(DshQuestionOption("Yes")))),
+                listOf(listOf("Yes")),
+            ),
+        )
+        val receipt = accepted.answerQuestion(connection, "question-rpc", "s1", payload)
+        assertTrue(receipt.accepted)
+        val body = json.parseToJsonElement((captured.single().body as TextContent).text).jsonObject
+        val value = body.getValue("result").jsonObject.getValue("value").jsonObject
+        assertEquals("s1", value.getValue("sessionId").jsonPrimitive.content)
+        val answers = value.getValue("answer").jsonObject.getValue("answers") as JsonArray
+        assertEquals("q1", answers.first().jsonObject.getValue("id").jsonPrimitive.content)
+
+        val rejected = api(mutableListOf()) { """{"accepted":false,"reason":"bad-response"}""" }
+        try {
+            rejected.answerQuestion(connection, "question-rpc", "s1", payload)
+            throw AssertionError("expected rejected receipt")
+        } catch (error: DshRpcException) {
+            assertEquals("bad-response", error.error.code)
+        }
     }
 
     @Test
