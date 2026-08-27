@@ -223,6 +223,9 @@
     <string name="sessions_empty">No sessions yet</string>
     <string name="sessions_tap_plus">Tap + to start a new conversation</string>
     <string name="sessions_open_project">Open project</string>
+    <string name="sessions_new_pick_directory">Choose a directory</string>
+    <string name="sessions_no_repo">No Repo</string>
+    <string name="sessions_no_repo_hint">Start a conversation without a project folder</string>
     <string name="sessions_search_folders">Search folders</string>
     <string name="sessions_search_hint">Search sessions</string>
     <string name="sessions_search_clear">Clear search</string>

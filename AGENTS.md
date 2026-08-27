@@ -108,6 +108,11 @@ fork based on OC Remote; the Android namespace/applicationId is
   list/select, goal, automation, settings mutate, llm catalog, subagent,
   systemPrompt, directory browse) live under Server Settings via
   `DshHostSurfaceController`.
+- DSH Sessions + opens the in-app `host.listDirectory` browser, not the
+  loopback OS picker. Selecting a directory runs `workspace.create` then
+  reuses an unarchived blank member or `session.create(workspaceId)`. No Repo
+  omits both `cwd` and `workspaceId`. Do not create with a bare `cwd`; that
+  leaves the session Ungrouped. Planner: `DshConnectWorkspace.kt`.
 - Chat markdown has two render paths: normal markdown uses Compose in `ChatMarkdownRenderer.kt`; KaTeX/math markdown uses the WebView renderer in `MarkdownMessageRenderer.kt`. Keep code blocks, tables, display math, and reasoning/plain text with long unbreakable ASCII tokens independently horizontally scrollable; normal prose should still wrap to the bubble width.
 - Chat Markdown has one structural pipeline: `MarkdownDocumentParser.kt` builds the GFM AST-backed document, `MarkdownRenderPlan.kt` assigns block routes and structured table data, and `MarkdownStreamingPlan.kt` reconciles completed-prefix identity while reparsing the open suffix. Do not add a second line scanner or whole-message/max-chunks fallback.
 - Long assistant Markdown is split into typed top-level rows. Tables and fenced code own their rows; root lists, blockquotes, raw HTML, and indented code remain atomic; prose may coalesce within the size budget.
@@ -150,7 +155,8 @@ If generated Hilt/Kotlin caches fail, rerun the affected verification after
 - `app/src/main/kotlin/dev/wuxie233/codecarry/data/api/`: OpenCode wire APIs
   and DTOs.
 - `app/src/main/kotlin/dev/wuxie233/codecarry/data/dsh/`: DSH RPC, mux/host
-  downlinks, event reduce, chat fold, and remaining host unary surfaces.
+  downlinks, event reduce, chat fold, connect-workspace planner, and remaining
+  host unary surfaces.
 - `app/src/main/kotlin/dev/wuxie233/codecarry/data/repository/`: persisted
   repositories and shared OpenCode event reduction.
 - `app/src/main/kotlin/dev/wuxie233/codecarry/domain/`: backend-neutral models

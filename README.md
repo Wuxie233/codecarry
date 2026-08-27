@@ -88,6 +88,7 @@ CodeCarry is an independently maintained Android client that connects developers
 ### Connection
 - **Multi-server** — connect to multiple OpenCode and DSH servers
 - **DSH** — native sessions and chat over `/api` RPC plus mux/host WebSockets; remaining host surfaces live under Server Settings
+- **DSH new conversation** — Sessions + browses the host filesystem, registers the chosen directory as a workspace, reuses a blank session when one already belongs there, or starts No Repo without a project folder
 - **Local runtime via Termux** — set up and run OpenCode directly on-device from the Home screen (setup/start/stop/sessions)
 - **Local runtime launch options** — configure LAN binding (`0.0.0.0`), optional server username/password auth, background launch mode, auto-start (background-only), startup timeout, and proxy/`NO_PROXY` from the app
 - **Provider OAuth flow** — browser OAuth, headless fallback handling, and provider-state refresh on resume

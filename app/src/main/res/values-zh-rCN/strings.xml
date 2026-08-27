@@ -246,6 +246,9 @@
     <string name="sessions_new_short">新建会话…</string>
     <string name="sessions_tap_plus">点击 + 开始新对话</string>
     <string name="sessions_open_project">打开项目</string>
+    <string name="sessions_new_pick_directory">选择目录</string>
+    <string name="sessions_no_repo">无项目</string>
+    <string name="sessions_no_repo_hint">不挂目录，直接开始对话</string>
     <string name="sessions_search_folders">搜索文件夹</string>
     <string name="sessions_no_folders">未找到文件夹</string>
     <string name="sessions_empty_directory">目录为空</string>

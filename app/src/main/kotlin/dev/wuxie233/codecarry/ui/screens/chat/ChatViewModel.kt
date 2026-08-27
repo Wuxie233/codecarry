@@ -26,6 +26,7 @@ import dev.wuxie233.codecarry.data.dsh.DshConnection
 import dev.wuxie233.codecarry.data.dsh.DshConnectionManager
 import dev.wuxie233.codecarry.data.dsh.DshEventState
 import dev.wuxie233.codecarry.data.dsh.DshGenerationStatus
+import dev.wuxie233.codecarry.data.dsh.connectDshConversation
 import dev.wuxie233.codecarry.data.dsh.DshQuestionAnswer
 import dev.wuxie233.codecarry.data.dsh.DshQuestionAnswerItem
 import dev.wuxie233.codecarry.data.dsh.DshRpcError
@@ -1998,10 +1999,18 @@ class ChatViewModel @Inject constructor(
                 }
                 val requestedDirectory = sessionDirectory
                 if (isDsh) {
-                    val created = dshApi.sessionCreate(dshConn, cwd = requestedDirectory)
+                    val describe = dshConnectionManager.states.value[serverId]?.describe
+                    val connected = connectDshConversation(
+                        client = dshApi,
+                        connection = dshConn,
+                        state = dshReducer.state.value,
+                        path = requestedDirectory?.takeIf { it.isNotBlank() },
+                        noRepoDirectory = describe?.cwd.orEmpty(),
+                    )
+                    connected.workspace?.let(dshReducer::applyWorkspace)
                     val session = Session(
-                        id = created.sessionId,
-                        directory = requestedDirectory.orEmpty(),
+                        id = connected.sessionId,
+                        directory = connected.directory,
                         time = Session.Time(created = System.currentTimeMillis(), updated = System.currentTimeMillis()),
                     )
                     eventReducer.setSessions(serverId, listOf(session))

@@ -5,8 +5,12 @@ import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import dev.wuxie233.codecarry.data.api.OpenCodeApi
+import dev.wuxie233.codecarry.data.dsh.DshApiClient
+import dev.wuxie233.codecarry.data.dsh.DshConnectionManager
+import dev.wuxie233.codecarry.data.dsh.DshSessionSummary
 import dev.wuxie233.codecarry.data.dsh.unusedDshApi
 import dev.wuxie233.codecarry.data.dsh.unusedDshConnectionManager
+import dev.wuxie233.codecarry.data.dsh.unusedDshDownlinks
 import dev.wuxie233.codecarry.data.diagnostics.AppEventDiagnosticsGenerator
 import dev.wuxie233.codecarry.data.diagnostics.DiagnosticsLogRepository
 import dev.wuxie233.codecarry.data.preferences.SessionFilter
@@ -26,9 +30,12 @@ import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.content.TextContent
 import io.ktor.http.headersOf
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.utils.io.ByteReadChannel
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -600,6 +607,91 @@ class SessionListViewModelTest {
         assertEquals("ses_created_1", navigated.single().id)
     }
 
+    @Test
+    fun `dsh new conversation registers workspace then creates with workspaceId`() = runTest(dispatcher) {
+        val captured = Collections.synchronizedList(mutableListOf<String>())
+        val eventReducer = EventReducer()
+        val manager = unusedDshConnectionManager(testScope.backgroundScope, json)
+        val vm = newSessionListViewModel(
+            eventReducer = eventReducer,
+            dshApi = dshSessionApi(captured),
+            dshConnectionManager = manager,
+            savedStateHandle = dshSavedStateHandle(),
+        )
+        val navigated = Collections.synchronizedList(mutableListOf<Session>())
+        collectNavigation(vm) { navigated.add(it) }
+        collectUiState(vm)
+
+        captured.clear()
+        vm.createNewSession(directory = "/work/new")
+        advanceUntilIdle()
+
+        assertEquals(
+            listOf("workspace.create", "session.create"),
+            captured.filter { it == "workspace.create" || it == "session.create" },
+        )
+        val session = navigated.single()
+        assertEquals("s-new", session.id)
+        assertEquals("/work/new", session.directory)
+        assertTrue(vm.uiState.value.supportsProjectRegister)
+        assertTrue(vm.uiState.value.supportsNoRepoCreate)
+    }
+
+    @Test
+    fun `dsh no-repo create posts empty session create`() = runTest(dispatcher) {
+        val captured = Collections.synchronizedList(mutableListOf<String>())
+        val vm = newSessionListViewModel(
+            dshApi = dshSessionApi(captured),
+            dshConnectionManager = unusedDshConnectionManager(testScope.backgroundScope, json),
+            savedStateHandle = dshSavedStateHandle(),
+        )
+        val navigated = Collections.synchronizedList(mutableListOf<Session>())
+        collectNavigation(vm) { navigated.add(it) }
+        collectUiState(vm)
+
+        captured.clear()
+        vm.createNoRepoSession()
+        advanceUntilIdle()
+
+        assertEquals(listOf("session.create"), captured.filter { it == "session.create" || it == "workspace.create" })
+        assertEquals("s-no-repo", navigated.single().id)
+    }
+
+    @Test
+    fun `dsh create reuses blank member without session create`() = runTest(dispatcher) {
+        val captured = Collections.synchronizedList(mutableListOf<String>())
+        val manager = unusedDshConnectionManager(testScope.backgroundScope, json)
+        manager.reducer("srv-session-list").applySessionList(
+            listOf(
+                DshSessionSummary(
+                    sessionId = "blank",
+                    updatedAt = 1L,
+                    running = false,
+                    blank = true,
+                    cwd = "/work/a",
+                ),
+            ),
+        )
+        val vm = newSessionListViewModel(
+            dshApi = dshSessionApi(captured, reuseBlank = true),
+            dshConnectionManager = manager,
+            savedStateHandle = dshSavedStateHandle(),
+        )
+        val navigated = Collections.synchronizedList(mutableListOf<Session>())
+        collectNavigation(vm) { navigated.add(it) }
+        collectUiState(vm)
+
+        captured.clear()
+        vm.createNewSession(directory = "/work/a")
+        advanceUntilIdle()
+
+        assertEquals(
+            listOf("workspace.create"),
+            captured.filter { it == "workspace.create" || it == "session.create" },
+        )
+        assertEquals("blank", navigated.single().id)
+    }
+
     private fun collectNavigation(
         vm: SessionListViewModel,
         onSession: (Session) -> Unit,
@@ -637,25 +729,77 @@ class SessionListViewModelTest {
         eventReducer: EventReducer = EventReducer(),
         api: OpenCodeApi = sessionListApi(),
         diagnosticsRepository: DiagnosticsLogRepository = diagnosticsLogRepository(),
+        dshApi: DshApiClient = unusedDshApi(json),
+        dshConnectionManager: DshConnectionManager = unusedDshConnectionManager(testScope.backgroundScope, json),
+        savedStateHandle: SavedStateHandle = SavedStateHandle(
+            mapOf(
+                "serverUrl" to "http%3A%2F%2Fexample.test%3A4096",
+                "username" to "",
+                "password" to "",
+                "serverName" to "Local",
+                "serverId" to "srv-session-list",
+            )
+        ),
     ): SessionListViewModel {
         return SessionListViewModel(
-            savedStateHandle = SavedStateHandle(
-                mapOf(
-                    "serverUrl" to "http%3A%2F%2Fexample.test%3A4096",
-                    "username" to "",
-                    "password" to "",
-                    "serverName" to "Local",
-                    "serverId" to "srv-session-list",
-                )
-            ),
+            savedStateHandle = savedStateHandle,
             eventReducer = eventReducer,
             api = api,
             preferencesRepo = sessionListPreferencesRepository(),
             settingsRepository = settingsRepository(),
             appEventDiagnosticsGenerator = AppEventDiagnosticsGenerator(diagnosticsRepository),
-            dshApi = unusedDshApi(json),
-            dshConnectionManager = unusedDshConnectionManager(testScope.backgroundScope, json),
+            dshApi = dshApi,
+            dshConnectionManager = dshConnectionManager,
         ).also { viewModels.add(it) }
+    }
+
+    private fun dshSavedStateHandle(): SavedStateHandle = SavedStateHandle(
+        mapOf(
+            "serverUrl" to "http%3A%2F%2F192.168.1.8%3A3080",
+            "username" to "",
+            "password" to "",
+            "serverName" to "DSH",
+            "serverId" to "srv-session-list",
+            "serverType" to "DSH",
+        )
+    )
+
+    private fun dshSessionApi(
+        captured: MutableList<String>,
+        reuseBlank: Boolean = false,
+    ): DshApiClient {
+        val engine = MockEngine { request ->
+            val body = (request.body as TextContent).text
+            val envelope = json.parseToJsonElement(body).jsonObject
+            val rpcId = envelope.getValue("rpcId").jsonPrimitive.content
+            val method = envelope.getValue("method").jsonPrimitive.content
+            captured += method
+            val payload = envelope.getValue("payload").jsonObject
+            val value = when (method) {
+                "workspace.list" -> """{"items":[],"archivedSessionIds":[],"hiddenWorkspaceIds":[]}"""
+                "session.list" -> """{"items":[]}"""
+                "host.listDirectory" -> """{"path":"/root","home":"/root","crumbs":[],"entries":[],"truncated":false}"""
+                "workspace.create" -> {
+                    val path = payload.getValue("path").jsonPrimitive.content
+                    val sessionIds = if (reuseBlank) """["blank"]""" else "[]"
+                    """{"workspace":{"workspaceId":"w1","path":"$path","folders":[],"title":"dir","sessionIds":$sessionIds,"createdAt":"t","updatedAt":"t"},"created":true}"""
+                }
+                "session.create" -> {
+                    val sessionId = if (payload.isEmpty()) "s-no-repo" else "s-new"
+                    """{"sessionId":"$sessionId"}"""
+                }
+                else -> "{}"
+            }
+            respond(
+                content = """{"type":"server-response","rpcId":"$rpcId","result":{"ok":true,"value":$value}}""",
+                status = HttpStatusCode.OK,
+                headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
+            )
+        }
+        val client = HttpClient(engine) {
+            install(ContentNegotiation) { json(json) }
+        }
+        return DshApiClient(client, json, downlinkFactory = unusedDshDownlinks())
     }
 
 

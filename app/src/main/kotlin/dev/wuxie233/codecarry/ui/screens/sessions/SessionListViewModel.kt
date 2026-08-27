@@ -11,13 +11,17 @@ import dev.wuxie233.codecarry.data.api.FileNode
 import dev.wuxie233.codecarry.data.api.OpenCodeApi
 import dev.wuxie233.codecarry.data.api.ServerConnection
 import dev.wuxie233.codecarry.data.dsh.DshApiClient
+import dev.wuxie233.codecarry.data.dsh.DshConnectWorkspaceResult
 import dev.wuxie233.codecarry.data.dsh.DshConnection
 import dev.wuxie233.codecarry.data.dsh.DshConnectionManager
 import dev.wuxie233.codecarry.data.dsh.DshEventState
 import dev.wuxie233.codecarry.data.dsh.DshGenerationStatus
+import dev.wuxie233.codecarry.data.dsh.connectDshConversation
+import dev.wuxie233.codecarry.data.dsh.directoryParentPath
 import dev.wuxie233.codecarry.data.dsh.mapDshApproval
 import dev.wuxie233.codecarry.data.dsh.mapDshEventStateToSessions
 import dev.wuxie233.codecarry.data.dsh.mapDshQuestion
+import dev.wuxie233.codecarry.data.dsh.visibleDirectoryEntries
 import dev.wuxie233.codecarry.data.diagnostics.AppEventBreadcrumb
 import dev.wuxie233.codecarry.data.diagnostics.AppEventDiagnosticsGenerator
 import dev.wuxie233.codecarry.data.diagnostics.AppEventName
@@ -125,6 +129,7 @@ data class SessionListUiState(
     val supportsDirectoryCreation: Boolean = true,
     val supportsMcp: Boolean = true,
     val supportsRehome: Boolean = false,
+    val supportsNoRepoCreate: Boolean = false,
     val isDsh: Boolean = false,
 )
 
@@ -670,11 +675,12 @@ class SessionListViewModel @Inject constructor(
             supportsSessionRestore = supportsSessionRestore,
             supportsSessionDelete = supportsSessionDelete,
             supportsSessionCreate = true,
-            supportsProjectRegister = !isDsh,
+            supportsProjectRegister = true,
             supportsDirectorySearch = !isDsh,
             supportsDirectoryCreation = true,
             supportsMcp = !isDsh,
             supportsRehome = isDsh,
+            supportsNoRepoCreate = isDsh,
             isDsh = isDsh,
         )
     }.stateIn(
@@ -806,23 +812,13 @@ class SessionListViewModel @Inject constructor(
                 _filter.value = SessionFilter.ALL
                 _scopeOverride.value = SessionScope.INBOX
                 if (isDsh) {
-                    val created = dshApi.sessionCreate(dshConn, cwd = directory)
-                    val createdDirectory = directory ?: dshConnectionManager.states.value[serverId]?.describe?.cwd.orEmpty()
-                    val normalizedSession = Session(
-                        id = created.sessionId,
-                        directory = createdDirectory,
-                        time = Session.Time(
-                            created = System.currentTimeMillis(),
-                            updated = System.currentTimeMillis(),
-                        ),
-                    )
-                    eventReducer.setSessions(serverId, listOf(normalizedSession))
+                    val connected = connectDshSession(directory)
                     persistCreateNewEvent(
                         name = AppEventName.CREATE_NEW_SUCCESS,
-                        directory = normalizedSession.directory,
-                        sessionId = normalizedSession.id,
+                        directory = connected.directory,
+                        sessionId = connected.sessionId,
                     )
-                    _navigateToSession.tryEmit(normalizedSession)
+                    _navigateToSession.tryEmit(connected.toSession())
                     return@launch
                 }
                 val session = api.createSession(conn, directory = directory)
@@ -974,6 +970,10 @@ class SessionListViewModel @Inject constructor(
     }
 
     fun pinDirectory(dir: String) {
+        if (isDsh) {
+            createNewSession(directory = dir)
+            return
+        }
         viewModelScope.launch {
             val normalizedDirectory = normalizeDirectory(dir)
             val refreshTargets = pinDirectoryRefreshTargets(
@@ -986,6 +986,10 @@ class SessionListViewModel @Inject constructor(
                 loadSessions()
             }
         }
+    }
+
+    fun createNoRepoSession() {
+        createNewSession(directory = null)
     }
 
     fun toggleCollapsed(dir: String) {
@@ -1151,7 +1155,8 @@ class SessionListViewModel @Inject constructor(
     suspend fun listDirectories(directory: String): List<FileNode> {
         return try {
             if (isDsh) {
-                return dshApi.hostListDirectory(dshConn, directory).entries.map { entry ->
+                val listing = dshApi.hostListDirectory(dshConn, directory)
+                return visibleDirectoryEntries(listing).map { entry ->
                     FileNode(name = entry.name, path = entry.path, type = "directory", absolute = entry.path)
                 }
             }
@@ -1164,23 +1169,67 @@ class SessionListViewModel @Inject constructor(
     }
 
     suspend fun browseDirectories(directory: String? = null): ServerDirectoryListing {
-        val path = directory ?: getHomeDirectory()
-        return ServerDirectoryListing(
-            path = path,
-            parent = run {
-                val trimmed = path.trimEnd('/')
-                when {
-                    trimmed.isEmpty() || trimmed == "/" -> null
-                    !trimmed.contains('/') -> "/"
-                    else -> trimmed.substringBeforeLast('/').ifBlank { "/" }
-                }
-            },
-            entries = listDirectories(path).map { node ->
-                ServerDirectoryEntry(
-                    name = node.name,
-                    path = node.absolute ?: "${path.trimEnd('/')}/${node.name}",
+        return try {
+            if (isDsh) {
+                val listing = dshApi.hostListDirectory(dshConn, directory)
+                if (listing.home.isNotBlank()) _homeDir.value = listing.home
+                return ServerDirectoryListing(
+                    path = listing.path,
+                    parent = directoryParentPath(listing.path, listing.crumbs),
+                    entries = visibleDirectoryEntries(listing).map { entry ->
+                        ServerDirectoryEntry(name = entry.name, path = entry.path)
+                    },
+                    truncated = listing.truncated,
                 )
-            },
+            }
+            val path = directory ?: getHomeDirectory()
+            ServerDirectoryListing(
+                path = path,
+                parent = directoryParentPath(path),
+                entries = listDirectories(path).map { node ->
+                    ServerDirectoryEntry(
+                        name = node.name,
+                        path = node.absolute ?: "${path.trimEnd('/')}/${node.name}",
+                    )
+                },
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to browse directory: $directory", e)
+            ServerDirectoryListing(path = directory ?: "/", parent = directoryParentPath(directory ?: "/"), entries = emptyList())
+        }
+    }
+
+    private suspend fun connectDshSession(directory: String?): DshConnectWorkspaceResult {
+        val describe = dshConnectionManager.states.value[serverId]?.describe
+        val noRepoDirectory = describe?.cwd?.takeIf { it.isNotBlank() }.orEmpty()
+        val connected = connectDshConversation(
+            client = dshApi,
+            connection = dshConn,
+            state = dshReducer.state.value,
+            path = directory?.takeIf { it.isNotBlank() },
+            noRepoDirectory = noRepoDirectory,
+        )
+        connected.workspace?.let(dshReducer::applyWorkspace)
+        val now = System.currentTimeMillis()
+        eventReducer.setSessions(
+            serverId,
+            listOf(
+                Session(
+                    id = connected.sessionId,
+                    directory = connected.directory,
+                    time = Session.Time(created = now, updated = now),
+                ),
+            ),
+        )
+        return connected
+    }
+
+    private fun DshConnectWorkspaceResult.toSession(): Session {
+        val now = System.currentTimeMillis()
+        return Session(
+            id = sessionId,
+            directory = directory,
+            time = Session.Time(created = now, updated = now),
         )
     }
 

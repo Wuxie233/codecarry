@@ -272,6 +272,10 @@ class DshEventReducer(
         }
     }
 
+    fun applyWorkspace(view: DshWorkspaceView) {
+        _state.update { it.withWorkspace(view) }
+    }
+
     private fun DshEventState.updateSession(
         sessionId: String,
         transform: (DshSessionSnapshot) -> DshSessionSnapshot,

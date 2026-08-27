@@ -681,9 +681,15 @@ fun SessionListScreen(
         OpenProjectDialog(
             viewModel = viewModel,
             projects = uiState.projects,
+            allowNoRepo = uiState.supportsNoRepoCreate,
             onSelect = { directory ->
                 showOpenProject = false
-                viewModel.pinDirectory(directory)
+                if (uiState.isDsh) {
+                    if (directory.isBlank()) viewModel.createNoRepoSession()
+                    else viewModel.createNewSession(directory = directory)
+                } else {
+                    viewModel.pinDirectory(directory)
+                }
             },
             onDismiss = { showOpenProject = false }
         )
@@ -796,6 +802,7 @@ fun SessionListScreen(
         OpenProjectDialog(
             viewModel = viewModel,
             projects = uiState.projects,
+            allowNoRepo = false,
             onSelect = { directory ->
                 showRehomeDialog = false
                 viewModel.rehomeSession(rehomeSessionId, directory)
@@ -1080,7 +1087,8 @@ private fun OpenProjectDialog(
     viewModel: SessionListViewModel,
     projects: List<Project>,
     onSelect: (String) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    allowNoRepo: Boolean = false,
 ) {
     val isAmoled = isAmoledTheme()
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -1174,7 +1182,13 @@ private fun OpenProjectDialog(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text(
-                        text = stringResource(R.string.sessions_open_project),
+                        text = stringResource(
+                            if (allowNoRepo) {
+                                R.string.sessions_new_pick_directory
+                            } else {
+                                R.string.sessions_open_project
+                            },
+                        ),
                         style = MaterialTheme.typography.titleMedium
                     )
                     IconButton(onClick = onDismiss) {
@@ -1182,8 +1196,7 @@ private fun OpenProjectDialog(
                     }
                 }
 
-                // Search field (OpenCode only; Pi Stack has canonical browse but no search capability).
-                if (true) {
+                if (viewModel.uiState.value.supportsDirectorySearch) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1294,7 +1307,7 @@ private fun OpenProjectDialog(
                     color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
                 )
 
-                Box(modifier = Modifier.fillMaxSize()) {
+                Box(modifier = Modifier.weight(1f)) {
                     // Content
                     when {
                         isLoading -> {
@@ -1419,6 +1432,38 @@ private fun OpenProjectDialog(
                                 .padding(16.dp),
                         ) {
                             Icon(Icons.Default.CreateNewFolder, contentDescription = stringResource(R.string.sessions_create_folder))
+                        }
+                    }
+                }
+                if (allowNoRepo) {
+                    HorizontalDivider(
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onSelect("") }
+                            .padding(horizontal = 20.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.Chat,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = stringResource(R.string.sessions_no_repo),
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium,
+                            )
+                            Text(
+                                text = stringResource(R.string.sessions_no_repo_hint),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                            )
                         }
                     }
                 }
