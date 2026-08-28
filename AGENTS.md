@@ -17,11 +17,14 @@ fork based on OC Remote; the Android namespace/applicationId is
   `OpenCodeConnectionService` owns connection continuity, `EventReducer` owns
   the server-scoped live aggregate, and screen ViewModels derive UI state and
   coordinate user actions.
-- DSH uses `POST /api/<method>` plus downlink-only WebSockets
-  `/api/events.mux` and `/api/events.host`. `DshApiClient` owns unary RPC and
-  respond, `DshConnectionManager` owns generation readiness and reconnect,
-  `DshEventReducer` owns mux/host aggregates. Ready only after `host.describe`
-  plus both sockets.
+- DSH uses Typert Remote: `POST /api/<namespace>/<method>` with
+  `{ type, rpcId, method, payload: { args } }`, plus one downlink WebSocket
+  `/api/remote.mux` with logical streams. `DshApiClient` owns unary RPC and
+  `$events/result`, `DshConnectionManager` owns generation readiness and
+  reconnect, `DshEventReducer` owns mux aggregates. Ready only after cookie
+  exchange, mux open, `$events` ready (`host.home`), `session/control` opening
+  baseline, and `workspace/follow` opening baseline. Contract:
+  `docs/specs/dsh-remote-auth-1.11.0.md`.
 - Compose screens own presentation. Keep navigation, transport, reducer, and
   backend-specific state outside reusable UI components.
 
@@ -82,38 +85,48 @@ fork based on OC Remote; the Android namespace/applicationId is
   than replacing it. On conflicts, the current live message/part state wins so
   a late REST response cannot roll back newer SSE deltas.
 - DSH is its own transport. Do not reuse OpenCode REST/SSE models. Unary
-  envelope is `{ rpcId, payload }`; mux/host frames are server-originated
-  `server-request` text. Client sends no application data on those sockets.
-  Reconnect reopens both sockets and refetches history. No SSE fallback.
+  envelope is `{ type, rpcId, method, payload: { args } }` on slash Remote
+  paths. Live state rides `/api/remote.mux` with logical `open`/`item`/`end`
+  streams. Reconnect reopens mux and re-follows `$events`, `session/control`,
+  and `workspace/follow`. Per-chat history uses `session/follow` plus
+  `session/page`. No SSE fallback. `host.describe`, `/api/events.mux`,
+  `/api/events.host`, `/api/respond`, and `workspace.list` are gone.
 - DSH `assistant/message` already embeds `tool-call` blocks. A later mux
   `tool/call` with the same `callId` must update that part, not append a
   second one, or Chat renders two identical Shell/MCP rows.
-- DSH connect is HTTP(S) only. Password is optional: stock DSH has no auth,
-  only Host plus `trustedHosts`. If `ServerConfig.password` is set, CodeCarry
-  sends HTTP Basic (`Authorization: Basic` of `:<password>`) on unary POST,
-  `/api/respond`, and mux/host WebSocket handshakes for a fronting proxy such
-  as dsh-auth. A passworded connection is treated as loopback because that
-  proxy rewrites Host to `127.0.0.1:18790`. Passwordless non-loopback URLs
-  still hide: `host.pickDirectory`, `host.openPath`, `credentials.*`,
-  `settings.openDocument`, `llm.discoverModels`,
-  `agentPreset.read/copy/openDocument/remove`. A 401 is `DshAuthRequiredException`.
-- Answer DSH `approval/requested` and `question/requested` on unary
-  `POST /api/respond` with the host `rpcId`. Question answers must echo each
-  question `id` and put custom text in `custom`, never in `selected`.
-  Single-select custom and selected labels are mutually exclusive. A rejected
-  receipt (`accepted: false`) must surface an error and unlock the card.
-  Pending requests survive screen collector timing and clear on disconnect or
-  resolved frames. DSH approval has no Always grant.
-- `session.prompt` mode is `queue` or `steer`. A sole text block starting with
-  `/` is a host slash command. DSH file mentions use `host.listDirectory`,
-  not OpenCode `@file` search. DSH has no shell/terminal.
+- DSH connect is HTTP(S) only. Latest DSH requires a process launch token:
+  `GET /?token=` mints an authority-bound Connection cookie. CodeCarry
+  accepts `ServerConfig.token` or `?token=` on the saved URL (strip the query
+  after save), follows the 303, and keeps the cookie in the in-memory
+  generation. Shared Ktor stays cookie-free; DSH attaches `Cookie` per
+  request. Optional `ServerConfig.password` remains HTTP Basic for a fronting
+  proxy such as dsh-auth. A passworded public host still GETs `/` so the
+  proxy can attach the current process token, and is treated as loopback
+  because that proxy rewrites Host to `127.0.0.1:18790`. Passwordless
+  non-loopback URLs still hide: `directoryPicker/pick`,
+  `session/openWorkspacePath`, `credentials.*`,
+  `settings/openSettingsDocument`, `llm/discoverModels`,
+  `agentPresets` read/copy/openDocument/remove. A 401 is
+  `DshAuthRequiredException`.
+- Answer DSH `approval/request` and `user-questions/request` waterfalls on
+  `POST /api/$events/result` with `{ args: { clientId, eventId, outcome } }`.
+  Question answers must echo each question `id` and put custom text in
+  `custom`, never in `selected`. Single-select custom and selected labels are
+  mutually exclusive. Approval outcome is `allowed-once` | `rejected` (map
+  Always to allowed-once). A rejected receipt must surface an error and
+  unlock the card. Pending requests survive screen collector timing and clear
+  on disconnect or resolved frames. DSH approval has no Always grant.
+- `session/prompt` mode is `queue` or `steer` and requires a client-minted
+  `requestId`. A sole text block starting with `/` is a host slash command.
+  DSH file mentions use `directoryPicker/list`, not OpenCode `@file` search.
+  DSH has no shell/terminal.
 - Remaining non-loopback DSH unary surfaces (workspace, skill, git, preset
   list/select, goal, automation, settings mutate, llm catalog, subagent,
   systemPrompt, directory browse) live under Server Settings via
   `DshHostSurfaceController`.
-- DSH Sessions + opens the in-app `host.listDirectory` browser, not the
-  loopback OS picker. Selecting a directory runs `workspace.create` then
-  reuses an unarchived blank member or `session.create(workspaceId)`. No Repo
+- DSH Sessions + opens the in-app `directoryPicker/list` browser, not the
+  loopback OS picker. Selecting a directory runs `workspace/create` then
+  reuses an unarchived blank member or `session/create(workspaceId)`. No Repo
   omits both `cwd` and `workspaceId`. Do not create with a bare `cwd`; that
   leaves the session Ungrouped. Planner: `DshConnectWorkspace.kt`.
 - Chat markdown has two render paths: normal markdown uses Compose in `ChatMarkdownRenderer.kt`; KaTeX/math markdown uses the WebView renderer in `MarkdownMessageRenderer.kt`. Keep code blocks, tables, display math, and reasoning/plain text with long unbreakable ASCII tokens independently horizontally scrollable; normal prose should still wrap to the bubble width.
@@ -132,7 +145,7 @@ fork based on OC Remote; the Android namespace/applicationId is
 - Parent/child topology must come from `EventReducer.serverSessionDetails[serverId]`, not from the global `sessions` list filtered by IDs; another server may reuse the same session ID with different metadata.
 - Pending OpenCode permissions and questions retain ownership in `EventReducer.permissionsByServer` and `questionsByServer`. Consumers and optimistic removals must select the active `serverId`; duplicate session or request IDs across servers must never share or clear pending state.
 - OpenCode recent work belongs inside the selected server's Sessions control surface and must be derived from that server's `serverSessions[serverId]`; do not place a cross-server recent-work feed on global Home.
-- Background OpenCode status continuity has two safeguards: the SSE read must use a finite timeout so silent half-open sockets enter the service reconnect loop, and `ProcessLifecycleOwner.ON_START` reconciles every connected OpenCode server from REST snapshots. Snapshot application must remain revision-safe, preserve newer live SSE events, and fail closed when a complete project-scope list cannot be discovered or reused. The same `ON_START` also merges OpenCode session lists, refreshes Ready DSH `workspace.list`/`session.list` catalogs, and asks an open `ChatViewModel` to merge only that session's history. A failed Ready DSH catalog refetch reconnects mux+host instead of leaving stale running flags.
+- Background OpenCode status continuity has two safeguards: the SSE read must use a finite timeout so silent half-open sockets enter the service reconnect loop, and `ProcessLifecycleOwner.ON_START` reconciles every connected OpenCode server from REST snapshots. Snapshot application must remain revision-safe, preserve newer live SSE events, and fail closed when a complete project-scope list cannot be discovered or reused. The same `ON_START` also merges OpenCode session lists, refreshes Ready DSH `session/list` plus the `workspace/follow` catalog, and asks an open `ChatViewModel` to merge only that session's history via `session/follow`/`session/page`. A failed Ready DSH catalog refetch reconnects `/api/remote.mux` instead of leaving stale running flags.
 - Native Chat layout now has focused boundaries: `ChatHeader.kt` owns compact/expanded context actions, `ChatResponseDock.kt` owns retry/permission/question placement above the primary composer, `ChatAdaptiveShell.kt` owns `WindowSizeClass` and safe-drawing layout, and `ChatFollowTailPolicy.kt` owns long-session follow-tail state. Keep backend callbacks and the single `LazyListState` scroll owner in `ChatScreen.kt`; do not reintroduce pending request cards in the timeline or hard-coded width breakpoints.
 - Chat timeline grammar is owned by `ChatMessageRowPlanner.kt`: assistant `Part.Reasoning` / `tool == "skill"` / other tools / leftover file-patch parts become independent Think, Skill, Tool, and Content rows. Assistant prose has no Response bubble chrome; user messages stay bubbles. `ChatProcessRows.kt` owns Think/Skill disclosure chrome. Spec: `docs/specs/chat-timeline-grammar.md`.
 - `SessionWorkspaceOverview.kt` and `SessionProjectsViewport.kt` share a centered 960dp content cap for the selected server's recent work, view controls, and project queue. Preserve `SessionListViewModel` as the server-scoped state authority when changing the visual hierarchy.
@@ -158,9 +171,9 @@ If generated Hilt/Kotlin caches fail, rerun the affected verification after
 
 - `app/src/main/kotlin/dev/wuxie233/codecarry/data/api/`: OpenCode wire APIs
   and DTOs.
-- `app/src/main/kotlin/dev/wuxie233/codecarry/data/dsh/`: DSH RPC, mux/host
-  downlinks, event reduce, chat fold, connect-workspace planner, and remaining
-  host unary surfaces.
+- `app/src/main/kotlin/dev/wuxie233/codecarry/data/dsh/`: DSH Remote RPC,
+  `/api/remote.mux` downlinks, event reduce, chat fold, connect-workspace
+  planner, and remaining host unary surfaces.
 - `app/src/main/kotlin/dev/wuxie233/codecarry/data/repository/`: persisted
   repositories and shared OpenCode event reduction.
 - `app/src/main/kotlin/dev/wuxie233/codecarry/domain/`: backend-neutral models

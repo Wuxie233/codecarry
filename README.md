@@ -87,7 +87,7 @@ CodeCarry is an independently maintained Android client that connects developers
 
 ### Connection
 - **Multi-server** — connect to multiple OpenCode and DSH servers
-- **DSH** — native sessions and chat over `/api` RPC plus mux/host WebSockets; remaining host surfaces live under Server Settings
+- **DSH** — native sessions and chat over slash Remote RPC plus one `/api/remote.mux` WebSocket; remaining host surfaces live under Server Settings
 - **DSH new conversation** — Sessions + browses the host filesystem, registers the chosen directory as a workspace, reuses a blank session when one already belongs there, or starts No Repo without a project folder
 - **Local runtime via Termux** — set up and run OpenCode directly on-device from the Home screen (setup/start/stop/sessions)
 - **Local runtime launch options** — configure LAN binding (`0.0.0.0`), optional server username/password auth, background launch mode, auto-start (background-only), startup timeout, and proxy/`NO_PROXY` from the app
@@ -116,7 +116,7 @@ opencode serve --port 4096 --hostname 0.0.0.0
 
 ### DeepSeek Harness
 
-Add a **DSH** server with an HTTP(S) URL (for example `http://192.168.1.8:3080`). There is no token field. Stock DSH has no password. If a fronting auth proxy such as dsh-auth is in the path, fill the optional DSH password; CodeCarry then sends HTTP Basic on unary POST and on the mux/host WebSocket handshakes. Passwordless LAN still needs the serving authority in `trustedHosts`, and loopback-locked methods stay hidden there. A passworded public host is treated like loopback when the proxy rewrites `Host` to `127.0.0.1:18790`.
+Add a **DSH** server with an HTTP(S) URL (for example `http://192.168.1.8:3080`). Paste the process launch token, or put `?token=` on the URL — CodeCarry exchanges it for a Connection cookie. Optional DSH password is only for a fronting auth proxy such as dsh-auth; CodeCarry then sends HTTP Basic plus the cookie. Passwordless LAN still needs the serving authority in `trustedHosts`, and loopback-locked methods stay hidden there. A passworded public host is treated like loopback when the proxy rewrites `Host` to `127.0.0.1:18790`.
 
 ## Building
 

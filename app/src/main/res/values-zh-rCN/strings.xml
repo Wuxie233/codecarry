@@ -110,9 +110,11 @@
     <string name="server_type_codex">Codex</string>
     <string name="server_url_example">例如：http://192.168.0.10:4096 或 https://my-server:443</string>
     <string name="server_dsh_url_hint">http://192.168.1.8:3080</string>
-    <string name="server_dsh_url_example">仅 HTTP(S)。密码可选，仅当前面有 dsh-auth 这类代理时需要。无密码的局域网需把权威加入 trustedHosts。</string>
+    <string name="server_dsh_url_example">仅 HTTP(S)。填写启动令牌，或在 URL 上带 ?token=。密码可选，仅当前面有 dsh-auth 这类代理时需要。无密码的局域网需把权威加入 trustedHosts。</string>
     <string name="server_dsh_password">DSH 密码</string>
-    <string name="server_dsh_password_hint">可选。仅当前面有鉴权代理时填写</string>
+    <string name="server_dsh_password_hint">可选。仅当前面有 dsh-auth 这类鉴权代理时填写</string>
+    <string name="server_dsh_token">启动令牌</string>
+    <string name="server_dsh_token_hint">来自 DSH 启动 URL 的 ?token=</string>
     <string name="dsh_auth_failed">DSH 鉴权失败</string>
     <string name="server_codex_url_hint">wss://codex.example.com</string>
     <string name="server_codex_url_example">远程连接请使用 wss://；ws:// 仅限环回地址</string>
