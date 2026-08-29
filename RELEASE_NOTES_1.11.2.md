@@ -16,7 +16,8 @@ Fix chat history failing with `bad-request: throughSeq must be an integer greate
 
 If the installer reports a parse error, the download is truncated — verify what landed on the device:
 
-- Size and SHA256 are published on the release page of each version.
+- Size: exactly `7,285,727` bytes (≈6.95 MB)
+- SHA256: `a058952f98dfb87e69e5430f35d7b840c6f9a7165672e164ea3e7cf4bf7789de`
 
 ## Metadata
 
