@@ -255,7 +255,7 @@ class DshApiClient(
         sessionId: String,
         beforeSeq: Long? = null,
         maxMessages: Int? = null,
-        throughSeq: Long = Long.MAX_VALUE,
+        throughSeq: Long = DshRpc.THROUGH_SEQ_LATEST,
     ): DshSessionHistoryValue = sessionPage(connection, sessionId, throughSeq, beforeSeq, maxMessages)
         .toHistory()
 

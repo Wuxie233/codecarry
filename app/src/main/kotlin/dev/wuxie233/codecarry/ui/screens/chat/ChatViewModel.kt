@@ -22,6 +22,7 @@ import dev.wuxie233.codecarry.data.api.ModelLimit
 import dev.wuxie233.codecarry.data.api.toPermissionAsked
 import dev.wuxie233.codecarry.data.api.ServerConnection
 import dev.wuxie233.codecarry.data.dsh.DshApiClient
+import dev.wuxie233.codecarry.data.dsh.DshRpc
 import dev.wuxie233.codecarry.data.dsh.DshConnection
 import dev.wuxie233.codecarry.data.dsh.DshConnectionManager
 import dev.wuxie233.codecarry.data.dsh.DshEventState
@@ -687,7 +688,7 @@ class ChatViewModel @Inject constructor(
     private suspend fun loadDshHistory(beforeSeq: Long? = null, silent: Boolean = false) {
         try {
             val throughSeq = dshReducer.state.value.sessions[sessionId]?.lastSeq?.takeIf { it >= 0 }
-                ?: Long.MAX_VALUE
+                ?: DshRpc.THROUGH_SEQ_LATEST
             val history = dshApi.sessionHistory(
                 connection = dshConn,
                 sessionId = sessionId,

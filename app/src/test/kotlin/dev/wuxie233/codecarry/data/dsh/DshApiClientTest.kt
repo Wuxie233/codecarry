@@ -284,7 +284,7 @@ class DshApiClientTest {
             val envelope = json.parseToJsonElement((request.body as TextContent).text).jsonObject
             val requestArgs = envelope.getValue("payload").jsonObject.getValue("args").jsonObject.getValue("request").jsonObject
             assertEquals("session", requestArgs.getValue("address").jsonObject.getValue("kind").jsonPrimitive.content)
-            assertEquals(9223372036854775807L, requestArgs.getValue("throughSeq").jsonPrimitive.content.toLong())
+            assertEquals(9_007_199_254_740_991L, requestArgs.getValue("throughSeq").jsonPrimitive.content.toLong())
             """{"type":"server-response","rpcId":"${envelope.getValue("rpcId").jsonPrimitive.content}","result":{"ok":true,"value":{"records":[{"type":"event","event":{"type":"user/message","seq":1,"time":1}},{"type":"chunks","event":{"type":"chunkrow/delta","seq":2,"time":2}}],"hasMore":false}}}"""
         }
         val history = client.sessionHistory(connection, sessionId = "s1")

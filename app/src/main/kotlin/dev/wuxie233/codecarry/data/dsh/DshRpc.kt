@@ -37,6 +37,13 @@ object DshRpc {
 
     fun mintRpcId(): String = UUID.randomUUID().toString()
 
+    /**
+     * "Newest cut" sentinel for `session/page` throughSeq. The Host validates
+     * it as a JSON integer, so it must stay inside the JS safe-integer range
+     * (Long.MAX_VALUE fails with `bad-request: throughSeq must be an integer`).
+     */
+    const val THROUGH_SEQ_LATEST: Long = 9_007_199_254_740_991L
+
     fun mintRequestId(): String = mintRpcId()
 
     fun mintStreamId(): String = mintRpcId()
