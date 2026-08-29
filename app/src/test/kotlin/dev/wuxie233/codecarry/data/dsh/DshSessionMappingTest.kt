@@ -46,17 +46,16 @@ class DshSessionMappingTest {
     }
 
     @Test
-    fun `approval maps host rpcId as permission request id`() {
+    fun `approval maps waterfall eventId as permission request id`() {
         val asked = mapDshApproval(
             DshPendingApproval(
-                rpcId = "host-rpc",
+                eventId = "event-1",
                 sessionId = "s1",
-                approvalId = "a1",
                 toolName = "bash",
                 reason = "sandbox",
             ),
         )
-        assertEquals("host-rpc", asked.id)
+        assertEquals("event-1", asked.id)
         assertEquals("bash", asked.permission)
     }
 

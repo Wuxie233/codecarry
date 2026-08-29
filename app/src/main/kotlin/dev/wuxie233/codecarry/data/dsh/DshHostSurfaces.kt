@@ -13,18 +13,18 @@ data class DshHostSurfaceCatalog(
 ) {
     fun can(method: String): Boolean = method in availableMethods
 
-    val canBrowseHost: Boolean get() = can("host.listDirectory") && can("host.createDirectory")
-    val canManageWorkspaces: Boolean get() = can("workspace.list") && can("workspace.create")
-    val canListSkills: Boolean get() = can("skill.catalog") || can("skill.list")
-    val canDescribeGit: Boolean get() = can("git.describe")
-    val canListPresets: Boolean get() = can("agentPreset.list")
-    val canSelectPreset: Boolean get() = can("agentPreset.select")
-    val canManageGoals: Boolean get() = can("goal.create")
-    val canManageAutomation: Boolean get() = can("automation.list")
-    val canMutateSettings: Boolean get() = can("settings.describe") && can("settings.mutate")
-    val canListLlm: Boolean get() = can("llm.providers") && can("llm.models")
-    val canListSubagents: Boolean get() = can("subagent.list")
-    val canListSystemPrompt: Boolean get() = can("systemPrompt.list")
+    val canBrowseHost: Boolean get() = can("directoryPicker/list") && can("directoryPicker/createDirectory")
+    val canManageWorkspaces: Boolean get() = can("workspace/create")
+    val canListSkills: Boolean get() = can("skills/list")
+    val canDescribeGit: Boolean get() = can("git/describe")
+    val canListPresets: Boolean get() = can("agentPresets/list")
+    val canSelectPreset: Boolean get() = can("agentPresets/select")
+    val canManageGoals: Boolean get() = can("goals/create")
+    val canManageAutomation: Boolean get() = can("automation/list")
+    val canMutateSettings: Boolean get() = can("settings/describe") && can("settings/mutate")
+    val canListLlm: Boolean get() = can("llm/listProviders") && can("session/modelCatalog")
+    val canListSubagents: Boolean get() = can("subagents/list")
+    val canListSystemPrompt: Boolean get() = can("systemPrompt/list")
 }
 
 fun dshHostSurfaceCatalog(connection: DshConnection): DshHostSurfaceCatalog {
@@ -43,138 +43,128 @@ class DshHostSurfaceController(
 ) {
     fun catalog(): DshHostSurfaceCatalog = catalog
 
-    suspend fun listWorkspaces(): DshWorkspaceListValue {
-        requireMethod("workspace.list")
-        return client.workspaceList(connection)
-    }
-
     suspend fun createWorkspace(path: String): DshWorkspaceCreateValue {
-        requireMethod("workspace.create")
+        requireMethod("workspace/create")
         return client.workspaceCreate(connection, path)
     }
 
     suspend fun renameWorkspace(workspaceId: String, title: String): DshWorkspaceValue {
-        requireMethod("workspace.rename")
+        requireMethod("workspace/rename")
         return client.workspaceRename(connection, workspaceId, title)
     }
 
     suspend fun deleteWorkspace(workspaceId: String): DshDeletedValue {
-        requireMethod("workspace.delete")
+        requireMethod("workspace/delete")
         return client.workspaceDelete(connection, workspaceId)
     }
 
     suspend fun hideWorkspace(workspaceId: String): DshHiddenWorkspacesValue {
-        requireMethod("workspace.hide")
+        requireMethod("workspace/hide")
         return client.workspaceHide(connection, workspaceId)
     }
 
     suspend fun showWorkspace(workspaceId: String): DshHiddenWorkspacesValue {
-        requireMethod("workspace.show")
+        requireMethod("workspace/show")
         return client.workspaceShow(connection, workspaceId)
     }
 
     suspend fun addWorkspaceFolder(workspaceId: String, path: String): DshWorkspaceValue {
-        requireMethod("workspace.addFolder")
+        requireMethod("workspace/addFolder")
         return client.workspaceAddFolder(connection, workspaceId, path)
     }
 
     suspend fun removeWorkspaceFolder(workspaceId: String, path: String): DshWorkspaceValue {
-        requireMethod("workspace.removeFolder")
+        requireMethod("workspace/removeFolder")
         return client.workspaceRemoveFolder(connection, workspaceId, path)
     }
 
     suspend fun listDirectory(path: String? = null): DshDirectoryListing {
-        requireMethod("host.listDirectory")
+        requireMethod("directoryPicker/list")
         return client.hostListDirectory(connection, path)
     }
 
     suspend fun createDirectory(path: String, name: String): DshCreateDirectoryValue {
-        requireMethod("host.createDirectory")
+        requireMethod("directoryPicker/createDirectory")
         return client.hostCreateDirectory(connection, path, name)
     }
 
-    suspend fun skillCatalog(): DshSkillCatalogValue {
-        requireMethod("skill.catalog")
-        return client.skillCatalog(connection)
-    }
-
     suspend fun skillList(sessionId: String): DshSkillListValue {
-        requireMethod("skill.list")
+        requireMethod("skills/list")
         return client.skillList(connection, sessionId)
     }
 
     suspend fun gitDescribe(sessionId: String? = null, workspaceId: String? = null): DshSessionGitView {
-        requireMethod("git.describe")
+        requireMethod("git/describe")
         return client.gitDescribe(connection, sessionId, workspaceId)
     }
 
     suspend fun gitCheckout(sessionId: String, branch: String): DshSessionGitView {
-        requireMethod("git.checkout")
+        requireMethod("git/checkout")
         return client.gitCheckout(connection, sessionId, branch)
     }
 
     suspend fun gitCreateBranch(sessionId: String, branch: String): DshSessionGitView {
-        requireMethod("git.createBranch")
+        requireMethod("git/createBranch")
         return client.gitCreateBranch(connection, sessionId, branch)
     }
 
     suspend fun agentPresetList(): DshAgentPresetListValue {
-        requireMethod("agentPreset.list")
+        requireMethod("agentPresets/list")
         return client.agentPresetList(connection)
     }
 
     suspend fun agentPresetSelect(sessionId: String, agentPreset: String): DshAgentPresetSelectValue {
-        requireMethod("agentPreset.select")
+        requireMethod("agentPresets/select")
         return client.agentPresetSelect(connection, sessionId, agentPreset)
     }
 
     suspend fun goalCreate(sessionId: String, objective: String, maxGoalRounds: Int? = null): DshGoalRefValue {
-        requireMethod("goal.create")
+        requireMethod("goals/create")
         return client.goalCreate(connection, sessionId, objective, maxGoalRounds)
     }
 
     suspend fun goalPause(sessionId: String, ref: DshGoalRef): DshGoalRefValue {
-        requireMethod("goal.pause")
+        requireMethod("goals/pause")
         return client.goalPause(connection, sessionId, ref)
     }
 
     suspend fun goalResume(sessionId: String, ref: DshGoalRef): DshGoalRefValue {
-        requireMethod("goal.resume")
+        requireMethod("goals/resume")
         return client.goalResume(connection, sessionId, ref)
     }
 
     suspend fun goalComplete(sessionId: String, ref: DshGoalRef): DshGoalRefValue {
-        requireMethod("goal.complete")
+        requireMethod("goals/complete")
         return client.goalComplete(connection, sessionId, ref)
     }
 
     suspend fun goalClear(sessionId: String, ref: DshGoalRef): DshGoalClearedValue {
-        requireMethod("goal.clear")
+        requireMethod("goals/clear")
         return client.goalClear(connection, sessionId, ref)
     }
 
     suspend fun automationList(): DshAutomationListValue {
-        requireMethod("automation.list")
+        requireMethod("automation/list")
         return client.automationList(connection)
     }
 
     suspend fun automationCreate(payload: JsonObject): DshAutomationRuleValue {
-        requireMethod("automation.create")
+        requireMethod("automation/create")
         return client.automationCreate(connection, payload)
     }
 
     suspend fun automationSetEnabled(id: String, enabled: Boolean): DshAutomationRuleValue {
-        requireMethod("automation.setEnabled")
+        requireMethod("automation/setEnabled")
         return client.automationSetEnabled(connection, id, enabled)
     }
 
     suspend fun automationDelete(id: String): DshAutomationDeleteValue {
-        requireMethod("automation.delete")
+        requireMethod("automation/delete")
         return client.automationDelete(connection, id)
     }
 
     suspend fun settingsDescribe(): DshSettingsDescribeValue {
-        requireMethod("settings.describe")
+        requireMethod("settings/describe")
         return client.settingsDescribe(connection)
     }
 
@@ -183,7 +173,7 @@ class DshHostSurfaceController(
         ops: JsonArray,
         expectedRevision: Long? = null,
     ): DshSettingsNamespaceView {
-        requireMethod("settings.mutate")
+        requireMethod("settings/mutate")
         return client.settingsMutate(connection, ns, ops, expectedRevision)
     }
 
@@ -192,7 +182,7 @@ class DshHostSurfaceController(
         patch: JsonObject,
         expectedRevision: Long? = null,
     ): DshSettingsNamespaceView {
-        requireMethod("settings.update")
+        requireMethod("settings/update")
         return client.settingsUpdate(connection, ns, patch, expectedRevision)
     }
 
@@ -201,22 +191,22 @@ class DshHostSurfaceController(
         section: JsonObject,
         expectedRevision: Long? = null,
     ): DshSettingsNamespaceView {
-        requireMethod("settings.replace")
+        requireMethod("settings/replace")
         return client.settingsReplace(connection, ns, section, expectedRevision)
     }
 
     suspend fun llmProviders(): DshLlmProvidersValue {
-        requireMethod("llm.providers")
+        requireMethod("llm/listProviders")
         return client.llmProviders(connection)
     }
 
     suspend fun llmModels(): DshLlmModelsValue {
-        requireMethod("llm.models")
+        requireMethod("session/modelCatalog")
         return client.llmModels(connection)
     }
 
     suspend fun subagentList(parentSessionId: String): DshSubagentCatalog {
-        requireMethod("subagent.list")
+        requireMethod("subagents/list")
         return client.subagentList(connection, parentSessionId)
     }
 
@@ -226,7 +216,7 @@ class DshHostSurfaceController(
         text: String,
         clientTimeZone: String? = null,
     ): DshSubagentPromptReceipt {
-        requireMethod("subagent.prompt")
+        requireMethod("subagents/prompt")
         return client.subagentPrompt(
             connection,
             parentSessionId,
@@ -242,12 +232,12 @@ class DshHostSurfaceController(
     }
 
     suspend fun subagentInterrupt(parentSessionId: String, childSessionId: String): DshAcceptedValue {
-        requireMethod("subagent.interrupt")
+        requireMethod("subagents/interruptByParent")
         return client.subagentInterrupt(connection, parentSessionId, childSessionId)
     }
 
     suspend fun systemPromptList(): DshSystemPromptListValue {
-        requireMethod("systemPrompt.list")
+        requireMethod("systemPrompt/list")
         return client.systemPromptList(connection)
     }
 

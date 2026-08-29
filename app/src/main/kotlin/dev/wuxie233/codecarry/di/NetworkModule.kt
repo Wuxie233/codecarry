@@ -68,6 +68,7 @@ object NetworkModule {
     @Provides
     @Singleton
     fun provideHttpClient(json: Json): HttpClient = HttpClient(OkHttp) {
+        followRedirects = false
         install(ContentNegotiation) {
             json(json)
         }
@@ -94,6 +95,10 @@ object NetworkModule {
             config {
                 // OkHttp-specific: disable response body buffering for streaming
                 retryOnConnectionFailure(true)
+                // DSH cookie exchange is a 303 + Set-Cookie. Engine-level
+                // redirects would drop that cookie because this client has no jar.
+                followRedirects(false)
+                followSslRedirects(false)
             }
         }
         

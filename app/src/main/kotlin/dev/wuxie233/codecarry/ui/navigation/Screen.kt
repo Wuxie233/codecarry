@@ -34,6 +34,7 @@ sealed class Screen(val route: String) {
             serverName: String,
             serverId: String,
             serverType: String = ServerType.OPENCODE.name,
+            token: String = "",
         ): String {
             val encodedUrl = URLEncoder.encode(serverUrl, "UTF-8")
             val encodedUsername = URLEncoder.encode(username, "UTF-8")
@@ -41,7 +42,8 @@ sealed class Screen(val route: String) {
             val encodedName = URLEncoder.encode(serverName, "UTF-8")
             val encodedServerId = URLEncoder.encode(serverId, "UTF-8")
             val encodedServerType = URLEncoder.encode(serverType, "UTF-8")
-            return "sessions?serverUrl=$encodedUrl&username=$encodedUsername&password=$encodedPassword&serverName=$encodedName&serverId=$encodedServerId&serverType=$encodedServerType"
+            val encodedToken = URLEncoder.encode(token, "UTF-8")
+            return "sessions?serverUrl=$encodedUrl&username=$encodedUsername&password=$encodedPassword&serverName=$encodedName&serverId=$encodedServerId&serverType=$encodedServerType&token=$encodedToken"
         }
     }
 
@@ -62,6 +64,7 @@ sealed class Screen(val route: String) {
             openTerminal: Boolean = false,
             directory: String = "",
             serverType: String = "OPENCODE",
+            token: String = "",
         ): String {
             val encodedUrl = URLEncoder.encode(serverUrl, "UTF-8")
             val encodedUsername = URLEncoder.encode(username, "UTF-8")
@@ -71,7 +74,8 @@ sealed class Screen(val route: String) {
             val encodedSessionId = URLEncoder.encode(sessionId, "UTF-8")
             val encodedDirectory = URLEncoder.encode(directory, "UTF-8")
             val encodedServerType = URLEncoder.encode(serverType, "UTF-8")
-            return "chat?serverUrl=$encodedUrl&username=$encodedUsername&password=$encodedPassword&serverName=$encodedName&serverId=$encodedServerId&sessionId=$encodedSessionId&openTerminal=$openTerminal&directory=$encodedDirectory&serverType=$encodedServerType"
+            val encodedToken = URLEncoder.encode(token, "UTF-8")
+            return "chat?serverUrl=$encodedUrl&username=$encodedUsername&password=$encodedPassword&serverName=$encodedName&serverId=$encodedServerId&sessionId=$encodedSessionId&openTerminal=$openTerminal&directory=$encodedDirectory&serverType=$encodedServerType&token=$encodedToken"
         }
     }
 

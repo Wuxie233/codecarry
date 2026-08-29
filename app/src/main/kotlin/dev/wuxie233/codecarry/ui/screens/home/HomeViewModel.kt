@@ -520,7 +520,7 @@ class HomeViewModel @Inject constructor(
         }
 
         if (server.type == ServerType.DSH) {
-            dshConnectionManager.connect(server.id, DshConnection.from(server.url, server.password))
+            dshConnectionManager.connect(server.id, DshConnection.from(server.url, server.password, server.token))
             return
         }
 

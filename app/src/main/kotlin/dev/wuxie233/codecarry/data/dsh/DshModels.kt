@@ -70,7 +70,27 @@ data class DshSessionHistoryValue(
     val events: List<DshHistoryEntry> = emptyList(),
     val hasMore: Boolean = false,
     val projections: DshProjectionsBlock? = null,
+    val cursor: Long? = null,
 )
+
+@Serializable
+data class DshHistoryRecord(
+    val type: String,
+    val event: DshSessionEventDto,
+)
+
+@Serializable
+data class DshSessionPageValue(
+    val records: List<DshHistoryRecord> = emptyList(),
+    val hasMore: Boolean = false,
+)
+
+fun DshSessionPageValue.toHistory(projections: DshProjectionsBlock? = null): DshSessionHistoryValue =
+    DshSessionHistoryValue(
+        events = records.map { DshHistoryEntry(event = it.event) },
+        hasMore = hasMore,
+        projections = projections,
+    )
 
 @Serializable
 data class DshModelSelection(
@@ -116,8 +136,9 @@ data class DshModelCatalogFailure(
 
 @Serializable
 data class DshSessionModels(
-    val current: DshModelSelection,
-    val routable: Boolean,
+    /** Host catalog default; a session-scoped selection rides projections. */
+    val default: DshModelSelection,
+    val routableProviders: List<String> = emptyList(),
     val groups: List<DshModelProviderGroup> = emptyList(),
     val failures: List<DshModelCatalogFailure> = emptyList(),
 )
@@ -303,8 +324,8 @@ data class DshAgentPresetEntry(
 @Serializable
 data class DshAgentPresetListValue(
     val presets: List<DshAgentPresetEntry> = emptyList(),
-    val authorable: Boolean,
-    val hasDocument: Boolean,
+    val authorable: Boolean = false,
+    val hasDocument: Boolean = false,
 )
 
 @Serializable
@@ -435,7 +456,13 @@ data class DshConfigurableProviderView(
 
 @Serializable
 data class DshLlmProvidersValue(
-    val providers: List<DshConfigurableProviderView> = emptyList(),
+    val providers: List<DshLlmProviderInfo> = emptyList(),
+)
+
+@Serializable
+data class DshLlmProviderInfo(
+    val id: String,
+    val name: String,
 )
 
 @Serializable

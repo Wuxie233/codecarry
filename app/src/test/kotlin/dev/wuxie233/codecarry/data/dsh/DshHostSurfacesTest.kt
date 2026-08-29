@@ -34,16 +34,16 @@ class DshHostSurfacesTest {
             assertTrue(method, method in catalog.loopbackOnlyHidden)
         }
         listOf(
-            "workspace.list", "workspace.create", "skill.catalog", "git.describe",
-            "agentPreset.list", "agentPreset.select", "goal.create", "automation.list",
-            "settings.describe", "settings.mutate", "llm.providers", "llm.models",
-            "subagent.list", "systemPrompt.list", "host.listDirectory", "host.createDirectory",
+            "workspace/create", "skills/list", "git/describe",
+            "agentPresets/list", "agentPresets/select", "goals/create", "automation/list",
+            "settings/describe", "settings/mutate", "llm/listProviders", "session/modelCatalog",
+            "subagents/list", "systemPrompt/list", "directoryPicker/list", "directoryPicker/createDirectory",
         ).forEach { method -> assertTrue(method, catalog.can(method)) }
         assertTrue(catalog.canManageWorkspaces)
         assertTrue(catalog.canBrowseHost)
         assertTrue(catalog.canListLlm)
-        assertFalse(catalog.can("credentials.set"))
-        assertFalse(catalog.can("llm.discoverModels"))
+        assertFalse(catalog.can("credentials/set"))
+        assertFalse(catalog.can("llm/discoverModels"))
     }
 
     @Test
@@ -51,8 +51,8 @@ class DshHostSurfacesTest {
         val catalog = dshHostSurfaceCatalog(DshConnection.from("http://127.0.0.1:3080"))
         assertTrue(catalog.isLoopback)
         assertTrue(catalog.loopbackOnlyHidden.isEmpty())
-        assertTrue(catalog.can("agentPreset.read"))
-        assertTrue(catalog.can("settings.openDocument"))
+        assertTrue(catalog.can("agentPresets/read"))
+        assertTrue(catalog.can("settings/openSettingsDocument"))
     }
 
     @Test
@@ -60,9 +60,9 @@ class DshHostSurfacesTest {
         val catalog = dshHostSurfaceCatalog(DshConnection.from("https://dsh.wuxie233.com", "secret"))
         assertTrue(catalog.isLoopback)
         assertTrue(catalog.loopbackOnlyHidden.isEmpty())
-        assertTrue(catalog.can("credentials.set"))
-        assertTrue(catalog.can("agentPreset.read"))
-        assertTrue(catalog.can("host.pickDirectory"))
+        assertTrue(catalog.can("credentials/set"))
+        assertTrue(catalog.can("agentPresets/read"))
+        assertTrue(catalog.can("directoryPicker/pick"))
     }
 
     @Test
@@ -75,11 +75,9 @@ class DshHostSurfacesTest {
             ok(rpcId, method)
         }
 
-        assertEquals("w1", controller.listWorkspaces().items.single().workspaceId)
         assertTrue(controller.createWorkspace("/tmp/project").created)
         assertEquals("/tmp", controller.listDirectory().path)
         assertEquals("/tmp/new", controller.createDirectory("/tmp", "new").path)
-        assertEquals("commit-helper", controller.skillCatalog().skills.single().name)
         assertEquals("main", controller.gitDescribe().currentBranch)
         assertEquals("coder", controller.agentPresetList().presets.single().id)
         assertEquals("coder", controller.agentPresetSelect("s1", "coder").agentPreset)
@@ -98,22 +96,26 @@ class DshHostSurfacesTest {
             expectedRevision = 3,
         )
         assertEquals(4L, mutated.revision)
-        assertEquals("deepseek", controller.llmProviders().providers.single().provider)
+        assertEquals("deepseek-official", controller.llmProviders().providers.single().id)
         assertEquals("v3", controller.llmModels().groups.single().models.single().id)
         assertEquals("child-1", controller.subagentList("s1").entries.single().id)
         assertEquals("m-1", controller.subagentPrompt("s1", "child-1", "continue").messageId)
         assertTrue(controller.subagentInterrupt("s1", "child-1").accepted)
         assertEquals("harness:identity", controller.systemPromptList().sections.single().name)
 
-        assertTrue(captured.containsAll(listOf(
-            "workspace.list", "workspace.create", "host.listDirectory", "host.createDirectory",
-            "skill.catalog", "git.describe", "agentPreset.list", "agentPreset.select",
-            "goal.create", "automation.list", "settings.describe", "settings.mutate",
-            "llm.providers", "llm.models", "subagent.list", "subagent.prompt",
-            "subagent.interrupt", "systemPrompt.list",
-        )))
-        assertFalse(captured.contains("llm.discoverModels"))
-        assertFalse(captured.contains("credentials.describe"))
+        assertTrue(
+            captured.containsAll(
+                listOf(
+                    "workspace/create", "directoryPicker/list", "directoryPicker/createDirectory",
+                    "git/describe", "agentPresets/list", "agentPresets/select",
+                    "goals/create", "automation/list", "settings/describe", "settings/mutate",
+                    "llm/listProviders", "session/modelCatalog", "subagents/list", "subagents/prompt",
+                    "subagents/interruptByParent", "systemPrompt/list",
+                ),
+            ),
+        )
+        assertFalse(captured.contains("llm/discoverModels"))
+        assertFalse(captured.contains("credentials/describe"))
     }
 
     @Test
@@ -129,12 +131,12 @@ class DshHostSurfacesTest {
             downlinkFactory = unusedDownlinks(),
         )
         val controller = DshHostSurfaceController(client, connection)
-        assertFalse(controller.catalog().can("credentials.set"))
+        assertFalse(controller.catalog().can("credentials/set"))
         try {
-            client.call(connection, "credentials.set")
+            client.call(connection, "credentials/set")
             throw AssertionError("expected fence")
         } catch (error: DshLoopbackUnavailableException) {
-            assertEquals("credentials.set", error.method)
+            assertEquals("credentials/set", error.method)
         }
         assertTrue(captured.isEmpty())
     }
@@ -154,7 +156,7 @@ class DshHostSurfacesTest {
         val http = HttpClient(engine) {
             install(ContentNegotiation) { json(json) }
         }
-        val connection = DshConnection.from("http://192.168.1.8:3080")
+        val connection = DshConnection.from("http://127.0.0.1:3080")
         return DshHostSurfaceController(
             client = DshApiClient(http, json, downlinkFactory = unusedDownlinks()),
             connection = connection,
@@ -163,29 +165,27 @@ class DshHostSurfacesTest {
 
     private fun unusedDownlinks(): DshDownlinkFactory = object : DshDownlinkFactory {
         override suspend fun openMux(connection: DshConnection) = error("unused")
-        override suspend fun openHost(connection: DshConnection) = error("unused")
     }
 
     private fun ok(rpcId: String, method: String): String {
         val value = when (method) {
-            "workspace.list" -> """{"items":[{"workspaceId":"w1","path":"/tmp","folders":[],"title":"tmp","sessionIds":[],"createdAt":"t","updatedAt":"t"}],"archivedSessionIds":[],"hiddenWorkspaceIds":[]}"""
-            "workspace.create" -> """{"workspace":{"workspaceId":"w1","path":"/tmp/project","folders":[],"title":"project","sessionIds":[],"createdAt":"t","updatedAt":"t"},"created":true}"""
-            "host.listDirectory" -> """{"path":"/tmp","home":"/root","crumbs":[],"entries":[],"truncated":false}"""
-            "host.createDirectory" -> """{"path":"/tmp/new"}"""
-            "skill.catalog" -> """{"skills":[{"name":"commit-helper","description":"Git","modelInvocable":true,"userInvocable":true,"source":"bundled","provider":"fixture"}]}"""
-            "git.describe" -> """{"currentBranch":"main","detached":false,"worktreePath":"/tmp","isolated":false,"dirtyCount":0,"unpushedCount":0,"branches":[]}"""
-            "agentPreset.list" -> """{"presets":[{"id":"coder","trust":"system","isDefault":true}],"authorable":false,"hasDocument":false}"""
-            "agentPreset.select" -> """{"agentPreset":"coder"}"""
-            "goal.create" -> """{"ref":{"id":"g1","revision":1}}"""
-            "automation.list" -> """{"items":[{"id":"auto-1","name":"nightly","enabled":true,"task":"check","workspaceId":"w1","onOverlap":"skip","selector":{},"scheduledAt":"t","createdAt":"t","updatedAt":"t","state":"scheduled","nextAt":"t"}]}"""
-            "settings.describe" -> """{"writable":true,"hasDocument":false,"namespaces":[{"ns":"llm-deepseek","schema":{},"value":{},"applies":"live","secrets":[],"revision":3}]}"""
-            "settings.mutate" -> """{"ns":"llm-deepseek","schema":{},"value":{},"applies":"live","secrets":[],"revision":4}"""
-            "llm.providers" -> """{"providers":[{"provider":"deepseek","displayName":"DeepSeek","settingsNs":"llm-deepseek","settingsPath":[],"active":true}]}"""
-            "llm.models" -> """{"groups":[{"id":"deepseek","name":"DeepSeek","models":[{"id":"v3","name":"V3"}]}],"failures":[]}"""
-            "subagent.list" -> """{"entries":[{"kind":"child","id":"child-1","mode":"continuable","activity":"inactive","hasChildren":false,"label":"worker"}],"parentAvailable":true}"""
-            "subagent.prompt" -> """{"messageId":"m-1"}"""
-            "subagent.interrupt" -> """{"accepted":true}"""
-            "systemPrompt.list" -> """{"sections":[{"name":"harness:identity","order":0,"text":"hi","complete":false}]}"""
+            "workspace/create" -> """{"workspace":{"workspaceId":"w1","path":"/tmp/project","folders":[],"title":"project","sessionIds":[],"createdAt":"t","updatedAt":"t"},"created":true}"""
+            "directoryPicker/list" -> """{"path":"/tmp","home":"/root","crumbs":[],"entries":[],"truncated":false}"""
+            "directoryPicker/createDirectory" -> """{"path":"/tmp/new"}"""
+            "skills/list" -> """{"skills":[{"name":"commit-helper","description":"Git","modelInvocable":true}]}"""
+            "git/describe" -> """{"currentBranch":"main","detached":false,"worktreePath":"/tmp","isolated":false,"dirtyCount":0,"unpushedCount":0,"branches":[]}"""
+            "agentPresets/list" -> """{"presets":[{"id":"coder","trust":"system","isDefault":true}],"authorable":false}"""
+            "agentPresets/select" -> """"coder""""
+            "goals/create" -> """{"ref":{"id":"g1","revision":1}}"""
+            "automation/list" -> """{"items":[{"id":"auto-1","name":"nightly","enabled":true,"task":"check","workspaceId":"w1","onOverlap":"skip","selector":{},"scheduledAt":"t","createdAt":"t","updatedAt":"t","state":"scheduled","nextAt":"t"}]}"""
+            "settings/describe" -> """{"writable":true,"hasDocument":false,"namespaces":[{"ns":"llm-deepseek","schema":{},"value":{},"applies":"live","secrets":[],"revision":3}]}"""
+            "settings/mutate" -> """{"ns":"llm-deepseek","schema":{},"value":{},"applies":"live","secrets":[],"revision":4}"""
+            "llm/listProviders" -> """[{"id":"deepseek-official","name":"DeepSeek"}]"""
+            "session/modelCatalog" -> """{"default":{"provider":"deepseek-official","model":"deepseek-v4-flash"},"routableProviders":["deepseek-official"],"groups":[{"id":"deepseek-official","name":"DeepSeek","models":[{"id":"v3","name":"V3"}]}],"failures":[]}"""
+            "subagents/list" -> """{"entries":[{"kind":"child","id":"child-1","mode":"continuable","activity":"inactive","hasChildren":false,"label":"worker"}],"parentAvailable":true}"""
+            "subagents/prompt" -> """{"messageId":"m-1"}"""
+            "subagents/interruptByParent" -> """{"accepted":true}"""
+            "systemPrompt/list" -> """{"sections":[{"name":"harness:identity","order":0,"text":"hi","complete":false}]}"""
             else -> error(method)
         }
         return """{"type":"server-response","rpcId":"$rpcId","result":{"ok":true,"value":$value}}"""

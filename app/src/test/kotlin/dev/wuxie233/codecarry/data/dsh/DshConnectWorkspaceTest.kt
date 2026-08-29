@@ -88,8 +88,9 @@ class DshConnectWorkspaceTest {
             val method = envelope.getValue("method").jsonPrimitive.content
             val payload = envelope.getValue("payload").jsonObject
             when (method) {
-                "session.create" -> {
-                    assertTrue(payload.isEmpty())
+                "session/create" -> {
+                    val requestArgs = payload.getValue("args").jsonObject.getValue("request").jsonObject
+                    assertTrue(requestArgs.isEmpty())
                     """{"type":"server-response","rpcId":"$rpcId","result":{"ok":true,"value":{"sessionId":"s-no-repo"}}}"""
                 }
                 else -> error(method)
@@ -105,7 +106,7 @@ class DshConnectWorkspaceTest {
         assertEquals("s-no-repo", result.sessionId)
         assertEquals("/root/.dsh/no-repo", result.directory)
         assertFalse(result.reused)
-        assertEquals("/api/session.create", captured.single().url.encodedPath)
+        assertEquals("/api/session/create", captured.single().url.encodedPath)
     }
 
     @Test
@@ -119,13 +120,14 @@ class DshConnectWorkspaceTest {
             val payload = envelope.getValue("payload").jsonObject
             methods += method
             when (method) {
-                "workspace.create" -> {
-                    assertEquals("/work/new", payload.getValue("path").jsonPrimitive.content)
+                "workspace/create" -> {
+                    assertEquals("/work/new", payload.getValue("args").jsonObject.getValue("request").jsonObject.getValue("path").jsonPrimitive.content)
                     """{"type":"server-response","rpcId":"$rpcId","result":{"ok":true,"value":{"workspace":{"workspaceId":"w-new","path":"/work/new","folders":[],"title":"new","sessionIds":[],"createdAt":"t","updatedAt":"t"},"created":true}}}"""
                 }
-                "session.create" -> {
-                    assertEquals("w-new", payload.getValue("workspaceId").jsonPrimitive.content)
-                    assertFalse(payload.containsKey("cwd"))
+                "session/create" -> {
+                    val requestArgs = payload.getValue("args").jsonObject.getValue("request").jsonObject
+                    assertEquals("w-new", requestArgs.getValue("workspaceId").jsonPrimitive.content)
+                    assertFalse(requestArgs.containsKey("cwd"))
                     """{"type":"server-response","rpcId":"$rpcId","result":{"ok":true,"value":{"sessionId":"s-new"}}}"""
                 }
                 else -> error(method)
@@ -141,7 +143,7 @@ class DshConnectWorkspaceTest {
         assertEquals("s-new", result.sessionId)
         assertEquals("/work/new", result.directory)
         assertFalse(result.reused)
-        assertEquals(listOf("workspace.create", "session.create"), methods)
+        assertEquals(listOf("workspace/create", "session/create"), methods)
     }
 
     @Test
@@ -152,7 +154,7 @@ class DshConnectWorkspaceTest {
             val rpcId = envelope.getValue("rpcId").jsonPrimitive.content
             val method = envelope.getValue("method").jsonPrimitive.content
             when (method) {
-                "workspace.create" ->
+                "workspace/create" ->
                     """{"type":"server-response","rpcId":"$rpcId","result":{"ok":true,"value":{"workspace":{"workspaceId":"w1","path":"/work/a","folders":[],"title":"a","sessionIds":["blank"],"createdAt":"t","updatedAt":"t"},"created":false}}}"""
                 else -> error(method)
             }
@@ -171,12 +173,11 @@ class DshConnectWorkspaceTest {
         assertEquals("blank", result.sessionId)
         assertTrue(result.reused)
         assertEquals(1, captured.size)
-        assertEquals("/api/workspace.create", captured.single().url.encodedPath)
+        assertEquals("/api/workspace/create", captured.single().url.encodedPath)
     }
 
     private fun unusedDownlinks(): DshDownlinkFactory = object : DshDownlinkFactory {
         override suspend fun openMux(connection: DshConnection) = error("unused")
-        override suspend fun openHost(connection: DshConnection) = error("unused")
     }
 
     private fun api(

@@ -428,8 +428,9 @@ class SessionListViewModel @Inject constructor(
     }.getOrDefault(ServerType.OPENCODE)
     private val conn = ServerConnection.from(serverUrl, username, password.ifEmpty { null })
     val currentConnection: ServerConnection = conn
+    private val tokenArg: String = decodeRouteArg(savedStateHandle.get<String>("token") ?: "")
     private val isDsh: Boolean = serverType == ServerType.DSH
-    private val dshConn = DshConnection.from(serverUrl, password.ifEmpty { null })
+    private val dshConn = DshConnection.from(serverUrl, password.ifEmpty { null }, tokenArg.ifEmpty { null })
     private val dshReducer = dshConnectionManager.reducer(serverId)
 
     private val _error = MutableStateFlow<String?>(null)
@@ -734,8 +735,6 @@ class SessionListViewModel @Inject constructor(
             if (!isCreatingSession) _error.value = null
             try {
                 if (isDsh) {
-                    val workspaces = dshApi.workspaceList(dshConn)
-                    dshReducer.applyWorkspaceList(workspaces)
                     val sessions = dshApi.sessionList(dshConn)
                     dshReducer.applySessionList(sessions.items)
                     applyDshState(dshReducer.state.value)

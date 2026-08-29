@@ -245,7 +245,7 @@ fun DshHostSurfacesScreen(
             if (catalog?.canListLlm == true) {
                 DshSurfaceSection(stringResource(R.string.dsh_host_surfaces_models)) {
                     uiState.providers?.providers.orEmpty().forEach { provider ->
-                        Text(provider.displayName, style = MaterialTheme.typography.bodyMedium)
+                        Text(provider.name, style = MaterialTheme.typography.bodyMedium)
                     }
                     uiState.models?.groups.orEmpty().forEach { group ->
                         Text("${group.name}: ${group.models.joinToString { it.name }}", style = MaterialTheme.typography.bodySmall)

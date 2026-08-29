@@ -2,12 +2,12 @@ package dev.wuxie233.codecarry.data.dsh
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -15,18 +15,20 @@ class DshRpcTest {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
     @Test
-    fun `client-request envelope encodes type rpcId method payload`() {
+    fun `client-request envelope encodes type rpcId method and args payload`() {
         val request = DshClientRequest(
             rpcId = "rpc-1",
-            method = "host.describe",
-            payload = JsonObject(emptyMap()),
+            method = "session/list",
+            payload = DshRpc.argsPayload(DshRpc.listRequestArgs()),
         )
         val encoded = json.encodeToString(DshClientRequest.serializer(), request)
         val obj = json.parseToJsonElement(encoded).jsonObject
         assertEquals("client-request", obj.getValue("type").jsonPrimitive.content)
         assertEquals("rpc-1", obj.getValue("rpcId").jsonPrimitive.content)
-        assertEquals("host.describe", obj.getValue("method").jsonPrimitive.content)
-        assertEquals(DshRpc.unaryPath("host.describe"), "/api/host.describe")
+        assertEquals("session/list", obj.getValue("method").jsonPrimitive.content)
+        val args = obj.getValue("payload").jsonObject.getValue("args").jsonObject
+        assertTrue(args.containsKey("_request"))
+        assertEquals("/api/session/list", DshRpc.unaryPath("session/list"))
     }
 
     @Test
@@ -47,11 +49,11 @@ class DshRpcTest {
     }
 
     @Test
-    fun `loopback-only methods match the DSH Host pin and hide on LAN`() {
-        assertTrue(DshRpc.isLoopbackOnly("host.pickDirectory"))
-        assertTrue(DshRpc.isLoopbackOnly("credentials.set"))
-        assertFalse(DshRpc.isLoopbackOnly("host.describe"))
-        assertFalse(DshRpc.isLoopbackOnly("session.prompt"))
+    fun `loopback-only methods match the Connection pin and hide on LAN`() {
+        assertTrue(DshRpc.isLoopbackOnly("directoryPicker/pick"))
+        assertTrue(DshRpc.isLoopbackOnly("credentials/set"))
+        assertFalse(DshRpc.isLoopbackOnly("session/list"))
+        assertFalse(DshRpc.isLoopbackOnly("session/prompt"))
         assertTrue(isDshLoopbackHostname("127.0.0.1"))
         assertTrue(isDshLoopbackHostname("localhost"))
         assertTrue(isDshLoopbackHostname("[::1]"))
@@ -75,67 +77,88 @@ class DshRpcTest {
         assertEquals("Basic OnNlY3JldA==", authedPublic.basicAuthorization)
         val passwordlessPublic = DshConnection.from("https://dsh.wuxie233.com")
         assertFalse(passwordlessPublic.isLoopback)
-        assertFalse(DshMethods.availableOn(passwordlessPublic).contains("credentials.set"))
+        assertFalse(DshMethods.availableOn(passwordlessPublic).contains("credentials/set"))
     }
 
     @Test
-    fun `http urls map to downlink-only websocket paths`() {
+    fun `token query is stripped into the connection token`() {
+        val connection = DshConnection.from("http://127.0.0.1:18790/?token=abc123")
+        assertEquals("http://127.0.0.1:18790", connection.baseUrl)
+        assertEquals("abc123", connection.token)
+        val explicit = DshConnection.from("http://127.0.0.1:18790", token = "tok")
+        assertEquals("tok", explicit.token)
+        val otherQuery = stripTokenQuery("http://h:1/?a=1&token=x&b=2")
+        assertEquals("http://h:1/?a=1&b=2", otherQuery.first)
+        assertEquals("x", otherQuery.second)
+        val none = stripTokenQuery("http://h:1/path")
+        assertNull(none.second)
+    }
+
+    @Test
+    fun `index url carries the token and cookie pair keeps name equals value`() {
         assertEquals(
-            "ws://192.168.1.8:3080/api/events.mux",
-            dshHttpToWebSocketUrl("http://192.168.1.8:3080/", DshRpc.MUX_EVENTS_PATH),
+            "http://127.0.0.1:18790/?token=abc",
+            dshIndexUrl("http://127.0.0.1:18790", "abc"),
+        )
+        assertEquals("http://127.0.0.1:18790/", dshIndexUrl("http://127.0.0.1:18790", null))
+        assertEquals(
+            "dsh-auth-zz=v1.body",
+            dshCookiePair("dsh-auth-zz=v1.body; Max-Age=2592000; Path=/; HttpOnly; SameSite=Strict"),
+        )
+        assertNull(dshCookiePair("novalue"))
+    }
+
+    @Test
+    fun `http urls map to the single remote mux socket`() {
+        assertEquals(
+            "ws://192.168.1.8:3080/api/remote.mux",
+            dshHttpToWebSocketUrl("http://192.168.1.8:3080/", DshRpc.REMOTE_MUX_PATH),
         )
         assertEquals(
-            "wss://dsh.example/api/events.host",
-            dshHttpToWebSocketUrl("https://dsh.example", DshRpc.HOST_EVENTS_PATH),
+            "wss://dsh.example/api/remote.mux",
+            dshHttpToWebSocketUrl("https://dsh.example", DshRpc.REMOTE_MUX_PATH),
         )
     }
 
     @Test
-    fun `unary catalog includes session workspace goal automation and subagent`() {
+    fun `unary catalog uses slash remote endpoints`() {
         val methods = DshMethods.unary.toSet()
         listOf(
-            "session.list", "session.prompt", "session.updateQueue", "workspace.list",
-            "goal.create", "automation.list", "subagent.prompt", "skill.list", "git.describe",
-            "host.listDirectory", "host.createDirectory", "settings.mutate", "llm.providers",
-            "systemPrompt.list", "agentPreset.list", "agentPreset.select",
+            "session/list", "session/prompt", "session/page", "session/modelCatalog",
+            "session/updateQueue", "workspace/create",
+            "goals/create", "automation/list", "subagents/prompt", "skills/list", "git/describe",
+            "directoryPicker/list", "directoryPicker/createDirectory", "settings/mutate",
+            "llm/listProviders", "session/modelCatalog",
+            "systemPrompt/list", "agentPresets/list", "agentPresets/select", "\$events/result",
         ).forEach { method -> assertTrue(method in methods) }
         DshRpc.LOOPBACK_ONLY_METHODS.forEach { method -> assertTrue(method in methods) }
+        assertFalse("host.describe" in methods)
+        assertFalse("workspace.list" in methods)
+        assertFalse("skill.catalog" in methods)
     }
 
     @Test
-    fun `unknown mux type is preserved rather than dropped`() {
-        val payload = buildJsonObject {
-            put("type", "future/frame")
-            put("extra", "keep")
-        }
-        val frame = parseMuxFrame(payload)
-        assertTrue(frame is DshMuxFrame.Unknown)
-        assertEquals("future/frame", frame.type)
+    fun `generation ready requires mux events control and workspace`() {
+        val partial = DshGenerationState(
+            status = DshGenerationStatus.Ready,
+            describe = dshHostDescribeFromReady("/root"),
+            muxOpen = true,
+            eventsReady = true,
+            controlReady = true,
+        )
+        assertFalse(partial.isReady)
+        val ready = partial.copy(workspaceReady = true)
+        assertTrue(ready.isReady)
+        assertEquals("/root", ready.describe!!.home)
     }
 
     @Test
-    fun `host session-added and workspace frames parse`() {
-        val added = parseHostFrame(
-            buildJsonObject {
-                put("type", "host/session-added")
-                put("sessionId", "s1")
-                put("blank", true)
-                put("cwd", "/tmp")
-            },
-        ) as DshHostFrame.SessionAdded
-        assertEquals("s1", added.sessionId)
-        assertTrue(added.blank)
-        assertEquals("/tmp", added.cwd)
-
-        val changed = parseHostFrame(
-            buildJsonObject {
-                put("type", "host/workspace-changed")
-                put("workspace", buildJsonObject {
-                    put("workspaceId", "w1")
-                    put("title", "one")
-                })
-            },
-        ) as DshHostFrame.WorkspaceChanged
-        assertEquals("w1", changed.workspace.getValue("workspaceId").jsonPrimitive.content)
+    fun `args helpers wrap named wire args`() {
+        val wrapped = DshRpc.argsPayload(DshRpc.requestArgs(JsonObject(emptyMap())))
+        val args = wrapped.getValue("args").jsonObject
+        assertTrue(args.containsKey("request"))
+        val listArgs = DshRpc.argsPayload(DshRpc.listRequestArgs("cursor-1"))
+            .getValue("args").jsonObject.getValue("_request").jsonObject
+        assertEquals("cursor-1", listArgs.getValue("cursor").jsonPrimitive.content)
     }
 }

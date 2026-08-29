@@ -58,6 +58,7 @@ data class DshHostSurfacesUiState(
 class DshHostSurfacesViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val serverRepository: ServerRepository,
+    private val dshConnectionManager: dev.wuxie233.codecarry.data.dsh.DshConnectionManager,
     private val api: dev.wuxie233.codecarry.data.dsh.DshApiClient,
 ) : ViewModel() {
     private val serverId: String = URLDecoder.decode(
@@ -161,24 +162,42 @@ class DshHostSurfacesViewModel @Inject constructor(
             _uiState.value = DshHostSurfacesUiState(isDsh = false)
             return
         }
-        val connection = DshConnection.from(server.url, server.password)
+        val connection = DshConnection.from(server.url, server.password, server.token)
         val catalog = dshHostSurfaceCatalog(connection)
         controller = DshHostSurfaceController(api, connection, catalog)
         _uiState.value = DshHostSurfacesUiState(isDsh = true, catalog = catalog, isLoading = true)
         loadAll()
     }
 
+    /** The workspace catalog is the live `workspace/follow` baseline in the reducer. */
+    private fun workspaceCatalogFromReducer(): DshWorkspaceListValue {
+        val state = dshConnectionManager.reducer(serverId).state.value
+        val order = state.workspaceOrder.ifEmpty { state.workspaces.keys.toList() }
+        return DshWorkspaceListValue(
+            items = order.mapNotNull { id -> state.workspaces[id]?.let(::workspaceViewOf) },
+            archivedSessionIds = state.archivedSessionIds.toList(),
+            hiddenWorkspaceIds = state.hiddenWorkspaceIds.toList(),
+        )
+    }
+
+    private fun workspaceViewOf(obj: kotlinx.serialization.json.JsonObject): dev.wuxie233.codecarry.data.dsh.DshWorkspaceView? =
+        runCatching {
+            Json.decodeFromJsonElement(
+                dev.wuxie233.codecarry.data.dsh.DshWorkspaceView.serializer(),
+                obj,
+            )
+        }.getOrNull()
+
     private suspend fun loadAll() {
         val host = controller ?: return
         val catalog = host.catalog()
         _uiState.update { it.copy(isLoading = true, error = null) }
         runCatching {
-            val workspaces = if (catalog.canManageWorkspaces) host.listWorkspaces() else null
+            val workspaces = workspaceCatalogFromReducer().takeIf { it.items.isNotEmpty() }
             val directory = if (catalog.canBrowseHost) host.listDirectory() else null
-            val skills = if (catalog.can("skill.catalog")) host.skillCatalog() else null
-            val git = if (catalog.canDescribeGit) {
-                val workspaceId = workspaces?.items?.firstOrNull()?.workspaceId
-                val sessionId = workspaces?.items?.firstOrNull()?.sessionIds?.firstOrNull()
+            val git = if (catalog.canDescribeGit && workspaces != null) {
+                val workspaceId = workspaces.items.firstOrNull()?.workspaceId
+                val sessionId = workspaces.items.firstOrNull()?.sessionIds?.firstOrNull()
                 if (workspaceId != null || sessionId != null) {
                     runCatching { host.gitDescribe(sessionId = sessionId, workspaceId = workspaceId) }.getOrNull()
                 } else {
@@ -189,9 +208,9 @@ class DshHostSurfacesViewModel @Inject constructor(
             }
             val presets = if (catalog.canListPresets) host.agentPresetList() else null
             val automation = if (catalog.canManageAutomation) host.automationList() else null
-            val settings = if (catalog.can("settings.describe")) host.settingsDescribe() else null
-            val providers = if (catalog.can("llm.providers")) host.llmProviders() else null
-            val models = if (catalog.can("llm.models")) host.llmModels() else null
+            val settings = if (catalog.can("settings/describe")) host.settingsDescribe() else null
+            val providers = if (catalog.can("llm/listProviders")) host.llmProviders() else null
+            val models = if (catalog.can("session/modelCatalog")) host.llmModels() else null
             val systemPrompt = if (catalog.canListSystemPrompt) host.systemPromptList() else null
             DshHostSurfacesUiState(
                 isDsh = true,
@@ -199,7 +218,7 @@ class DshHostSurfacesViewModel @Inject constructor(
                 isLoading = false,
                 workspaces = workspaces,
                 directory = directory,
-                skills = skills,
+                skills = _uiState.value.skills,
                 git = git,
                 presets = presets,
                 automation = automation,
@@ -215,6 +234,34 @@ class DshHostSurfacesViewModel @Inject constructor(
             _uiState.value = next
         }.onFailure { error ->
             _uiState.update { it.copy(isLoading = false, error = error.message) }
+        }
+    }
+
+    /** Skills are session-scoped on current DSH; load them for one session. */
+    fun loadSkills(sessionId: String) {
+        viewModelScope.launch {
+            runCatching { requireController().skillList(sessionId) }
+                .onSuccess { skills ->
+                    _uiState.update {
+                        it.copy(
+                            skills = dev.wuxie233.codecarry.data.dsh.DshSkillCatalogValue(
+                                skills = skills.skills.map { entry ->
+                                    dev.wuxie233.codecarry.data.dsh.DshSkillCatalogEntry(
+                                        name = entry.name,
+                                        description = entry.description,
+                                        whenToUse = entry.whenToUse,
+                                        modelInvocable = entry.modelInvocable,
+                                        userInvocable = true,
+                                        source = "",
+                                        provider = "",
+                                    )
+                                },
+                            ),
+                            error = null,
+                        )
+                    }
+                }
+                .onFailure { error -> _uiState.update { it.copy(error = error.message) } }
         }
     }
 

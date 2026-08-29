@@ -121,7 +121,7 @@ internal fun shouldShowServerDisconnect(isConnected: Boolean, isConnecting: Bool
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
-    onNavigateToSessions: (serverUrl: String, username: String, password: String, serverName: String, serverId: String, serverType: ServerType) -> Unit = { _, _, _, _, _, _ -> },
+    onNavigateToSessions: (serverUrl: String, username: String, password: String, serverName: String, serverId: String, serverType: ServerType, token: String) -> Unit = { _, _, _, _, _, _, _ -> },
     onNavigateToServerSettings: (serverUrl: String, username: String, password: String, serverName: String, serverId: String) -> Unit = { _, _, _, _, _ -> },
     onNavigateToSettings: () -> Unit = {},
     onNavigateToAbout: () -> Unit = {},
@@ -299,6 +299,7 @@ fun HomeScreen(
                                                 server.displayName,
                                                 server.id,
                                                 server.type,
+                                                server.token ?: "",
                                             )
                                         }
                                     },
@@ -366,6 +367,7 @@ fun HomeScreen(
                                             server.displayName,
                                             server.id,
                                             server.type,
+                                            server.token ?: "",
                                         )
                                     },
                                     onServerSettings = {

@@ -63,7 +63,7 @@ fun mapDshEventStateToSessions(state: DshEventState): DshMappedSessions {
 
 fun mapDshApproval(approval: DshPendingApproval): SseEvent.PermissionAsked =
     SseEvent.PermissionAsked(
-        id = approval.rpcId,
+        id = approval.eventId,
         sessionId = approval.sessionId,
         permission = approval.toolName,
         patterns = listOfNotNull(approval.reason, approval.callId),
@@ -71,7 +71,7 @@ fun mapDshApproval(approval: DshPendingApproval): SseEvent.PermissionAsked =
 
 fun mapDshQuestion(question: DshPendingQuestion): SseEvent.QuestionAsked =
     SseEvent.QuestionAsked(
-        id = question.rpcId,
+        id = question.eventId,
         sessionId = question.sessionId,
         questions = question.questions.map { item ->
             SseEvent.QuestionAsked.Question(

@@ -220,11 +220,12 @@ class ChatViewModel @Inject constructor(
     private val serverType: ServerType = runCatching {
         ServerType.valueOf(decodeRouteArg(savedStateHandle.get<String>("serverType")).ifBlank { ServerType.OPENCODE.name })
     }.getOrDefault(ServerType.OPENCODE)
+    private val tokenArg: String = decodeRouteArg(savedStateHandle.get<String>("token") ?: "")
     private val isDsh: Boolean = serverType == ServerType.DSH
     private val dshCapabilities = chatBackendCapabilities(serverType)
 
     private val conn = ServerConnection.from(serverUrl, username, password.ifEmpty { null })
-    private val dshConn = DshConnection.from(serverUrl, password.ifEmpty { null })
+    private val dshConn = DshConnection.from(serverUrl, password.ifEmpty { null }, tokenArg.ifEmpty { null })
     private val dshReducer = dshConnectionManager.reducer(serverId)
     private val foregroundResumeListener: () -> Unit = {
         if (sessionId.isNotBlank()) refreshOpenSessionOnForeground()
@@ -670,8 +671,6 @@ class ChatViewModel @Inject constructor(
         try {
             val list = dshApi.sessionList(dshConn)
             dshReducer.applySessionList(list.items)
-            val workspaces = dshApi.workspaceList(dshConn)
-            dshReducer.applyWorkspaceList(workspaces)
             val current = list.items.firstOrNull { it.sessionId == sessionId }
             sessionDirectory = current?.cwd?.takeIf { it.isNotBlank() } ?: routeDirectory ?: sessionDirectory
             loadDshHistory()
@@ -687,11 +686,14 @@ class ChatViewModel @Inject constructor(
 
     private suspend fun loadDshHistory(beforeSeq: Long? = null, silent: Boolean = false) {
         try {
+            val throughSeq = dshReducer.state.value.sessions[sessionId]?.lastSeq?.takeIf { it >= 0 }
+                ?: Long.MAX_VALUE
             val history = dshApi.sessionHistory(
                 connection = dshConn,
                 sessionId = sessionId,
                 beforeSeq = beforeSeq,
                 maxMessages = currentMessageLimit,
+                throughSeq = throughSeq,
             )
             dshReducer.mergeHistory(
                 sessionId = sessionId,
@@ -757,7 +759,7 @@ class ChatViewModel @Inject constructor(
     private fun loadDshProviders() {
         viewModelScope.launch {
             try {
-                val models = dshApi.sessionModels(dshConn, sessionId)
+                val models = dshApi.sessionModels(dshConn)
                 val providers = models.groups.map { group ->
                     ProviderInfo(
                         id = group.id,
@@ -776,9 +778,9 @@ class ChatViewModel @Inject constructor(
                 }
                 _allProviders.value = providers
                 applyProviderFilter()
-                _selectedProviderId.value = models.current.provider
-                _selectedModelId.value = models.current.model
-                _selectedVariant.value = models.current.reasoningEffort
+                _selectedProviderId.value = models.default.provider
+                _selectedModelId.value = models.default.model
+                _selectedVariant.value = models.default.reasoningEffort
                 isModelExplicitlySelected = true
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to load DSH models", e)
@@ -1451,12 +1453,16 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 if (isDsh) {
-                    val approval = dshReducer.state.value.pendingApprovals[requestId] ?: return@launch
+                    val state = dshReducer.state.value
+                    val approval = state.pendingApprovals[requestId] ?: return@launch
+                    val clientId = state.eventsClientId ?: return@launch
                     val outcome = when (reply) {
                         "once", "always", "allowed-once" -> "allowed-once"
                         else -> "rejected"
                     }
-                    dshApi.answerApproval(dshConn, approval.rpcId, approval.sessionId, approval.approvalId, outcome)
+                    dshApi.answerApproval(dshConn, clientId, approval.eventId, outcome)
+                    dshReducer.removePendingApproval(approval.eventId)
+                    applyDshState(dshReducer.state.value)
                     return@launch
                 }
                 api.replyToPermission(
@@ -1530,17 +1536,21 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 if (isDsh) {
-                    val pending = dshReducer.state.value.pendingQuestions[requestId]
+                    val state = dshReducer.state.value
+                    val pending = state.pendingQuestions[requestId]
                         ?: error("question $requestId is no longer pending")
+                    val clientId = state.eventsClientId
+                        ?: error("question $requestId has no events client")
                     val payload = dshQuestionAnswer(pending.questions, answers)
                     dshApi.answerQuestion(
                         dshConn,
-                        pending.rpcId,
-                        pending.sessionId,
+                        clientId,
+                        pending.eventId,
                         json.encodeToJsonElement(DshQuestionAnswer.serializer(), payload),
                     )
-                    dshReducer.removePendingQuestion(pending.rpcId)
+                    dshReducer.removePendingQuestion(pending.eventId)
                     eventReducer.removeQuestion(serverId, requestId)
+                    applyDshState(dshReducer.state.value)
                     return@launch
                 }
                 val success = api.replyToQuestion(
@@ -1568,21 +1578,15 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 if (isDsh) {
-                    val pending = dshReducer.state.value.pendingQuestions[requestId]
+                    val state = dshReducer.state.value
+                    val pending = state.pendingQuestions[requestId]
                         ?: error("question $requestId is no longer pending")
-                    val receipt = dshApi.respond(
-                        dshConn,
-                        pending.rpcId,
-                        DshRpcResult(ok = false, error = DshRpcError("cancelled", "cancelled")),
-                    )
-                    if (!receipt.accepted) {
-                        throw DshRpcException(
-                            pending.rpcId,
-                            DshRpcError("bad-response", receipt.reason ?: "question reject rejected"),
-                        )
-                    }
-                    dshReducer.removePendingQuestion(pending.rpcId)
+                    val clientId = state.eventsClientId
+                        ?: error("question $requestId has no events client")
+                    dshApi.rejectQuestion(dshConn, clientId, pending.eventId)
+                    dshReducer.removePendingQuestion(pending.eventId)
                     eventReducer.removeQuestion(serverId, requestId)
+                    applyDshState(dshReducer.state.value)
                     return@launch
                 }
                 val success = api.rejectQuestion(conn = conn, requestId = requestId, directory = sessionDirectory)

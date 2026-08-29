@@ -59,146 +59,76 @@ data class DshQuestionOption(
     val description: String? = null,
 )
 
-sealed interface DshMuxFrame {
-    val type: String
+/** Frames carried by the Gateway-internal `$events` logical stream. */
+sealed interface DshEventsFrame {
+    data class Ready(
+        val clientId: String,
+        val home: String,
+    ) : DshEventsFrame
 
-    data class SessionEvent(
-        val sessionId: String,
-        val event: DshSessionEvent,
-        val view: JsonElement? = null,
-    ) : DshMuxFrame {
-        override val type: String = "session/event"
-    }
+    data class Emit(
+        val event: String,
+        val args: List<JsonElement>,
+    ) : DshEventsFrame
 
-    data class SessionSubscribed(
-        val sessionId: String,
-        val lastSeq: Long,
-    ) : DshMuxFrame {
-        override val type: String = "session/subscribed"
-    }
+    data class Waterfall(
+        val eventId: String,
+        val event: String,
+        val agentId: String,
+        val request: JsonObject,
+    ) : DshEventsFrame
 
-    data class ApprovalRequested(
-        val sessionId: String,
-        val approvalId: String,
-        val toolName: String,
-        val callId: String? = null,
-        val reason: String? = null,
-    ) : DshMuxFrame {
-        override val type: String = "approval/requested"
-    }
+    data class CancelEvent(val eventId: String) : DshEventsFrame
+}
 
-    data class ApprovalResolved(
-        val sessionId: String,
-        val approvalId: String,
-        val outcome: String,
-    ) : DshMuxFrame {
-        override val type: String = "approval/resolved"
-    }
+/** Frames carried by the `session/control` logical stream. */
+sealed interface DshControlFrame {
+    data class Baseline(
+        val queues: Map<String, List<DshQueuedInboxItem>>,
+        val jobs: Map<String, List<DshJobView>>,
+        val projections: Map<String, DshProjectionsBlock>,
+    ) : DshControlFrame
 
-    data class QuestionRequested(
-        val sessionId: String,
-        val questions: List<DshQuestionItem>,
-    ) : DshMuxFrame {
-        override val type: String = "question/requested"
-    }
-
-    data class QuestionResolved(
-        val sessionId: String,
-        val questionRpcId: String,
-        val outcome: String,
-    ) : DshMuxFrame {
-        override val type: String = "question/resolved"
-    }
-
-    data class SessionQueue(
+    data class Queue(
         val sessionId: String,
         val items: List<DshQueuedInboxItem>,
-    ) : DshMuxFrame {
-        override val type: String = "session/queue"
-    }
+    ) : DshControlFrame
 
-    data class SessionJobs(
+    data class Jobs(
         val sessionId: String,
         val jobs: List<DshJobView>,
-    ) : DshMuxFrame {
-        override val type: String = "session/jobs"
-    }
+    ) : DshControlFrame
 
-    data class SessionProjection(
+    data class Projection(
         val sessionId: String,
         val key: String,
         val value: JsonElement?,
         val seq: Long,
-    ) : DshMuxFrame {
-        override val type: String = "session/projection"
-    }
-
-    data class StreamError(val error: DshRpcError) : DshMuxFrame {
-        override val type: String = "stream/error"
-    }
-
-    data class Unknown(val rawType: String, val payload: JsonObject) : DshMuxFrame {
-        override val type: String = rawType
-    }
+    ) : DshControlFrame
 }
 
-sealed interface DshHostFrame {
-    val type: String
+/** Frames carried by the `workspace/follow` logical stream. */
+sealed interface DshWorkspaceFrame {
+    data class Baseline(val value: DshWorkspaceListValue) : DshWorkspaceFrame
 
-    data class SessionAdded(
-        val sessionId: String,
-        val blank: Boolean,
-        val parentSessionId: String? = null,
-        val origin: String? = null,
-        val cwd: String? = null,
-        val agentPreset: String? = null,
-    ) : DshHostFrame {
-        override val type: String = "host/session-added"
-    }
+    data class Upsert(val workspace: DshWorkspaceView) : DshWorkspaceFrame
+    data class Remove(val workspaceId: String) : DshWorkspaceFrame
+    data class Order(val workspaceIds: List<String>) : DshWorkspaceFrame
+    data class Archived(val archivedSessionIds: List<String>) : DshWorkspaceFrame
+    data class Hidden(val hiddenWorkspaceIds: List<String>) : DshWorkspaceFrame
+}
 
-    data class SessionRemoved(val sessionId: String) : DshHostFrame {
-        override val type: String = "host/session-removed"
-    }
+/** Frames carried by one addressed `session/follow` logical stream. */
+sealed interface DshFollowFrame {
+    data class Snapshot(
+        val header: JsonObject?,
+        val cursor: Long,
+        val records: List<DshHistoryRecord>,
+        val hasMore: Boolean,
+        val projections: DshProjectionsBlock? = null,
+    ) : DshFollowFrame
 
-    data class SessionStatus(val sessionId: String, val running: Boolean) : DshHostFrame {
-        override val type: String = "host/session-status"
-    }
-
-    data class AgentError(val sessionId: String, val message: String) : DshHostFrame {
-        override val type: String = "host/agent-error"
-    }
-
-    data class WorkspaceChanged(val workspace: JsonObject) : DshHostFrame {
-        override val type: String = "host/workspace-changed"
-    }
-
-    data class WorkspaceRemoved(val workspaceId: String) : DshHostFrame {
-        override val type: String = "host/workspace-removed"
-    }
-
-    data class WorkspaceOrderChanged(val workspaceIds: List<String>) : DshHostFrame {
-        override val type: String = "host/workspace-order-changed"
-    }
-
-    data class ArchivedSessionsChanged(val archivedSessionIds: List<String>) : DshHostFrame {
-        override val type: String = "host/archived-sessions-changed"
-    }
-
-    data class HiddenWorkspacesChanged(val hiddenWorkspaceIds: List<String>) : DshHostFrame {
-        override val type: String = "host/hidden-workspaces-changed"
-    }
-
-    data class RemoteEvent(val event: String, val args: JsonArray) : DshHostFrame {
-        override val type: String = "host/remote-event"
-    }
-
-    data class StreamError(val error: DshRpcError) : DshHostFrame {
-        override val type: String = "stream/error"
-    }
-
-    data class Unknown(val rawType: String, val payload: JsonObject) : DshHostFrame {
-        override val type: String = rawType
-    }
+    data class FollowEvent(val event: DshSessionEvent) : DshFollowFrame
 }
 
 data class DshEnvelope<T>(
@@ -206,7 +136,6 @@ data class DshEnvelope<T>(
     val payload: T,
 )
 
-private fun JsonElement.obj(): JsonObject = jsonObject
 private fun JsonObject.str(key: String): String? = this[key]?.jsonPrimitive?.contentOrNull
 private fun JsonObject.reqStr(key: String): String = str(key).orEmpty()
 private fun JsonObject.bool(key: String): Boolean = this[key]?.jsonPrimitive?.booleanOrNull == true
@@ -215,95 +144,123 @@ private fun JsonObject.long(key: String): Long =
         ?: this[key]?.jsonPrimitive?.intOrNull?.toLong()
         ?: 0L
 
-fun parseMuxFrame(payload: JsonElement): DshMuxFrame {
-    val obj = payload.obj()
-    return when (val type = obj.reqStr("type")) {
-        "session/event" -> DshMuxFrame.SessionEvent(
-            sessionId = obj.reqStr("sessionId"),
-            event = parseSessionEvent(obj["event"]),
-            view = obj["view"],
+/** Parse one `$events` stream item. */
+fun parseEventsFrame(value: JsonElement?): DshEventsFrame? {
+    val obj = (value as? JsonObject) ?: return null
+    return when (obj.reqStr("type")) {
+        "ready" -> DshEventsFrame.Ready(
+            clientId = obj.reqStr("clientId"),
+            home = obj["host"]?.jsonObject?.str("home").orEmpty(),
         )
-        "session/subscribed" -> DshMuxFrame.SessionSubscribed(
-            sessionId = obj.reqStr("sessionId"),
-            lastSeq = obj.long("lastSeq"),
+        "emit" -> DshEventsFrame.Emit(
+            event = obj.reqStr("event"),
+            args = (obj["args"] as? JsonArray).orEmpty(),
         )
-        "approval/requested" -> DshMuxFrame.ApprovalRequested(
-            sessionId = obj.reqStr("sessionId"),
-            approvalId = obj.reqStr("approvalId"),
-            toolName = obj.reqStr("toolName"),
-            callId = obj.str("callId"),
-            reason = obj.str("reason"),
+        "waterfall" -> DshEventsFrame.Waterfall(
+            eventId = obj.reqStr("eventId"),
+            event = obj.reqStr("event"),
+            agentId = obj.reqStr("agentId"),
+            request = obj["request"] as? JsonObject ?: JsonObject(emptyMap()),
         )
-        "approval/resolved" -> DshMuxFrame.ApprovalResolved(
+        "cancel" -> DshEventsFrame.CancelEvent(obj.reqStr("eventId"))
+        else -> null
+    }
+}
+
+/** Parse one `session/control` stream item. */
+fun parseControlFrame(value: JsonElement?): DshControlFrame? {
+    val obj = (value as? JsonObject) ?: return null
+    return when (obj.reqStr("type")) {
+        "baseline" -> {
+            val base = obj["value"]?.jsonObject ?: JsonObject(emptyMap())
+            DshControlFrame.Baseline(
+                queues = recordOfLists(base["queues"]) { parseQueueItem(it) },
+                jobs = recordOfLists(base["jobs"]) { parseJob(it) },
+                projections = base["projections"]?.jsonObject?.entries?.associate { (sessionId, block) ->
+                    sessionId to (
+                        runCatching { parseProjectionsBlock(block) }.getOrNull()
+                            ?: DshProjectionsBlock(asOfSeq = 0L)
+                        )
+                }.orEmpty(),
+            )
+        }
+        "queue" -> DshControlFrame.Queue(
             sessionId = obj.reqStr("sessionId"),
-            approvalId = obj.reqStr("approvalId"),
-            outcome = obj.reqStr("outcome"),
+            items = (obj["items"] as? JsonArray).orEmpty().mapNotNull(::parseQueueItem),
         )
-        "question/requested" -> DshMuxFrame.QuestionRequested(
+        "jobs" -> DshControlFrame.Jobs(
             sessionId = obj.reqStr("sessionId"),
-            questions = (obj["questions"] as? JsonArray).orEmpty().mapNotNull { parseQuestionItem(it) },
+            jobs = (obj["jobs"] as? JsonArray).orEmpty().mapNotNull(::parseJob),
         )
-        "question/resolved" -> DshMuxFrame.QuestionResolved(
-            sessionId = obj.reqStr("sessionId"),
-            questionRpcId = obj.reqStr("questionRpcId"),
-            outcome = obj.reqStr("outcome"),
-        )
-        "session/queue" -> DshMuxFrame.SessionQueue(
-            sessionId = obj.reqStr("sessionId"),
-            items = (obj["items"] as? JsonArray).orEmpty().mapNotNull { parseQueueItem(it) },
-        )
-        "session/jobs" -> DshMuxFrame.SessionJobs(
-            sessionId = obj.reqStr("sessionId"),
-            jobs = (obj["jobs"] as? JsonArray).orEmpty().mapNotNull { parseJob(it) },
-        )
-        "session/projection" -> DshMuxFrame.SessionProjection(
+        "projection" -> DshControlFrame.Projection(
             sessionId = obj.reqStr("sessionId"),
             key = obj.reqStr("key"),
             value = obj["value"],
             seq = obj.long("seq"),
         )
-        "stream/error" -> DshMuxFrame.StreamError(parseRpcError(obj["error"]))
-        else -> DshMuxFrame.Unknown(type, obj)
+        else -> null
     }
 }
 
-fun parseHostFrame(payload: JsonElement): DshHostFrame {
-    val obj = payload.obj()
-    return when (val type = obj.reqStr("type")) {
-        "host/session-added" -> DshHostFrame.SessionAdded(
-            sessionId = obj.reqStr("sessionId"),
-            blank = obj.bool("blank"),
-            parentSessionId = obj.str("parentSessionId"),
-            origin = obj.str("origin"),
-            cwd = obj.str("cwd"),
-            agentPreset = obj.str("agentPreset"),
+/** Parse one `workspace/follow` stream item. */
+fun parseWorkspaceFrame(value: JsonElement?): DshWorkspaceFrame? {
+    val obj = (value as? JsonObject) ?: return null
+    return when (obj.reqStr("type")) {
+        "baseline" -> DshWorkspaceFrame.Baseline(
+            value = parseWorkspaceListValue(obj["value"]),
         )
-        "host/session-removed" -> DshHostFrame.SessionRemoved(obj.reqStr("sessionId"))
-        "host/session-status" -> DshHostFrame.SessionStatus(
-            sessionId = obj.reqStr("sessionId"),
-            running = obj.bool("running"),
-        )
-        "host/agent-error" -> DshHostFrame.AgentError(
-            sessionId = obj.reqStr("sessionId"),
-            message = obj.reqStr("message"),
-        )
-        "host/workspace-changed" -> DshHostFrame.WorkspaceChanged(
-            workspace = (obj["workspace"] as? JsonObject) ?: JsonObject(emptyMap()),
-        )
-        "host/workspace-removed" -> DshHostFrame.WorkspaceRemoved(obj.reqStr("workspaceId"))
-        "host/workspace-order-changed" -> DshHostFrame.WorkspaceOrderChanged(stringList(obj["workspaceIds"]))
-        "host/archived-sessions-changed" -> DshHostFrame.ArchivedSessionsChanged(stringList(obj["archivedSessionIds"]))
-        "host/hidden-workspaces-changed" -> DshHostFrame.HiddenWorkspacesChanged(stringList(obj["hiddenWorkspaceIds"]))
-        "host/remote-event" -> DshHostFrame.RemoteEvent(
-            event = obj.reqStr("event"),
-            args = obj["args"] as? JsonArray ?: JsonArray(emptyList()),
-        )
-        "stream/error" -> DshHostFrame.StreamError(parseRpcError(obj["error"]))
-        else -> DshHostFrame.Unknown(type, obj)
+        "upsert" -> DshWorkspaceFrame.Upsert(parseWorkspaceView(obj["workspace"]) ?: return null)
+        "remove" -> DshWorkspaceFrame.Remove(obj.reqStr("workspaceId"))
+        "order" -> DshWorkspaceFrame.Order(stringList(obj["workspaceIds"]))
+        "archived" -> DshWorkspaceFrame.Archived(stringList(obj["archivedSessionIds"]))
+        "hidden" -> DshWorkspaceFrame.Hidden(stringList(obj["hiddenWorkspaceIds"]))
+        else -> null
     }
 }
 
-private fun parseSessionEvent(element: JsonElement?): DshSessionEvent {
+/** Parse one `session/follow` stream item. */
+fun parseFollowFrame(value: JsonElement?): DshFollowFrame? {
+    val obj = (value as? JsonObject) ?: return null
+    return when (obj.reqStr("type")) {
+        "snapshot" -> DshFollowFrame.Snapshot(
+            header = obj["header"] as? JsonObject,
+            cursor = obj.long("cursor"),
+            records = (obj["records"] as? JsonArray).orEmpty().mapNotNull(::parseHistoryRecord),
+            hasMore = obj.bool("hasMore"),
+            projections = runCatching { parseProjectionsBlock(obj["projections"]) }.getOrNull(),
+        )
+        "event" -> DshFollowFrame.FollowEvent(parseSessionEvent(obj["event"]))
+        else -> null
+    }
+}
+
+/** History records are `{type: "event", event}` or packed `{type: "chunks", event}`. */
+fun parseHistoryRecord(element: JsonElement?): DshHistoryRecord? {
+    val obj = (element as? JsonObject) ?: return null
+    val event = obj["event"] ?: return null
+    return DshHistoryRecord(
+        type = obj.reqStr("type").ifBlank { "event" },
+        event = parseSessionEventDto(event),
+    )
+}
+
+private fun parseSessionEventDto(element: JsonElement): DshSessionEventDto {
+    val obj = (element as? JsonObject) ?: JsonObject(emptyMap())
+    val seqs = (obj["sourceEventSeqs"] as? JsonArray)?.mapNotNull {
+        it.jsonPrimitive.longOrNull ?: it.jsonPrimitive.intOrNull?.toLong()
+    }
+    return DshSessionEventDto(
+        type = obj.reqStr("type"),
+        seq = obj.long("seq"),
+        time = obj.long("time"),
+        data = obj["data"],
+        sourceEventSeqs = seqs,
+        surfaceOp = obj["surfaceOp"],
+        ignorable = obj["ignorable"]?.jsonPrimitive?.booleanOrNull,
+    )
+}
+
+fun parseSessionEvent(element: JsonElement?): DshSessionEvent {
     val obj = (element as? JsonObject) ?: JsonObject(emptyMap())
     val seqs = (obj["sourceEventSeqs"] as? JsonArray)?.mapNotNull {
         it.jsonPrimitive.longOrNull ?: it.jsonPrimitive.intOrNull?.toLong()
@@ -318,6 +275,46 @@ private fun parseSessionEvent(element: JsonElement?): DshSessionEvent {
         ignorable = obj["ignorable"]?.jsonPrimitive?.booleanOrNull,
         raw = obj,
     )
+}
+
+private fun parseWorkspaceListValue(element: JsonElement?): DshWorkspaceListValue {
+    val obj = (element as? JsonObject) ?: JsonObject(emptyMap())
+    return DshWorkspaceListValue(
+        items = (obj["items"] as? JsonArray).orEmpty().mapNotNull(::parseWorkspaceView),
+        archivedSessionIds = stringList(obj["archivedSessionIds"]),
+        hiddenWorkspaceIds = stringList(obj["hiddenWorkspaceIds"]),
+    )
+}
+
+private fun parseWorkspaceView(element: JsonElement?): DshWorkspaceView? {
+    val obj = (element as? JsonObject) ?: return null
+    return DshWorkspaceView(
+        workspaceId = obj.reqStr("workspaceId"),
+        path = obj.reqStr("path"),
+        folders = stringList(obj["folders"]),
+        title = obj.reqStr("title"),
+        sessionIds = stringList(obj["sessionIds"]),
+        createdAt = obj.reqStr("createdAt"),
+        updatedAt = obj.reqStr("updatedAt"),
+    )
+}
+
+private fun parseProjectionsBlock(element: JsonElement?): DshProjectionsBlock? {
+    val obj = (element as? JsonObject) ?: return null
+    return DshProjectionsBlock(
+        asOfSeq = obj.long("asOfSeq"),
+        values = obj["values"] as? JsonObject ?: JsonObject(emptyMap()),
+    )
+}
+
+private fun <T> recordOfLists(
+    element: JsonElement?,
+    parse: (JsonElement) -> T?,
+): Map<String, List<T>> {
+    val obj = (element as? JsonObject) ?: return emptyMap()
+    return obj.entries.associate { (sessionId, rows) ->
+        sessionId to (rows as? JsonArray).orEmpty().mapNotNull(parse)
+    }
 }
 
 private fun parseQuestionItem(element: JsonElement): DshQuestionItem? {
@@ -346,6 +343,9 @@ private fun parseQuestionItem(element: JsonElement): DshQuestionItem? {
     )
 }
 
+fun parseQuestionItems(element: JsonElement?): List<DshQuestionItem> =
+    (element as? JsonArray).orEmpty().mapNotNull(::parseQuestionItem)
+
 private fun parseQueueItem(element: JsonElement): DshQueuedInboxItem? {
     val obj = element as? JsonObject ?: return null
     return DshQueuedInboxItem(
@@ -366,15 +366,6 @@ private fun parseJob(element: JsonElement): DshJobView? {
         startedAt = obj.long("startedAt"),
         finishedAt = obj["finishedAt"]?.jsonPrimitive?.longOrNull
             ?: obj["finishedAt"]?.jsonPrimitive?.intOrNull?.toLong(),
-    )
-}
-
-private fun parseRpcError(element: JsonElement?): DshRpcError {
-    val obj = element as? JsonObject
-    return DshRpcError(
-        code = obj?.reqStr("code").orEmpty().ifBlank { "internal" },
-        message = obj?.reqStr("message").orEmpty(),
-        details = obj?.get("details") ?: JsonObject(emptyMap()),
     )
 }
 

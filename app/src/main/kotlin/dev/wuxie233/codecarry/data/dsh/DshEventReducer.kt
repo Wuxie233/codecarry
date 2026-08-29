@@ -7,22 +7,21 @@ import kotlinx.coroutines.flow.update
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonArray
-import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.put
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 
 data class DshPendingApproval(
-    val rpcId: String,
+    val eventId: String,
     val sessionId: String,
-    val approvalId: String,
     val toolName: String,
     val callId: String? = null,
     val reason: String? = null,
 )
 
 data class DshPendingQuestion(
-    val rpcId: String,
+    val eventId: String,
     val sessionId: String,
     val questions: List<DshQuestionItem>,
 )
@@ -35,6 +34,7 @@ data class DshSessionSnapshot(
     val origin: String? = null,
     val cwd: String? = null,
     val agentPreset: String? = null,
+    val updatedAt: Long = 0,
     val lastSeq: Long = -1,
     val events: List<DshSessionEvent> = emptyList(),
     val queue: List<DshQueuedInboxItem> = emptyList(),
@@ -45,6 +45,8 @@ data class DshSessionSnapshot(
 
 data class DshEventState(
     val generation: Long = 0,
+    val eventsClientId: String? = null,
+    val home: String? = null,
     val sessions: Map<String, DshSessionSnapshot> = emptyMap(),
     val archivedSessionIds: Set<String> = emptySet(),
     val hiddenWorkspaceIds: Set<String> = emptySet(),
@@ -70,111 +72,193 @@ class DshEventReducer(
         _state.value = DshEventState(generation = generation)
     }
 
-    fun applyMux(rpcId: String, frame: DshMuxFrame) {
-        _state.update { current ->
-            when (frame) {
-                is DshMuxFrame.SessionEvent -> current.updateSession(frame.sessionId) { session ->
-                    val events = if (frame.event.seq > session.lastSeq) {
-                        session.events + frame.event
-                    } else {
-                        session.events
-                    }
-                    session.copy(
-                        lastSeq = maxOf(session.lastSeq, frame.event.seq),
-                        events = events,
-                    )
-                }
-                is DshMuxFrame.SessionSubscribed -> current.updateSession(frame.sessionId) { session ->
-                    session.copy(lastSeq = maxOf(session.lastSeq, frame.lastSeq))
-                }
-                is DshMuxFrame.ApprovalRequested -> current.copy(
-                    pendingApprovals = current.pendingApprovals + (rpcId to DshPendingApproval(
-                        rpcId = rpcId,
-                        sessionId = frame.sessionId,
-                        approvalId = frame.approvalId,
-                        toolName = frame.toolName,
-                        callId = frame.callId,
-                        reason = frame.reason,
-                    )),
+    /** Fold one `$events` stream item: readiness, api-session emits, waterfalls. */
+    fun applyEventsFrame(frame: DshEventsFrame) {
+        when (frame) {
+            is DshEventsFrame.Ready -> _state.update {
+                it.copy(eventsClientId = frame.clientId, home = frame.home.ifBlank { it.home })
+            }
+            is DshEventsFrame.Emit -> applyEmit(frame.event, frame.args)
+            is DshEventsFrame.Waterfall -> applyWaterfall(frame)
+            is DshEventsFrame.CancelEvent -> _state.update {
+                it.copy(
+                    pendingApprovals = it.pendingApprovals - frame.eventId,
+                    pendingQuestions = it.pendingQuestions - frame.eventId,
                 )
-                is DshMuxFrame.ApprovalResolved -> current.copy(
-                    pendingApprovals = current.pendingApprovals.filterValues {
-                        it.approvalId != frame.approvalId || it.sessionId != frame.sessionId
-                    },
-                )
-                is DshMuxFrame.QuestionRequested -> current.copy(
-                    pendingQuestions = current.pendingQuestions + (rpcId to DshPendingQuestion(
-                        rpcId = rpcId,
-                        sessionId = frame.sessionId,
-                        questions = frame.questions,
-                    )),
-                )
-                is DshMuxFrame.QuestionResolved -> current.copy(
-                    pendingQuestions = current.pendingQuestions.filterKeys { it != frame.questionRpcId },
-                )
-                is DshMuxFrame.SessionQueue -> current.updateSession(frame.sessionId) { session ->
-                    session.copy(queue = frame.items)
-                }
-                is DshMuxFrame.SessionJobs -> current.updateSession(frame.sessionId) { session ->
-                    session.copy(jobs = frame.jobs)
-                }
-                is DshMuxFrame.SessionProjection -> current.updateSession(frame.sessionId) { session ->
-                    val existing = session.projections[frame.key]
-                    if (existing != null && existing.first > frame.seq) {
-                        session
-                    } else {
-                        session.copy(projections = session.projections + (frame.key to (frame.seq to frame.value)))
-                    }
-                }
-                is DshMuxFrame.StreamError, is DshMuxFrame.Unknown -> current
             }
         }
     }
 
-    fun applyHost(frame: DshHostFrame) {
-        _state.update { current ->
-            when (frame) {
-                is DshHostFrame.SessionAdded -> current.updateSession(frame.sessionId) { session ->
-                    session.copy(
-                        blank = frame.blank,
-                        parentSessionId = frame.parentSessionId ?: session.parentSessionId,
-                        origin = frame.origin ?: session.origin,
-                        cwd = frame.cwd ?: session.cwd,
-                        agentPreset = frame.agentPreset ?: session.agentPreset,
-                    )
+    private fun applyEmit(event: String, args: List<JsonElement>) {
+        when (event) {
+            "api-session/added" -> {
+                val summary = args.firstOrNull()?.jsonObject ?: return
+                applySessionList(listOf(parseSummary(summary)))
+            }
+            "api-session/removed" -> {
+                val sessionId = args.firstOrNull()?.jsonPrimitive?.contentOrNull ?: return
+                _state.update { it.copy(sessions = it.sessions - sessionId) }
+            }
+            "api-session/status" -> {
+                val sessionId = args.getOrNull(0)?.jsonPrimitive?.contentOrNull ?: return
+                val running = args.getOrNull(1)?.jsonPrimitive?.contentOrNull == "true"
+                _state.update { current ->
+                    current.updateSession(sessionId) { session ->
+                        session.copy(
+                            running = running,
+                            blank = if (running) false else session.blank,
+                        )
+                    }
                 }
-                is DshHostFrame.SessionRemoved -> current.copy(sessions = current.sessions - frame.sessionId)
-                is DshHostFrame.SessionStatus -> current.updateSession(frame.sessionId) { session ->
-                    session.copy(
-                        running = frame.running,
-                        blank = if (frame.running) false else session.blank,
-                    )
+            }
+            "api-session/error" -> {
+                val sessionId = args.getOrNull(0)?.jsonPrimitive?.contentOrNull ?: return
+                val message = args.getOrNull(1)?.jsonPrimitive?.contentOrNull ?: return
+                _state.update { current ->
+                    current.updateSession(sessionId) { it.copy(error = message) }
                 }
-                is DshHostFrame.AgentError -> current.updateSession(frame.sessionId) { session ->
-                    session.copy(error = frame.message)
+            }
+            "api-session/activity" -> {
+                val sessionId = args.getOrNull(0)?.jsonPrimitive?.contentOrNull ?: return
+                val updatedAt = args.getOrNull(1)?.jsonPrimitive?.longOrNull ?: return
+                _state.update { current ->
+                    current.updateSession(sessionId) { it.copy(updatedAt = updatedAt) }
                 }
-                is DshHostFrame.WorkspaceChanged -> {
-                    val workspaceId = frame.workspace["workspaceId"]
-                        ?.let { (it as? JsonPrimitive)?.contentOrNull }
-                        .orEmpty()
-                    if (workspaceId.isBlank()) current else current.copy(
-                        workspaces = current.workspaces + (workspaceId to frame.workspace),
-                    )
-                }
-                is DshHostFrame.WorkspaceRemoved -> current.copy(
-                    workspaces = current.workspaces - frame.workspaceId,
-                    workspaceOrder = current.workspaceOrder - frame.workspaceId,
+            }
+            else -> Unit
+        }
+    }
+
+    private fun applyWaterfall(frame: DshEventsFrame.Waterfall) {
+        when (frame.event) {
+            "approval/request" -> _state.update {
+                it.copy(
+                    pendingApprovals = it.pendingApprovals + (frame.eventId to DshPendingApproval(
+                        eventId = frame.eventId,
+                        sessionId = frame.agentId,
+                        toolName = frame.request.strValue("toolName").orEmpty(),
+                        callId = frame.request.strValue("callId"),
+                        reason = frame.request.strValue("reason"),
+                    )),
                 )
-                is DshHostFrame.WorkspaceOrderChanged -> current.copy(workspaceOrder = frame.workspaceIds)
-                is DshHostFrame.ArchivedSessionsChanged -> current.copy(archivedSessionIds = frame.archivedSessionIds.toSet())
-                is DshHostFrame.HiddenWorkspacesChanged -> current.copy(hiddenWorkspaceIds = frame.hiddenWorkspaceIds.toSet())
-                is DshHostFrame.RemoteEvent, is DshHostFrame.StreamError, is DshHostFrame.Unknown -> current
+            }
+            "user-questions/request" -> _state.update {
+                it.copy(
+                    pendingQuestions = it.pendingQuestions + (frame.eventId to DshPendingQuestion(
+                        eventId = frame.eventId,
+                        sessionId = frame.agentId,
+                        questions = parseQuestionItems(frame.request["questions"]),
+                    )),
+                )
+            }
+            else -> Unit
+        }
+    }
+
+    /** Fold one `session/control` stream item. */
+    fun applyControlFrame(frame: DshControlFrame) {
+        when (frame) {
+            is DshControlFrame.Baseline -> _state.update { current ->
+                var next = current
+                frame.queues.forEach { (sessionId, items) ->
+                    next = next.updateSession(sessionId) { it.copy(queue = items) }
+                }
+                frame.jobs.forEach { (sessionId, jobs) ->
+                    next = next.updateSession(sessionId) { it.copy(jobs = jobs) }
+                }
+                frame.projections.forEach { (sessionId, block) ->
+                    next = applyProjections(next, sessionId, block)
+                }
+                next
+            }
+            is DshControlFrame.Queue -> _state.update { current ->
+                current.updateSession(frame.sessionId) { it.copy(queue = frame.items) }
+            }
+            is DshControlFrame.Jobs -> _state.update { current ->
+                current.updateSession(frame.sessionId) { it.copy(jobs = frame.jobs) }
+            }
+            is DshControlFrame.Projection -> _state.update { current ->
+                current.updateSession(frame.sessionId) { session ->
+                    val existing = session.projections[frame.key]
+                    if (existing != null && existing.first > frame.seq) {
+                        session
+                    } else {
+                        session.copy(
+                            projections = session.projections +
+                                (frame.key to Pair(frame.seq, frame.value)),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    /** Fold one `workspace/follow` stream item. */
+    fun applyWorkspaceFrame(frame: DshWorkspaceFrame) {
+        when (frame) {
+            is DshWorkspaceFrame.Baseline -> applyWorkspaceList(frame.value)
+            is DshWorkspaceFrame.Upsert -> _state.update { it.withWorkspace(frame.workspace) }
+            is DshWorkspaceFrame.Remove -> _state.update {
+                it.copy(
+                    workspaces = it.workspaces - frame.workspaceId,
+                    workspaceOrder = it.workspaceOrder - frame.workspaceId,
+                )
+            }
+            is DshWorkspaceFrame.Order -> _state.update { it.copy(workspaceOrder = frame.workspaceIds) }
+            is DshWorkspaceFrame.Archived -> _state.update {
+                it.copy(archivedSessionIds = frame.archivedSessionIds.toSet())
+            }
+            is DshWorkspaceFrame.Hidden -> _state.update {
+                it.copy(hiddenWorkspaceIds = frame.hiddenWorkspaceIds.toSet())
+            }
+        }
+    }
+
+    /** Apply one `session/follow` opening snapshot. */
+    fun applyFollowSnapshot(sessionId: String, frame: DshFollowFrame.Snapshot) {
+        mergeHistory(
+            sessionId = sessionId,
+            events = frame.records.map { it.event.toSessionEvent() },
+            projections = frame.projections,
+            replace = true,
+        )
+        _state.update { current ->
+            current.updateSession(sessionId) { session ->
+                session.copy(lastSeq = maxOf(session.lastSeq, frame.cursor))
+            }
+        }
+    }
+
+    /** Apply one live `session/follow` event item. */
+    fun applyFollowEvent(sessionId: String, event: DshSessionEvent) {
+        _state.update { current ->
+            current.updateSession(sessionId) { session ->
+                val events = if (event.seq > session.lastSeq) session.events + event else session.events
+                session.copy(
+                    lastSeq = maxOf(session.lastSeq, event.seq),
+                    events = events,
+                    blank = if (event.type == "turn/start") false else session.blank,
+                )
             }
         }
     }
 
     fun clearPending() {
         _state.update { it.copy(pendingApprovals = emptyMap(), pendingQuestions = emptyMap()) }
+    }
+
+    fun removePendingQuestion(eventId: String) {
+        _state.update { current ->
+            if (eventId !in current.pendingQuestions) current
+            else current.copy(pendingQuestions = current.pendingQuestions - eventId)
+        }
+    }
+
+    fun removePendingApproval(eventId: String) {
+        _state.update { current ->
+            if (eventId !in current.pendingApprovals) current
+            else current.copy(pendingApprovals = current.pendingApprovals - eventId)
+        }
     }
 
     fun mergeHistory(
@@ -202,7 +286,7 @@ class DshEventReducer(
                     projections.values.forEach { (key, value) ->
                         val existing = updated[key]
                         if (existing == null || existing.first <= asOf) {
-                            updated[key] = asOf to value
+                            updated[key] = Pair(asOf, value)
                         }
                     }
                     updated
@@ -230,7 +314,7 @@ class DshEventReducer(
                         item.projections.values.forEach { (key, value) ->
                             val existing = updated[key]
                             if (existing == null || existing.first <= asOf) {
-                                updated[key] = asOf to value
+                                updated[key] = Pair(asOf, value)
                             }
                         }
                         updated
@@ -238,6 +322,7 @@ class DshEventReducer(
                     session.copy(
                         blank = item.blank,
                         running = item.running,
+                        updatedAt = item.updatedAt,
                         parentSessionId = item.parentSessionId ?: session.parentSessionId,
                         origin = item.origin ?: session.origin,
                         cwd = item.cwd ?: session.cwd,
@@ -253,18 +338,7 @@ class DshEventReducer(
     fun applyWorkspaceList(value: DshWorkspaceListValue) {
         _state.update { current ->
             current.copy(
-                workspaces = value.items.associate { item ->
-                    item.workspaceId to buildJsonObject {
-                        put("workspaceId", item.workspaceId)
-                        put("path", item.path)
-                        put("title", item.title)
-                        put("createdAt", item.createdAt)
-                        put("updatedAt", item.updatedAt)
-                        put("sessionIds", buildJsonArray {
-                            item.sessionIds.forEach { add(JsonPrimitive(it)) }
-                        })
-                    }
-                },
+                workspaces = value.items.associate { item -> item.workspaceId to item.toJsonObject() },
                 workspaceOrder = value.items.map { it.workspaceId },
                 archivedSessionIds = value.archivedSessionIds.toSet(),
                 hiddenWorkspaceIds = value.hiddenWorkspaceIds.toSet(),
@@ -276,11 +350,19 @@ class DshEventReducer(
         _state.update { it.withWorkspace(view) }
     }
 
-    fun removePendingQuestion(rpcId: String) {
-        _state.update { current ->
-            if (rpcId !in current.pendingQuestions) current
-            else current.copy(pendingQuestions = current.pendingQuestions - rpcId)
+    private fun applyProjections(
+        state: DshEventState,
+        sessionId: String,
+        block: DshProjectionsBlock,
+    ): DshEventState = state.updateSession(sessionId) { session ->
+        val updated = session.projections.toMutableMap()
+        block.values.forEach { (key, value) ->
+            val existing = updated[key]
+            if (existing == null || existing.first <= block.asOfSeq) {
+                updated[key] = Pair(block.asOfSeq, value)
+            }
         }
+        session.copy(projections = updated)
     }
 
     private fun DshEventState.updateSession(
@@ -290,4 +372,33 @@ class DshEventReducer(
         val current = sessions[sessionId] ?: DshSessionSnapshot(sessionId = sessionId)
         return copy(sessions = sessions + (sessionId to transform(current)))
     }
+
+    private fun DshEventState.withWorkspace(view: DshWorkspaceView): DshEventState {
+        val id = view.workspaceId
+        return copy(
+            workspaces = workspaces + (id to view.toJsonObject()),
+            workspaceOrder = if (id in workspaceOrder) workspaceOrder else workspaceOrder + id,
+        )
+    }
+
+    private fun JsonObject.strValue(key: String): String? =
+        this[key]?.jsonPrimitive?.contentOrNull
+
+    private fun parseSummary(obj: JsonObject): DshSessionSummary = DshSessionSummary(
+        sessionId = obj.strValue("sessionId").orEmpty(),
+        updatedAt = obj["updatedAt"]?.jsonPrimitive?.longOrNull ?: 0L,
+        running = obj["running"]?.jsonPrimitive?.contentOrNull == "true",
+        blank = obj["blank"]?.jsonPrimitive?.contentOrNull == "true",
+        parentSessionId = obj.strValue("parentSessionId"),
+        origin = obj.strValue("origin"),
+        cwd = obj.strValue("cwd"),
+        agentPreset = obj.strValue("agentPreset"),
+        projections = runCatching {
+            val block = obj["projections"]?.jsonObject ?: return@runCatching null
+            DshProjectionsBlock(
+                asOfSeq = block["asOfSeq"]?.jsonPrimitive?.longOrNull ?: 0L,
+                values = block["values"] as? JsonObject ?: JsonObject(emptyMap()),
+            )
+        }.getOrNull(),
+    )
 }

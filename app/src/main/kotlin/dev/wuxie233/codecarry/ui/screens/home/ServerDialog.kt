@@ -107,6 +107,7 @@ fun ServerDialog(
     var url by remember { mutableStateOf(server?.url ?: "http://") }
     var username by remember { mutableStateOf(server?.username ?: "opencode") }
     var password by remember { mutableStateOf(server?.password ?: "") }
+    var token by remember { mutableStateOf(server?.token ?: "") }
     var passwordVisible by remember { mutableStateOf(false) }
     var autoConnect by remember { mutableStateOf(server?.autoConnect ?: false) }
 
@@ -307,6 +308,17 @@ fun ServerDialog(
                             .fillMaxWidth()
                             .semantics { contentDescription = passwordLabel }
                     )
+
+                    if (serverType == ServerType.DSH) {
+                        OutlinedTextField(
+                            value = token,
+                            onValueChange = { token = it },
+                            label = { Text(stringResource(R.string.server_dsh_token)) },
+                            placeholder = { Text(stringResource(R.string.server_dsh_token_hint)) },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
                     }
 
                     Surface(
@@ -362,6 +374,29 @@ fun ServerDialog(
                     TextButton(
                         modifier = Modifier.semantics { contentDescription = saveServerDescription },
                         onClick = {
+                            // A pasted launch URL carries ?token=; split it into the
+                            // token field so the saved URL stays clean.
+                            val pastedToken = runCatching {
+                                java.net.URI(url.trim()).rawQuery
+                            }.getOrNull()?.let { query ->
+                                query.split('&')
+                                    .firstOrNull { it.startsWith("token=") }
+                                    ?.substringAfter('=')
+                                    ?.takeIf { it.isNotBlank() }
+                            }
+                            if (pastedToken != null) {
+                                if (token.isBlank()) token = java.net.URLDecoder.decode(pastedToken, "UTF-8")
+                                val uri = java.net.URI(url.trim())
+                                url = java.net.URI(
+                                    uri.scheme,
+                                    null,
+                                    uri.host,
+                                    uri.port,
+                                    uri.path.takeUnless { it.isNullOrBlank() },
+                                    null,
+                                    null,
+                                ).toString().trimEnd('/')
+                            }
                             val normalizedUrl = validateAndNormalizeUrl(url, serverType)
                             urlError = when {
                                 url.isBlank() -> urlRequiredText
@@ -379,7 +414,7 @@ fun ServerDialog(
                                     serverType,
                                     if (serverType == ServerType.DSH) "" else username.ifBlank { "opencode" },
                                     password.takeIf { it.isNotBlank() },
-                                    null,
+                                    if (serverType == ServerType.DSH) token.trim().takeIf { it.isNotBlank() } else null,
                                     autoConnect
                                 )
                             }

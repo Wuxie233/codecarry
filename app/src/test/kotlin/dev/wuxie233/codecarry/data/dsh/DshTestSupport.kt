@@ -9,7 +9,6 @@ internal fun unusedDshHttp(): HttpClient = HttpClient(MockEngine { error("dsh ht
 
 internal fun unusedDshDownlinks(): DshDownlinkFactory = object : DshDownlinkFactory {
     override suspend fun openMux(connection: DshConnection) = error("unused mux")
-    override suspend fun openHost(connection: DshConnection) = error("unused host")
 }
 
 internal fun unusedDshApi(json: Json = Json { ignoreUnknownKeys = true; encodeDefaults = true }): DshApiClient =

@@ -542,7 +542,7 @@ class SessionListViewModelTest {
         collectUiState(vm)
 
         vm.createNewSession(directory = "/work/project")
-        advanceUntilIdle()
+        advanceUntilIoSettles { vm.uiState.value.error != null }
 
         assertTrue(navigated.isEmpty())
         assertEquals("create exploded", vm.uiState.value.error)
@@ -624,11 +624,11 @@ class SessionListViewModelTest {
 
         captured.clear()
         vm.createNewSession(directory = "/work/new")
-        advanceUntilIdle()
+        advanceUntilIoSettles { "session/create" in captured && navigated.isNotEmpty() }
 
         assertEquals(
-            listOf("workspace.create", "session.create"),
-            captured.filter { it == "workspace.create" || it == "session.create" },
+            listOf("workspace/create", "session/create"),
+            captured.filter { it == "workspace/create" || it == "session/create" },
         )
         val session = navigated.single()
         assertEquals("s-new", session.id)
@@ -651,9 +651,9 @@ class SessionListViewModelTest {
 
         captured.clear()
         vm.createNoRepoSession()
-        advanceUntilIdle()
+        advanceUntilIoSettles { "session/create" in captured && navigated.isNotEmpty() }
 
-        assertEquals(listOf("session.create"), captured.filter { it == "session.create" || it == "workspace.create" })
+        assertEquals(listOf("session/create"), captured.filter { it == "session/create" || it == "workspace/create" })
         assertEquals("s-no-repo", navigated.single().id)
     }
 
@@ -683,13 +683,25 @@ class SessionListViewModelTest {
 
         captured.clear()
         vm.createNewSession(directory = "/work/a")
-        advanceUntilIdle()
+        advanceUntilIoSettles { navigated.isNotEmpty() }
 
         assertEquals(
-            listOf("workspace.create"),
-            captured.filter { it == "workspace.create" || it == "session.create" },
+            listOf("workspace/create"),
+            captured.filter { it == "workspace/create" || it == "session/create" },
         )
         assertEquals("blank", navigated.single().id)
+    }
+
+
+    /** MockEngine answers on real IO threads; drain the scheduler until the
+     *  condition holds or the bounded budget expires. */
+    private fun advanceUntilIoSettles(condition: () -> Boolean) {
+        repeat(80) {
+            if (condition()) return
+            testScope.advanceUntilIdle()
+            Thread.sleep(10)
+        }
+        testScope.advanceUntilIdle()
     }
 
     private fun collectNavigation(
@@ -776,16 +788,17 @@ class SessionListViewModelTest {
             captured += method
             val payload = envelope.getValue("payload").jsonObject
             val value = when (method) {
-                "workspace.list" -> """{"items":[],"archivedSessionIds":[],"hiddenWorkspaceIds":[]}"""
-                "session.list" -> """{"items":[]}"""
-                "host.listDirectory" -> """{"path":"/root","home":"/root","crumbs":[],"entries":[],"truncated":false}"""
-                "workspace.create" -> {
-                    val path = payload.getValue("path").jsonPrimitive.content
+                "session/list" -> """{"items":[]}"""
+                "directoryPicker/list" -> """{"path":"/root","home":"/root","crumbs":[],"entries":[],"truncated":false}"""
+                "workspace/create" -> {
+                    val request = payload.getValue("args").jsonObject.getValue("request").jsonObject
+                    val path = request.getValue("path").jsonPrimitive.content
                     val sessionIds = if (reuseBlank) """["blank"]""" else "[]"
                     """{"workspace":{"workspaceId":"w1","path":"$path","folders":[],"title":"dir","sessionIds":$sessionIds,"createdAt":"t","updatedAt":"t"},"created":true}"""
                 }
-                "session.create" -> {
-                    val sessionId = if (payload.isEmpty()) "s-no-repo" else "s-new"
+                "session/create" -> {
+                    val request = payload.getValue("args").jsonObject.getValue("request").jsonObject
+                    val sessionId = if (request.isEmpty()) "s-no-repo" else "s-new"
                     """{"sessionId":"$sessionId"}"""
                 }
                 else -> "{}"

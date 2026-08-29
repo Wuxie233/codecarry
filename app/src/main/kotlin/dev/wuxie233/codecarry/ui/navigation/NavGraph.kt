@@ -153,6 +153,8 @@ fun NavGraph(
                     serverId = server.id,
                     sessionId = session.id,
                     directory = session.directory,
+                    serverType = server.type.name,
+                    token = server.token ?: "",
                 )
                 Log.i(TAG, "Share → navigating to session ${session.id} on ${server.displayName}")
                 navController.navigate(route) { launchSingleTop = true }
@@ -166,7 +168,9 @@ fun NavGraph(
                     username = server.username,
                     password = server.password ?: "",
                     serverName = server.displayName,
-                    serverId = server.id
+                    serverId = server.id,
+                    serverType = server.type.name,
+                    token = server.token ?: "",
                 )
                 Log.i(TAG, "Share → navigating to session list on ${server.displayName}")
                 navController.navigate(route) { launchSingleTop = true }
@@ -262,9 +266,9 @@ fun NavGraph(
         // ============ Home Screen ============
         composable(Screen.Home.route) {
             HomeScreen(
-                onNavigateToSessions = { serverUrl, username, password, serverName, serverId, serverType ->
+                onNavigateToSessions = { serverUrl, username, password, serverName, serverId, serverType, token ->
                     navController.navigate(
-                        Screen.SessionList.createRoute(serverUrl, username, password, serverName, serverId, serverType.name)
+                        Screen.SessionList.createRoute(serverUrl, username, password, serverName, serverId, serverType.name, token)
                     )
                 },
                 onNavigateToServerSettings = { serverUrl, username, password, serverName, serverId ->
@@ -455,7 +459,7 @@ fun NavGraph(
         
         // ============ Session List Screen (native) ============
         composable(
-            route = "sessions?serverUrl={serverUrl}&username={username}&password={password}&serverName={serverName}&serverId={serverId}&serverType={serverType}",
+            route = "sessions?serverUrl={serverUrl}&username={username}&password={password}&serverName={serverName}&serverId={serverId}&serverType={serverType}&token={token}",
             arguments = listOf(
                 navArgument("serverUrl") { type = NavType.StringType },
                 navArgument("username") { type = NavType.StringType },
@@ -463,6 +467,7 @@ fun NavGraph(
                 navArgument("serverName") { type = NavType.StringType },
                 navArgument("serverId") { type = NavType.StringType },
                 navArgument("serverType") { type = NavType.StringType; defaultValue = ServerType.OPENCODE.name },
+                navArgument("token") { type = NavType.StringType; defaultValue = "" },
             )
         ) { backStackEntry ->
             val serverUrl = decodeRouteArg(backStackEntry.arguments?.getString("serverUrl"))
@@ -471,6 +476,7 @@ fun NavGraph(
             val serverName = decodeRouteArg(backStackEntry.arguments?.getString("serverName"))
             val serverId = decodeRouteArg(backStackEntry.arguments?.getString("serverId"))
             val serverType = decodeRouteArg(backStackEntry.arguments?.getString("serverType"))
+            val token = decodeRouteArg(backStackEntry.arguments?.getString("token"))
 
             SessionListScreen(
                 onNavigateToChat = { sessionId, openTerminal, directory ->
@@ -485,6 +491,7 @@ fun NavGraph(
                             openTerminal = openTerminal,
                             directory = directory,
                             serverType = serverType,
+                            token = token,
                         )
                     )
                 },
@@ -496,7 +503,7 @@ fun NavGraph(
 
         // ============ Chat Screen (native) ============
         composable(
-            route = "chat?serverUrl={serverUrl}&username={username}&password={password}&serverName={serverName}&serverId={serverId}&sessionId={sessionId}&openTerminal={openTerminal}&directory={directory}&serverType={serverType}",
+            route = "chat?serverUrl={serverUrl}&username={username}&password={password}&serverName={serverName}&serverId={serverId}&sessionId={sessionId}&openTerminal={openTerminal}&directory={directory}&serverType={serverType}&token={token}",
             arguments = listOf(
                 navArgument("serverUrl") { type = NavType.StringType },
                 navArgument("username") { type = NavType.StringType },
@@ -506,7 +513,8 @@ fun NavGraph(
                 navArgument("sessionId") { type = NavType.StringType },
                 navArgument("openTerminal") { type = NavType.BoolType; defaultValue = false },
                 navArgument("directory") { type = NavType.StringType; defaultValue = "" },
-                navArgument("serverType") { type = NavType.StringType; defaultValue = ServerType.OPENCODE.name }
+                navArgument("serverType") { type = NavType.StringType; defaultValue = ServerType.OPENCODE.name },
+                navArgument("token") { type = NavType.StringType; defaultValue = "" }
             )
         ) { backStackEntry ->
             val serverUrl = decodeRouteArg(backStackEntry.arguments?.getString("serverUrl"))
@@ -518,6 +526,7 @@ fun NavGraph(
             val openTerminal = backStackEntry.arguments?.getBoolean("openTerminal") ?: false
             val directory = decodeRouteArg(backStackEntry.arguments?.getString("directory"))
             val serverType = decodeRouteArg(backStackEntry.arguments?.getString("serverType"))
+            val token = decodeRouteArg(backStackEntry.arguments?.getString("token"))
 
             // Only pass shared images to the targeted session, then clear them
             val imagesForThisSession = if (pendingShareSessionId == sessionId && pendingShareUris.isNotEmpty()) {
@@ -540,6 +549,7 @@ fun NavGraph(
                         sessionId = newSessionId,
                         directory = newSessionDirectory,
                         serverType = serverType,
+                        token = token,
                     )
                     navController.navigate(route) {
                         launchSingleTop = shouldLaunchSingleTopChat(sessionId, newSessionId)
