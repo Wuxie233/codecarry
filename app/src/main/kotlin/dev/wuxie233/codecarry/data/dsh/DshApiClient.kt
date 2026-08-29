@@ -78,6 +78,17 @@ class DshApiClient(
     private val downlinkFactory: DshDownlinkFactory = KtorDshDownlinkFactory(httpClient),
 ) {
     /**
+     * Cookies minted by [exchangeCookie], keyed by baseUrl. Screens build
+     * their own [DshConnection] from route args without the cookie, so the
+     * client attaches the cached session per request; a 401 drops the cache
+     * and surfaces as [DshAuthRequiredException] so the manager re-exchanges.
+     */
+    private val cookieCache = mutableMapOf<String, String>()
+
+    private fun cookieFor(connection: DshConnection): String? =
+        connection.cookie ?: cookieCache[connection.baseUrl]
+
+    /**
      * One unary Remote call: `POST /api/<namespace>/<method>` with the
      * `{ type, rpcId, method, payload: { args } }` envelope. Cookie first,
      * optional Basic for a fronting proxy.
@@ -101,7 +112,7 @@ class DshApiClient(
             httpClient.post("${connection.baseUrl}${DshRpc.unaryPath(method)}") {
                 contentType(ContentType.Application.Json)
                 connection.basicAuthorization?.let { header(HttpHeaders.Authorization, it) }
-                connection.cookie?.let { header(HttpHeaders.Cookie, it) }
+                cookieFor(connection)?.let { header(HttpHeaders.Cookie, it) }
                 setBody(bodyText)
             }
         } catch (error: CancellationException) {
@@ -110,6 +121,7 @@ class DshApiClient(
             throw DshTransportException("transport failure for $method", error)
         }
         if (response.status == HttpStatusCode.Unauthorized) {
+            cookieCache.remove(connection.baseUrl)
             throw DshAuthRequiredException("DSH authentication failed for $method")
         }
         if (!response.status.isSuccess()) {
@@ -143,7 +155,10 @@ class DshApiClient(
      * the current process token itself.
      */
     suspend fun exchangeCookie(connection: DshConnection): DshConnection {
-        if (!connection.cookie.isNullOrBlank()) return connection
+        if (!connection.cookie.isNullOrBlank()) {
+            cookieCache[connection.baseUrl] = connection.cookie
+            return connection
+        }
         val indexUrl = dshIndexUrl(connection.baseUrl, connection.token)
         val response = try {
             httpClient.get(indexUrl) {
@@ -162,6 +177,7 @@ class DshApiClient(
             ?: throw DshAuthRequiredException(
                 "DSH cookie exchange returned no session cookie (HTTP ${response.status.value})",
             )
+        cookieCache[connection.baseUrl] = cookie
         return connection.withCookie(cookie)
     }
 
@@ -912,7 +928,8 @@ class DshApiClient(
         )
     }
 
-    suspend fun openMux(connection: DshConnection): DshDownlink = downlinkFactory.openMux(connection)
+    suspend fun openMux(connection: DshConnection): DshDownlink =
+        downlinkFactory.openMux(connection.withCookie(cookieFor(connection)))
 
     /** Send one logical-stream open request on the mux socket. */
     suspend fun sendStreamOpen(downlink: DshDownlink, endpoint: String, streamId: String, args: JsonObject) {

@@ -71,6 +71,86 @@ class DshApiClientTest {
     }
 
     @Test
+    fun `screen connections reuse the cached cookie after exchange`() = runTest {
+        var cookieHeaders = 0
+        val engine = MockEngine { request ->
+            if (request.url.encodedPath == "/") {
+                respond(
+                    content = "",
+                    status = HttpStatusCode.SeeOther,
+                    headers = headersOf(
+                        HttpHeaders.SetCookie,
+                        "dsh-auth-zz=v1.body; Max-Age=2592000; Path=/; HttpOnly; SameSite=Strict",
+                    ),
+                )
+            } else {
+                if (!request.headers[HttpHeaders.Cookie].isNullOrBlank()) cookieHeaders += 1
+                respond(
+                    content = """{"type":"server-response","rpcId":"fixed","result":{"ok":true,"value":{"items":[]}}}""",
+                    headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                )
+            }
+        }
+        val http = HttpClient(engine) {
+            followRedirects = false
+            install(ContentNegotiation) { json(json) }
+        }
+        val client = DshApiClient(http, json, mintRpcId = { "fixed" }, downlinkFactory = unusedDownlinks())
+        // Manager-style connect exchanges with the tokened connection...
+        client.exchangeCookie(DshConnection.from("http://192.168.1.8:3080", token = "launch-token"))
+        // ...while screens call with their own cookie-less connection.
+        val screenConn = DshConnection.from("http://192.168.1.8:3080")
+        client.sessionList(screenConn)
+        client.sessionList(screenConn)
+        assertEquals(2, cookieHeaders)
+    }
+
+    @Test
+    fun `http 401 clears the cached cookie for the next generation`() = runTest {
+        var unauthorizedOnce = false
+        val engine = MockEngine { request ->
+            if (request.url.encodedPath == "/") {
+                respond(
+                    content = "",
+                    status = HttpStatusCode.SeeOther,
+                    headers = headersOf(
+                        HttpHeaders.SetCookie,
+                        "dsh-auth-zz=v1.body; Max-Age=2592000; Path=/; HttpOnly; SameSite=Strict",
+                    ),
+                )
+            } else if (!unauthorizedOnce) {
+                unauthorizedOnce = true
+                respond(
+                    content = "unauthorized",
+                    status = HttpStatusCode.Unauthorized,
+                    headers = headersOf(HttpHeaders.ContentType, "text/plain"),
+                )
+            } else {
+                respond(
+                    content = """{"type":"server-response","rpcId":"fixed","result":{"ok":true,"value":{"items":[]}}}""",
+                    headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                )
+            }
+        }
+        val http = HttpClient(engine) {
+            followRedirects = false
+            install(ContentNegotiation) { json(json) }
+        }
+        val client = DshApiClient(http, json, mintRpcId = { "fixed" }, downlinkFactory = unusedDownlinks())
+        client.exchangeCookie(DshConnection.from("http://192.168.1.8:3080", token = "launch-token"))
+        val screenConn = DshConnection.from("http://192.168.1.8:3080")
+        try {
+            client.sessionList(screenConn)
+            throw AssertionError("expected auth failure")
+        } catch (_: DshAuthRequiredException) {
+        }
+        // Re-exchange mints a fresh cookie and the same screen connection works.
+        client.exchangeCookie(DshConnection.from("http://192.168.1.8:3080", token = "launch-token"))
+        client.sessionList(screenConn)
+        assertTrue(unauthorizedOnce)
+    }
+
+    @Test
     fun `authed unary sends cookie and basic on every post`() = runTest {
         val captured = mutableListOf<HttpRequestData>()
         val authed = DshConnection.from("https://dsh.wuxie233.com", "secret", "launch-token")
