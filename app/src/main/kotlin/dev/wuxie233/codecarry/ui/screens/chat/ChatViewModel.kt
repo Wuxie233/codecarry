@@ -639,12 +639,12 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    private fun startDshFollow(force: Boolean = false) {
-        if (!isDsh || sessionId.isBlank()) return
-        val generation = dshConnectionManager.states.value[serverId] ?: return
-        if (!generation.isReady) return
+    private fun startDshFollow(force: Boolean = false): Boolean {
+        if (!isDsh || sessionId.isBlank()) return false
+        val generation = dshConnectionManager.states.value[serverId] ?: return false
+        if (!generation.isReady) return false
         if (!force && dshFollowJob?.isActive == true && dshFollowGeneration == generation.generation) {
-            return
+            return true
         }
         dshFollowJob?.cancel()
         dshFollowGeneration = generation.generation
@@ -675,8 +675,18 @@ class ChatViewModel @Inject constructor(
                 Log.e(TAG, "DSH session follow failed", e)
                 _error.value = e.message ?: "Failed to load messages"
                 _isLoading.value = false
+                val diedGeneration = dshFollowGeneration
+                val stillReady = dshConnectionManager.states.value[serverId]
+                if (stillReady?.isReady == true && stillReady.generation == diedGeneration) {
+                    delay(1_000)
+                    val current = dshConnectionManager.states.value[serverId]
+                    if (current?.isReady == true && current.generation == diedGeneration) {
+                        startDshFollow(force = true)
+                    }
+                }
             }
         }
+        return true
     }
 
     private fun applyDshState(state: DshEventState) {
@@ -889,9 +899,14 @@ class ChatViewModel @Inject constructor(
 
     fun loadMessages() {
         if (isDsh) {
-            _error.value = null
-            _isLoading.value = true
-            startDshFollow(force = true)
+            if (startDshFollow(force = true)) {
+                _error.value = null
+                _isLoading.value = true
+            } else {
+                _isLoading.value = false
+                _error.value = dshConnectionManager.states.value[serverId]?.error
+                    ?: "DSH is not connected"
+            }
             return
         }
         viewModelScope.launch {

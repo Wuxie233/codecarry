@@ -39,6 +39,7 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runCurrent
@@ -158,6 +159,75 @@ class ChatViewModelDshFollowTest {
         assertFalse(unary.any { it.contains("session/page") })
     }
 
+    @Test
+    fun `retry without a ready mux surfaces an error instead of spinning`() = runTest(dispatcher) {
+        val mux = FakeDownlink()
+        val unary = Collections.synchronizedList(mutableListOf<String>())
+        val harness = dshHarness(mux, unary)
+        val vm = newViewModel(harness.client, harness.manager)
+        collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
+        runCurrent()
+        advanceUntilIdle()
+
+        vm.loadMessages()
+        runCurrent()
+        advanceUntilIdle()
+
+        val state = vm.uiState.value
+        assertFalse(state.isLoading)
+        assertEquals("DSH is not connected", state.error)
+        assertFalse(mux.sent.any { it.contains("\"session/follow\"") })
+    }
+
+    @Test
+    fun `follow end while ready reopens session follow`() = runTest(dispatcher) {
+        val mux = FakeDownlink()
+        val unary = Collections.synchronizedList(mutableListOf<String>())
+        val harness = dshHarness(mux, unary)
+        val vm = newViewModel(harness.client, harness.manager)
+        collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
+
+        harness.manager.connect(SERVER_ID, DshConnection.from("http://127.0.0.1:3080", token = "launch-token"))
+        runCurrent()
+        pushBaselines(mux)
+        harness.manager.states.first { it[SERVER_ID]?.isReady == true }
+        runCurrent()
+
+        val firstFollow = mux.sent.last { it.contains("\"session/follow\"") }
+        val followId = json.parseToJsonElement(firstFollow).jsonObject.getValue("streamId").jsonPrimitive.content
+        mux.incoming.trySend(
+            item(
+                followId,
+                """{"type":"snapshot","header":null,"cursor":12072,"records":[{"type":"event","event":{"type":"user/message","seq":12070,"time":1,"data":{"id":"u1","content":[{"type":"text","text":"hello"}],"source":{"kind":"user"}},"surfaceOp":"append"}}],"hasMore":false}""",
+            ),
+        )
+        runCurrent()
+        advanceUntilIdle()
+        vm.uiState.first { !it.isLoading && it.messages.isNotEmpty() }
+
+        mux.incoming.trySend("""{"type":"end","streamId":"$followId"}""")
+        runCurrent()
+        assertEquals("session/follow stream ended", vm.uiState.value.error)
+
+        val opensBefore = mux.sent.count { it.contains("\"session/follow\"") }
+        advanceTimeBy(1_000)
+        runCurrent()
+
+        val opensAfter = mux.sent.count { it.contains("\"session/follow\"") }
+        assertEquals(opensBefore + 1, opensAfter)
+        val secondFollow = mux.sent.last { it.contains("\"session/follow\"") }
+        val secondId = json.parseToJsonElement(secondFollow).jsonObject.getValue("streamId").jsonPrimitive.content
+        mux.incoming.trySend(
+            item(
+                secondId,
+                """{"type":"snapshot","header":null,"cursor":12072,"records":[{"type":"event","event":{"type":"user/message","seq":12070,"time":1,"data":{"id":"u1","content":[{"type":"text","text":"hello"}],"source":{"kind":"user"}},"surfaceOp":"append"}}],"hasMore":false}""",
+            ),
+        )
+        runCurrent()
+        advanceUntilIdle()
+        vm.uiState.first { it.error == null && it.messages.isNotEmpty() }
+    }
+
     private data class DshHarness(
         val client: DshApiClient,
         val manager: DshConnectionManager,
@@ -168,7 +238,7 @@ class ChatViewModelDshFollowTest {
         unary: MutableList<String>,
     ): DshHarness {
         var nextStream = 0
-        val streamIds = listOf("st-events", "st-control", "st-workspace", "st-follow")
+        val streamIds = listOf("st-0", "st-1", "st-2", "st-3", "st-4", "st-5")
         val engine = MockEngine { request ->
             when (request.url.encodedPath) {
                 "/" -> respond(
@@ -289,10 +359,10 @@ class ChatViewModelDshFollowTest {
     )
 
     private fun pushBaselines(mux: FakeDownlink) {
-        mux.incoming.trySend(item("st-events", """{"type":"ready","clientId":"client-1","host":{"home":"/root"}}"""))
-        mux.incoming.trySend(item("st-control", """{"type":"baseline","value":{"queues":{},"jobs":{},"projections":{}}}"""))
+        mux.incoming.trySend(item("st-0", """{"type":"ready","clientId":"client-1","host":{"home":"/root"}}"""))
+        mux.incoming.trySend(item("st-1", """{"type":"baseline","value":{"queues":{},"jobs":{},"projections":{}}}"""))
         mux.incoming.trySend(
-            item("st-workspace", """{"type":"baseline","value":{"items":[],"archivedSessionIds":[],"hiddenWorkspaceIds":[]}}"""),
+            item("st-2", """{"type":"baseline","value":{"items":[],"archivedSessionIds":[],"hiddenWorkspaceIds":[]}}"""),
         )
     }
 
