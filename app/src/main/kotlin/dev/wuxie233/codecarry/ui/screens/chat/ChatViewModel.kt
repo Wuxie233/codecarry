@@ -22,10 +22,10 @@ import dev.wuxie233.codecarry.data.api.ModelLimit
 import dev.wuxie233.codecarry.data.api.toPermissionAsked
 import dev.wuxie233.codecarry.data.api.ServerConnection
 import dev.wuxie233.codecarry.data.dsh.DshApiClient
-import dev.wuxie233.codecarry.data.dsh.DshRpc
 import dev.wuxie233.codecarry.data.dsh.DshConnection
 import dev.wuxie233.codecarry.data.dsh.DshConnectionManager
 import dev.wuxie233.codecarry.data.dsh.DshEventState
+import dev.wuxie233.codecarry.data.dsh.DshFollowFrame
 import dev.wuxie233.codecarry.data.dsh.DshGenerationStatus
 import dev.wuxie233.codecarry.data.dsh.connectDshConversation
 import dev.wuxie233.codecarry.data.dsh.DshQuestionAnswer
@@ -260,6 +260,8 @@ class ChatViewModel @Inject constructor(
     private var pendingOpenCodeDrain: Job? = null
     private val dshResolvedAttachments = mutableMapOf<String, String>()
     private var dshAttachmentJob: Job? = null
+    private var dshFollowJob: Job? = null
+    private var dshFollowGeneration: Long = -1
     private var dshAppliedEventSeq: Long = -1
     private val dshHistoryFolder = DshHistoryFolder()
     private var lastBuiltChatMessages: List<ChatMessage> = emptyList()
@@ -630,9 +632,49 @@ class ChatViewModel @Inject constructor(
             dshConnectionManager.states.collect { states ->
                 val generation = states[serverId]
                 if (generation?.status == DshGenerationStatus.Ready && generation.isReady) {
-                    loadDshHistory()
+                    startDshFollow()
                     loadDshProviders()
                 }
+            }
+        }
+    }
+
+    private fun startDshFollow(force: Boolean = false) {
+        if (!isDsh || sessionId.isBlank()) return
+        val generation = dshConnectionManager.states.value[serverId] ?: return
+        if (!generation.isReady) return
+        if (!force && dshFollowJob?.isActive == true && dshFollowGeneration == generation.generation) {
+            return
+        }
+        dshFollowJob?.cancel()
+        dshFollowGeneration = generation.generation
+        dshFollowJob = viewModelScope.launch {
+            try {
+                _error.value = null
+                dshConnectionManager.openSessionFollow(
+                    serverId = serverId,
+                    sessionId = sessionId,
+                    maxMessages = currentMessageLimit,
+                ).collect { frame ->
+                    when (frame) {
+                        is DshFollowFrame.Snapshot -> {
+                            dshReducer.applyFollowSnapshot(sessionId, frame)
+                            _hasOlderMessages.value = frame.hasMore
+                            applyDshState(dshReducer.state.value)
+                            _isLoading.value = false
+                        }
+                        is DshFollowFrame.FollowEvent -> {
+                            dshReducer.applyFollowEvent(sessionId, frame.event)
+                            applyDshState(dshReducer.state.value)
+                        }
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "DSH session follow failed", e)
+                _error.value = e.message ?: "Failed to load messages"
+                _isLoading.value = false
             }
         }
     }
@@ -674,27 +716,28 @@ class ChatViewModel @Inject constructor(
             dshReducer.applySessionList(list.items)
             val current = list.items.firstOrNull { it.sessionId == sessionId }
             sessionDirectory = current?.cwd?.takeIf { it.isNotBlank() } ?: routeDirectory ?: sessionDirectory
-            loadDshHistory()
+            startDshFollow()
             loadDshProviders()
         } catch (e: Exception) {
             Log.e(TAG, "Failed to load DSH session", e)
             _error.value = e.message ?: "Failed to load session"
+            _isLoading.value = false
         } finally {
             sessionLoaded.complete(Unit)
-            _isLoading.value = false
         }
     }
 
-    private suspend fun loadDshHistory(beforeSeq: Long? = null, silent: Boolean = false) {
+    private suspend fun loadDshOlderHistory() {
+        val snapshot = dshReducer.state.value.sessions[sessionId]
+        val throughSeq = snapshot?.pageThroughSeq ?: return
+        val beforeSeq = snapshot.events.minOfOrNull { it.seq } ?: return
         try {
-            val throughSeq = dshReducer.state.value.sessions[sessionId]?.lastSeq?.takeIf { it >= 0 }
-                ?: DshRpc.THROUGH_SEQ_LATEST
             val history = dshApi.sessionHistory(
                 connection = dshConn,
                 sessionId = sessionId,
+                throughSeq = throughSeq,
                 beforeSeq = beforeSeq,
                 maxMessages = currentMessageLimit,
-                throughSeq = throughSeq,
             )
             dshReducer.mergeHistory(
                 sessionId = sessionId,
@@ -702,15 +745,12 @@ class ChatViewModel @Inject constructor(
                 projections = history.projections,
                 replace = false,
             )
-            if (beforeSeq == null) {
-                _hasOlderMessages.value = history.hasMore
-            } else if (!history.hasMore) {
+            if (!history.hasMore) {
                 _hasOlderMessages.value = false
             }
             applyDshState(dshReducer.state.value)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to load DSH history", e)
-            if (!silent && beforeSeq == null) _error.value = e.message ?: "Failed to load messages"
+            Log.e(TAG, "Failed to load older DSH history", e)
         }
     }
 
@@ -849,11 +889,9 @@ class ChatViewModel @Inject constructor(
 
     fun loadMessages() {
         if (isDsh) {
-            viewModelScope.launch {
-                _isLoading.value = true
-                loadDshHistory()
-                _isLoading.value = false
-            }
+            _error.value = null
+            _isLoading.value = true
+            startDshFollow(force = true)
             return
         }
         viewModelScope.launch {
@@ -907,8 +945,7 @@ class ChatViewModel @Inject constructor(
         if (isDsh) {
             viewModelScope.launch {
                 _isLoadingOlder.value = true
-                val before = dshReducer.state.value.sessions[sessionId]?.events?.minOfOrNull { it.seq }
-                loadDshHistory(beforeSeq = before)
+                loadDshOlderHistory()
                 _isLoadingOlder.value = false
             }
             return
@@ -1262,6 +1299,7 @@ class ChatViewModel @Inject constructor(
 
     override fun onCleared() {
         foregroundResumeDispatcher.removeListener(foregroundResumeListener)
+        dshFollowJob?.cancel()
         eventReducer.clearActiveSessionId(sessionId)
         closeTerminalSession()
         super.onCleared()
@@ -1271,8 +1309,10 @@ class ChatViewModel @Inject constructor(
     private fun refreshOpenSessionOnForeground() {
         viewModelScope.launch {
             if (isDsh) {
+                // Live history rides session/follow; do not re-page while the
+                // follow is open. Ready reconnect already reopens follow.
                 if (dshConnectionManager.states.value[serverId]?.isReady == true) {
-                    loadDshHistory(silent = true)
+                    startDshFollow()
                 }
             } else {
                 runCatching { mergeOpenCodeHistorySilently() }

@@ -89,7 +89,9 @@ fork based on OC Remote; the Android namespace/applicationId is
   paths. Live state rides `/api/remote.mux` with logical `open`/`item`/`end`
   streams. Reconnect reopens mux and re-follows `$events`, `session/control`,
   and `workspace/follow`. Per-chat history uses `session/follow` plus
-  `session/page`. No SSE fallback. `host.describe`, `/api/events.mux`,
+  `session/page`. `session/page` throughSeq is the follow snapshot
+  cursor (later live seqs), never a JS sentinel; unknown cursor skips
+  the page call. No SSE fallback. `host.describe`, `/api/events.mux`,
   `/api/events.host`, `/api/respond`, and `workspace.list` are gone.
 - DSH `assistant/message` already embeds `tool-call` blocks. A later mux
   `tool/call` with the same `callId` must update that part, not append a

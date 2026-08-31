@@ -10,7 +10,6 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.content.TextContent
 import io.ktor.http.headersOf
 import io.ktor.serialization.kotlinx.json.json
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
@@ -284,10 +283,16 @@ class DshApiClientTest {
             val envelope = json.parseToJsonElement((request.body as TextContent).text).jsonObject
             val requestArgs = envelope.getValue("payload").jsonObject.getValue("args").jsonObject.getValue("request").jsonObject
             assertEquals("session", requestArgs.getValue("address").jsonObject.getValue("kind").jsonPrimitive.content)
-            assertEquals(9_007_199_254_740_991L, requestArgs.getValue("throughSeq").jsonPrimitive.content.toLong())
+            assertEquals(12072L, requestArgs.getValue("throughSeq").jsonPrimitive.content.toLong())
+            assertEquals(1L, requestArgs.getValue("beforeSeq").jsonPrimitive.content.toLong())
             """{"type":"server-response","rpcId":"${envelope.getValue("rpcId").jsonPrimitive.content}","result":{"ok":true,"value":{"records":[{"type":"event","event":{"type":"user/message","seq":1,"time":1}},{"type":"chunks","event":{"type":"chunkrow/delta","seq":2,"time":2}}],"hasMore":false}}}"""
         }
-        val history = client.sessionHistory(connection, sessionId = "s1")
+        val history = client.sessionHistory(
+            connection,
+            sessionId = "s1",
+            throughSeq = 12072L,
+            beforeSeq = 1L,
+        )
         assertEquals(2, history.events.size)
         assertEquals("user/message", history.events.first().event.type)
         assertTrue(!history.hasMore)
@@ -388,19 +393,5 @@ class DshApiClientTest {
             install(ContentNegotiation) { json(json) }
         }
         return DshApiClient(http, json, downlinkFactory = unusedDownlinks())
-    }
-}
-
-internal class FakeDownlink : DshDownlink {
-    val incoming = Channel<String>(Channel.UNLIMITED)
-    val sent = mutableListOf<String>()
-    override var isOpen: Boolean = true
-    override suspend fun receive(): String? = incoming.receiveCatching().getOrNull()
-    override suspend fun send(text: String) {
-        sent += text
-    }
-    override suspend fun close() {
-        isOpen = false
-        incoming.close()
     }
 }

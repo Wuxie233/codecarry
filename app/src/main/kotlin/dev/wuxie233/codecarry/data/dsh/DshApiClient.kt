@@ -216,8 +216,9 @@ class DshApiClient(
 
     /**
      * One backwards history page via `session/page`. `throughSeq` is the
-     * inclusive log cut from the follow snapshot; when absent the newest cut
-     * is requested with a very large sentinel.
+     * inclusive log cut from the corresponding `session/follow` snapshot
+     * (later advanced by live seqs). Never a "latest" sentinel: the Host
+     * rejects any cut past the session cursor.
      */
     suspend fun sessionPage(
         connection: DshConnection,
@@ -253,9 +254,9 @@ class DshApiClient(
     suspend fun sessionHistory(
         connection: DshConnection,
         sessionId: String,
+        throughSeq: Long,
         beforeSeq: Long? = null,
         maxMessages: Int? = null,
-        throughSeq: Long = DshRpc.THROUGH_SEQ_LATEST,
     ): DshSessionHistoryValue = sessionPage(connection, sessionId, throughSeq, beforeSeq, maxMessages)
         .toHistory()
 

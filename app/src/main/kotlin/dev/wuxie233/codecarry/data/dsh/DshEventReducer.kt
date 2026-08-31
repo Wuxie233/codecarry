@@ -36,12 +36,20 @@ data class DshSessionSnapshot(
     val agentPreset: String? = null,
     val updatedAt: Long = 0,
     val lastSeq: Long = -1,
+    /**
+     * True after `session/follow` has reported a log cut. Default `lastSeq = -1`
+     * is not a known empty-log cursor; Host `-1` is valid only after follow.
+     */
+    val historyOpened: Boolean = false,
     val events: List<DshSessionEvent> = emptyList(),
     val queue: List<DshQueuedInboxItem> = emptyList(),
     val jobs: List<DshJobView> = emptyList(),
     val projections: Map<String, Pair<Long, JsonElement?>> = emptyMap(),
     val error: String? = null,
-)
+) {
+    /** Inclusive `session/page` cut, or null when follow has not opened yet. */
+    val pageThroughSeq: Long? get() = if (historyOpened) lastSeq else null
+}
 
 data class DshEventState(
     val generation: Long = 0,
@@ -224,7 +232,10 @@ class DshEventReducer(
         )
         _state.update { current ->
             current.updateSession(sessionId) { session ->
-                session.copy(lastSeq = maxOf(session.lastSeq, frame.cursor))
+                session.copy(
+                    lastSeq = maxOf(session.lastSeq, frame.cursor),
+                    historyOpened = true,
+                )
             }
         }
     }
@@ -236,6 +247,7 @@ class DshEventReducer(
                 val events = if (event.seq > session.lastSeq) session.events + event else session.events
                 session.copy(
                     lastSeq = maxOf(session.lastSeq, event.seq),
+                    historyOpened = true,
                     events = events,
                     blank = if (event.type == "turn/start") false else session.blank,
                 )

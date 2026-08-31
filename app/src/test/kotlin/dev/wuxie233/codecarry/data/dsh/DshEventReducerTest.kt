@@ -182,8 +182,42 @@ class DshEventReducerTest {
         val session = reducer.state.value.sessions.getValue("s1")
         assertEquals(2, session.events.size)
         assertEquals(4L, session.lastSeq)
+        assertTrue(session.historyOpened)
+        assertEquals(4L, session.pageThroughSeq)
         reducer.applyFollowEvent("s1", DshSessionEvent(type = "assistant/message", seq = 5, time = 5))
         assertEquals(3, reducer.state.value.sessions.getValue("s1").events.size)
+        assertEquals(5L, reducer.state.value.sessions.getValue("s1").pageThroughSeq)
+    }
+
+    @Test
+    fun `page throughSeq is unknown until follow reports a cut including empty cursor -1`() {
+        val reducer = DshEventReducer()
+        assertNull(DshSessionSnapshot(sessionId = "s1").pageThroughSeq)
+        reducer.applySessionList(
+            listOf(
+                DshSessionSummary(
+                    sessionId = "s1",
+                    updatedAt = 1,
+                    running = false,
+                    blank = false,
+                    cwd = "/tmp",
+                ),
+            ),
+        )
+        assertFalse(reducer.state.value.sessions.getValue("s1").historyOpened)
+        assertNull(reducer.state.value.sessions.getValue("s1").pageThroughSeq)
+        reducer.applyFollowSnapshot(
+            "s1",
+            DshFollowFrame.Snapshot(
+                header = null,
+                cursor = -1,
+                records = emptyList(),
+                hasMore = false,
+            ),
+        )
+        val empty = reducer.state.value.sessions.getValue("s1")
+        assertTrue(empty.historyOpened)
+        assertEquals(-1L, empty.pageThroughSeq)
     }
 
     @Test
