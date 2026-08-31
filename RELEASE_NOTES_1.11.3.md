@@ -11,7 +11,14 @@ Fix DSH chat opening onto `bad-request: session page through seq 900719925474099
 ## Verification
 
 - Focused JVM tests: first open never posts `session/page`; older pages use the real cut (`12072`); unknown cursor skips page; Retry without Ready surfaces an error; follow End while Ready reopens.
-- Passed `:app:testDebugUnitTest` (614 tests) and `:app:assembleDebug`.
+- Passed `:app:testDebugUnitTest` (616 tests) and `:app:assembleDebug`.
+
+## APK integrity
+
+If the installer reports a parse error, the download is truncated — verify what landed on the device:
+
+- Size: exactly `7,302,111` bytes (≈6.96 MB)
+- SHA256: `2a5a145ae9e50782cc9519b342bae4c8a96dc68f3b5ada07f0ba09748c91fbe7`
 
 ## Metadata
 
