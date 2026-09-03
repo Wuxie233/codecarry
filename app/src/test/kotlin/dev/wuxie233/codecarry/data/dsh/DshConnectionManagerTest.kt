@@ -169,7 +169,7 @@ class DshConnectionManagerTest {
         pushBaselines(mux)
         manager.states.first { it["dsh-1"]?.isReady == true }
         backgroundScope.launch {
-            manager.openSessionFollow("dsh-1", "s1").collect { frame ->
+            manager.openSessionFollow("dsh-1", DshSessionAddress.Session("s1")).collect { frame ->
                 when (frame) {
                     is DshFollowFrame.Snapshot ->
                         manager.reducer("dsh-1").applyFollowSnapshot("s1", frame)
@@ -194,6 +194,46 @@ class DshConnectionManagerTest {
         val session = manager.reducer("dsh-1").state.value.sessions.getValue("s1")
         assertEquals(1, session.events.size)
         assertEquals(2L, session.lastSeq)
+        val address = followObj.getValue("payload").jsonObject
+            .getValue("args").jsonObject
+            .getValue("request").jsonObject
+            .getValue("address").jsonObject
+        assertEquals("session", address.getValue("kind").jsonPrimitive.content)
+        assertEquals("s1", address.getValue("sessionId").jsonPrimitive.content)
+    }
+
+    @Test
+    fun `session follow open payload uses subagent address`() = runTest {
+        val mux = FakeDownlink()
+        var next = 0
+        val manager = DshConnectionManager(
+            client = clientFor(muxFactory(mux), running = false),
+            scope = backgroundScope,
+            mintStreamId = { streamIds[next++ % streamIds.size] },
+        )
+        manager.connect("dsh-1", connection)
+        pushBaselines(mux)
+        manager.states.first { it["dsh-1"]?.isReady == true }
+        backgroundScope.launch {
+            manager.openSessionFollow(
+                "dsh-1",
+                DshSessionAddress.Subagent(
+                    parentSessionId = "parent-1",
+                    childSessionId = "child-1",
+                    mode = "continuable",
+                ),
+            ).collect { }
+        }
+        runCurrent()
+        val followObj = json.parseToJsonElement(mux.sent.last()).jsonObject
+        val address = followObj.getValue("payload").jsonObject
+            .getValue("args").jsonObject
+            .getValue("request").jsonObject
+            .getValue("address").jsonObject
+        assertEquals("subagent", address.getValue("kind").jsonPrimitive.content)
+        assertEquals("parent-1", address.getValue("parentSessionId").jsonPrimitive.content)
+        assertEquals("child-1", address.getValue("childSessionId").jsonPrimitive.content)
+        assertEquals("continuable", address.getValue("mode").jsonPrimitive.content)
     }
 
     private fun muxFactory(mux: FakeDownlink): DshDownlinkFactory = object : DshDownlinkFactory {

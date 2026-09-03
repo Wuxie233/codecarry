@@ -289,13 +289,61 @@ class DshApiClientTest {
         }
         val history = client.sessionHistory(
             connection,
-            sessionId = "s1",
+            address = DshSessionAddress.Session("s1"),
             throughSeq = 12072L,
             beforeSeq = 1L,
         )
         assertEquals(2, history.events.size)
         assertEquals("user/message", history.events.first().event.type)
         assertTrue(!history.hasMore)
+    }
+
+    @Test
+    fun `session page with subagent address encodes parent child and mode`() = runTest {
+        val captured = mutableListOf<HttpRequestData>()
+        val client = api(captured) { request ->
+            val envelope = json.parseToJsonElement((request.body as TextContent).text).jsonObject
+            val requestArgs = envelope.getValue("payload").jsonObject.getValue("args").jsonObject.getValue("request").jsonObject
+            val address = requestArgs.getValue("address").jsonObject
+            assertEquals("subagent", address.getValue("kind").jsonPrimitive.content)
+            assertEquals("parent-1", address.getValue("parentSessionId").jsonPrimitive.content)
+            assertEquals("child-1", address.getValue("childSessionId").jsonPrimitive.content)
+            assertEquals("continuable", address.getValue("mode").jsonPrimitive.content)
+            assertEquals(12L, requestArgs.getValue("throughSeq").jsonPrimitive.content.toLong())
+            """{"type":"server-response","rpcId":"${envelope.getValue("rpcId").jsonPrimitive.content}","result":{"ok":true,"value":{"records":[],"hasMore":false}}}"""
+        }
+        client.sessionPage(
+            connection,
+            address = DshSessionAddress.Subagent(
+                parentSessionId = "parent-1",
+                childSessionId = "child-1",
+                mode = "continuable",
+            ),
+            throughSeq = 12L,
+        )
+        assertEquals("/api/session/page", captured.single().url.encodedPath)
+    }
+
+    @Test
+    fun `subagent prompt includes mode continuable`() = runTest {
+        val captured = mutableListOf<HttpRequestData>()
+        val client = api(captured) { request ->
+            val envelope = json.parseToJsonElement((request.body as TextContent).text).jsonObject
+            assertEquals("subagents/prompt", envelope.getValue("method").jsonPrimitive.content)
+            val requestArgs = envelope.getValue("payload").jsonObject.getValue("args").jsonObject.getValue("request").jsonObject
+            assertEquals("parent-1", requestArgs.getValue("parentSessionId").jsonPrimitive.content)
+            assertEquals("child-1", requestArgs.getValue("childSessionId").jsonPrimitive.content)
+            assertEquals("continuable", requestArgs.getValue("mode").jsonPrimitive.content)
+            """{"type":"server-response","rpcId":"${envelope.getValue("rpcId").jsonPrimitive.content}","result":{"ok":true,"value":{"messageId":"m-1"}}}"""
+        }
+        val receipt = client.subagentPrompt(
+            connection,
+            parentSessionId = "parent-1",
+            childSessionId = "child-1",
+            content = buildJsonArray { add(buildJsonObject { put("type", "text"); put("text", "hello") }) },
+        )
+        assertEquals("m-1", receipt.messageId)
+        assertEquals("/api/subagents/prompt", captured.single().url.encodedPath)
     }
 
     @Test

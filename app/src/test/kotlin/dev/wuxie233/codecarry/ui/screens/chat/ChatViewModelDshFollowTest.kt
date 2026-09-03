@@ -11,6 +11,7 @@ import dev.wuxie233.codecarry.data.dsh.DshConnectionManager
 import dev.wuxie233.codecarry.data.dsh.DshDownlink
 import dev.wuxie233.codecarry.data.dsh.DshDownlinkFactory
 import dev.wuxie233.codecarry.data.dsh.FakeDownlink
+import dev.wuxie233.codecarry.data.dsh.historyAddress
 import dev.wuxie233.codecarry.data.preferences.SessionListPreferencesRepository
 import dev.wuxie233.codecarry.data.repository.DraftRepository
 import dev.wuxie233.codecarry.data.repository.EventReducer
@@ -142,7 +143,94 @@ class ChatViewModelDshFollowTest {
             .getValue("request").jsonObject
         assertEquals(12072L, request.getValue("throughSeq").jsonPrimitive.content.toLong())
         assertEquals(12070L, request.getValue("beforeSeq").jsonPrimitive.content.toLong())
+        val address = request.getValue("address").jsonObject
+        assertEquals("session", address.getValue("kind").jsonPrimitive.content)
+        assertEquals(SESSION_ID, address.getValue("sessionId").jsonPrimitive.content)
         assertNull(vm.uiState.value.error)
+    }
+
+    @Test
+    fun `subagent list item follows with parent child and mode`() = runTest(dispatcher) {
+        val mux = FakeDownlink()
+        val unary = Collections.synchronizedList(mutableListOf<String>())
+        val harness = dshHarness(
+            mux,
+            unary,
+            listItem = """{"sessionId":"$SESSION_ID","updatedAt":2,"running":false,"blank":false,"cwd":"/root/CODE/Minecraft","origin":"subagent","parentSessionId":"$PARENT_ID","projections":{"asOfSeq":1,"values":{"subagent":{"mode":"continuable"}}}}""",
+        )
+        val vm = newViewModel(harness.client, harness.manager)
+        collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
+
+        harness.manager.connect(SERVER_ID, DshConnection.from("http://127.0.0.1:3080", token = "launch-token"))
+        runCurrent()
+        pushBaselines(mux)
+        harness.manager.states.first { it[SERVER_ID]?.isReady == true }
+        runCurrent()
+
+        val followOpen = mux.sent.last { it.contains("\"session/follow\"") }
+        val followObj = json.parseToJsonElement(followOpen).jsonObject
+        val address = followObj.getValue("payload").jsonObject
+            .getValue("args").jsonObject
+            .getValue("request").jsonObject
+            .getValue("address").jsonObject
+        assertEquals("subagent", address.getValue("kind").jsonPrimitive.content)
+        assertEquals(PARENT_ID, address.getValue("parentSessionId").jsonPrimitive.content)
+        assertEquals(SESSION_ID, address.getValue("childSessionId").jsonPrimitive.content)
+        assertEquals("continuable", address.getValue("mode").jsonPrimitive.content)
+
+        val followId = followObj.getValue("streamId").jsonPrimitive.content
+        mux.incoming.trySend(
+            item(
+                followId,
+                """{"type":"snapshot","header":{"parentSession":"$PARENT_ID","origin":"subagent"},"cursor":12072,"records":[{"type":"event","event":{"type":"user/message","seq":12070,"time":1,"data":{"id":"u1","content":[{"type":"text","text":"hello"}],"source":{"kind":"user"}},"surfaceOp":"append"}}],"hasMore":true}""",
+            ),
+        )
+        runCurrent()
+        advanceUntilIdle()
+        vm.uiState.first { !it.isLoading && it.error == null && it.messages.isNotEmpty() }
+
+        vm.loadOlderMessages()
+        runCurrent()
+        advanceUntilIdle()
+
+        val pageBodies = unary.filter { it.contains("\"session/page\"") }
+        assertEquals(1, pageBodies.size)
+        val pageAddress = json.parseToJsonElement(pageBodies.single()).jsonObject
+            .getValue("payload").jsonObject
+            .getValue("args").jsonObject
+            .getValue("request").jsonObject
+            .getValue("address").jsonObject
+        assertEquals("subagent", pageAddress.getValue("kind").jsonPrimitive.content)
+        assertEquals(PARENT_ID, pageAddress.getValue("parentSessionId").jsonPrimitive.content)
+        assertEquals(SESSION_ID, pageAddress.getValue("childSessionId").jsonPrimitive.content)
+        assertEquals("continuable", pageAddress.getValue("mode").jsonPrimitive.content)
+    }
+
+    @Test
+    fun `subagent origin without parent does not follow as session`() = runTest(dispatcher) {
+        val mux = FakeDownlink()
+        val unary = Collections.synchronizedList(mutableListOf<String>())
+        val harness = dshHarness(
+            mux,
+            unary,
+            listItem = """{"sessionId":"$SESSION_ID","updatedAt":2,"running":false,"blank":false,"cwd":"/root/CODE/Minecraft","origin":"subagent"}""",
+        )
+        val vm = newViewModel(harness.client, harness.manager)
+        collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
+
+        harness.manager.connect(SERVER_ID, DshConnection.from("http://127.0.0.1:3080", token = "launch-token"))
+        runCurrent()
+        pushBaselines(mux)
+        harness.manager.states.first { it[SERVER_ID]?.isReady == true }
+        runCurrent()
+        advanceUntilIdle()
+
+        assertFalse(mux.sent.any { it.contains("\"session/follow\"") })
+        assertFalse(unary.any { it.contains("session/page") })
+        val snapshot = harness.manager.reducer(SERVER_ID).state.value.sessions[SESSION_ID]
+        assertEquals("subagent", snapshot?.origin)
+        assertNull(snapshot?.parentSessionId)
+        assertNull(snapshot?.historyAddress())
     }
 
     @Test
@@ -236,6 +324,7 @@ class ChatViewModelDshFollowTest {
     private fun dshHarness(
         mux: FakeDownlink,
         unary: MutableList<String>,
+        listItem: String = """{"sessionId":"$SESSION_ID","updatedAt":2,"running":false,"blank":false,"cwd":"/root/CODE/Minecraft"}""",
     ): DshHarness {
         var nextStream = 0
         val streamIds = listOf("st-0", "st-1", "st-2", "st-3", "st-4", "st-5")
@@ -253,7 +342,7 @@ class ChatViewModelDshFollowTest {
                     unary += (request.body as TextContent).text
                     respond(
                         content = ByteReadChannel(
-                            """{"type":"server-response","rpcId":"fixed","result":{"ok":true,"value":{"items":[{"sessionId":"$SESSION_ID","updatedAt":2,"running":false,"blank":false,"cwd":"/root/CODE/Minecraft"}]}}}""",
+                            """{"type":"server-response","rpcId":"fixed","result":{"ok":true,"value":{"items":[$listItem]}}}""",
                         ),
                         status = HttpStatusCode.OK,
                         headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
@@ -372,5 +461,6 @@ class ChatViewModelDshFollowTest {
     private companion object {
         private const val SERVER_ID = "dsh-1"
         private const val SESSION_ID = "ses_minecraft"
+        private const val PARENT_ID = "ses_parent"
     }
 }

@@ -222,7 +222,7 @@ class DshApiClient(
      */
     suspend fun sessionPage(
         connection: DshConnection,
-        sessionId: String,
+        address: DshSessionAddress,
         throughSeq: Long,
         beforeSeq: Long? = null,
         maxMessages: Int? = null,
@@ -234,13 +234,7 @@ class DshApiClient(
                 put(
                     "request",
                     buildJsonObject {
-                        put(
-                            "address",
-                            buildJsonObject {
-                                put("kind", "session")
-                                put("sessionId", sessionId)
-                            },
-                        )
+                        put("address", address.toJson())
                         put("throughSeq", throughSeq)
                         beforeSeq?.let { put("beforeSeq", it) }
                         maxMessages?.let { put("maxMessages", it) }
@@ -253,11 +247,11 @@ class DshApiClient(
     /** History helper preserving the old call shape; folds page records. */
     suspend fun sessionHistory(
         connection: DshConnection,
-        sessionId: String,
+        address: DshSessionAddress,
         throughSeq: Long,
         beforeSeq: Long? = null,
         maxMessages: Int? = null,
-    ): DshSessionHistoryValue = sessionPage(connection, sessionId, throughSeq, beforeSeq, maxMessages)
+    ): DshSessionHistoryValue = sessionPage(connection, address, throughSeq, beforeSeq, maxMessages)
         .toHistory()
 
     /** Host-wide model catalog; the session-scoped selection rides projections. */
@@ -831,6 +825,7 @@ class DshApiClient(
                         put("requestId", requestId)
                         put("parentSessionId", parentSessionId)
                         put("childSessionId", childSessionId)
+                        put("mode", "continuable")
                         put("content", content)
                         clientTimeZone?.let { put("clientTimeZone", it) }
                     },

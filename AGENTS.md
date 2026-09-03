@@ -89,10 +89,17 @@ fork based on OC Remote; the Android namespace/applicationId is
   paths. Live state rides `/api/remote.mux` with logical `open`/`item`/`end`
   streams. Reconnect reopens mux and re-follows `$events`, `session/control`,
   and `workspace/follow`. Per-chat history uses `session/follow` plus
-  `session/page`. `session/page` throughSeq is the follow snapshot
-  cursor (later live seqs), never a JS sentinel; unknown cursor skips
-  the page call. No SSE fallback. `host.describe`, `/api/events.mux`,
-  `/api/events.host`, `/api/respond`, and `workspace.list` are gone.
+  `session/page`. Both take a Host `SessionAddress`: ordinary sessions
+  `{ kind: "session", sessionId }`; a child with `origin == "subagent"`
+  `{ kind: "subagent", parentSessionId, childSessionId, mode }`. Never
+  follow/page a subagent origin as `kind: "session"` — Host returns
+  `session/agent-busy`. If origin is subagent and parent is still
+  unknown, wait; do not invent a parent. `session/page` throughSeq is
+  the follow snapshot cursor (later live seqs), never a JS sentinel;
+  unknown cursor skips the page call. Chat send/stop on that child use
+  `subagents/prompt` and `subagents/interruptByParent`. No SSE fallback.
+  `host.describe`, `/api/events.mux`, `/api/events.host`, `/api/respond`,
+  and `workspace.list` are gone.
 - DSH `assistant/message` already embeds `tool-call` blocks. A later mux
   `tool/call` with the same `callId` must update that part, not append a
   second one, or Chat renders two identical Shell/MCP rows.

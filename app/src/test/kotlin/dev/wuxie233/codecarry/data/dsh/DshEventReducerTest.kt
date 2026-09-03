@@ -221,6 +221,30 @@ class DshEventReducerTest {
     }
 
     @Test
+    fun `follow snapshot header fills missing parent and origin`() {
+        val reducer = DshEventReducer()
+        reducer.applyFollowSnapshot(
+            "child-1",
+            DshFollowFrame.Snapshot(
+                header = buildJsonObject {
+                    put("parentSession", "parent-1")
+                    put("origin", "subagent")
+                },
+                cursor = 2,
+                records = emptyList(),
+                hasMore = false,
+            ),
+        )
+        val session = reducer.state.value.sessions.getValue("child-1")
+        assertEquals("parent-1", session.parentSessionId)
+        assertEquals("subagent", session.origin)
+        val address = session.historyAddress() as DshSessionAddress.Subagent
+        assertEquals("parent-1", address.parentSessionId)
+        assertEquals("child-1", address.childSessionId)
+        assertEquals("continuable", address.mode)
+    }
+
+    @Test
     fun `session list merge keeps newer live state`() {
         val reducer = DshEventReducer()
         reducer.applyFollowEvent("s1", DshSessionEvent(type = "user/message", seq = 1, time = 10))

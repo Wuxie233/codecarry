@@ -46,6 +46,8 @@ data class DshSessionSnapshot(
     val jobs: List<DshJobView> = emptyList(),
     val projections: Map<String, Pair<Long, JsonElement?>> = emptyMap(),
     val error: String? = null,
+    /** True after `session/list` or `api-session/added` supplied this identity. */
+    val listed: Boolean = false,
 ) {
     /** Inclusive `session/page` cut, or null when follow has not opened yet. */
     val pageThroughSeq: Long? get() = if (historyOpened) lastSeq else null
@@ -232,9 +234,14 @@ class DshEventReducer(
         )
         _state.update { current ->
             current.updateSession(sessionId) { session ->
+                val headerParent = frame.header?.strValue("parentSession")
+                val headerOrigin = frame.header?.strValue("origin")
                 session.copy(
                     lastSeq = maxOf(session.lastSeq, frame.cursor),
                     historyOpened = true,
+                    parentSessionId = headerParent ?: session.parentSessionId,
+                    origin = headerOrigin ?: session.origin,
+                    listed = session.listed || headerOrigin != null || headerParent != null,
                 )
             }
         }
@@ -340,6 +347,7 @@ class DshEventReducer(
                         cwd = item.cwd ?: session.cwd,
                         agentPreset = item.agentPreset ?: session.agentPreset,
                         projections = nextProjections,
+                        listed = true,
                     )
                 }
             }

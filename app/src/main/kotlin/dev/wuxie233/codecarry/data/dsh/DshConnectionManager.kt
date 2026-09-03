@@ -143,7 +143,7 @@ class DshConnectionManager(
      */
     fun openSessionFollow(
         serverId: String,
-        sessionId: String,
+        address: DshSessionAddress,
         maxMessages: Int? = null,
     ): Flow<DshFollowFrame> = flow {
         val downlink = muxDownlinks[serverId]
@@ -159,13 +159,7 @@ class DshConnectionManager(
                 put(
                     "request",
                     buildJsonObject {
-                        put(
-                            "address",
-                            buildJsonObject {
-                                put("kind", "session")
-                                put("sessionId", sessionId)
-                            },
-                        )
+                        put("address", address.toJson())
                         maxMessages?.let { put("maxMessages", it) }
                     },
                 )

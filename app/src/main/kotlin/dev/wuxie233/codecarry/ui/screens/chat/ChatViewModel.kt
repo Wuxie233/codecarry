@@ -27,6 +27,8 @@ import dev.wuxie233.codecarry.data.dsh.DshConnectionManager
 import dev.wuxie233.codecarry.data.dsh.DshEventState
 import dev.wuxie233.codecarry.data.dsh.DshFollowFrame
 import dev.wuxie233.codecarry.data.dsh.DshGenerationStatus
+import dev.wuxie233.codecarry.data.dsh.DshSessionAddress
+import dev.wuxie233.codecarry.data.dsh.historyAddress
 import dev.wuxie233.codecarry.data.dsh.connectDshConversation
 import dev.wuxie233.codecarry.data.dsh.DshQuestionAnswer
 import dev.wuxie233.codecarry.data.dsh.DshRpcError
@@ -262,6 +264,9 @@ class ChatViewModel @Inject constructor(
     private var dshAttachmentJob: Job? = null
     private var dshFollowJob: Job? = null
     private var dshFollowGeneration: Long = -1
+    private var dshFollowAddress: DshSessionAddress? = null
+    /** Last resolved address for this Chat; survives reducer reset so a child is not followed as `kind: session`. */
+    private var dshKnownAddress: DshSessionAddress? = null
     private var dshAppliedEventSeq: Long = -1
     private val dshHistoryFolder = DshHistoryFolder()
     private var lastBuiltChatMessages: List<ChatMessage> = emptyList()
@@ -632,9 +637,29 @@ class ChatViewModel @Inject constructor(
             dshConnectionManager.states.collect { states ->
                 val generation = states[serverId]
                 if (generation?.status == DshGenerationStatus.Ready && generation.isReady) {
-                    startDshFollow()
-                    loadDshProviders()
+                    loadDshSession()
                 }
+            }
+        }
+    }
+
+    private fun dshHistoryAddress(): DshSessionAddress? {
+        val snapshot = dshReducer.state.value.sessions[sessionId]
+        val resolved = snapshot?.historyAddress()
+        when (resolved) {
+            is DshSessionAddress.Subagent -> {
+                dshKnownAddress = resolved
+                return resolved
+            }
+            is DshSessionAddress.Session -> {
+                val known = dshKnownAddress
+                if (known is DshSessionAddress.Subagent) return known
+                dshKnownAddress = resolved
+                return resolved
+            }
+            null -> {
+                if (snapshot?.origin == "subagent") return null
+                return dshKnownAddress
             }
         }
     }
@@ -643,17 +668,23 @@ class ChatViewModel @Inject constructor(
         if (!isDsh || sessionId.isBlank()) return false
         val generation = dshConnectionManager.states.value[serverId] ?: return false
         if (!generation.isReady) return false
-        if (!force && dshFollowJob?.isActive == true && dshFollowGeneration == generation.generation) {
+        val address = dshHistoryAddress() ?: return false
+        if (!force &&
+            dshFollowJob?.isActive == true &&
+            dshFollowGeneration == generation.generation &&
+            dshFollowAddress == address
+        ) {
             return true
         }
         dshFollowJob?.cancel()
         dshFollowGeneration = generation.generation
+        dshFollowAddress = address
         dshFollowJob = viewModelScope.launch {
             try {
                 _error.value = null
                 dshConnectionManager.openSessionFollow(
                     serverId = serverId,
-                    sessionId = sessionId,
+                    address = address,
                     maxMessages = currentMessageLimit,
                 ).collect { frame ->
                     when (frame) {
@@ -696,6 +727,10 @@ class ChatViewModel @Inject constructor(
             eventReducer.updateSessionStatus(id, status)
         }
         val snapshot = state.sessions[sessionId]
+        val address = dshHistoryAddress()
+        if (address != null && dshFollowAddress != address) {
+            startDshFollow()
+        }
         if (snapshot != null) {
             val folded = dshHistoryFolder.fold(sessionId, snapshot.events)
             val lastSeq = snapshot.events.maxOfOrNull { it.seq } ?: -1L
@@ -739,12 +774,13 @@ class ChatViewModel @Inject constructor(
 
     private suspend fun loadDshOlderHistory() {
         val snapshot = dshReducer.state.value.sessions[sessionId]
-        val throughSeq = snapshot?.pageThroughSeq ?: return
+        val address = snapshot?.historyAddress() ?: return
+        val throughSeq = snapshot.pageThroughSeq ?: return
         val beforeSeq = snapshot.events.minOfOrNull { it.seq } ?: return
         try {
             val history = dshApi.sessionHistory(
                 connection = dshConn,
-                sessionId = sessionId,
+                address = address,
                 throughSeq = throughSeq,
                 beforeSeq = beforeSeq,
                 maxMessages = currentMessageLimit,
@@ -899,14 +935,15 @@ class ChatViewModel @Inject constructor(
 
     fun loadMessages() {
         if (isDsh) {
-            if (startDshFollow(force = true)) {
-                _error.value = null
-                _isLoading.value = true
-            } else {
+            val generation = dshConnectionManager.states.value[serverId]
+            if (generation?.isReady != true) {
                 _isLoading.value = false
-                _error.value = dshConnectionManager.states.value[serverId]?.error
-                    ?: "DSH is not connected"
+                _error.value = generation?.error ?: "DSH is not connected"
+                return
             }
+            _error.value = null
+            _isLoading.value = true
+            startDshFollow(force = true)
             return
         }
         viewModelScope.launch {
@@ -1315,6 +1352,8 @@ class ChatViewModel @Inject constructor(
     override fun onCleared() {
         foregroundResumeDispatcher.removeListener(foregroundResumeListener)
         dshFollowJob?.cancel()
+        dshFollowAddress = null
+        dshKnownAddress = null
         eventReducer.clearActiveSessionId(sessionId)
         closeTerminalSession()
         super.onCleared()
@@ -1424,6 +1463,31 @@ class ChatViewModel @Inject constructor(
         if (_pendingSendError.value == null) drainPendingDshSends()
     }
 
+    private suspend fun sendDshPrompt(mode: String, content: kotlinx.serialization.json.JsonArray) {
+        when (val address = dshHistoryAddress()) {
+            is DshSessionAddress.Subagent -> dshApi.subagentPrompt(
+                connection = dshConn,
+                parentSessionId = address.parentSessionId,
+                childSessionId = address.childSessionId,
+                content = content,
+            )
+            is DshSessionAddress.Session -> dshApi.sessionPrompt(dshConn, sessionId, mode, content)
+            null -> error("DSH session address is not ready")
+        }
+    }
+
+    private suspend fun abortDshSession(): Boolean {
+        return when (val address = dshHistoryAddress()) {
+            is DshSessionAddress.Subagent -> dshApi.subagentInterrupt(
+                connection = dshConn,
+                parentSessionId = address.parentSessionId,
+                childSessionId = address.childSessionId,
+            ).accepted
+            is DshSessionAddress.Session -> dshApi.sessionCancel(dshConn, sessionId).accepted
+            null -> false
+        }
+    }
+
     private fun drainPendingDshSends() {
         if (pendingOpenCodeDrain?.isActive == true || pendingOpenCodeSends.isEmpty()) return
         pendingOpenCodeDrain = viewModelScope.launch {
@@ -1434,7 +1498,7 @@ class ChatViewModel @Inject constructor(
                     try {
                         val steer = uiState.value.sessionStatus is SessionStatus.Busy
                         val request = dshPromptRequest(head.parts, steer)
-                        dshApi.sessionPrompt(dshConn, sessionId, request.mode, request.content)
+                        sendDshPrompt(request.mode, request.content)
                         pendingOpenCodeSends.removeFirst()
                         _pendingSendCount.value = pendingOpenCodeSends.size
                         _pendingSendError.value = null
@@ -1538,7 +1602,7 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch {
             val outcome: AbortOutcome = try {
                 val ok = if (isDsh) {
-                    dshApi.sessionCancel(dshConn, sessionId).accepted
+                    abortDshSession()
                 } else {
                     api.abortSession(conn, sessionId, directory = sessionDirectory)
                 }
@@ -1958,7 +2022,7 @@ class ChatViewModel @Inject constructor(
                 if (isDsh) {
                     val text = "/" + command.removePrefix("/").trim() + if (arguments.isBlank()) "" else " $arguments"
                     val request = dshPromptRequest(listOf(PromptPart(type = "text", text = text)), steer = false)
-                    dshApi.sessionPrompt(dshConn, sessionId, request.mode, request.content)
+                    sendDshPrompt(request.mode, request.content)
                     onResult(true)
                     return@launch
                 }
