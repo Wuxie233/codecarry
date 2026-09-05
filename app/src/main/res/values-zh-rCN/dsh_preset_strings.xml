@@ -16,4 +16,6 @@
     <string name="dsh_preset_connection_changed">连接已变化，请刷新后重试。</string>
     <string name="dsh_preset_selecting">正在应用预设…</string>
     <string name="dsh_model_selection_failed">无法切换模型，请重试。</string>
+    <string name="dsh_preset_unassigned">未关联预设</string>
+    <string name="dsh_preset_unavailable">尚未获取当前预设</string>
 </resources>

@@ -88,8 +88,8 @@ suspend fun connectDshConversation(
     val registered = client.workspaceCreate(connection, path)
     val workspace = registered.workspace
     val reusable = reusableBlankSessionId(state.withWorkspace(workspace), workspace)
-    if (reusable != null && (agentPreset != null || state.sessions[reusable]?.agentPreset == null)) {
-        if (agentPreset != null && state.sessions[reusable]?.agentPreset != agentPreset) {
+    if (reusable != null && (agentPreset != null || state.sessions[reusable]?.currentAgentPreset == null)) {
+        if (agentPreset != null && state.sessions[reusable]?.currentAgentPreset != agentPreset) {
             client.agentPresetSelect(connection, reusable, agentPreset)
         }
         return DshConnectWorkspaceResult(

@@ -163,6 +163,7 @@ data class ChatUiState(
 data class DshChatPresetState(
     val presets: List<DshAgentPresetEntry> = emptyList(),
     val currentId: String? = null,
+    val currentResolved: Boolean = false,
     val loading: Boolean = false,
     val selecting: Boolean = false,
     val ready: Boolean = false,
@@ -764,7 +765,8 @@ class ChatViewModel @Inject constructor(
         val snapshot = state.sessions[sessionId]
         applyDshProjectedModel()
         _dshPresets.update { it.copy(
-            currentId = snapshot?.agentPreset,
+            currentId = snapshot?.currentAgentPreset,
+            currentResolved = snapshot?.let { it.projections.containsKey("agentPreset") || it.presetSelectionReceipt != null } == true,
             canSelect = canSelectDshPreset(snapshot, it.ready, sending = false),
         ) }
         val address = dshHistoryAddress()
@@ -925,11 +927,12 @@ class ChatViewModel @Inject constructor(
             onResult(false)
             return
         }
-        if (snapshot?.agentPreset == presetId) {
+        if (snapshot?.currentAgentPreset == presetId) {
             onResult(true)
             return
         }
         val generation = dshReducer.state.value.generation
+        val observedPresetSeq = maxOf(snapshot?.lastSeq ?: -1L, snapshot?.projections?.get("agentPreset")?.first ?: -1L)
         dshModelMutationRevision++
         _dshPresets.update { it.copy(selecting = true, error = null) }
         viewModelScope.launch {
@@ -940,7 +943,7 @@ class ChatViewModel @Inject constructor(
                     _dshPresets.update { it.copy(error = appContext.getString(R.string.dsh_preset_connection_changed)) }
                     onResult(false)
                 } else {
-                    dshReducer.applyPresetSelection(sessionId, selected.agentPreset, generation)
+                    dshReducer.applyPresetSelection(sessionId, selected.agentPreset, generation, observedPresetSeq)
                     loadDshProviders(refreshSelection = true)
                     onResult(true)
                 }

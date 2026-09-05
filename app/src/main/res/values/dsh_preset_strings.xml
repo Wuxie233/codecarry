@@ -16,4 +16,6 @@
     <string name="dsh_preset_connection_changed">Connection changed. Refresh and try again.</string>
     <string name="dsh_preset_selecting">Applying preset…</string>
     <string name="dsh_model_selection_failed">Could not change the model. Try again.</string>
+    <string name="dsh_preset_unassigned">No preset associated</string>
+    <string name="dsh_preset_unavailable">Current preset not received</string>
 </resources>

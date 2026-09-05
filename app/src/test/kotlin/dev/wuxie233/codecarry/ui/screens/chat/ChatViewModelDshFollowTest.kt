@@ -322,6 +322,20 @@ class ChatViewModelDshFollowTest {
     }
 
     @Test
+    fun `existing session displays its projected preset independently of roster default`() = runTest(dispatcher) {
+        val mux = FakeDownlink()
+        val harness = dshHarness(mux, CopyOnWriteArrayList(), listItem =
+            """{"sessionId":"$SESSION_ID","updatedAt":2,"running":false,"blank":false,"projections":{"asOfSeq":10,"values":{"agentPreset":"custom-existing"}}}""")
+        val vm = newViewModel(harness.client, harness.manager)
+        harness.manager.connect(SERVER_ID, DshConnection.from("http://127.0.0.1:3080", token = "launch-token"))
+        runCurrent()
+        pushBaselines(mux)
+        val state = vm.dshPresets.first { it.currentId != null && !it.loading }
+        assertEquals("custom-existing", state.currentId)
+        assertEquals("standard", state.presets.single().id)
+    }
+
+    @Test
     fun `preset roster is visible while the unrelated session list remains pending`() = runTest(dispatcher) {
         val mux = FakeDownlink()
         val unary = CopyOnWriteArrayList<String>()

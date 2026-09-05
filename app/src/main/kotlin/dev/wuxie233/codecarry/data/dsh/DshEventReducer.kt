@@ -34,6 +34,8 @@ data class DshSessionSnapshot(
     val origin: String? = null,
     val cwd: String? = null,
     val agentPreset: String? = null,
+    /** Successful local selection until a newer authoritative projection arrives. */
+    val presetSelectionReceipt: Pair<Long, String>? = null,
     val updatedAt: Long = 0,
     val lastSeq: Long = -1,
     /**
@@ -49,6 +51,18 @@ data class DshSessionSnapshot(
     /** True after `session/list` or `api-session/added` supplied this identity. */
     val listed: Boolean = false,
 ) {
+    /** Host projects the current preset; the header only describes creation. */
+    val currentAgentPreset: String?
+        get() {
+            val projection = projections["agentPreset"]
+            presetSelectionReceipt?.let { receipt ->
+                if (projection == null || projection.first <= receipt.first) return receipt.second
+            }
+            return if (projection != null) {
+                (projection.second as? JsonPrimitive)?.contentOrNull
+            } else null
+        }
+
     /** Inclusive `session/page` cut, or null when follow has not opened yet. */
     val pageThroughSeq: Long? get() = if (historyOpened) lastSeq else null
 }
@@ -79,11 +93,14 @@ class DshEventReducer(
     val state: StateFlow<DshEventState> = _state.asStateFlow()
 
     /** Ignore command receipts from an obsolete connection generation. */
-    fun applyPresetSelection(sessionId: String, presetId: String, generation: Long) {
+    fun applyPresetSelection(sessionId: String, presetId: String, generation: Long, observedSeq: Long = -1L) {
         _state.update { state ->
             val session = state.sessions[sessionId]
             if (state.generation != generation || session == null) state
-            else state.copy(sessions = state.sessions + (sessionId to session.copy(agentPreset = presetId)))
+            else state.copy(sessions = state.sessions + (sessionId to session.copy(
+                agentPreset = presetId,
+                presetSelectionReceipt = observedSeq to presetId,
+            )))
         }
     }
 
@@ -265,6 +282,7 @@ class DshEventReducer(
                     lastSeq = maxOf(session.lastSeq, event.seq),
                     historyOpened = true,
                     events = events,
+                    projections = mergePresetEvents(session.projections, listOf(event)),
                     blank = if (event.type == "turn/start") false else session.blank,
                 )
             }
@@ -322,7 +340,7 @@ class DshEventReducer(
                 session.copy(
                     lastSeq = maxOf(session.lastSeq, merged.maxOfOrNull { it.seq } ?: session.lastSeq),
                     events = merged,
-                    projections = nextProjections,
+                    projections = mergePresetEvents(nextProjections, merged),
                     blank = if (merged.any { it.type == "turn/start" }) false else session.blank,
                 )
             }
@@ -377,6 +395,20 @@ class DshEventReducer(
 
     fun applyWorkspace(view: DshWorkspaceView) {
         _state.update { it.withWorkspace(view) }
+    }
+
+    private fun mergePresetEvents(
+        projections: Map<String, Pair<Long, JsonElement?>>,
+        events: List<DshSessionEvent>,
+    ): Map<String, Pair<Long, JsonElement?>> {
+        val selected = events.filter { it.type == "agent-preset/selected" }
+            .maxByOrNull { it.seq } ?: return projections
+        val preset = (selected.data as? JsonObject)?.get("agentPreset") as? JsonPrimitive
+            ?: return projections
+        if (!preset.isString || preset.contentOrNull.isNullOrBlank()) return projections
+        val existing = projections["agentPreset"]
+        if (existing != null && existing.first >= selected.seq) return projections
+        return projections + ("agentPreset" to (selected.seq to preset))
     }
 
     private fun applyProjections(

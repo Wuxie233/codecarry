@@ -2272,7 +2272,9 @@ fun ChatScreen(
                 dshPresetLabel = if (uiState.isDsh) stringResource(
                     R.string.dsh_preset_label,
                     dshPresets.presets.find { it.id == dshPresets.currentId }?.name
-                        ?: dshPresets.currentId ?: stringResource(R.string.dsh_preset_unknown),
+                        ?: dshPresets.currentId ?: stringResource(
+                            if (dshPresets.currentResolved) R.string.dsh_preset_unassigned else R.string.dsh_preset_unavailable,
+                        ),
                 ) else null,
                 onDshPresetClick = {
                     showDshPresetPicker = true
@@ -3061,6 +3063,9 @@ fun ChatScreen(
         DshPresetPickerSheet(
             presets = dshPresets.presets,
             selectedId = if (creating) null else dshPresets.currentId,
+            currentStatus = if (creating || dshPresets.currentId != null) null else stringResource(
+                if (dshPresets.currentResolved) R.string.dsh_preset_unassigned else R.string.dsh_preset_unavailable,
+            ),
             loading = dshPresets.loading,
             error = dshCreateError ?: dshPresets.error,
             selecting = dshPresets.selecting || creatingWithDshPreset,

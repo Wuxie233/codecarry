@@ -36,7 +36,7 @@ class DshPresetSelectionTest {
         val sibling = idle.copy(sessionId = "s2", agentPreset = "sibling")
         val reducer = DshEventReducer(DshEventState(generation = 4, sessions = mapOf("s1" to idle, "s2" to sibling)))
         reducer.applyPresetSelection("s1", "new", 4)
-        assertEquals(idle.copy(agentPreset = "new"), reducer.state.value.sessions["s1"])
+        assertEquals(idle.copy(agentPreset = "new", presetSelectionReceipt = -1L to "new"), reducer.state.value.sessions["s1"])
         assertEquals(sibling, reducer.state.value.sessions["s2"])
     }
 

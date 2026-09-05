@@ -40,6 +40,7 @@ fun DshPresetPickerSheet(
     allowDefault: Boolean = false,
     enabled: Boolean = true,
     disabledReason: String? = null,
+    currentStatus: String? = null,
     onSelect: (String?) -> Unit,
     onRefresh: () -> Unit,
     onDismiss: () -> Unit,
@@ -50,6 +51,7 @@ fun DshPresetPickerSheet(
         Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(stringResource(R.string.dsh_preset_title), style = MaterialTheme.typography.titleLarge)
             Text(stringResource(R.string.dsh_preset_scope), style = MaterialTheme.typography.bodySmall)
+            currentStatus?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             OutlinedTextField(
                 value = query,
                 onValueChange = { query = it },

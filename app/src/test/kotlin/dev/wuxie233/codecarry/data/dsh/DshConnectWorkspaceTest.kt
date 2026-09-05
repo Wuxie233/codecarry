@@ -11,6 +11,8 @@ import io.ktor.http.headersOf
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
@@ -264,7 +266,8 @@ class DshConnectWorkspaceTest {
             """{"type":"server-response","rpcId":"$rpcId","result":{"ok":true,"value":$value}}"""
         }
         val state = DshEventState(sessions = if (hasBlank) mapOf(
-            "blank" to DshSessionSnapshot(sessionId = "blank", blank = true, cwd = "/work/a", agentPreset = existing),
+            "blank" to DshSessionSnapshot(sessionId = "blank", blank = true, cwd = "/work/a", agentPreset = "creation",
+                projections = mapOf("agentPreset" to (10L to (existing?.let(::JsonPrimitive) ?: JsonNull)))),
         ) else emptyMap())
         val result = connectDshConversation(client, connection, state, "/work/a", "/home", selected)
         assertEquals(expectReuse, result.reused)
