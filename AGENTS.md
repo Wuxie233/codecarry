@@ -199,16 +199,30 @@ fork based on OC Remote; the Android namespace/applicationId is
   roster independently of `session/list`. Ready starts separate preset and
   session load jobs; disconnect cancels both. `agentPresets/list` has a 15-second
   deadline that becomes a retryable failure; caller cancellation still propagates.
+- DSH current preset comes from `projections.values.agentPreset` or its selected
+  log event, not the creation header. Explicit null means unassigned; missing
+  state is unresolved, never the catalog default. Capture the preset sequence
+  before a selection request so a late receipt cannot replace newer live state.
 - Codex project screens reuse the shared session presentation components while
   keeping their native transport and server-scoped project preferences. Remote
   directory browsing uses `fs/readDirectory`; preserve exact directory strings,
   including trailing spaces, when starting a thread.
 - Codex composer Enter inserts a newline. Keep submission on the explicit send
   button rather than wiring the text field IME action to submit.
+- Codex and native chat share `ChatHeader` and `ProcessDisclosureRow`
+  presentation. Preserve native composer spacing, AMOLED treatment, and
+  navigation insets when adding backend-specific controls.
 - Codex user-message images come from `raw.content`: `image.url` is a data or
   HTTP URL, while `localImage.path` belongs to the daemon and must use its
   `fs/readFile` RPC. Never resolve remote image paths through Android files.
   Image load failures must leave a retryable placeholder in the timeline.
+- Different Codex threads need independent navigation entries and ViewModel
+  owners, including notification navigation. Same-destination single-top can
+  retain the parent's constructor-bound thread ID. Open with full `thread/resume`
+  history; do not require a disk-backed read for a running, unmaterialized child.
+- Publish a Codex resume snapshot before optional goal/model metadata loads.
+  Late snapshots cannot regress terminal turns, and unrelated notifications
+  must not erase a local open error or a newer server error.
 
 ## Commands
 

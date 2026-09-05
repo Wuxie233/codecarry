@@ -18,6 +18,10 @@ presentation conventions, but retain independent transports and state ownership.
 - New conversations may specify a preset before their first prompt. The
   workspace flow must preserve that choice even when reusing a blank session.
 - Reconnection and external changes must restore the actual session preset.
+- Current selection comes from `projections.values.agentPreset`, not the
+  creation header. Explicit null means no associated preset; a missing
+  projection means the state has not been received. Neither implies the Host
+  global default. A late selection receipt must not replace newer live state.
 
 Existing wire contracts: `agentPresets/list`, `agentPresets/select` with
 `agentId` and `agentPreset`, and `session/create` with optional `agentPreset`.
@@ -41,14 +45,21 @@ Existing wire contracts: `agentPresets/list`, `agentPresets/select` with
   limit the combined attachment payload below the bridge frame limit.
 - Plan steps, changed files/diffs, and child-agent navigation have structured
   presentation. A child navigation retains the same server identity.
+- A different child thread gets its own navigation entry and ViewModel; Back
+  returns to the parent's draft and scroll state. Opening a running thread uses
+  the full `thread/resume` snapshot without requiring a second disk-history read.
 - A compact status sheet contains goal progress, memory mode, token usage and
   context compaction. Memory mode is not a memory-content editor.
+- Use the native chat header and process disclosure presentation. Align the
+  composer, user bubble geometry, spacing, and AMOLED treatment with the
+  DSH/OpenCode chat; detailed controls remain behind explicit actions.
 
 ## Codex sessions
 
 Preserve directory grouping, search, archive/restore, rename, fork and delete.
 Add running and awaiting-response filters driven by server-scoped state. New
-threads offer recent directories while retaining manual path entry.
+threads offer recent directories and full remote directory browsing. Match
+native session row typography, card spacing, and optional search controls.
 
 ## Protocol evidence and compatibility
 
