@@ -620,6 +620,25 @@ class CodexAppServerClientTest {
     }
 
     @Test
+    fun `resume rejoins a running child with history without a persisted rollout read`() = runTest {
+        val transport = FakeTransport()
+        val client = newClient(transport, backgroundScope)
+        initialize(client, transport)
+        val opening = async { client.resumeThread("child", excludeTurns = false) }
+        val request = transport.takeSentObject()
+        assertEquals("thread/resume", request["method"]?.jsonPrimitive?.content)
+        assertEquals("child", request["params"]?.jsonObject?.get("threadId")?.jsonPrimitive?.content)
+        assertFalse(request["params"]!!.jsonObject.containsKey("excludeTurns"))
+        transport.respond(request.getValue("id").jsonPrimitive, json.parseToJsonElement(
+            """{"thread":{"id":"child","parentThreadId":"parent","ephemeral":true,"turns":[{"id":"turn-child","status":"inProgress","items":[{"id":"answer","type":"agentMessage","text":"Working"}]}]},"model":"test-model"}""",
+        ))
+        val session = opening.await()
+        assertEquals("child", session.thread.id)
+        assertEquals("inProgress", session.thread.turns.single().status)
+        assertEquals("Working", session.thread.turns.single().items.single().text)
+    }
+
+    @Test
     fun `new blank thread opens without asking for a nonexistent rollout`() = runTest {
         val transport = FakeTransport()
         val client = newClient(transport, backgroundScope)

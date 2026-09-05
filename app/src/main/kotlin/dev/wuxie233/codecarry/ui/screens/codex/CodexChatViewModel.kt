@@ -109,6 +109,7 @@ class CodexChatViewModel @Inject constructor(
     private var requestsJob: Job? = null
     private var activeThreadToken: Closeable? = null
     private var loadJob: Job? = null
+    private var loadError: String? = null
     private val connectionMutex = Mutex()
     private val sendIdentity = CodexSendIdentityTracker(
         createId = { UUID.randomUUID().toString() },
@@ -125,6 +126,7 @@ class CodexChatViewModel @Inject constructor(
     fun connectAndLoad() {
         loadJob?.cancel()
         loadJob = viewModelScope.launch {
+            loadError = null
             _uiState.update { it.copy(isLoading = true, error = null) }
             try {
                 val server = serverRepository.getServer(serverId) ?: error("Codex server is no longer configured")
@@ -134,10 +136,25 @@ class CodexChatViewModel @Inject constructor(
                 }
                 val connected = acquired.connection.client
                 connected.connect()
-                val resumed = connected.resumeThread(threadId, excludeTurns = true)
-                val thread = connected.readThread(threadId, includeTurns = true)
-                val goal = runCatching { connected.getGoal(threadId) }.getOrNull()
-                val models = runCatching { connected.listModels(limit = 100).models }.getOrDefault(emptyList())
+                // Resume rejoins the live thread and returns its history. A subsequent
+                // disk-backed read can fail for a running, not-yet-materialized subagent.
+                val resumed = connected.resumeThread(threadId, excludeTurns = false)
+                val thread = resumed.thread
+                acquired.connection.reducer.upsertThread(thread)
+                val openedThread = acquired.connection.events.value.threads[threadId] ?: thread
+                _uiState.update { it.copy(
+                    thread = openedThread,
+                    activeTurnId = openedThread.turns.lastOrNull { turn -> turn.status == "inProgress" }?.id,
+                    isLoading = false,
+                ) }
+                val goal = runCatching { connected.getGoal(threadId) }.getOrElse {
+                    if (it is CancellationException) throw it
+                    null
+                }
+                val models = runCatching { connected.listModels(limit = 100).models }.getOrElse {
+                    if (it is CancellationException) throw it
+                    emptyList()
+                }
                 val selectedModel = models.firstOrNull { it.model == resumed.model || it.id == resumed.model }
                     ?: resumed.model?.let { model ->
                         CodexModel(id = model, model = model, displayName = model)
@@ -149,7 +166,6 @@ class CodexChatViewModel @Inject constructor(
                 } else {
                     models
                 }
-                acquired.connection.reducer.upsertThread(thread)
                 val mergedThread = acquired.connection.events.value.threads[threadId] ?: thread
                 val receivedAuthoritativeTurn = consumeAuthoritativeTurn(mergedThread)
                 _uiState.update {
@@ -166,16 +182,15 @@ class CodexChatViewModel @Inject constructor(
                             it.isAwaitingAuthoritativeTurn
                         },
                         isLoading = false,
-                        error = null,
+                        error = acquired.connection.events.value.threadErrors[threadId],
                     )
                 }
                 confirmPendingSendFromThread(mergedThread)
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Throwable) {
-                _uiState.update {
-                    it.copy(isLoading = false, error = error.message ?: "Failed to open Codex thread")
-                }
+                loadError = error.message ?: "Failed to open Codex thread"
+                _uiState.update { it.copy(isLoading = false, error = loadError) }
             }
         }
     }
@@ -622,7 +637,7 @@ class CodexChatViewModel @Inject constructor(
                         } else {
                             it.goal
                         },
-                        error = eventState.threadErrors[threadId],
+                        error = loadError ?: eventState.threadErrors[threadId],
                     )
                 }
             }

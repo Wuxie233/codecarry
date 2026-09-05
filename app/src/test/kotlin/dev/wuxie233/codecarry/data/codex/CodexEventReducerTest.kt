@@ -8,6 +8,27 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CodexEventReducerTest {
+    @Test
+    fun `late resume snapshot cannot reactivate a completed turn`() {
+        val completed = CodexTurn(id = "turn", status = "completed", completedAt = 42)
+        val reducer = CodexEventReducer(listOf(CodexThread(
+            id = "child", status = CodexThreadStatus("idle"), turns = listOf(completed),
+        )))
+        reducer.upsertThread(CodexThread(
+            id = "child", status = CodexThreadStatus("active"),
+            turns = listOf(CodexTurn(id = "turn", status = "inProgress")),
+        ))
+        val thread = reducer.state.value.threads.getValue("child")
+        assertEquals("idle", thread.status.type)
+        assertEquals("completed", thread.turns.single().status)
+        assertEquals(42L, thread.turns.single().completedAt)
+        reducer.upsertThread(CodexThread(
+            id = "child", status = CodexThreadStatus("active"),
+            turns = listOf(CodexTurn(id = "next", status = "inProgress")),
+        ))
+        assertEquals("active", reducer.state.value.threads.getValue("child").status.type)
+    }
+
     @org.junit.Test
     fun `turn receipt supplies active turn before notification arrives`() {
         val reducer = CodexEventReducer(listOf(CodexThread(id = "thread")))

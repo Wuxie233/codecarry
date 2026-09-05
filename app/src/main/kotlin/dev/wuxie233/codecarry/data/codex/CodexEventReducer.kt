@@ -321,6 +321,13 @@ class CodexEventReducer(
 }
 
 private fun CodexThread.mergeMetadata(incoming: CodexThread): CodexThread = incoming.copy(
+    status = if (incoming.status.type == "active" && incoming.turns.isNotEmpty() &&
+        incoming.turns.filter { it.status == "inProgress" }.let { running ->
+            running.isNotEmpty() && running.all { stale ->
+                turns.any { it.id == stale.id && it.status in terminalTurnStatuses }
+            }
+        }
+    ) status else incoming.status,
     turns = if (incoming.turns.isEmpty()) turns else incoming.turns.fold(turns) { current, turn ->
         val existing = current.firstOrNull { candidate -> candidate.id == turn.id }
         current.upsertBy(CodexTurn::id, existing?.mergeSnapshot(turn) ?: turn)
@@ -328,11 +335,17 @@ private fun CodexThread.mergeMetadata(incoming: CodexThread): CodexThread = inco
 )
 
 private fun CodexTurn.mergeSnapshot(incoming: CodexTurn): CodexTurn = incoming.copy(
+    status = if (status in terminalTurnStatuses && incoming.status !in terminalTurnStatuses) status else incoming.status,
+    error = if (status in terminalTurnStatuses && incoming.status !in terminalTurnStatuses) error else incoming.error,
+    completedAt = completedAt ?: incoming.completedAt,
+    durationMs = durationMs ?: incoming.durationMs,
     items = incoming.items.fold(items) { current, item ->
         val existing = current.firstOrNull { candidate -> candidate.id == item.id }
         current.upsertBy(CodexThreadItem::id, existing?.mergeSnapshot(item) ?: item)
     },
 )
+
+private val terminalTurnStatuses = setOf("completed", "failed", "interrupted")
 
 private fun CodexThreadItem.mergeSnapshot(incoming: CodexThreadItem): CodexThreadItem = incoming.copy(
     status = if (advancesCompletionOf(incoming)) status else incoming.status,

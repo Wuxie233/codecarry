@@ -201,8 +201,8 @@ fun NavGraph(
                 ) {
                     return@collect
                 }
-                if (currentRoute?.startsWith("codex_chat") == true) navController.popBackStack()
-                navController.navigate(route) { launchSingleTop = true }
+                // Keep each thread's state owner separate, including parent/child stacks.
+                navController.navigate(route)
                 return@collect
             }
             if (BuildConfig.DEBUG) Log.d(TAG, "Deep-link received: sessionPath=${deepLink.sessionPath}, sessionId=${deepLink.sessionId}, currentRoute=$currentRoute, useNativeUi=$useNativeUi")
@@ -542,9 +542,11 @@ fun NavGraph(
             CodexChatScreen(
                 onNavigateBack = { navController.popBackStack() },
                 onOpenThread = { threadId ->
-                    navController.navigate(Screen.CodexChat.createRoute(serverId, threadId)) {
-                        launchSingleTop = true
-                    }
+                    navController.openCodexRelatedThread(
+                        serverId = serverId,
+                        currentThreadId = decodeRouteArg(backStackEntry.arguments?.getString("threadId")),
+                        targetThreadId = threadId,
+                    )
                 },
             )
         }
