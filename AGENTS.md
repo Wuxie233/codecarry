@@ -175,6 +175,25 @@ fork based on OC Remote; the Android namespace/applicationId is
 - Native Chat layout now has focused boundaries: `ChatHeader.kt` owns compact/expanded context actions, `ChatResponseDock.kt` owns retry/permission/question placement above the primary composer, `ChatAdaptiveShell.kt` owns `WindowSizeClass` and safe-drawing layout, and `ChatFollowTailPolicy.kt` owns long-session follow-tail state. Keep backend callbacks and the single `LazyListState` scroll owner in `ChatScreen.kt`; do not reintroduce pending request cards in the timeline or hard-coded width breakpoints.
 - Chat timeline grammar is owned by `ChatMessageRowPlanner.kt`: assistant `Part.Reasoning` / `tool == "skill"` / other tools / leftover file-patch parts become independent Think, Skill, Tool, and Content rows. Assistant prose has no Response bubble chrome; user messages stay bubbles. `ChatProcessRows.kt` owns Think/Skill disclosure chrome. Spec: `docs/specs/chat-timeline-grammar.md`.
 - `SessionWorkspaceOverview.kt` and `SessionProjectsViewport.kt` share a centered 960dp content cap for the selected server's recent work, view controls, and project queue. Preserve `SessionListViewModel` as the server-scoped state authority when changing the visual hierarchy.
+- DSH presets are session-scoped. Chat and new-session flows use
+  `DshPresetPickerSheet`; `DshConnectWorkspace` must carry explicit choices
+  through blank-session reuse. Never route DSH preset selection through
+  OpenCode's draft-only `selectAgent` path. Only ordinary idle sessions may
+  switch, and a receipt from an obsolete connection generation cannot apply.
+  Model display follows session `modelSelection.next`; the catalog's global
+  default is valid only when the projection explicitly selects that default.
+- Codex mobile presentation is split between `CodexTimeline`,
+  `CodexTimelineViewport`, and `CodexComposerAttachments`. The viewport owns
+  the single lazy-list scroll state and uses `ChatFollowTailPolicy`; physical
+  drags, not programmatic scrolling, suspend tail following.
+- Codex plan/diff/token notifications have state separate from turn items in
+  `CodexEventReducer`. Their thread/turn maps must not overwrite streamed
+  items; reconnect invalidates notification-only state before resume so new
+  events remain authoritative. Do not display missing token usage as zero.
+- Codex attachments send image bytes as image data URLs, never Android-local
+  paths as daemon `localImage` inputs. Camera files are restricted to the
+  FileProvider `codex-attachments/` cache path. Keep binary attachments out of
+  saved-instance Bundles. Skills with parse errors must not hide valid Skills.
 
 ## Commands
 
