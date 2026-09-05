@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="codex_timeline_plan">Task progress</string>
+    <string name="codex_timeline_images">%1$d image(s)</string>
+    <string name="codex_timeline_details_unavailable">No file details available</string>
+    <string name="codex_timeline_open_subagent">Open subtask</string>
+    <string name="codex_timeline_completed">Completed</string>
+    <string name="codex_timeline_running">In progress</string>
+    <string name="codex_timeline_pending">Pending</string>
+    <string name="codex_timeline_failed">Failed</string>
+    <string name="codex_timeline_added">Added</string>
+    <string name="codex_timeline_deleted">Deleted</string>
+    <string name="codex_timeline_modified">Modified</string>
+    <string name="codex_timeline_moved_to">Moved to %1$s</string>
+    <string name="codex_timeline_diff_unavailable">No diff available</string>
+    <string name="codex_timeline_collapse">Collapse</string>
+    <string name="codex_timeline_expand">Expand</string>
+    <string name="codex_timeline_subagent_activity">Subtask activity</string>
+</resources>

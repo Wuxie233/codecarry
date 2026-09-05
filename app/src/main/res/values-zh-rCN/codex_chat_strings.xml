@@ -1,0 +1,23 @@
+<resources>
+    <string name="codex_chat_status">会话状态</string>
+    <string name="codex_chat_pending_count">%1$d 个待处理请求 · 依次处理</string>
+    <string name="codex_chat_disconnected">连接已断开 · 可重新连接恢复</string>
+    <string name="codex_chat_waiting_turn">消息已接收 · 等待任务确认</string>
+    <string name="codex_chat_steering">任务执行中 · 发送消息可补充当前任务</string>
+    <string name="codex_chat_ready">可开始新任务</string>
+    <string name="codex_chat_steer">补充当前任务</string>
+    <string name="codex_chat_steer_hint">补充当前任务的要求…</string>
+    <string name="codex_chat_no_goal">尚未设置目标</string>
+    <string name="codex_chat_memory_value">记忆模式：%1$s</string>
+    <string name="codex_chat_context_value">最近用量：%1$d tokens · 上下文窗口：%2$s</string>
+    <string name="codex_chat_total_tokens">会话累计：%1$d tokens</string>
+    <string name="codex_chat_context_unavailable">服务端报告用量后将在此显示</string>
+    <string name="codex_chat_turn_diff">查看任务文件改动</string>
+    <string name="codex_chat_payload_limit">消息附件超出大小限制，请移除图片或缩短消息。</string>
+    <string name="codex_chat_goal_usage">目标用量：%1$d / %2$s tokens · %3$d 秒</string>
+    <string name="codex_chat_goal_active">进行中</string>
+    <string name="codex_chat_goal_complete">已完成</string>
+    <string name="codex_chat_goal_paused">已暂停</string>
+    <string name="codex_chat_goal_blocked">受阻</string>
+    <string name="codex_chat_goal_unknown">状态未提供</string>
+</resources>

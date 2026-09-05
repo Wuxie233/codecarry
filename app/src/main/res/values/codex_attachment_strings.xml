@@ -1,0 +1,13 @@
+<resources>
+    <string name="codex_attachment_add">Add attachment</string>
+    <string name="codex_attachment_image">Image</string>
+    <string name="codex_attachment_gallery">Choose image</string>
+    <string name="codex_attachment_camera">Take photo</string>
+    <string name="codex_attachment_skills">Skills</string>
+    <string name="codex_attachment_files">Project files</string>
+    <string name="codex_attachment_search">Search</string>
+    <string name="codex_attachment_empty">No matching items</string>
+    <string name="codex_attachment_remove">Remove attachment</string>
+    <string name="codex_attachment_image_failed">Could not read this image. Choose a supported image smaller than 20 MB.</string>
+    <string name="codex_attachment_camera_failed">Could not open the camera. Try choosing an image from your gallery.</string>
+</resources>

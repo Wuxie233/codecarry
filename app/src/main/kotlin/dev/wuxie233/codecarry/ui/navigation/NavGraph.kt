@@ -537,8 +537,16 @@ fun NavGraph(
                 navArgument("serverId") { type = NavType.StringType },
                 navArgument("threadId") { type = NavType.StringType },
             ),
-        ) {
-            CodexChatScreen(onNavigateBack = { navController.popBackStack() })
+        ) { backStackEntry ->
+            val serverId = decodeRouteArg(backStackEntry.arguments?.getString("serverId"))
+            CodexChatScreen(
+                onNavigateBack = { navController.popBackStack() },
+                onOpenThread = { threadId ->
+                    navController.navigate(Screen.CodexChat.createRoute(serverId, threadId)) {
+                        launchSingleTop = true
+                    }
+                },
+            )
         }
 
         // ============ Chat Screen (native) ============

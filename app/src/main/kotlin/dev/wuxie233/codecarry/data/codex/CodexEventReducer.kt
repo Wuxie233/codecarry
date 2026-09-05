@@ -11,6 +11,10 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 
 data class CodexEventState(
+    val turnPlans: Map<String, Map<String, CodexTurnPlan>> = emptyMap(),
+    val turnDiffs: Map<String, Map<String, String>> = emptyMap(),
+    val turnTokenUsage: Map<String, Map<String, CodexThreadTokenUsage>> = emptyMap(),
+    val tokenUsage: Map<String, CodexThreadTokenUsage> = emptyMap(),
     val threads: Map<String, CodexThread> = emptyMap(),
     val goals: Map<String, CodexGoal> = emptyMap(),
     val knownGoalThreadIds: Set<String> = emptySet(),
@@ -60,6 +64,10 @@ class CodexEventReducer(
                 threads = reconciledThreads,
                 archivedThreadIds = reconciledArchivedIds,
                 threadErrors = current.threadErrors.filterKeys { it in finalIds },
+                turnPlans = current.turnPlans.filterKeys { it in finalIds },
+                turnDiffs = current.turnDiffs.filterKeys { it in finalIds },
+                turnTokenUsage = current.turnTokenUsage.filterKeys { it in finalIds },
+                tokenUsage = current.tokenUsage.filterKeys { it in finalIds },
             )
         }
     }
@@ -83,6 +91,17 @@ class CodexEventReducer(
         }
     }
 
+    /** These notification-only values cannot be recovered from a thread/resume snapshot.
+     * Invalidate before the request so newer notifications during resume remain visible. */
+    fun invalidateThreadControlState(threadId: String) {
+        _state.update { current -> current.copy(
+            turnPlans = current.turnPlans - threadId,
+            turnDiffs = current.turnDiffs - threadId,
+            turnTokenUsage = current.turnTokenUsage - threadId,
+            tokenUsage = current.tokenUsage - threadId,
+        ) }
+    }
+
     fun upsertThreadAuthoritative(thread: CodexThread) {
         _state.update { current ->
             current.copy(threads = current.threads + (thread.id to thread))
@@ -97,12 +116,23 @@ class CodexEventReducer(
                 knownGoalThreadIds = current.knownGoalThreadIds - threadId,
                 archivedThreadIds = current.archivedThreadIds - threadId,
                 threadErrors = current.threadErrors - threadId,
+                turnPlans = current.turnPlans - threadId,
+                turnDiffs = current.turnDiffs - threadId,
+                turnTokenUsage = current.turnTokenUsage - threadId,
+                tokenUsage = current.tokenUsage - threadId,
             )
         }
     }
 
     fun process(notification: CodexNotification) {
         when (notification.method) {
+            "turn/plan/updated", "turn/diff/updated", "thread/tokenUsage/updated" -> updateControlState(notification)
+            "item/fileChange/patchUpdated" -> {
+                val itemId = notification.itemId ?: return
+                updateItem(notification.threadId, notification.turnId, itemId, "fileChange") { item ->
+                    item.copy(fileChanges = notification.params.controlObjects("changes").map(CodexFileChange::fromJson))
+                }
+            }
             "thread/started" -> notification.thread?.let(::upsertThread)
             "thread/status/changed" -> updateThread(notification.threadId) { thread ->
                 val status = notification.params["status"] ?: return@updateThread thread
@@ -172,6 +202,34 @@ class CodexEventReducer(
             "error" -> notification.threadId?.let { threadId ->
                 _state.update { current ->
                     current.copy(threadErrors = current.threadErrors + (threadId to notification.params.errorMessage()))
+                }
+            }
+        }
+    }
+
+    private fun updateControlState(notification: CodexNotification) {
+        val threadId = notification.threadId ?: return
+        val turnId = notification.turnId ?: return
+        _state.update { current ->
+            val withThread = if (threadId in current.threads) current else current.copy(
+                threads = current.threads + (threadId to CodexThread(id = threadId)),
+            )
+            when (notification.method) {
+                "turn/plan/updated" -> withThread.copy(turnPlans = current.turnPlans + (threadId to
+                    (current.turnPlans[threadId].orEmpty() + (turnId to CodexTurnPlan.fromJson(notification.params)))))
+                "turn/diff/updated" -> {
+                    val diff = notification.params.string("diff") ?: return@update current
+                    withThread.copy(turnDiffs = current.turnDiffs + (threadId to
+                        (current.turnDiffs[threadId].orEmpty() + (turnId to diff))))
+                }
+                else -> {
+                    val value = notification.params["tokenUsage"] as? JsonObject ?: return@update current
+                    val usage = CodexThreadTokenUsage.fromJson(turnId, value)
+                    withThread.copy(
+                        turnTokenUsage = current.turnTokenUsage + (threadId to
+                            (current.turnTokenUsage[threadId].orEmpty() + (turnId to usage))),
+                        tokenUsage = current.tokenUsage + (threadId to usage),
+                    )
                 }
             }
         }
@@ -277,11 +335,19 @@ private fun CodexTurn.mergeSnapshot(incoming: CodexTurn): CodexTurn = incoming.c
 )
 
 private fun CodexThreadItem.mergeSnapshot(incoming: CodexThreadItem): CodexThreadItem = incoming.copy(
+    status = if (advancesCompletionOf(incoming)) status else incoming.status,
+    fileChanges = if (incoming.advancesCompletionOf(this)) incoming.fileChanges else fileChanges.ifEmpty { incoming.fileChanges },
+    collabAgentCall = if (incoming.advancesCompletionOf(this)) incoming.collabAgentCall else collabAgentCall ?: incoming.collabAgentCall,
     text = existingStreamValue(text, incoming.text),
     output = existingStreamValue(output, incoming.output),
     reasoningSummary = reasoningSummary.mergeStreamParts(incoming.reasoningSummary),
     reasoningContent = reasoningContent.mergeStreamParts(incoming.reasoningContent),
 )
+
+private fun CodexThreadItem.advancesCompletionOf(existing: CodexThreadItem): Boolean {
+    val terminal = setOf("completed", "failed", "declined", "interrupted")
+    return status in terminal && existing.status !in terminal
+}
 
 private fun CodexThread.upsertTurn(turn: CodexTurn, authoritative: Boolean): CodexThread {
     val existing = turns.firstOrNull { candidate -> candidate.id == turn.id }
@@ -303,6 +369,8 @@ private fun CodexTurn.upsertItem(item: CodexThreadItem, authoritative: Boolean):
 }
 
 private fun CodexThreadItem.mergeStarted(incoming: CodexThreadItem): CodexThreadItem = incoming.copy(
+    fileChanges = fileChanges.ifEmpty { incoming.fileChanges },
+    collabAgentCall = collabAgentCall ?: incoming.collabAgentCall,
     text = incoming.text?.takeIf(String::isNotEmpty) ?: text,
     output = incoming.output?.takeIf(String::isNotEmpty) ?: output,
     reasoningSummary = incoming.reasoningSummary.ifEmpty { reasoningSummary },

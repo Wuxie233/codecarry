@@ -7,6 +7,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.wuxie233.codecarry.data.codex.CodexConnectionLease
 import dev.wuxie233.codecarry.data.codex.CodexConnectionManager
 import dev.wuxie233.codecarry.data.codex.CodexEventState
+import dev.wuxie233.codecarry.data.codex.CodexServerRequest
 import dev.wuxie233.codecarry.data.codex.CodexServerConnection
 import dev.wuxie233.codecarry.data.codex.CodexThread
 import dev.wuxie233.codecarry.data.codex.CodexThreadListPage
@@ -20,10 +21,15 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.combine
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import javax.inject.Inject
+
+enum class CodexThreadFilter { ALL, RUNNING, PENDING }
 
 data class CodexThreadListUiState(
     val serverName: String = "Codex",
@@ -31,21 +37,42 @@ data class CodexThreadListUiState(
     val archivedThreads: List<CodexThread> = emptyList(),
     val showArchived: Boolean = false,
     val searchQuery: String = "",
+    val filter: CodexThreadFilter = CodexThreadFilter.ALL,
+    val pendingRequestCounts: Map<String, Int> = emptyMap(),
     val isLoading: Boolean = true,
     val error: String? = null,
 ) {
+    val hasListConstraints: Boolean
+        get() = filter != CodexThreadFilter.ALL || searchQuery.isNotBlank()
+
     val visibleThreads: List<CodexThread>
         get() {
             val source = if (showArchived) archivedThreads else activeThreads
             val query = searchQuery.trim()
-            if (query.isEmpty()) return source
             return source.filter { thread ->
-                thread.name.orEmpty().contains(query, ignoreCase = true) ||
+                val matchesFilter = when (filter) {
+                    CodexThreadFilter.ALL -> true
+                    CodexThreadFilter.RUNNING -> thread.status.type == "active"
+                    CodexThreadFilter.PENDING -> pendingRequestCounts.getOrDefault(thread.id, 0) > 0
+                }
+                matchesFilter && (query.isEmpty() ||
+                    thread.name.orEmpty().contains(query, ignoreCase = true) ||
                     thread.preview.contains(query, ignoreCase = true) ||
-                    thread.cwd.orEmpty().contains(query, ignoreCase = true)
-            }
+                    thread.cwd.orEmpty().contains(query, ignoreCase = true))
+            }.sortedByDescending { it.recencyAt ?: it.updatedAt ?: it.createdAt ?: 0L }
         }
+
+    val recentDirectories: List<String>
+        get() = (activeThreads + archivedThreads)
+            .sortedByDescending { it.recencyAt ?: it.updatedAt ?: it.createdAt ?: 0L }
+            .mapNotNull { it.cwd?.trim()?.takeIf(String::isNotEmpty) }
+            .distinct()
+            .take(8)
 }
+
+internal fun codexPendingRequestCounts(requests: List<CodexServerRequest>): Map<String, Int> =
+    requests.mapNotNull { (it.params["threadId"] as? JsonPrimitive)?.contentOrNull?.takeIf(String::isNotBlank) }
+        .groupingBy { it }.eachCount()
 
 @HiltViewModel
 class CodexThreadListViewModel @Inject constructor(
@@ -126,6 +153,8 @@ class CodexThreadListViewModel @Inject constructor(
 
     fun setSearchQuery(query: String) = _uiState.update { it.copy(searchQuery = query) }
 
+    fun setFilter(filter: CodexThreadFilter) = _uiState.update { it.copy(filter = filter) }
+
     fun showArchived(show: Boolean) = _uiState.update { it.copy(showArchived = show) }
 
     fun createThread(cwd: String) {
@@ -171,11 +200,13 @@ class CodexThreadListViewModel @Inject constructor(
     private fun observeEvents(connected: CodexServerConnection) {
         eventsJob?.cancel()
         eventsJob = viewModelScope.launch {
-            connected.events.collect { eventState ->
+            combine(connected.events, connected.pendingRequests) { events, requests ->
+                events to codexPendingRequestCounts(requests)
+            }.collect { (eventState, pendingCounts) ->
                 val previous = observedEventState
                 observedEventState = eventState
                 _uiState.update {
-                    it.applyCodexEventState(previous, eventState)
+                    it.applyCodexEventState(previous, eventState).copy(pendingRequestCounts = pendingCounts)
                 }
             }
         }
@@ -205,6 +236,7 @@ class CodexThreadListViewModel @Inject constructor(
         eventsJob?.cancel()
         eventsJob = null
         observedEventState = null
+        _uiState.update { it.copy(pendingRequestCounts = emptyMap()) }
         lease?.close()
         lease = null
         connection = null

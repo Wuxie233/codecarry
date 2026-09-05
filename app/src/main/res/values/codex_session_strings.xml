@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="codex_sessions_all">All</string>
+    <string name="codex_sessions_running">Running</string>
+    <string name="codex_sessions_pending">Needs attention</string>
+    <string name="codex_sessions_pending_count">%1$d pending</string>
+    <string name="codex_sessions_idle">Ready</string>
+    <string name="codex_sessions_error">Error</string>
+    <string name="codex_sessions_not_loaded">Not loaded</string>
+    <string name="codex_sessions_unknown">Status unknown</string>
+    <string name="codex_sessions_no_matches">No matching sessions</string>
+    <string name="codex_sessions_no_matches_hint">Try another search or status filter.</string>
+    <string name="codex_sessions_directory">Working directory</string>
+    <string name="codex_sessions_directory_hint">Enter a remote path or choose a recent directory. Leave blank to use the server default.</string>
+    <string name="codex_sessions_recent_directories">Recent directories</string>
+    <string name="codex_sessions_default_directory">Use server default</string>
+    <string name="codex_sessions_clear_filters">Clear filters</string>
+</resources>

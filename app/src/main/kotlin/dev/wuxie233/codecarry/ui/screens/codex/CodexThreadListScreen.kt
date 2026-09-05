@@ -2,6 +2,8 @@ package dev.wuxie233.codecarry.ui.screens.codex
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,6 +14,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -35,6 +39,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -123,73 +128,104 @@ fun CodexThreadListScreen(
             }
         },
     ) { padding ->
-        Column(
-            Modifier.fillMaxSize().padding(padding),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            OutlinedTextField(
-                value = state.searchQuery,
-                onValueChange = viewModel::setSearchQuery,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                placeholder = { Text(stringResource(R.string.codex_thread_search)) },
-                singleLine = true,
-            )
-            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
-                listOf(
-                    false to stringResource(R.string.codex_thread_active),
-                    true to stringResource(R.string.codex_thread_archived),
-                ).forEachIndexed { index, (archived, label) ->
-                    SegmentedButton(
-                        selected = state.showArchived == archived,
-                        onClick = { viewModel.showArchived(archived) },
-                        shape = SegmentedButtonDefaults.itemShape(index, 2),
-                    ) { Text(label) }
+        Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.TopCenter) {
+            Column(
+                Modifier.widthIn(max = 960.dp).fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OutlinedTextField(
+                    value = state.searchQuery,
+                    onValueChange = viewModel::setSearchQuery,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                    placeholder = { Text(stringResource(R.string.codex_thread_search)) },
+                    singleLine = true,
+                )
+                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+                    listOf(
+                        false to stringResource(R.string.codex_thread_active),
+                        true to stringResource(R.string.codex_thread_archived),
+                    ).forEachIndexed { index, (archived, label) ->
+                        SegmentedButton(
+                            selected = state.showArchived == archived,
+                            onClick = { viewModel.showArchived(archived) },
+                            shape = SegmentedButtonDefaults.itemShape(index, 2),
+                        ) { Text(label) }
+                    }
                 }
-            }
-            Box(Modifier.fillMaxSize()) {
-                when {
-                    state.isLoading -> LoadingStateCard(Modifier.padding(12.dp), stringResource(R.string.codex_thread_loading))
-                    state.error != null && state.activeThreads.isEmpty() && state.archivedThreads.isEmpty() -> ErrorStateCard(
-                        title = stringResource(R.string.codex_thread_load_failed),
-                        message = state.error.orEmpty(),
-                        onRetry = viewModel::refresh,
-                        modifier = Modifier.padding(12.dp),
-                    )
-                    state.visibleThreads.isEmpty() -> EmptyStateCard(
-                        title = if (state.showArchived) stringResource(R.string.codex_thread_archived_empty) else stringResource(R.string.codex_thread_empty),
-                        message = if (state.showArchived) stringResource(R.string.codex_thread_archived_empty_message) else stringResource(R.string.codex_thread_empty_message),
-                        action = if (state.showArchived) null else ({ Button(onClick = { createOpen = true }) { Text(stringResource(R.string.codex_thread_new)) } }),
-                        modifier = Modifier.padding(12.dp),
-                    )
-                    else -> LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        state.visibleThreads.groupBy { it.cwd.orEmpty().ifBlank { noWorkspace } }.forEach { (cwd, threads) ->
-                            item("cwd:$cwd") {
-                                Text(
-                                    cwd,
-                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp),
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    fontFamily = FontFamily.Monospace,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-                            items(threads, key = { it.id }) { thread ->
-                                CodexThreadRow(
-                                    thread = thread,
-                                    archived = state.showArchived,
-                                    onOpen = { onOpenThread(thread.id) },
-                                    onRename = { renameTarget = thread },
-                                    onFork = { viewModel.forkThread(thread.id) },
-                                    onArchive = { viewModel.archiveThread(thread.id) },
-                                    onRestore = { viewModel.unarchiveThread(thread.id) },
-                                    onDelete = { deleteTarget = thread },
-                                )
+                Row(
+                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    CodexThreadFilter.entries.forEach { filter ->
+                        FilterChip(
+                            selected = state.filter == filter,
+                            onClick = { viewModel.setFilter(filter) },
+                            label = { Text(stringResource(when (filter) {
+                                CodexThreadFilter.ALL -> R.string.codex_sessions_all
+                                CodexThreadFilter.RUNNING -> R.string.codex_sessions_running
+                                CodexThreadFilter.PENDING -> R.string.codex_sessions_pending
+                            })) },
+                        )
+                    }
+                }
+                state.error?.takeIf { state.activeThreads.isNotEmpty() || state.archivedThreads.isNotEmpty() }?.let {
+                    Text(it, modifier = Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.error)
+                }
+                Box(Modifier.fillMaxSize()) {
+                    when {
+                        state.isLoading && state.activeThreads.isEmpty() && state.archivedThreads.isEmpty() -> LoadingStateCard(Modifier.padding(12.dp), stringResource(R.string.codex_thread_loading))
+                        state.error != null && state.activeThreads.isEmpty() && state.archivedThreads.isEmpty() -> ErrorStateCard(
+                            title = stringResource(R.string.codex_thread_load_failed),
+                            message = state.error.orEmpty(),
+                            onRetry = viewModel::refresh,
+                            modifier = Modifier.padding(12.dp),
+                        )
+                        state.visibleThreads.isEmpty() -> EmptyStateCard(
+                            title = if (state.hasListConstraints) stringResource(R.string.codex_sessions_no_matches) else if (state.showArchived) stringResource(R.string.codex_thread_archived_empty) else stringResource(R.string.codex_thread_empty),
+                            message = if (state.hasListConstraints) stringResource(R.string.codex_sessions_no_matches_hint) else if (state.showArchived) stringResource(R.string.codex_thread_archived_empty_message) else stringResource(R.string.codex_thread_empty_message),
+                            action = when {
+                                state.hasListConstraints -> ({
+                                    TextButton(onClick = {
+                                        viewModel.setSearchQuery("")
+                                        viewModel.setFilter(CodexThreadFilter.ALL)
+                                    }) { Text(stringResource(R.string.codex_sessions_clear_filters)) }
+                                })
+                                state.showArchived -> null
+                                else -> ({ Button(onClick = { createOpen = true }) { Text(stringResource(R.string.codex_thread_new)) } })
+                            },
+                            modifier = Modifier.padding(12.dp),
+                        )
+                        else -> LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            state.visibleThreads.groupBy { it.cwd.orEmpty().ifBlank { noWorkspace } }.forEach { (cwd, threads) ->
+                                item("cwd:$cwd") {
+                                    Text(
+                                        cwd,
+                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        fontFamily = FontFamily.Monospace,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                                items(threads, key = { it.id }) { thread ->
+                                    CodexThreadRow(
+                                        thread = thread,
+                                        archived = state.showArchived,
+                                        pendingCount = state.pendingRequestCounts.getOrDefault(thread.id, 0),
+                                        onOpen = { onOpenThread(thread.id) },
+                                        onRename = { renameTarget = thread },
+                                        onFork = { viewModel.forkThread(thread.id) },
+                                        onArchive = { viewModel.archiveThread(thread.id) },
+                                        onRestore = { viewModel.unarchiveThread(thread.id) },
+                                        onDelete = { deleteTarget = thread },
+                                    )
+                                }
                             }
                         }
                     }
@@ -199,10 +235,11 @@ fun CodexThreadListScreen(
     }
 
     if (createOpen) {
-        val suggested = state.activeThreads.firstOrNull()?.cwd.orEmpty()
+        val suggested = rememberSaveable { state.recentDirectories.firstOrNull().orEmpty() }
         PathDialog(
             title = stringResource(R.string.codex_thread_create_title),
             initial = suggested,
+            directories = state.recentDirectories,
             confirmLabel = stringResource(R.string.codex_thread_create),
             onDismiss = { createOpen = false },
             onConfirm = { viewModel.createThread(it); createOpen = false },
@@ -236,6 +273,7 @@ fun CodexThreadListScreen(
 private fun CodexThreadRow(
     thread: CodexThread,
     archived: Boolean,
+    pendingCount: Int,
     onOpen: () -> Unit,
     onRename: () -> Unit,
     onFork: () -> Unit,
@@ -244,9 +282,9 @@ private fun CodexThreadRow(
     onDelete: () -> Unit,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
-    val statusColor = when (thread.status.type) {
-        "active" -> StatusWarning
-        "systemError" -> StatusError
+    val statusColor = when {
+        pendingCount > 0 || thread.status.type == "active" -> StatusWarning
+        thread.status.type == "systemError" -> StatusError
         else -> StatusConnected
     }
     Card(
@@ -269,7 +307,17 @@ private fun CodexThreadRow(
                     Text(thread.preview, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(thread.status.type, style = MaterialTheme.typography.labelSmall, color = statusColor)
+                    Text(
+                        if (pendingCount > 0) stringResource(R.string.codex_sessions_pending_count, pendingCount)
+                        else stringResource(when (thread.status.type) {
+                            "active" -> R.string.codex_sessions_running
+                            "idle" -> R.string.codex_sessions_idle
+                            "systemError" -> R.string.codex_sessions_error
+                            "notLoaded" -> R.string.codex_sessions_not_loaded
+                            else -> R.string.codex_sessions_unknown
+                        }),
+                        style = MaterialTheme.typography.labelSmall, color = statusColor,
+                    )
                     thread.updatedAt?.let { seconds ->
                         Text(
                             remember(seconds) {
@@ -320,6 +368,7 @@ private fun PathDialog(
     title: String,
     initial: String,
     confirmLabel: String,
+    directories: List<String>? = null,
     onDismiss: () -> Unit,
     onConfirm: (String) -> Unit,
 ) {
@@ -327,7 +376,30 @@ private fun PathDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
-        text = { OutlinedTextField(value, { value = it }, modifier = Modifier.fillMaxWidth(), singleLine = true) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value, { value = it }, modifier = Modifier.fillMaxWidth(), singleLine = true,
+                    label = if (directories != null) ({ Text(stringResource(R.string.codex_sessions_directory)) }) else null,
+                )
+                if (directories != null) {
+                    Text(stringResource(R.string.codex_sessions_directory_hint), style = MaterialTheme.typography.bodySmall)
+                    if (directories.isNotEmpty()) {
+                        Text(stringResource(R.string.codex_sessions_recent_directories), style = MaterialTheme.typography.labelMedium)
+                        LazyColumn(Modifier.heightIn(max = 240.dp)) {
+                            items(directories, key = { it }) { directory ->
+                                TextButton(onClick = { value = directory }, modifier = Modifier.fillMaxWidth()) {
+                                    Text(directory, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontWeight = if (value == directory) FontWeight.Bold else FontWeight.Normal)
+                                }
+                            }
+                        }
+                    }
+                    TextButton(onClick = { value = "" }) { Text(stringResource(R.string.codex_sessions_default_directory)) }
+                }
+            }
+        },
         confirmButton = { TextButton(onClick = { onConfirm(value) }) { Text(confirmLabel) } },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
     )

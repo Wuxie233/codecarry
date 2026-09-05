@@ -1,0 +1,13 @@
+<resources>
+    <string name="codex_attachment_add">添加附件</string>
+    <string name="codex_attachment_image">图片</string>
+    <string name="codex_attachment_gallery">选择图片</string>
+    <string name="codex_attachment_camera">拍照</string>
+    <string name="codex_attachment_skills">Skills</string>
+    <string name="codex_attachment_files">项目文件</string>
+    <string name="codex_attachment_search">搜索</string>
+    <string name="codex_attachment_empty">没有匹配项</string>
+    <string name="codex_attachment_remove">移除附件</string>
+    <string name="codex_attachment_image_failed">无法读取图片，请选择小于 20 MB 的受支持图片。</string>
+    <string name="codex_attachment_camera_failed">无法打开相机，请尝试从相册选择图片。</string>
+</resources>

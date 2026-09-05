@@ -620,6 +620,41 @@ open class CodexAppServerClient internal constructor(
         ),
     ).let(CodexModelListPage::fromJson)
 
+    suspend fun listSkills(cwd: String, forceReload: Boolean = false): List<CodexSkill> =
+        listSkillsResult(cwd, forceReload).skills
+
+    suspend fun listSkillsResult(cwd: String, forceReload: Boolean = false): CodexSkillsResult {
+        val result = capabilityRequest("skills/list", buildJsonObject {
+            put("cwds", JsonArray(listOf(JsonPrimitive(cwd))))
+            put("forceReload", forceReload)
+        }).objectOrEmpty()
+        check(result["data"] is JsonArray) { "Invalid Codex skills/list response" }
+        val entries = result.controlObjects("data")
+        val errors = entries.flatMap { it.controlObjects("errors") }
+        val warnings = errors.map { (it["message"] as? JsonPrimitive)?.contentOrNull ?: "Skill loading failed" }
+        val skills = entries.flatMap { it.controlObjects("skills") }.map(CodexSkill::fromJson).distinctBy { it.path }
+        if (skills.isEmpty() && warnings.isNotEmpty()) throw IllegalStateException(warnings.joinToString("\n"))
+        return CodexSkillsResult(skills, warnings)
+    }
+
+    suspend fun searchFiles(query: String, roots: List<String>): List<CodexFileMatch> {
+        require(roots.isNotEmpty()) { "Remote file search requires a workspace root" }
+        val result = capabilityRequest("fuzzyFileSearch", buildJsonObject {
+            put("query", query)
+            put("roots", JsonArray(roots.map(::JsonPrimitive)))
+            put("cancellationToken", JsonNull)
+        }).objectOrEmpty()
+        check(result["files"] is JsonArray) { "Invalid Codex fuzzyFileSearch response" }
+        return result.controlObjects("files").map(CodexFileMatch::fromJson)
+    }
+
+    private suspend fun capabilityRequest(method: String, params: JsonObject): JsonElement = try {
+        request(method, params)
+    } catch (error: CodexRpcException) {
+        if (error.code == -32601L) throw CodexCapabilityUnavailableException(method, error)
+        throw error
+    }
+
     private suspend fun sendJson(message: JsonObject) {
         sendMutex.withLock {
             transport.send(json.encodeToString(JsonObject.serializer(), message))

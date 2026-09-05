@@ -1,0 +1,23 @@
+<resources>
+    <string name="codex_chat_status">Session status</string>
+    <string name="codex_chat_pending_count">%1$d requests waiting · handle in order</string>
+    <string name="codex_chat_disconnected">Disconnected · use Reconnect to restore</string>
+    <string name="codex_chat_waiting_turn">Message accepted · waiting for task receipt</string>
+    <string name="codex_chat_steering">Task running · messages steer the current task</string>
+    <string name="codex_chat_ready">Ready for a new task</string>
+    <string name="codex_chat_steer">Supplement current task</string>
+    <string name="codex_chat_steer_hint">Add guidance to the current task…</string>
+    <string name="codex_chat_no_goal">No goal set</string>
+    <string name="codex_chat_memory_value">Memory: %1$s</string>
+    <string name="codex_chat_context_value">Latest usage: %1$d tokens · context window: %2$s</string>
+    <string name="codex_chat_total_tokens">Session total: %1$d tokens</string>
+    <string name="codex_chat_context_unavailable">Usage will appear when reported by the server</string>
+    <string name="codex_chat_turn_diff">View task diff</string>
+    <string name="codex_chat_payload_limit">Message attachments exceed the size limit. Remove an image or shorten the message.</string>
+    <string name="codex_chat_goal_usage">Goal usage: %1$d / %2$s tokens · %3$d seconds</string>
+    <string name="codex_chat_goal_active">Active</string>
+    <string name="codex_chat_goal_complete">Completed</string>
+    <string name="codex_chat_goal_paused">Paused</string>
+    <string name="codex_chat_goal_blocked">Blocked</string>
+    <string name="codex_chat_goal_unknown">Status unavailable</string>
+</resources>

@@ -235,6 +235,8 @@ data class CodexThreadItem(
     val command: String? = null,
     val cwd: String? = null,
     val output: String? = null,
+    val fileChanges: List<CodexFileChange> = emptyList(),
+    val collabAgentCall: CodexCollabAgentCall? = null,
     val reasoningSummary: List<String> = emptyList(),
     val reasoningContent: List<String> = emptyList(),
     val extra: JsonObject = JsonObject(emptyMap()),
@@ -265,6 +267,8 @@ data class CodexThreadItem(
                 command = value.string("command"),
                 cwd = value.string("cwd"),
                 output = value.string("aggregatedOutput") ?: value.string("output"),
+                fileChanges = value.controlObjects("changes").map(CodexFileChange::fromJson),
+                collabAgentCall = if (type == "collabAgentToolCall") CodexCollabAgentCall.fromJson(value) else null,
                 reasoningSummary = value.stringList("summary"),
                 reasoningContent = value.stringList("content"),
                 extra = value.without(

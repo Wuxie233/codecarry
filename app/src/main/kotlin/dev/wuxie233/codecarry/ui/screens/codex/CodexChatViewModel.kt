@@ -4,6 +4,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dev.wuxie233.codecarry.data.codex.*
 import dev.wuxie233.codecarry.data.codex.CodexApprovalKind
 import dev.wuxie233.codecarry.data.codex.CodexAppServerClient
 import dev.wuxie233.codecarry.data.codex.CodexDisconnectedException
@@ -44,6 +45,7 @@ import java.util.UUID
 import javax.inject.Inject
 
 data class CodexChatUiState(
+    val draft: String = "",
     val thread: CodexThread? = null,
     val goal: CodexGoal? = null,
     val activeTurnId: String? = null,
@@ -57,9 +59,21 @@ data class CodexChatUiState(
     val selectedEffort: String? = null,
     val pendingRequests: List<CodexServerRequest> = emptyList(),
     val error: String? = null,
+    val isConnected: Boolean = false,
+    val replyingRequestIds: Set<String> = emptySet(),
+    val requestErrors: Map<String, String> = emptyMap(),
+    val plans: Map<String, CodexTurnPlan> = emptyMap(),
+    val diffs: Map<String, String> = emptyMap(),
+    val tokenUsage: CodexThreadTokenUsage? = null,
+    val attachmentLimitReached: Boolean = false,
+    val composerAttachments: List<CodexComposerAttachment> = emptyList(),
+    val skills: List<CodexSkill> = emptyList(),
+    val files: List<CodexFileMatch> = emptyList(),
+    val attachmentsLoading: Boolean = false,
+    val attachmentsError: String? = null,
 )
 
-data class CodexSendResult(val content: String, val accepted: Boolean)
+data class CodexSendResult(val content: String, val accepted: Boolean, val attachmentIds: Set<String> = emptySet())
 
 @HiltViewModel
 class CodexChatViewModel @Inject constructor(
@@ -78,6 +92,7 @@ class CodexChatViewModel @Inject constructor(
     )
     private val _uiState = MutableStateFlow(
         CodexChatUiState(
+            draft = savedStateHandle.get<String>("codexDraft").orEmpty(),
             isSendConfirmationPending = restoredPendingSendContent != null && restoredPendingSendId != null,
             isAwaitingAuthoritativeTurn = authoritativeTurnTracker.isAwaiting,
         ),
@@ -88,6 +103,8 @@ class CodexChatViewModel @Inject constructor(
     private var client: CodexAppServerClient? = null
     private var connection: CodexServerConnection? = null
     private var lease: CodexConnectionLease? = null
+    private var searchJob: Job? = null
+    private var pendingAttachmentIds: Set<String> = emptySet()
     private var eventsJob: Job? = null
     private var requestsJob: Job? = null
     private var activeThreadToken: Closeable? = null
@@ -174,17 +191,32 @@ class CodexChatViewModel @Inject constructor(
         }
     }
 
-    fun sendMessage(text: String) {
+    fun updateDraft(text: String) {
+        savedStateHandle["codexDraft"] = text
+        _uiState.update { it.copy(draft = text) }
+    }
+
+    fun sendMessage(text: String, attachments: List<CodexComposerAttachment> = emptyList()) {
         val content = text.trim()
         if (
-            content.isEmpty() ||
+            (content.isEmpty() && attachments.isEmpty()) ||
             _uiState.value.isLoading ||
             _uiState.value.thread == null ||
+            !_uiState.value.isConnected ||
             _uiState.value.isSending ||
             _uiState.value.isAwaitingAuthoritativeTurn ||
             _uiState.value.isSendConfirmationPending
         ) return
+        if (content.toByteArray(Charsets.UTF_8).size > 1024 * 1024) {
+            _uiState.update { it.copy(attachmentLimitReached = true) }
+            return
+        }
         val clientUserMessageId = sendIdentity.begin(content) ?: return
+        pendingAttachmentIds = attachments.map { it.id }.toSet()
+        val input = buildList {
+            if (content.isNotBlank()) add(CodexUserInput.Text(content))
+            addAll(attachments.map { it.input })
+        }
         savePendingSend(content, clientUserMessageId)
         _uiState.update { it.copy(isSending = true, error = null) }
         viewModelScope.launch {
@@ -194,7 +226,7 @@ class CodexChatViewModel @Inject constructor(
                     requireClient().steerTurn(
                         threadId = threadId,
                         expectedTurnId = activeTurnId,
-                        text = content,
+                        input = input,
                         clientUserMessageId = clientUserMessageId,
                     )
                     markSendAccepted(content, clientUserMessageId, awaitAuthoritativeTurn = false)
@@ -206,7 +238,7 @@ class CodexChatViewModel @Inject constructor(
                 _uiState.update { it.copy(isAwaitingAuthoritativeTurn = true) }
                 val confirmedTurn = requireClient().startTurn(
                     threadId = threadId,
-                    text = content,
+                    input = input,
                     model = selected?.model,
                     effort = _uiState.value.selectedEffort,
                     clientUserMessageId = clientUserMessageId,
@@ -323,7 +355,12 @@ class CodexChatViewModel @Inject constructor(
         _uiState.update {
             it.copy(isSendConfirmationPending = awaitAuthoritativeTurn, error = null)
         }
-        if (firstAcceptance) _sendResults.emit(CodexSendResult(content, accepted = true))
+        if (firstAcceptance) {
+            if (_uiState.value.draft.trim() == content) updateDraft("")
+            _uiState.update { state -> state.copy(composerAttachments = state.composerAttachments.filterNot { it.id in pendingAttachmentIds }) }
+            _sendResults.emit(CodexSendResult(content, accepted = true, attachmentIds = pendingAttachmentIds))
+            pendingAttachmentIds = emptySet()
+        }
     }
 
     private suspend fun reconcileUncertainSend(
@@ -420,8 +457,8 @@ class CodexChatViewModel @Inject constructor(
     }
 
     fun answerApproval(request: CodexServerRequest, decision: String) {
-        viewModelScope.launch {
-            val approval = request.approval ?: return@launch
+        replyToRequest(request) {
+            val approval = request.approval ?: return@replyToRequest
             runCatching {
                 when (approval.kind) {
                     CodexApprovalKind.PERMISSIONS -> {
@@ -449,29 +486,29 @@ class CodexChatViewModel @Inject constructor(
                     }
                     else -> requireConnection().replyApproval(approval, decision)
                 }
-            }.onFailure { error -> _uiState.update { it.copy(error = error.message) } }
+            }.getOrThrow()
         }
     }
 
     fun answerUserInput(request: CodexServerRequest, answers: Map<String, List<String>>) {
-        viewModelScope.launch {
+        replyToRequest(request) {
             runCatching {
                 val userInput = requireNotNull(request.userInput)
                 requireConnection().replyUserInput(userInput, answers)
-            }.onFailure { error -> _uiState.update { it.copy(error = error.message) } }
+            }.getOrThrow()
         }
     }
 
     fun answerElicitation(request: CodexServerRequest, action: String, content: JsonElement? = null) {
-        viewModelScope.launch {
+        replyToRequest(request) {
             runCatching {
                 requireConnection().reply(request, codexElicitationResponse(action, content))
-            }.onFailure { error -> _uiState.update { it.copy(error = error.message) } }
+            }.getOrThrow()
         }
     }
 
     fun cancelRequest(request: CodexServerRequest) {
-        viewModelScope.launch {
+        replyToRequest(request) {
             runCatching {
                 val connected = requireConnection()
                 when {
@@ -495,7 +532,67 @@ class CodexChatViewModel @Inject constructor(
                     )
                     else -> connected.replyError(request, -32601, "Unsupported request in OC Remote")
                 }
-            }.onFailure { error -> _uiState.update { it.copy(error = error.message) } }
+            }.getOrThrow()
+        }
+    }
+
+    private fun replyToRequest(request: CodexServerRequest, block: suspend () -> Unit) {
+        val key = request.id.requestKey()
+        if (key in _uiState.value.replyingRequestIds) return
+        _uiState.update { it.copy(replyingRequestIds = it.replyingRequestIds + key, requestErrors = it.requestErrors - key) }
+        viewModelScope.launch {
+            try {
+                block()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                _uiState.update { it.copy(requestErrors = it.requestErrors + (key to (error.message ?: "Request failed"))) }
+            } finally {
+                _uiState.update { it.copy(replyingRequestIds = it.replyingRequestIds - key) }
+            }
+        }
+    }
+
+    fun addAttachment(attachment: CodexComposerAttachment) {
+        _uiState.update { state ->
+            val next = state.composerAttachments.filterNot { it.id == attachment.id } + attachment
+            if (next.size > 8 || next.sumOf { it.input.toJson().toString().toByteArray(Charsets.UTF_8).size.toLong() } > 12 * 1024 * 1024) {
+                state.copy(attachmentLimitReached = true)
+            } else state.copy(composerAttachments = next, attachmentLimitReached = false)
+        }
+    }
+
+    fun removeAttachment(id: String) {
+        _uiState.update { it.copy(composerAttachments = it.composerAttachments.filterNot { attachment -> attachment.id == id }, attachmentLimitReached = false) }
+    }
+
+    fun loadSkills() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(attachmentsLoading = true, attachmentsError = null) }
+            try {
+                val cwd = requireNotNull(_uiState.value.thread?.cwd)
+                val result = requireClient().listSkillsResult(cwd)
+                _uiState.update { it.copy(skills = result.skills, attachmentsError = result.warnings.takeIf { warnings -> warnings.isNotEmpty() }?.joinToString("\n")) }
+            } catch (error: CancellationException) { throw error
+            } catch (error: Throwable) {
+                _uiState.update { it.copy(attachmentsError = error.message) }
+            } finally { _uiState.update { it.copy(attachmentsLoading = false) } }
+        }
+    }
+
+    fun searchFiles(query: String) {
+        searchJob?.cancel()
+        searchJob = viewModelScope.launch {
+            _uiState.update { it.copy(attachmentsLoading = true, attachmentsError = null) }
+            try {
+                kotlinx.coroutines.delay(250)
+                val cwd = requireNotNull(_uiState.value.thread?.cwd)
+                val files = requireClient().searchFiles(query, listOf(cwd))
+                _uiState.update { it.copy(files = files) }
+            } catch (error: CancellationException) { throw error
+            } catch (error: Throwable) {
+                _uiState.update { it.copy(attachmentsError = error.message) }
+            } finally { _uiState.update { it.copy(attachmentsLoading = false) } }
         }
     }
 
@@ -509,6 +606,9 @@ class CodexChatViewModel @Inject constructor(
                 _uiState.update {
                     it.copy(
                         thread = thread,
+                        plans = eventState.turnPlans[threadId].orEmpty(),
+                        diffs = eventState.turnDiffs[threadId].orEmpty(),
+                        tokenUsage = eventState.tokenUsage[threadId],
                         activeTurnId = thread?.turns?.lastOrNull { turn -> turn.status == "inProgress" }?.id,
                         isAwaitingAuthoritativeTurn = if (receivedAuthoritativeTurn) {
                             false
@@ -576,6 +676,7 @@ class CodexChatViewModel @Inject constructor(
             connectionManager.connections.collect { connections ->
                 _uiState.update { state ->
                     state.copy(
+                        isConnected = connections[serverId]?.state is CodexClientConnectionState.Connected,
                         pendingRequests = connections[serverId]?.pendingRequests
                             .orEmpty()
                             .filter { request -> request.params.string("threadId") == threadId },

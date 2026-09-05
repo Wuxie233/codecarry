@@ -34,6 +34,42 @@ class CodexAppServerClientTest {
     }
 
     @Test
+    fun `skill discovery retains valid skills alongside load warnings`() = runTest {
+        val transport = FakeTransport()
+        val client = newClient(transport, backgroundScope)
+        initialize(client, transport)
+        val listing = async { client.listSkillsResult("/repo") }
+        val request = transport.takeSentObject()
+        transport.respond(request.getValue("id").jsonPrimitive, json.parseToJsonElement(
+            """{"data":[{"cwd":"/repo","skills":[{"name":"valid","description":"OK","path":"/repo/SKILL.md","enabled":true}],"errors":[{"path":"/bad/SKILL.md","message":"invalid frontmatter"}]}]}""",
+        ))
+        val result = listing.await()
+        assertEquals("valid", result.skills.single().name)
+        assertEquals(listOf("invalid frontmatter"), result.warnings)
+    }
+
+    @Test
+    fun `skills and remote search use native contracts and report unsupported methods`() = runTest {
+        val transport = FakeTransport()
+        val client = newClient(transport, backgroundScope)
+        initialize(client, transport)
+        val skills = async { client.listSkills("/repo") }
+        val skillRequest = transport.takeSentObject()
+        assertEquals("skills/list", skillRequest["method"]?.jsonPrimitive?.content)
+        assertEquals("[\"/repo\"]", skillRequest["params"]?.jsonObject?.get("cwds").toString())
+        transport.respond(skillRequest.getValue("id").jsonPrimitive, json.parseToJsonElement(
+            """{"data":[{"cwd":"/repo","skills":[{"name":"review","description":"Review","path":"/repo/SKILL.md","enabled":true}],"errors":[]}]}""",
+        ))
+        assertEquals("review", skills.await().single().name)
+        val search = async { runCatching { client.searchFiles("app", listOf("/repo")) } }
+        val fileRequest = transport.takeSentObject()
+        assertEquals("fuzzyFileSearch", fileRequest["method"]?.jsonPrimitive?.content)
+        assertEquals("app", fileRequest["params"]?.jsonObject?.get("query")?.jsonPrimitive?.content)
+        transport.respondError(fileRequest.getValue("id").jsonPrimitive, -32601, "Method not found")
+        assertTrue(search.await().exceptionOrNull() is CodexCapabilityUnavailableException)
+    }
+
+    @Test
     fun `connect initializes experimental API then sends initialized notification`() = runTest {
         val transport = FakeTransport()
         val client = newClient(transport, backgroundScope)

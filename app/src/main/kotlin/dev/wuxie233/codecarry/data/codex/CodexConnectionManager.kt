@@ -700,6 +700,7 @@ class CodexConnectionManager {
             } ?: continue
             if (restoredThreads[threadId] == lifecycleVersion) continue
             try {
+                entry.reducer.invalidateThreadControlState(threadId)
                 val resumed = entry.client.resumeThread(threadId, excludeTurns = false)
                 val stillCurrent = synchronized(lock) {
                     entries[entry.connection.serverId] === entry &&

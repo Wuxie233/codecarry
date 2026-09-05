@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="codex_timeline_plan">任务进度</string>
+    <string name="codex_timeline_images">%1$d 张图片</string>
+    <string name="codex_timeline_details_unavailable">暂无文件详情</string>
+    <string name="codex_timeline_open_subagent">打开子任务</string>
+    <string name="codex_timeline_completed">已完成</string>
+    <string name="codex_timeline_running">进行中</string>
+    <string name="codex_timeline_pending">待执行</string>
+    <string name="codex_timeline_failed">失败</string>
+    <string name="codex_timeline_added">新增</string>
+    <string name="codex_timeline_deleted">删除</string>
+    <string name="codex_timeline_modified">修改</string>
+    <string name="codex_timeline_moved_to">移动至 %1$s</string>
+    <string name="codex_timeline_diff_unavailable">暂无差异内容</string>
+    <string name="codex_timeline_collapse">收起</string>
+    <string name="codex_timeline_expand">展开</string>
+    <string name="codex_timeline_subagent_activity">子任务动态</string>
+</resources>

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="codex_sessions_all">全部</string>
+    <string name="codex_sessions_running">运行中</string>
+    <string name="codex_sessions_pending">待处理</string>
+    <string name="codex_sessions_pending_count">%1$d 项待处理</string>
+    <string name="codex_sessions_idle">就绪</string>
+    <string name="codex_sessions_error">发生错误</string>
+    <string name="codex_sessions_not_loaded">未加载</string>
+    <string name="codex_sessions_unknown">状态未知</string>
+    <string name="codex_sessions_no_matches">没有匹配的会话</string>
+    <string name="codex_sessions_no_matches_hint">请调整搜索内容或状态筛选。</string>
+    <string name="codex_sessions_directory">工作目录</string>
+    <string name="codex_sessions_directory_hint">输入远端路径或选择最近目录。留空则使用服务器默认目录。</string>
+    <string name="codex_sessions_recent_directories">最近目录</string>
+    <string name="codex_sessions_default_directory">使用服务器默认目录</string>
+    <string name="codex_sessions_clear_filters">清除筛选</string>
+</resources>

@@ -9,19 +9,19 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -59,23 +59,21 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -89,7 +87,6 @@ import dev.wuxie233.codecarry.data.codex.CodexApprovalKind
 import dev.wuxie233.codecarry.data.codex.CodexMemoryMode
 import dev.wuxie233.codecarry.data.codex.CodexServerRequest
 import dev.wuxie233.codecarry.ui.screens.chat.chatTextOverflow
-import dev.wuxie233.codecarry.data.codex.CodexThreadItem
 import dev.wuxie233.codecarry.data.codex.requestKey
 import dev.wuxie233.codecarry.ui.components.ErrorStateCard
 import dev.wuxie233.codecarry.ui.components.LoadingStateCard
@@ -108,11 +105,10 @@ import kotlinx.serialization.json.put
 @Composable
 fun CodexChatScreen(
     onNavigateBack: () -> Unit,
+    onOpenThread: (String) -> Unit = {},
     viewModel: CodexChatViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsState()
-    val listState = rememberLazyListState()
-    val focusManager = LocalFocusManager.current
     val uriHandler = LocalUriHandler.current
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(viewModel, lifecycleOwner) {
@@ -128,7 +124,9 @@ fun CodexChatScreen(
             viewModel.setChatVisible(false)
         }
     }
-    var draft by rememberSaveable { mutableStateOf("") }
+    val draft = state.draft
+    val attachments = state.composerAttachments
+    var statusOpen by remember { mutableStateOf(false) }
     var menuExpanded by remember { mutableStateOf(false) }
     var renameOpen by remember { mutableStateOf(false) }
     var goalOpen by remember { mutableStateOf(false) }
@@ -137,28 +135,17 @@ fun CodexChatScreen(
         state.thread?.turns.orEmpty().flatMap { turn -> turn.items.map { turn.id to it } }
     }
 
-    LaunchedEffect(timeline.size, timeline.lastOrNull()?.second?.text, timeline.lastOrNull()?.second?.output) {
-        if (timeline.isNotEmpty()) listState.animateScrollToItem(timeline.lastIndex)
-    }
-    LaunchedEffect(Unit) {
-        viewModel.sendResults.collect { result ->
-            if (shouldClearCodexDraft(draft, result)) {
-                draft = ""
-                focusManager.clearFocus()
-            }
-        }
-    }
-
     fun submitDraft() {
         if (
-            draft.isNotBlank() &&
+            (draft.isNotBlank() || attachments.isNotEmpty()) &&
             !state.isLoading &&
+            state.isConnected &&
             state.thread != null &&
             !state.isSending &&
             !state.isAwaitingAuthoritativeTurn &&
             !state.isSendConfirmationPending
         ) {
-            viewModel.sendMessage(draft)
+            viewModel.sendMessage(draft, attachments)
         }
     }
 
@@ -200,6 +187,10 @@ fun CodexChatScreen(
                         }
                         DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
                             DropdownMenuItem(
+                                text = { Text(stringResource(R.string.codex_chat_status)) },
+                                onClick = { menuExpanded = false; statusOpen = true },
+                            )
+                            DropdownMenuItem(
                                 text = { Text(stringResource(R.string.codex_goal)) },
                                 leadingIcon = { Icon(Icons.Default.TrackChanges, contentDescription = null) },
                                 onClick = { menuExpanded = false; goalOpen = true },
@@ -236,6 +227,45 @@ fun CodexChatScreen(
                     .imePadding()
                     .padding(horizontal = 12.dp, vertical = 8.dp),
             ) {
+                state.pendingRequests.firstOrNull()?.let { request ->
+                    val requestKey = request.id.requestKey()
+                    Column(Modifier.fillMaxWidth().heightIn(max = 280.dp).verticalScroll(rememberScrollState())) {
+                        Text(stringResource(R.string.codex_chat_pending_count, state.pendingRequests.size), style = MaterialTheme.typography.labelMedium)
+                        state.requestErrors[requestKey]?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                        key(requestKey) {
+                            Box {
+                                androidx.compose.runtime.CompositionLocalProvider(LocalCodexRequestEnabled provides (requestKey !in state.replyingRequestIds)) {
+                                    CodexRequestCard(
+                                        request = request,
+                                        thread = state.thread,
+                                        onDecision = { viewModel.answerApproval(request, it) },
+                                        onAnswer = { viewModel.answerUserInput(request, it) },
+                                        onElicitation = { action, content -> viewModel.answerElicitation(request, action, content) },
+                                        onOpenUrl = { url -> runCatching { uriHandler.openUri(url) } },
+                                        onCancel = { viewModel.cancelRequest(request) },
+                                    )
+                                }
+                                if (requestKey in state.replyingRequestIds) {
+                                    Box(Modifier.matchParentSize().background(MaterialTheme.colorScheme.surface.copy(alpha = 0.75f)).clickable { }, contentAlignment = Alignment.Center) {
+                                        CircularProgressIndicator(Modifier.size(24.dp))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Text(
+                    stringResource(when {
+                        state.isLoading -> R.string.codex_opening_thread
+                        !state.isConnected -> R.string.codex_chat_disconnected
+                        state.isSendConfirmationPending -> R.string.codex_send_confirmation_pending
+                        state.isAwaitingAuthoritativeTurn -> R.string.codex_chat_waiting_turn
+                        state.activeTurnId != null -> R.string.codex_chat_steering
+                        else -> R.string.codex_chat_ready
+                    }),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 if (state.isSendConfirmationPending) {
                     Column(
                         modifier = Modifier.padding(bottom = 8.dp),
@@ -256,6 +286,8 @@ fun CodexChatScreen(
                         }
                     }
                 }
+                if (state.attachmentLimitReached) Text(stringResource(R.string.codex_chat_payload_limit), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                CodexAttachmentChips(attachments, enabled = !state.isSending && !state.isSendConfirmationPending, onRemove = viewModel::removeAttachment)
                 ModelControls(
                     state = state,
                     onModel = viewModel::selectModel,
@@ -266,11 +298,18 @@ fun CodexChatScreen(
                     verticalAlignment = Alignment.Bottom,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
+                    CodexAttachmentPicker(
+                        enabled = !state.isSending && !state.isSendConfirmationPending && attachments.size < 8,
+                        skills = state.skills, files = state.files,
+                        loading = state.attachmentsLoading, error = state.attachmentsError,
+                        onLoadSkills = viewModel::loadSkills, onSearchFiles = viewModel::searchFiles,
+                        onAdd = viewModel::addAttachment,
+                    )
                     OutlinedTextField(
                         value = draft,
-                        onValueChange = { draft = it },
+                        onValueChange = viewModel::updateDraft,
                         modifier = Modifier.weight(1f),
-                        placeholder = { Text(stringResource(R.string.codex_message_hint)) },
+                        placeholder = { Text(stringResource(if (state.activeTurnId != null) R.string.codex_chat_steer_hint else R.string.codex_message_hint)) },
                         minLines = 1,
                         maxLines = 6,
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
@@ -280,8 +319,9 @@ fun CodexChatScreen(
                     )
                     FilledIconButton(
                         onClick = ::submitDraft,
-                        enabled = draft.isNotBlank() &&
+                        enabled = (draft.isNotBlank() || attachments.isNotEmpty()) &&
                             !state.isLoading &&
+                            state.isConnected &&
                             state.thread != null &&
                             !state.isSending &&
                             !state.isAwaitingAuthoritativeTurn &&
@@ -290,7 +330,7 @@ fun CodexChatScreen(
                         if (state.isSending || state.isAwaitingAuthoritativeTurn) {
                             CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
                         }
-                        else Icon(Icons.AutoMirrored.Filled.Send, contentDescription = stringResource(R.string.chat_send))
+                        else Icon(Icons.AutoMirrored.Filled.Send, contentDescription = stringResource(if (state.activeTurnId != null) R.string.codex_chat_steer else R.string.chat_send))
                     }
                 }
             }
@@ -305,11 +345,9 @@ fun CodexChatScreen(
                     onRetry = viewModel::connectAndLoad,
                     modifier = Modifier.padding(16.dp),
                 )
-                else -> LazyColumn(
-                    state = listState,
+                else -> CodexTimelineViewport(
+                    contentKey = listOf(timeline, state.plans, state.diffs, state.activeTurnId, state.error),
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     state.error?.let { error ->
                         item("error") {
@@ -322,20 +360,19 @@ fun CodexChatScreen(
                         }
                     }
                     items(timeline, key = { (turnId, item) -> "$turnId:${item.id ?: item.type}" }) { (_, item) ->
-                        CodexTimelineItem(item)
+                        CodexTimelineItem(item, onOpenThread)
                     }
-                    items(state.pendingRequests, key = { it.id.requestKey() }) { request ->
-                        CodexRequestCard(
-                            request = request,
-                            thread = state.thread,
-                            onDecision = { viewModel.answerApproval(request, it) },
-                            onAnswer = { viewModel.answerUserInput(request, it) },
-                            onElicitation = { action, content ->
-                                viewModel.answerElicitation(request, action, content)
-                            },
-                            onOpenUrl = { url -> runCatching { uriHandler.openUri(url) } },
-                            onCancel = { viewModel.cancelRequest(request) },
-                        )
+                    state.thread?.turns?.lastOrNull()?.id?.let { turnId ->
+                        state.plans[turnId]?.let { plan -> item("plan:$turnId") { CodexTurnPlanCard(plan) } }
+                        state.diffs[turnId]?.takeIf { it.isNotBlank() }?.let { diff ->
+                            item("diff:$turnId") {
+                                var expanded by rememberSaveable(turnId) { mutableStateOf(false) }
+                                Column {
+                                    TextButton(onClick = { expanded = !expanded }) { Text(stringResource(R.string.codex_chat_turn_diff)) }
+                                    if (expanded) CodexDiffContent(diff)
+                                }
+                            }
+                        }
                     }
                     if (state.activeTurnId != null && timeline.none { it.second.type == "agentMessage" && it.second.text.isNullOrEmpty() }) {
                         item("working") {
@@ -351,6 +388,42 @@ fun CodexChatScreen(
         }
     }
 
+    if (statusOpen) AlertDialog(
+        onDismissRequest = { statusOpen = false },
+        title = { Text(stringResource(R.string.codex_chat_status)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                state.goal?.let { goal ->
+                    Text(goal.objective)
+                    Text(stringResource(when (goal.status) {
+                        "active" -> R.string.codex_chat_goal_active
+                        "complete", "completed" -> R.string.codex_chat_goal_complete
+                        "paused" -> R.string.codex_chat_goal_paused
+                        "blocked" -> R.string.codex_chat_goal_blocked
+                        else -> R.string.codex_chat_goal_unknown
+                    }))
+                } ?: Text(stringResource(R.string.codex_chat_no_goal))
+                state.goal?.let { goal ->
+                    Text(stringResource(R.string.codex_chat_goal_usage, goal.tokensUsed, goal.tokenBudget?.toString() ?: "—", goal.timeUsedSeconds))
+                }
+                Text(stringResource(R.string.codex_chat_memory_value, when (state.memoryMode) {
+                    CodexMemoryMode.ENABLED -> stringResource(R.string.codex_enable)
+                    CodexMemoryMode.DISABLED -> stringResource(R.string.codex_disable)
+                    null -> "—"
+                }))
+                state.tokenUsage?.let { usage ->
+                    Text(stringResource(R.string.codex_chat_context_value, usage.last.totalTokens, usage.modelContextWindow?.toString() ?: "—"))
+                    Text(stringResource(R.string.codex_chat_total_tokens, usage.total.totalTokens))
+                } ?: Text(stringResource(R.string.codex_chat_context_unavailable))
+                FlowRow {
+                    TextButton(onClick = { statusOpen = false; goalOpen = true }) { Text(stringResource(R.string.codex_goal)) }
+                    TextButton(onClick = { statusOpen = false; memoryOpen = true }) { Text(stringResource(R.string.codex_memory)) }
+                    TextButton(onClick = { viewModel.compactThread(); statusOpen = false }) { Text(stringResource(R.string.codex_compact_context)) }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = { statusOpen = false }) { Text(stringResource(R.string.close)) } },
+    )
     if (renameOpen) RenameDialog(
         initial = state.thread?.name.orEmpty(),
         onDismiss = { renameOpen = false },
@@ -442,95 +515,7 @@ private fun ModelControls(
     }
 }
 
-@Composable
-private fun CodexTimelineItem(item: CodexThreadItem) {
-    when (item.type) {
-        "userMessage" -> {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(0.9f),
-                    color = MaterialTheme.colorScheme.primaryContainer,
-                    shape = RoundedCornerShape(8.dp),
-                ) {
-                    MessageMarkdownContent(
-                        markdown = item.text.orEmpty(),
-                        textColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                        isUser = true,
-                        modifier = Modifier.padding(12.dp),
-                    )
-                }
-            }
-        }
-        "agentMessage" -> MessageMarkdownContent(
-            markdown = item.text.orEmpty().ifBlank { "..." },
-            textColor = MaterialTheme.colorScheme.onSurface,
-            isUser = false,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp),
-        )
-        "reasoning", "plan" -> {
-            val text = item.text.orEmpty().ifBlank {
-                if (item.type == "plan") stringResource(R.string.codex_planning) else stringResource(R.string.codex_thinking)
-            }
-            Text(
-                text = text,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .chatTextOverflow(text)
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.bodySmall,
-                fontStyle = FontStyle.Italic,
-            )
-        }
-        "contextCompaction" -> Text(
-            stringResource(R.string.codex_context_compacted),
-            modifier = Modifier.fillMaxWidth().padding(8.dp),
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            style = MaterialTheme.typography.labelMedium,
-        )
-        else -> CodexToolRow(item)
-    }
-}
-
-@Composable
-private fun CodexToolRow(item: CodexThreadItem) {
-    var expanded by rememberSaveable(item.id) { mutableStateOf(false) }
-    val title = when (item.type) {
-        "commandExecution" -> item.command ?: stringResource(R.string.codex_tool_command)
-        "fileChange" -> stringResource(R.string.codex_tool_file_changes)
-        "mcpToolCall" -> stringResource(R.string.codex_tool_mcp)
-        "webSearch" -> item.text ?: stringResource(R.string.codex_tool_web_search)
-        "collabAgentToolCall" -> stringResource(R.string.codex_tool_collaboration)
-        else -> item.type.replaceFirstChar { it.uppercase() }
-    }
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .clickable { expanded = !expanded }
-            .padding(horizontal = 8.dp, vertical = 7.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                title,
-                Modifier.weight(1f).chatTextOverflow(title),
-                style = MaterialTheme.typography.labelLarge,
-                maxLines = 1,
-            )
-            item.status?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-        }
-        if (expanded) {
-            val details = item.output ?: item.text ?: item.raw.toString()
-            Spacer(Modifier.height(6.dp))
-            Text(
-                details,
-                modifier = Modifier.fillMaxWidth().chatTextOverflow(details),
-                style = MaterialTheme.typography.bodySmall,
-                fontFamily = if (item.type == "commandExecution") FontFamily.Monospace else FontFamily.Default,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
+private val LocalCodexRequestEnabled = androidx.compose.runtime.compositionLocalOf { true }
 
 @Composable
 private fun CodexRequestCard(
@@ -603,21 +588,21 @@ private fun CodexRequestCard(
                     approvalPresentation.decisions.forEach { decision ->
                         val enabled = !isCodexApprovalDecision(decision) || approvalPresentation.canApprove
                         when (decision) {
-                            "decline" -> OutlinedButton(onClick = { onDecision(decision) }) {
+                            "decline" -> OutlinedButton(enabled = LocalCodexRequestEnabled.current, onClick = { onDecision(decision) }) {
                                 Text(stringResource(R.string.codex_deny))
                             }
-                            "cancel" -> OutlinedButton(onClick = { onDecision(decision) }) {
+                            "cancel" -> OutlinedButton(enabled = LocalCodexRequestEnabled.current, onClick = { onDecision(decision) }) {
                                 Text(stringResource(R.string.codex_cancel_turn))
                             }
                             "accept" -> Button(
                                 onClick = { onDecision(decision) },
-                                enabled = enabled,
+                                enabled = LocalCodexRequestEnabled.current && (enabled),
                             ) {
                                 Text(stringResource(R.string.notification_permission_action_allow_once))
                             }
                             "acceptForSession" -> TextButton(
                                 onClick = { onDecision(decision) },
-                                enabled = enabled,
+                                enabled = LocalCodexRequestEnabled.current && (enabled),
                             ) {
                                 Text(stringResource(R.string.codex_for_session))
                             }
@@ -629,7 +614,7 @@ private fun CodexRequestCard(
             } else if (elicitation != null) {
                 McpElicitationContent(request, onElicitation, onOpenUrl)
             } else {
-                OutlinedButton(onClick = onCancel) { Text(stringResource(R.string.cancel)) }
+                OutlinedButton(enabled = LocalCodexRequestEnabled.current, onClick = onCancel) { Text(stringResource(R.string.cancel)) }
             }
         }
     }
@@ -653,19 +638,19 @@ private fun McpElicitationContent(
         )
         "url" -> {
             val url = request.params.string("url").orEmpty()
-            Button(onClick = { onOpenUrl(url) }, enabled = url.startsWith("https://")) {
+            Button(onClick = { onOpenUrl(url) }, enabled = LocalCodexRequestEnabled.current && (url.startsWith("https://"))) {
                 Text(stringResource(R.string.codex_open_link))
             }
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                TextButton(onClick = { onReply("cancel", null) }) { Text(stringResource(R.string.cancel)) }
-                OutlinedButton(onClick = { onReply("decline", null) }) { Text(stringResource(R.string.codex_decline)) }
-                Button(onClick = { onReply("accept", null) }) { Text(stringResource(R.string.codex_continue)) }
+                TextButton(enabled = LocalCodexRequestEnabled.current, onClick = { onReply("cancel", null) }) { Text(stringResource(R.string.cancel)) }
+                OutlinedButton(enabled = LocalCodexRequestEnabled.current, onClick = { onReply("decline", null) }) { Text(stringResource(R.string.codex_decline)) }
+                Button(enabled = LocalCodexRequestEnabled.current, onClick = { onReply("accept", null) }) { Text(stringResource(R.string.codex_continue)) }
             }
         }
-        else -> OutlinedButton(onClick = { onReply("cancel", null) }) { Text(stringResource(R.string.cancel)) }
+        else -> OutlinedButton(enabled = LocalCodexRequestEnabled.current, onClick = { onReply("cancel", null) }) { Text(stringResource(R.string.cancel)) }
     }
 }
 
@@ -722,7 +707,7 @@ private fun McpForm(
             enumValues.isNotEmpty() -> {
                 Text(label, style = MaterialTheme.typography.labelLarge)
                 enumValues.forEach { (value, title) ->
-                    OutlinedButton(
+                    OutlinedButton(enabled = LocalCodexRequestEnabled.current,
                         onClick = { values[name] = JsonPrimitive(value) },
                         modifier = Modifier.fillMaxWidth(),
                     ) { Text(title) }
@@ -759,8 +744,8 @@ private fun McpForm(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        TextButton(onClick = onCancel) { Text(stringResource(R.string.cancel)) }
-        OutlinedButton(onClick = onDecline) { Text(stringResource(R.string.codex_decline)) }
+        TextButton(enabled = LocalCodexRequestEnabled.current, onClick = onCancel) { Text(stringResource(R.string.cancel)) }
+        OutlinedButton(enabled = LocalCodexRequestEnabled.current, onClick = onDecline) { Text(stringResource(R.string.codex_decline)) }
         Button(
             onClick = {
                 onSubmit(buildJsonObject {
@@ -770,7 +755,7 @@ private fun McpForm(
                     }
                 })
             },
-            enabled = valid,
+            enabled = LocalCodexRequestEnabled.current && (valid),
         ) { Text(stringResource(R.string.codex_submit)) }
     }
 }
@@ -844,7 +829,7 @@ private fun UserInputQuestions(
         if (question.options.isNotEmpty()) {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 question.options.forEach { option ->
-                    OutlinedButton(
+                    OutlinedButton(enabled = LocalCodexRequestEnabled.current,
                         onClick = { values[question.id] = option.label },
                         modifier = Modifier.fillMaxWidth(),
                     ) {
@@ -874,10 +859,10 @@ private fun UserInputQuestions(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        TextButton(onClick = onCancel) { Text(stringResource(R.string.cancel)) }
+        TextButton(enabled = LocalCodexRequestEnabled.current, onClick = onCancel) { Text(stringResource(R.string.cancel)) }
         Button(
             onClick = { onAnswer(values.mapValues { listOf(it.value) }) },
-            enabled = questions.all { values[it.id].orEmpty().isNotBlank() },
+            enabled = LocalCodexRequestEnabled.current && (questions.all { values[it.id].orEmpty().isNotBlank() }),
         ) { Text(stringResource(R.string.codex_submit)) }
     }
 }
