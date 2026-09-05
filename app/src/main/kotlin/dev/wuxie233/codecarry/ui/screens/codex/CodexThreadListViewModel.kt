@@ -29,10 +29,15 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import javax.inject.Inject
 
+import dev.wuxie233.codecarry.data.preferences.SessionListViewMode
+import dev.wuxie233.codecarry.data.codex.CodexDirectoryListing
+
 enum class CodexThreadFilter { ALL, RUNNING, PENDING }
 
 data class CodexThreadListUiState(
     val serverName: String = "Codex",
+    val projectPreferences: CodexProjectPreferences = CodexProjectPreferences(),
+    val showHiddenProjects: Boolean = false,
     val activeThreads: List<CodexThread> = emptyList(),
     val archivedThreads: List<CodexThread> = emptyList(),
     val showArchived: Boolean = false,
@@ -42,6 +47,14 @@ data class CodexThreadListUiState(
     val isLoading: Boolean = true,
     val error: String? = null,
 ) {
+    val activityThreads: List<CodexThread>
+        get() = copy(showArchived = false).visibleThreads.filter {
+            it.status.type == "active" || it.status.type == "systemError" || pendingRequestCounts.getOrDefault(it.id, 0) > 0
+        }
+
+    val projects: List<CodexThreadProject>
+        get() = buildCodexThreadProjects(visibleThreads, projectPreferences, showHiddenProjects, searchQuery.isNotBlank())
+
     val hasListConstraints: Boolean
         get() = filter != CodexThreadFilter.ALL || searchQuery.isNotBlank()
 
@@ -65,10 +78,13 @@ data class CodexThreadListUiState(
     val recentDirectories: List<String>
         get() = (activeThreads + archivedThreads)
             .sortedByDescending { it.recencyAt ?: it.updatedAt ?: it.createdAt ?: 0L }
-            .mapNotNull { it.cwd?.trim()?.takeIf(String::isNotEmpty) }
+            .mapNotNull { it.cwd?.let(::codexThreadWorkingDirectory) }
             .distinct()
             .take(8)
 }
+
+/** Empty means the daemon default; whitespace in a filesystem path is significant. */
+internal fun codexThreadWorkingDirectory(directory: String): String? = directory.takeIf(String::isNotEmpty)
 
 internal fun codexPendingRequestCounts(requests: List<CodexServerRequest>): Map<String, Int> =
     requests.mapNotNull { (it.params["threadId"] as? JsonPrimitive)?.contentOrNull?.takeIf(String::isNotBlank) }
@@ -79,6 +95,7 @@ class CodexThreadListViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val serverRepository: ServerRepository,
     private val connectionManager: CodexConnectionManager,
+    private val projectPreferencesRepository: CodexProjectPreferencesRepository,
 ) : ViewModel() {
     val serverId: String = decodeCodexRouteArg(savedStateHandle["serverId"])
     private val _uiState = MutableStateFlow(CodexThreadListUiState())
@@ -93,6 +110,11 @@ class CodexThreadListViewModel @Inject constructor(
     private val connectionMutex = Mutex()
 
     init {
+        viewModelScope.launch {
+            projectPreferencesRepository.observe(serverId).collect { preferences ->
+                _uiState.update { it.copy(projectPreferences = preferences) }
+            }
+        }
         refresh()
     }
 
@@ -151,6 +173,38 @@ class CodexThreadListViewModel @Inject constructor(
         }
     }
 
+    fun setViewMode(mode: SessionListViewMode) = viewModelScope.launch {
+        projectPreferencesRepository.setViewMode(serverId, mode)
+    }
+
+    fun toggleProjectCollapsed(directory: String) = viewModelScope.launch {
+        projectPreferencesRepository.toggle(serverId, "collapsed", directory)
+    }
+
+    fun toggleProjectPinned(directory: String) = viewModelScope.launch {
+        projectPreferencesRepository.toggle(serverId, "pinned", directory)
+    }
+
+    fun toggleProjectHidden(directory: String) = viewModelScope.launch {
+        projectPreferencesRepository.toggle(serverId, "hidden", directory)
+    }
+
+    fun toggleShowHiddenProjects() = _uiState.update { it.copy(showHiddenProjects = !it.showHiddenProjects) }
+
+    fun archiveProject(directory: String) = mutate { connected ->
+        _uiState.value.activeThreads.filter { it.cwd.orEmpty() == directory }.forEach {
+            connected.client.archiveThread(it.id)
+        }
+    }
+
+    suspend fun defaultDirectory(preferred: String?): String? {
+        val client = requireConnection().client
+        client.connect()
+        return client.defaultDirectory(preferred)
+    }
+
+    suspend fun readDirectory(path: String): CodexDirectoryListing = requireConnection().client.readDirectory(path)
+
     fun setSearchQuery(query: String) = _uiState.update { it.copy(searchQuery = query) }
 
     fun setFilter(filter: CodexThreadFilter) = _uiState.update { it.copy(filter = filter) }
@@ -161,7 +215,7 @@ class CodexThreadListViewModel @Inject constructor(
         viewModelScope.launch {
             runCatching {
                 val connected = requireConnection()
-                val created = connected.client.startThread(cwd = cwd.trim().takeIf(String::isNotEmpty))
+                val created = connected.client.startThread(cwd = codexThreadWorkingDirectory(cwd))
                 connected.reducer.upsertThread(created.thread)
                 _openThread.emit(created.thread.id)
                 refresh()

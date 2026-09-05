@@ -46,7 +46,11 @@ import kotlinx.serialization.json.contentOrNull
 
 /** Backend presentation stays independent from chat navigation and transport ownership. */
 @Composable
-internal fun CodexTimelineItem(item: CodexThreadItem, onOpenThread: (String) -> Unit) {
+internal fun CodexTimelineItem(
+    item: CodexThreadItem,
+    onOpenThread: (String) -> Unit,
+    loadRemoteImage: suspend (String) -> ByteArray = { error("Remote image reader unavailable") },
+) {
     when (item.type) {
         "userMessage" -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
             Surface(
@@ -60,12 +64,7 @@ internal fun CodexTimelineItem(item: CodexThreadItem, onOpenThread: (String) -> 
                         textColor = MaterialTheme.colorScheme.onPrimaryContainer,
                         isUser = true,
                     )
-                    // The daemon may omit image bytes from restored history.
-                    val images = codexTimelineImageCount(item)
-                    if (images > 0) Text(
-                        stringResource(R.string.codex_timeline_images, images),
-                        style = MaterialTheme.typography.labelSmall,
-                    )
+                    CodexTimelineImages(item, loadRemoteImage)
                 }
             }
         }
@@ -250,9 +249,3 @@ private fun codexTimelineStatus(status: String): String = when (status) {
     "update", "modified" -> stringResource(R.string.codex_timeline_modified)
     else -> status
 }
-
-private fun codexTimelineImageCount(item: CodexThreadItem): Int =
-    (item.raw["content"] as? JsonArray).orEmpty().count { block ->
-        val type = ((block as? JsonObject)?.get("type") as? JsonPrimitive)?.contentOrNull
-        type == "image" || type == "localImage"
-    }

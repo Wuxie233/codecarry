@@ -23,7 +23,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -75,7 +74,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -305,17 +303,11 @@ fun CodexChatScreen(
                         onLoadSkills = viewModel::loadSkills, onSearchFiles = viewModel::searchFiles,
                         onAdd = viewModel::addAttachment,
                     )
-                    OutlinedTextField(
+                    CodexComposerTextField(
                         value = draft,
                         onValueChange = viewModel::updateDraft,
                         modifier = Modifier.weight(1f),
-                        placeholder = { Text(stringResource(if (state.activeTurnId != null) R.string.codex_chat_steer_hint else R.string.codex_message_hint)) },
-                        minLines = 1,
-                        maxLines = 6,
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                        keyboardActions = KeyboardActions(onSend = {
-                            submitDraft()
-                        }),
+                        placeholder = stringResource(if (state.activeTurnId != null) R.string.codex_chat_steer_hint else R.string.codex_message_hint),
                     )
                     FilledIconButton(
                         onClick = ::submitDraft,
@@ -360,7 +352,7 @@ fun CodexChatScreen(
                         }
                     }
                     items(timeline, key = { (turnId, item) -> "$turnId:${item.id ?: item.type}" }) { (_, item) ->
-                        CodexTimelineItem(item, onOpenThread)
+                        CodexTimelineItem(item, onOpenThread, viewModel::loadRemoteImage)
                     }
                     state.thread?.turns?.lastOrNull()?.id?.let { turnId ->
                         state.plans[turnId]?.let { plan -> item("plan:$turnId") { CodexTurnPlanCard(plan) } }

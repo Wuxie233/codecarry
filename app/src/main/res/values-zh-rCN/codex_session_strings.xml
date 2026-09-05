@@ -15,4 +15,8 @@
     <string name="codex_sessions_recent_directories">最近目录</string>
     <string name="codex_sessions_default_directory">使用服务器默认目录</string>
     <string name="codex_sessions_clear_filters">清除筛选</string>
+    <string name="codex_projects_show_hidden">显示隐藏项目（%1$d）</string>
+    <string name="codex_projects_hide_hidden">收起隐藏项目（%1$d）</string>
+    <string name="codex_projects_no_activity">暂无待处理活动</string>
+    <string name="codex_projects_no_activity_hint">正在执行的会话和等待回复的请求会显示在这里。</string>
 </resources>

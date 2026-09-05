@@ -82,6 +82,18 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+import dev.wuxie233.codecarry.data.preferences.SessionListViewMode
+import dev.wuxie233.codecarry.data.preferences.SessionScope
+import dev.wuxie233.codecarry.domain.model.SessionStatus
+import dev.wuxie233.codecarry.ui.screens.sessions.SessionRecentWorkItem
+import dev.wuxie233.codecarry.ui.screens.sessions.components.*
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
+import androidx.compose.material3.rememberSwipeToDismissBoxState
+import androidx.compose.ui.platform.testTag
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CodexThreadListScreen(
@@ -93,7 +105,18 @@ fun CodexThreadListScreen(
     var createOpen by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<CodexThread?>(null) }
     var deleteTarget by remember { mutableStateOf<CodexThread?>(null) }
+    val clipboard = LocalClipboardManager.current
     val noWorkspace = stringResource(R.string.codex_thread_no_workspace)
+    val projectsView = state.projectPreferences.viewMode == SessionListViewMode.PROJECTS
+    val displayedThreads = if (projectsView) state.projects.flatMap { it.threads } else state.activityThreads
+    val recentWork = remember(state.activeThreads, state.projectPreferences.hidden) {
+        state.activeThreads.filter { it.cwd.orEmpty() !in state.projectPreferences.hidden }
+            .sortedByDescending { it.recencyAt ?: it.updatedAt ?: it.createdAt ?: 0L }.take(6).map {
+                SessionRecentWorkItem(it.id, it.name?.takeIf(String::isNotBlank) ?: it.preview.take(72),
+                    it.cwd.orEmpty(), (it.recencyAt ?: it.updatedAt ?: it.createdAt ?: 0L) * 1000,
+                    if (it.status.type == "active") SessionStatus.Busy else SessionStatus.Idle)
+            }
+    }
 
     LaunchedEffect(Unit) { viewModel.openThread.collect(onOpenThread) }
 
@@ -133,26 +156,31 @@ fun CodexThreadListScreen(
                 Modifier.widthIn(max = 960.dp).fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
+                SessionWorkspaceOverview(
+                    recentWork = if (recentWork.isNotEmpty()) ({
+                        SessionRecentWork(recentWork, onSessionClick = { id, _ -> onOpenThread(id) })
+                    }) else null,
+                    viewControl = {
+                        SessionWorkspaceViewControl(
+                            state.projectPreferences.viewMode, state.activityThreads.size, viewModel::setViewMode,
+                        )
+                    },
+                    projectControls = if (projectsView) ({
+                        SessionScopeSegmentedControl(
+                            if (state.showArchived) SessionScope.ARCHIVED else SessionScope.INBOX,
+                            state.archivedThreads.size,
+                            { viewModel.showArchived(it == SessionScope.ARCHIVED) },
+                        )
+                    }) else null,
+                )
                 OutlinedTextField(
                     value = state.searchQuery,
                     onValueChange = viewModel::setSearchQuery,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                     leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                     placeholder = { Text(stringResource(R.string.codex_thread_search)) },
                     singleLine = true,
                 )
-                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
-                    listOf(
-                        false to stringResource(R.string.codex_thread_active),
-                        true to stringResource(R.string.codex_thread_archived),
-                    ).forEachIndexed { index, (archived, label) ->
-                        SegmentedButton(
-                            selected = state.showArchived == archived,
-                            onClick = { viewModel.showArchived(archived) },
-                            shape = SegmentedButtonDefaults.itemShape(index, 2),
-                        ) { Text(label) }
-                    }
-                }
                 Row(
                     Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -169,6 +197,12 @@ fun CodexThreadListScreen(
                         )
                     }
                 }
+                if (projectsView && state.projectPreferences.hidden.isNotEmpty()) {
+                    TextButton(onClick = viewModel::toggleShowHiddenProjects, modifier = Modifier.padding(horizontal = 8.dp)) {
+                        Text(stringResource(if (state.showHiddenProjects) R.string.codex_projects_hide_hidden else R.string.codex_projects_show_hidden,
+                            state.projectPreferences.hidden.size))
+                    }
+                }
                 state.error?.takeIf { state.activeThreads.isNotEmpty() || state.archivedThreads.isNotEmpty() }?.let {
                     Text(it, modifier = Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.error)
                 }
@@ -181,9 +215,9 @@ fun CodexThreadListScreen(
                             onRetry = viewModel::refresh,
                             modifier = Modifier.padding(12.dp),
                         )
-                        state.visibleThreads.isEmpty() -> EmptyStateCard(
-                            title = if (state.hasListConstraints) stringResource(R.string.codex_sessions_no_matches) else if (state.showArchived) stringResource(R.string.codex_thread_archived_empty) else stringResource(R.string.codex_thread_empty),
-                            message = if (state.hasListConstraints) stringResource(R.string.codex_sessions_no_matches_hint) else if (state.showArchived) stringResource(R.string.codex_thread_archived_empty_message) else stringResource(R.string.codex_thread_empty_message),
+                        displayedThreads.isEmpty() -> EmptyStateCard(
+                            title = if (!projectsView) stringResource(R.string.codex_projects_no_activity) else if (state.hasListConstraints) stringResource(R.string.codex_sessions_no_matches) else if (state.showArchived) stringResource(R.string.codex_thread_archived_empty) else stringResource(R.string.codex_thread_empty),
+                            message = if (!projectsView) stringResource(R.string.codex_projects_no_activity_hint) else if (state.hasListConstraints) stringResource(R.string.codex_sessions_no_matches_hint) else if (state.showArchived) stringResource(R.string.codex_thread_archived_empty_message) else stringResource(R.string.codex_thread_empty_message),
                             action = when {
                                 state.hasListConstraints -> ({
                                     TextButton(onClick = {
@@ -196,27 +230,12 @@ fun CodexThreadListScreen(
                             },
                             modifier = Modifier.padding(12.dp),
                         )
-                        else -> LazyColumn(
-                            modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            state.visibleThreads.groupBy { it.cwd.orEmpty().ifBlank { noWorkspace } }.forEach { (cwd, threads) ->
-                                item("cwd:$cwd") {
-                                    Text(
-                                        cwd,
-                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp),
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        fontFamily = FontFamily.Monospace,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                }
-                                items(threads, key = { it.id }) { thread ->
+                        else -> SessionProjectsViewport(modifier = Modifier.fillMaxSize()) {
+                            fun androidx.compose.foundation.lazy.LazyListScope.threadRows(threads: List<CodexThread>, archived: Boolean) {
+                                items(threads, key = { "thread:${it.id}" }) { thread ->
                                     CodexThreadRow(
                                         thread = thread,
-                                        archived = state.showArchived,
+                                        archived = archived,
                                         pendingCount = state.pendingRequestCounts.getOrDefault(thread.id, 0),
                                         onOpen = { onOpenThread(thread.id) },
                                         onRename = { renameTarget = thread },
@@ -227,6 +246,27 @@ fun CodexThreadListScreen(
                                     )
                                 }
                             }
+                            if (!projectsView) {
+                                threadRows(displayedThreads, false)
+                            } else state.projects.forEach { project ->
+                                item("project:${project.directory}") {
+                                    ProjectGroupHeader(
+                                        projectName = project.directory.trimEnd('/', '\\').substringAfterLast('/').substringAfterLast('\\').ifBlank { noWorkspace },
+                                        tildeDirectory = project.directory.ifBlank { noWorkspace },
+                                        sessionCount = project.threads.size,
+                                        activeCount = project.threads.count { it.status.type == "active" },
+                                        unreadCount = 0, additions = 0, deletions = 0,
+                                        isPinned = project.pinned, isCollapsed = project.collapsed, isHidden = project.hidden,
+                                        onToggleCollapsed = { viewModel.toggleProjectCollapsed(project.directory) },
+                                        onTogglePinned = { viewModel.toggleProjectPinned(project.directory) },
+                                        onToggleHidden = { viewModel.toggleProjectHidden(project.directory) },
+                                        onNewSession = { viewModel.createThread(project.directory) },
+                                        onCopyPath = { clipboard.setText(AnnotatedString(project.directory)) },
+                                        onArchiveAll = if (!state.showArchived) ({ viewModel.archiveProject(project.directory) }) else null,
+                                    )
+                                }
+                                if (!project.collapsed) threadRows(project.threads, state.showArchived)
+                            }
                         }
                     }
                 }
@@ -235,14 +275,12 @@ fun CodexThreadListScreen(
     }
 
     if (createOpen) {
-        val suggested = rememberSaveable { state.recentDirectories.firstOrNull().orEmpty() }
-        PathDialog(
-            title = stringResource(R.string.codex_thread_create_title),
-            initial = suggested,
-            directories = state.recentDirectories,
-            confirmLabel = stringResource(R.string.codex_thread_create),
+        CodexDirectoryPicker(
+            recentDirectories = state.recentDirectories,
+            defaultDirectory = viewModel::defaultDirectory,
+            readDirectory = viewModel::readDirectory,
             onDismiss = { createOpen = false },
-            onConfirm = { viewModel.createThread(it); createOpen = false },
+            onSelect = { viewModel.createThread(it); createOpen = false },
         )
     }
     renameTarget?.let { thread ->
@@ -269,8 +307,9 @@ fun CodexThreadListScreen(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun CodexThreadRow(
+internal fun CodexThreadRow(
     thread: CodexThread,
     archived: Boolean,
     pendingCount: Int,
@@ -287,80 +326,108 @@ private fun CodexThreadRow(
         thread.status.type == "systemError" -> StatusError
         else -> StatusConnected
     }
-    Card(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onOpen),
-        shape = RoundedCornerShape(8.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-    ) {
-        Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(8.dp).background(statusColor, CircleShape))
-            Spacer(Modifier.width(10.dp))
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Text(
-                    thread.name?.takeIf(String::isNotBlank) ?: thread.preview.lineSequence().firstOrNull()?.take(72) ?: thread.id.take(8),
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Medium,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                if (thread.preview.isNotBlank() && thread.preview != thread.name) {
-                    Text(thread.preview, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        if (pendingCount > 0) stringResource(R.string.codex_sessions_pending_count, pendingCount)
-                        else stringResource(when (thread.status.type) {
-                            "active" -> R.string.codex_sessions_running
-                            "idle" -> R.string.codex_sessions_idle
-                            "systemError" -> R.string.codex_sessions_error
-                            "notLoaded" -> R.string.codex_sessions_not_loaded
-                            else -> R.string.codex_sessions_unknown
-                        }),
-                        style = MaterialTheme.typography.labelSmall, color = statusColor,
-                    )
-                    thread.updatedAt?.let { seconds ->
-                        Text(
-                            remember(seconds) {
-                                SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date(seconds * 1000))
-                            },
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
+    val swipeState = rememberSwipeToDismissBoxState(
+        confirmValueChange = { direction ->
+            when (direction) {
+                SwipeToDismissBoxValue.StartToEnd -> onRename()
+                SwipeToDismissBoxValue.EndToStart -> if (archived) onRestore() else onArchive()
+                SwipeToDismissBoxValue.Settled -> Unit
+            }
+            false
+        },
+        positionalThreshold = { it * 0.3f },
+    )
+    SwipeToDismissBox(
+        state = swipeState,
+        modifier = Modifier.testTag("codex_thread_swipe:${thread.id}"),
+        backgroundContent = {
+            val right = swipeState.dismissDirection == SwipeToDismissBoxValue.StartToEnd
+            val label = stringResource(if (right) R.string.session_rename else if (archived) R.string.sessions_restore_action else R.string.sessions_archive_action)
+            Box(Modifier.fillMaxSize().background(if (right) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.tertiaryContainer).padding(horizontal = 20.dp),
+                contentAlignment = if (right) Alignment.CenterStart else Alignment.CenterEnd) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Icon(if (right) Icons.Default.Edit else if (archived) Icons.Default.Restore else Icons.Default.Archive, null)
+                    Text(label, style = MaterialTheme.typography.labelMedium)
                 }
             }
-            Box {
-                IconButton(onClick = { menuOpen = true }) {
-                    Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.codex_thread_actions))
-                }
-                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.codex_thread_rename_action)) }, leadingIcon = { Icon(Icons.Default.Edit, null) },
-                        onClick = { menuOpen = false; onRename() },
+        },
+    ) {
+        Card(
+            modifier = Modifier.fillMaxWidth().clickable(onClick = onOpen),
+            shape = RoundedCornerShape(8.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+        ) {
+            Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(8.dp).background(statusColor, CircleShape))
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text(
+                        thread.name?.takeIf(String::isNotBlank) ?: thread.preview.lineSequence().firstOrNull()?.take(72) ?: thread.id.take(8),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
                     )
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.codex_thread_fork_action)) }, leadingIcon = { Icon(Icons.Default.CallSplit, null) },
-                        onClick = { menuOpen = false; onFork() },
-                    )
-                    if (archived) {
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.codex_thread_restore_action)) }, leadingIcon = { Icon(Icons.Default.Restore, null) },
-                            onClick = { menuOpen = false; onRestore() },
+                    if (thread.preview.isNotBlank() && thread.preview != thread.name) {
+                        Text(thread.preview, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            if (pendingCount > 0) stringResource(R.string.codex_sessions_pending_count, pendingCount)
+                            else stringResource(when (thread.status.type) {
+                                "active" -> R.string.codex_sessions_running
+                                "idle" -> R.string.codex_sessions_idle
+                                "systemError" -> R.string.codex_sessions_error
+                                "notLoaded" -> R.string.codex_sessions_not_loaded
+                                else -> R.string.codex_sessions_unknown
+                            }),
+                            style = MaterialTheme.typography.labelSmall, color = statusColor,
                         )
-                    } else {
+                        thread.updatedAt?.let { seconds ->
+                            Text(
+                                remember(seconds) {
+                                    SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date(seconds * 1000))
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+                Box {
+                    IconButton(onClick = { menuOpen = true }) {
+                        Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.codex_thread_actions))
+                    }
+                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                         DropdownMenuItem(
-                            text = { Text(stringResource(R.string.codex_thread_archive_action)) }, leadingIcon = { Icon(Icons.Default.Archive, null) },
-                            onClick = { menuOpen = false; onArchive() },
+                            text = { Text(stringResource(R.string.codex_thread_rename_action)) }, leadingIcon = { Icon(Icons.Default.Edit, null) },
+                            onClick = { menuOpen = false; onRename() },
+                        )
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.codex_thread_fork_action)) }, leadingIcon = { Icon(Icons.Default.CallSplit, null) },
+                            onClick = { menuOpen = false; onFork() },
+                        )
+                        if (archived) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.codex_thread_restore_action)) }, leadingIcon = { Icon(Icons.Default.Restore, null) },
+                                onClick = { menuOpen = false; onRestore() },
+                            )
+                        } else {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.codex_thread_archive_action)) }, leadingIcon = { Icon(Icons.Default.Archive, null) },
+                                onClick = { menuOpen = false; onArchive() },
+                            )
+                        }
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.delete)) }, leadingIcon = { Icon(Icons.Default.DeleteOutline, null) },
+                            onClick = { menuOpen = false; onDelete() },
                         )
                     }
-                    DropdownMenuItem(
-                        text = { Text(stringResource(R.string.delete)) }, leadingIcon = { Icon(Icons.Default.DeleteOutline, null) },
-                        onClick = { menuOpen = false; onDelete() },
-                    )
                 }
             }
         }
     }
+
 }
 
 @Composable
@@ -368,7 +435,6 @@ private fun PathDialog(
     title: String,
     initial: String,
     confirmLabel: String,
-    directories: List<String>? = null,
     onDismiss: () -> Unit,
     onConfirm: (String) -> Unit,
 ) {
@@ -380,24 +446,7 @@ private fun PathDialog(
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
                     value, { value = it }, modifier = Modifier.fillMaxWidth(), singleLine = true,
-                    label = if (directories != null) ({ Text(stringResource(R.string.codex_sessions_directory)) }) else null,
                 )
-                if (directories != null) {
-                    Text(stringResource(R.string.codex_sessions_directory_hint), style = MaterialTheme.typography.bodySmall)
-                    if (directories.isNotEmpty()) {
-                        Text(stringResource(R.string.codex_sessions_recent_directories), style = MaterialTheme.typography.labelMedium)
-                        LazyColumn(Modifier.heightIn(max = 240.dp)) {
-                            items(directories, key = { it }) { directory ->
-                                TextButton(onClick = { value = directory }, modifier = Modifier.fillMaxWidth()) {
-                                    Text(directory, maxLines = 2, overflow = TextOverflow.Ellipsis,
-                                        fontFamily = FontFamily.Monospace,
-                                        fontWeight = if (value == directory) FontWeight.Bold else FontWeight.Normal)
-                                }
-                            }
-                        }
-                    }
-                    TextButton(onClick = { value = "" }) { Text(stringResource(R.string.codex_sessions_default_directory)) }
-                }
             }
         },
         confirmButton = { TextButton(onClick = { onConfirm(value) }) { Text(confirmLabel) } },

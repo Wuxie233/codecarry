@@ -566,6 +566,8 @@ class CodexChatViewModel @Inject constructor(
         _uiState.update { it.copy(composerAttachments = it.composerAttachments.filterNot { attachment -> attachment.id == id }, attachmentLimitReached = false) }
     }
 
+    suspend fun loadRemoteImage(path: String): ByteArray = requireClient().readImageFile(path)
+
     fun loadSkills() {
         viewModelScope.launch {
             _uiState.update { it.copy(attachmentsLoading = true, attachmentsError = null) }

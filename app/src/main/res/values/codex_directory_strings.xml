@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="codex_directory_title">Choose project directory</string>
+    <string name="codex_directory_path">Remote directory path</string>
+    <string name="codex_directory_go">Go</string>
+    <string name="codex_directory_recent">Recent directories</string>
+    <string name="codex_directory_parent">Parent directory</string>
+    <string name="codex_directory_filter">Filter folders in this directory</string>
+    <string name="codex_directory_failed">Could not load this directory. Retry or enter another path.</string>
+    <string name="codex_directory_unavailable">This server does not support directory browsing.</string>
+    <string name="codex_directory_retry">Retry</string>
+    <string name="codex_directory_empty">No subfolders</string>
+    <string name="codex_directory_no_matches">No matching folders</string>
+    <string name="codex_directory_cancel">Cancel</string>
+    <string name="codex_directory_select">Use this directory</string>
+</resources>

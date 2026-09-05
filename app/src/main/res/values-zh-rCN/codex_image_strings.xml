@@ -1,0 +1,5 @@
+<resources>
+    <string name="codex_image_description">图片 %1$d</string>
+    <string name="codex_image_unavailable">图片暂不可用，服务端可能已不再保留原文件。</string>
+    <string name="codex_image_retry">重试加载图片</string>
+</resources>

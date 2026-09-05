@@ -1,0 +1,5 @@
+<resources>
+    <string name="codex_image_description">Image %1$d</string>
+    <string name="codex_image_unavailable">Image unavailable. The server may no longer retain its original file.</string>
+    <string name="codex_image_retry">Retry image</string>
+</resources>

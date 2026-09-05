@@ -28,6 +28,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
@@ -41,6 +42,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 import java.io.Closeable
 import java.net.URI
+import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
@@ -646,6 +648,41 @@ open class CodexAppServerClient internal constructor(
         }).objectOrEmpty()
         check(result["files"] is JsonArray) { "Invalid Codex fuzzyFileSearch response" }
         return result.controlObjects("files").map(CodexFileMatch::fromJson)
+    }
+
+    fun defaultDirectory(preferredPath: String? = null): String? =
+        preferredPath?.let(::normalizeCodexDirectoryPath)
+            ?: initialized?.codexHome?.let(::normalizeCodexDirectoryPath)
+            ?: "/".takeIf { initialized?.platformFamily == "unix" }
+
+    suspend fun readDirectory(path: String): CodexDirectoryListing {
+        val absolutePath = requireNotNull(normalizeCodexDirectoryPath(path)) {
+            "Remote directory must be an absolute path"
+        }
+        val result = withTimeout(15_000) {
+            capabilityRequest("fs/readDirectory", buildJsonObject { put("path", absolutePath) })
+        }
+        return parseCodexDirectoryListing(absolutePath, result.objectOrEmpty())
+    }
+
+    /** Read bytes from the daemon filesystem, never from Android-local paths. */
+    suspend fun readImageFile(path: String): ByteArray {
+        require(normalizeCodexDirectoryPath(path) != null) {
+            "Remote image must be an absolute path"
+        }
+        val result = kotlinx.coroutines.withTimeoutOrNull(15_000) {
+            capabilityRequest("fs/readFile", buildJsonObject { put("path", path) })
+        }?.objectOrEmpty() ?: throw java.io.IOException("Timed out reading remote image")
+        return withContext(Dispatchers.Default) {
+            val encoded = result["dataBase64"] as? JsonPrimitive
+            check(encoded?.isString == true) { "Invalid Codex fs/readFile response" }
+            val data = encoded.content
+            val maxBytes = 16 * 1024 * 1024
+            require(data.length <= ((maxBytes + 2) / 3) * 4) { "Remote image exceeds 16 MiB" }
+            Base64.getDecoder().decode(data).also {
+                require(it.size <= maxBytes) { "Remote image exceeds 16 MiB" }
+            }
+        }
     }
 
     private suspend fun capabilityRequest(method: String, params: JsonObject): JsonElement = try {

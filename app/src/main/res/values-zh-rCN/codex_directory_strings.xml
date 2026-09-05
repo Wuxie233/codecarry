@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="codex_directory_title">选择项目目录</string>
+    <string name="codex_directory_path">远端目录路径</string>
+    <string name="codex_directory_go">前往</string>
+    <string name="codex_directory_recent">最近目录</string>
+    <string name="codex_directory_parent">上级目录</string>
+    <string name="codex_directory_filter">筛选当前目录中的文件夹</string>
+    <string name="codex_directory_failed">无法加载目录，请重试或输入其他路径。</string>
+    <string name="codex_directory_unavailable">此服务器不支持目录浏览。</string>
+    <string name="codex_directory_retry">重试</string>
+    <string name="codex_directory_empty">没有子文件夹</string>
+    <string name="codex_directory_no_matches">没有匹配的文件夹</string>
+    <string name="codex_directory_cancel">取消</string>
+    <string name="codex_directory_select">使用此目录</string>
+</resources>

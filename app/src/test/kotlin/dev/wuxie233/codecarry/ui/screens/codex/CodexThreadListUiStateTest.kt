@@ -177,7 +177,7 @@ class CodexThreadListUiStateTest {
     @Test
     fun `recent directory choices include archived paths deduplicate and sort by recency`() {
         val state = CodexThreadListUiState(
-            activeThreads = listOf(active, active.copy(id = "duplicate", updatedAt = 300), active.copy(id = "none", cwd = " ")),
+            activeThreads = listOf(active, active.copy(id = "duplicate", updatedAt = 300), active.copy(id = "none", cwd = "")),
             archivedThreads = listOf(archived.copy(recencyAt = 400)),
             searchQuery = "no-match",
         )

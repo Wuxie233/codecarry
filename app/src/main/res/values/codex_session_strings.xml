@@ -15,4 +15,8 @@
     <string name="codex_sessions_recent_directories">Recent directories</string>
     <string name="codex_sessions_default_directory">Use server default</string>
     <string name="codex_sessions_clear_filters">Clear filters</string>
+    <string name="codex_projects_show_hidden">Show hidden projects (%1$d)</string>
+    <string name="codex_projects_hide_hidden">Hide hidden projects (%1$d)</string>
+    <string name="codex_projects_no_activity">Nothing needs attention</string>
+    <string name="codex_projects_no_activity_hint">Running sessions and requests that need your reply appear here.</string>
 </resources>
