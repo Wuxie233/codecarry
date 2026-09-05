@@ -195,6 +195,21 @@ fork based on OC Remote; the Android namespace/applicationId is
   FileProvider `codex-attachments/` cache path. Keep binary attachments out of
   saved-instance Bundles. Skills with parse errors must not hide valid Skills.
 
+- DSH preset reads observe only the active server generation and publish the
+  roster independently of `session/list`. Ready starts separate preset and
+  session load jobs; disconnect cancels both. `agentPresets/list` has a 15-second
+  deadline that becomes a retryable failure; caller cancellation still propagates.
+- Codex project screens reuse the shared session presentation components while
+  keeping their native transport and server-scoped project preferences. Remote
+  directory browsing uses `fs/readDirectory`; preserve exact directory strings,
+  including trailing spaces, when starting a thread.
+- Codex composer Enter inserts a newline. Keep submission on the explicit send
+  button rather than wiring the text field IME action to submit.
+- Codex user-message images come from `raw.content`: `image.url` is a data or
+  HTTP URL, while `localImage.path` belongs to the daemon and must use its
+  `fs/readFile` RPC. Never resolve remote image paths through Android files.
+  Image load failures must leave a retryable placeholder in the timeline.
+
 ## Commands
 
 Use Java 21 for Gradle on this host:
