@@ -10,6 +10,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.wuxie233.codecarry.data.api.FileNode
 import dev.wuxie233.codecarry.data.api.OpenCodeApi
 import dev.wuxie233.codecarry.data.api.ServerConnection
+import dev.wuxie233.codecarry.data.dsh.DshAgentPresetEntry
 import dev.wuxie233.codecarry.data.dsh.DshApiClient
 import dev.wuxie233.codecarry.data.dsh.DshConnectWorkspaceResult
 import dev.wuxie233.codecarry.data.dsh.DshConnection
@@ -406,6 +407,18 @@ internal fun directoryDisplayPath(path: String, homeDirectory: String?, useTilde
     }
 }
 
+data class DshCreationPresetState(
+    val visible: Boolean = false,
+    val directory: String? = null,
+    val presets: List<DshAgentPresetEntry> = emptyList(),
+    val selectedId: String? = null,
+    val loading: Boolean = false,
+    val creating: Boolean = false,
+    val connectionReady: Boolean = false,
+    val catalogGeneration: Long? = null,
+    val error: String? = null,
+)
+
 @HiltViewModel
 class SessionListViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
@@ -449,6 +462,50 @@ class SessionListViewModel @Inject constructor(
     private val _undoState = Channel<UndoAction>(Channel.BUFFERED)
     internal val undoState: kotlinx.coroutines.flow.Flow<UndoAction> = _undoState.receiveAsFlow()
     private var isCreatingSession = false
+    private val _dshCreationPreset = MutableStateFlow(DshCreationPresetState())
+    val dshCreationPreset: StateFlow<DshCreationPresetState> = _dshCreationPreset
+    private var presetLoadJob: kotlinx.coroutines.Job? = null
+
+    fun refreshCreationPresets() {
+        if (!isDsh || !_dshCreationPreset.value.visible || isCreatingSession) return
+        presetLoadJob?.cancel()
+        val connectionState = dshConnectionManager.states.value[serverId]
+        val generation = connectionState?.takeIf { it.status == DshGenerationStatus.Ready }?.generation
+        if (generation == null) {
+            _dshCreationPreset.value = _dshCreationPreset.value.copy(loading = false, connectionReady = false, presets = emptyList(), catalogGeneration = null)
+            return
+        }
+        _dshCreationPreset.value = _dshCreationPreset.value.copy(loading = true, connectionReady = true, presets = emptyList(), catalogGeneration = generation, error = null)
+        presetLoadJob = viewModelScope.launch {
+            try {
+                val presets = dshApi.agentPresetList(dshConn).presets
+                if (!isDshGenerationReady(generation)) return@launch
+                _dshCreationPreset.value = _dshCreationPreset.value.copy(presets = presets, catalogGeneration = generation, loading = false)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (!isDshGenerationReady(generation)) return@launch
+                _dshCreationPreset.value = _dshCreationPreset.value.copy(loading = false, error = e.message.orEmpty())
+            }
+        }
+    }
+
+    fun dismissCreationPresets() {
+        if (isCreatingSession) return
+        presetLoadJob?.cancel()
+        _dshCreationPreset.value = DshCreationPresetState()
+    }
+
+    fun createWithDshPreset(presetId: String?) {
+        val picker = _dshCreationPreset.value
+        if (!isDsh || !picker.visible || picker.loading || isCreatingSession) return
+        val generation = dshConnectionManager.states.value[serverId]?.generation ?: return
+        if (!isDshGenerationReady(generation)) return
+        if (presetId != null && picker.catalogGeneration != generation) return
+        if (presetId != null && picker.presets.none { it.id == presetId && it.broken == null }) return
+        _dshCreationPreset.value = picker.copy(selectedId = presetId, creating = true, error = null)
+        performCreateNewSession(picker.directory, presetId)
+    }
     private val prefsFlow = preferencesRepo.preferences.stateIn(
         viewModelScope,
         SharingStarted.Eagerly,
@@ -699,8 +756,20 @@ class SessionListViewModel @Inject constructor(
             }
             viewModelScope.launch {
                 dshConnectionManager.states.collect { states ->
-                    if (states[serverId]?.status == DshGenerationStatus.Ready) {
+                    val connectionState = states[serverId]
+                    val ready = connectionState?.status == DshGenerationStatus.Ready
+                    val picker = _dshCreationPreset.value
+                    val stale = picker.catalogGeneration != null && picker.catalogGeneration != connectionState?.generation
+                    _dshCreationPreset.value = picker.copy(connectionReady = ready)
+                    if (!ready || stale) {
+                        presetLoadJob?.cancel()
+                        _dshCreationPreset.value = _dshCreationPreset.value.copy(
+                            presets = emptyList(), catalogGeneration = null, loading = false,
+                        )
+                    }
+                    if (ready) {
                         loadSessions()
+                        if (picker.visible && !picker.creating && (!picker.connectionReady || stale)) refreshCreationPresets()
                     }
                 }
             }
@@ -799,6 +868,16 @@ class SessionListViewModel @Inject constructor(
 
     fun createNewSession(directory: String? = null) {
         if (isCreatingSession) return
+        if (isDsh) {
+            _dshCreationPreset.value = DshCreationPresetState(visible = true, directory = directory)
+            refreshCreationPresets()
+            return
+        }
+        performCreateNewSession(directory)
+    }
+
+    private fun performCreateNewSession(directory: String?, agentPreset: String? = null) {
+        if (isCreatingSession) return
         isCreatingSession = true
         viewModelScope.launch {
             _isLoading.value = true
@@ -811,12 +890,13 @@ class SessionListViewModel @Inject constructor(
                 _filter.value = SessionFilter.ALL
                 _scopeOverride.value = SessionScope.INBOX
                 if (isDsh) {
-                    val connected = connectDshSession(directory)
+                    val connected = connectDshSession(directory, agentPreset)
                     persistCreateNewEvent(
                         name = AppEventName.CREATE_NEW_SUCCESS,
                         directory = connected.directory,
                         sessionId = connected.sessionId,
                     )
+                    _dshCreationPreset.value = DshCreationPresetState()
                     _navigateToSession.tryEmit(connected.toSession())
                     return@launch
                 }
@@ -849,6 +929,7 @@ class SessionListViewModel @Inject constructor(
                     ),
                 )
                 _error.value = e.message ?: "Failed to create session"
+                if (isDsh) _dshCreationPreset.value = _dshCreationPreset.value.copy(creating = false, error = e.message.orEmpty())
             } finally {
                 _isLoading.value = false
                 yield()
@@ -1198,7 +1279,16 @@ class SessionListViewModel @Inject constructor(
         }
     }
 
-    private suspend fun connectDshSession(directory: String?): DshConnectWorkspaceResult {
+    private fun isDshGenerationReady(generation: Long): Boolean {
+        val current = dshConnectionManager.states.value[serverId]
+        return current?.generation == generation && current.status == DshGenerationStatus.Ready
+    }
+
+    private suspend fun connectDshSession(directory: String?, agentPreset: String?): DshConnectWorkspaceResult {
+        val generation = dshConnectionManager.states.value[serverId]?.generation
+            ?: throw IllegalStateException()
+        if (!isDshGenerationReady(generation)) throw IllegalStateException()
+        if (agentPreset != null && _dshCreationPreset.value.catalogGeneration != generation) throw IllegalStateException()
         val describe = dshConnectionManager.states.value[serverId]?.describe
         val noRepoDirectory = describe?.cwd?.takeIf { it.isNotBlank() }.orEmpty()
         val connected = connectDshConversation(
@@ -1207,7 +1297,9 @@ class SessionListViewModel @Inject constructor(
             state = dshReducer.state.value,
             path = directory?.takeIf { it.isNotBlank() },
             noRepoDirectory = noRepoDirectory,
+            agentPreset = agentPreset,
         )
+        if (!isDshGenerationReady(generation)) throw IllegalStateException()
         connected.workspace?.let(dshReducer::applyWorkspace)
         val now = System.currentTimeMillis()
         eventReducer.setSessions(

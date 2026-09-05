@@ -45,6 +45,9 @@ fun reusableBlankSessionId(
         if (sessionId in archived) return@firstOrNull false
         val snapshot = state.sessions[sessionId] ?: return@firstOrNull false
         snapshot.blank &&
+            !snapshot.running &&
+            snapshot.queue.isEmpty() &&
+            snapshot.origin != "subagent" &&
             snapshot.parentSessionId == null &&
             snapshot.cwd == path
     }
@@ -72,9 +75,10 @@ suspend fun connectDshConversation(
     state: DshEventState,
     path: String?,
     noRepoDirectory: String,
+    agentPreset: String? = null,
 ): DshConnectWorkspaceResult {
     if (path.isNullOrBlank()) {
-        val created = client.sessionCreate(connection)
+        val created = client.sessionCreate(connection, agentPreset = agentPreset)
         return DshConnectWorkspaceResult(
             sessionId = created.sessionId,
             directory = noRepoDirectory,
@@ -84,7 +88,10 @@ suspend fun connectDshConversation(
     val registered = client.workspaceCreate(connection, path)
     val workspace = registered.workspace
     val reusable = reusableBlankSessionId(state.withWorkspace(workspace), workspace)
-    if (reusable != null) {
+    if (reusable != null && (agentPreset != null || state.sessions[reusable]?.agentPreset == null)) {
+        if (agentPreset != null && state.sessions[reusable]?.agentPreset != agentPreset) {
+            client.agentPresetSelect(connection, reusable, agentPreset)
+        }
         return DshConnectWorkspaceResult(
             sessionId = reusable,
             directory = workspace.path,
@@ -92,7 +99,7 @@ suspend fun connectDshConversation(
             workspace = workspace,
         )
     }
-    val created = client.sessionCreate(connection, workspaceId = workspace.workspaceId)
+    val created = client.sessionCreate(connection, workspaceId = workspace.workspaceId, agentPreset = agentPreset)
     return DshConnectWorkspaceResult(
         sessionId = created.sessionId,
         directory = workspace.path,

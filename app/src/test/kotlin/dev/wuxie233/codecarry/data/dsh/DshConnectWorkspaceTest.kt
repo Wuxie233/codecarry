@@ -29,12 +29,14 @@ class DshConnectWorkspaceTest {
             workspaceId = "w1",
             path = "/work/a",
             title = "a",
-            sessionIds = listOf("blank", "busy", "archived", "other-cwd"),
+            sessionIds = listOf("subagent", "running-blank", "blank", "busy", "archived", "other-cwd"),
             createdAt = "t",
             updatedAt = "t",
         )
         val state = DshEventState(
             sessions = mapOf(
+                "subagent" to DshSessionSnapshot(sessionId = "subagent", blank = true, origin = "subagent", cwd = "/work/a"),
+                "running-blank" to DshSessionSnapshot(sessionId = "running-blank", blank = true, running = true, cwd = "/work/a"),
                 "blank" to DshSessionSnapshot(sessionId = "blank", blank = true, cwd = "/work/a"),
                 "busy" to DshSessionSnapshot(sessionId = "busy", blank = false, cwd = "/work/a"),
                 "archived" to DshSessionSnapshot(sessionId = "archived", blank = true, cwd = "/work/a"),
@@ -46,7 +48,7 @@ class DshConnectWorkspaceTest {
         assertNull(
             reusableBlankSessionId(
                 state,
-                workspace.copy(sessionIds = listOf("busy", "archived", "other-cwd")),
+                workspace.copy(sessionIds = listOf("subagent", "running-blank", "busy", "archived", "other-cwd")),
             ),
         )
     }
@@ -174,6 +176,104 @@ class DshConnectWorkspaceTest {
         assertTrue(result.reused)
         assertEquals(1, captured.size)
         assertEquals("/api/workspace/create", captured.single().url.encodedPath)
+    }
+
+    @Test
+    fun `explicit preset reaches first no repo create`() = runTest {
+        val captured = mutableListOf<HttpRequestData>()
+        val client = api(captured) { request ->
+            val envelope = json.parseToJsonElement((request.body as TextContent).text).jsonObject
+            val rpcId = envelope.getValue("rpcId").jsonPrimitive.content
+            val args = envelope.getValue("payload").jsonObject.getValue("args").jsonObject.getValue("request").jsonObject
+            assertEquals("preset-a", args.getValue("agentPreset").jsonPrimitive.content)
+            assertFalse(args.containsKey("cwd"))
+            assertFalse(args.containsKey("workspaceId"))
+            """{"type":"server-response","rpcId":"$rpcId","result":{"ok":true,"value":{"sessionId":"new"}}}"""
+        }
+        connectDshConversation(client, connection, DshEventState(), null, "/home", "preset-a")
+        assertEquals(1, captured.size)
+    }
+
+    @Test
+    fun `reused blank selects requested preset before returning`() = runTest {
+        verifyPresetReuse(existing = "preset-a", selected = "preset-b", expectSelect = true, expectReuse = true)
+    }
+
+    @Test
+    fun `reused blank with same preset needs no selection`() = runTest {
+        verifyPresetReuse(existing = "preset-a", selected = "preset-a", expectSelect = false, expectReuse = true)
+    }
+
+    @Test
+    fun `host default creates fresh when blank member has explicit preset`() = runTest {
+        verifyPresetReuse(existing = "preset-a", selected = null, expectSelect = false, expectReuse = false)
+    }
+
+    @Test
+    fun `failed selection never returns reused conversation`() = runTest {
+        var failure: Throwable? = null
+        try {
+            verifyPresetReuse(existing = "preset-a", selected = "preset-b", expectSelect = true, expectReuse = true, failSelect = true)
+        } catch (e: DshTransportException) {
+            assertTrue(e.cause is IllegalStateException)
+            assertEquals("Host refused preset switch", e.cause?.message)
+            failure = e
+        }
+        assertTrue("A failed preset selection must not return a reused conversation", failure != null)
+    }
+
+    @Test
+    fun `new workspace session carries explicit preset`() = runTest {
+        verifyPresetReuse(existing = null, selected = "preset-b", expectSelect = false, expectReuse = false, hasBlank = false)
+    }
+
+    private suspend fun verifyPresetReuse(
+        existing: String?,
+        selected: String?,
+        expectSelect: Boolean,
+        expectReuse: Boolean,
+        failSelect: Boolean = false,
+        hasBlank: Boolean = true,
+    ) {
+        val captured = mutableListOf<HttpRequestData>()
+        val methods = mutableListOf<String>()
+        val client = api(captured) { request ->
+            val envelope = json.parseToJsonElement((request.body as TextContent).text).jsonObject
+            val rpcId = envelope.getValue("rpcId").jsonPrimitive.content
+            val method = envelope.getValue("method").jsonPrimitive.content
+            val args = envelope.getValue("payload").jsonObject.getValue("args").jsonObject
+            methods += method
+            val value = when (method) {
+                "workspace/create" -> """{"workspace":{"workspaceId":"w1","path":"/work/a","folders":[],"title":"a","sessionIds":["blank"],"createdAt":"t","updatedAt":"t"},"created":false}"""
+                "agentPresets/select" -> {
+                    assertEquals("blank", args.getValue("agentId").jsonPrimitive.content)
+                    assertEquals(selected, args.getValue("agentPreset").jsonPrimitive.content)
+                    if (failSelect) error("Host refused preset switch")
+                    "\"$selected\""
+                }
+                "session/create" -> {
+                    val creation = args.getValue("request").jsonObject
+                    assertEquals("w1", creation.getValue("workspaceId").jsonPrimitive.content)
+                    assertFalse(creation.containsKey("cwd"))
+                    if (selected == null) assertFalse(creation.containsKey("agentPreset"))
+                    else assertEquals(selected, creation.getValue("agentPreset").jsonPrimitive.content)
+                    """{"sessionId":"new"}"""
+                }
+                else -> error(method)
+            }
+            """{"type":"server-response","rpcId":"$rpcId","result":{"ok":true,"value":$value}}"""
+        }
+        val state = DshEventState(sessions = if (hasBlank) mapOf(
+            "blank" to DshSessionSnapshot(sessionId = "blank", blank = true, cwd = "/work/a", agentPreset = existing),
+        ) else emptyMap())
+        val result = connectDshConversation(client, connection, state, "/work/a", "/home", selected)
+        assertEquals(expectReuse, result.reused)
+        assertEquals(if (expectReuse) "blank" else "new", result.sessionId)
+        assertEquals(buildList {
+            add("workspace/create")
+            if (expectSelect) add("agentPresets/select")
+            if (!expectReuse) add("session/create")
+        }, methods)
     }
 
     private fun unusedDownlinks(): DshDownlinkFactory = object : DshDownlinkFactory {

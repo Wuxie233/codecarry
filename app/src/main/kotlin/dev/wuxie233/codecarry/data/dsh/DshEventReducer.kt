@@ -78,6 +78,15 @@ class DshEventReducer(
     private val _state = MutableStateFlow(initial)
     val state: StateFlow<DshEventState> = _state.asStateFlow()
 
+    /** Ignore command receipts from an obsolete connection generation. */
+    fun applyPresetSelection(sessionId: String, presetId: String, generation: Long) {
+        _state.update { state ->
+            val session = state.sessions[sessionId]
+            if (state.generation != generation || session == null) state
+            else state.copy(sessions = state.sessions + (sessionId to session.copy(agentPreset = presetId)))
+        }
+    }
+
     fun resetGeneration(generation: Long) {
         _state.value = DshEventState(generation = generation)
     }

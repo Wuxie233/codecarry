@@ -1,0 +1,19 @@
+<resources>
+    <string name="dsh_preset_title">Choose preset</string>
+    <string name="dsh_preset_scope">Applies to this conversation.</string>
+    <string name="dsh_preset_search">Search presets</string>
+    <string name="dsh_preset_host_default">Use host default</string>
+    <string name="dsh_preset_current">Current</string>
+    <string name="dsh_preset_default_badge">Host default</string>
+    <string name="dsh_preset_broken">Unavailable: %1$s</string>
+    <string name="dsh_preset_empty">No presets available</string>
+    <string name="dsh_preset_no_match">No matching presets</string>
+    <string name="dsh_preset_refresh">Refresh</string>
+    <string name="dsh_preset_label">Preset: %1$s</string>
+    <string name="dsh_preset_unknown">Unknown</string>
+    <string name="dsh_preset_idle_required">Presets can be changed when this conversation is idle and connected. Subagent presets are managed by the parent.</string>
+    <string name="dsh_preset_failed">Could not load or change presets. Try again.</string>
+    <string name="dsh_preset_connection_changed">Connection changed. Refresh and try again.</string>
+    <string name="dsh_preset_selecting">Applying preset…</string>
+    <string name="dsh_model_selection_failed">Could not change the model. Try again.</string>
+</resources>

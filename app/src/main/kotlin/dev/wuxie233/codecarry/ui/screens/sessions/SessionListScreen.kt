@@ -139,6 +139,7 @@ fun SessionListScreen(
     viewModel: SessionListViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val creationPreset by viewModel.dshCreationPreset.collectAsState()
     val mcpViewModel: McpViewModel = hiltViewModel()
     val mcpState by mcpViewModel.state.collectAsState()
     val isAmoled = isAmoledTheme()
@@ -657,6 +658,22 @@ fun SessionListScreen(
                 }
             }
         }
+    }
+
+    if (creationPreset.visible) {
+        dev.wuxie233.codecarry.ui.components.DshPresetPickerSheet(
+            presets = creationPreset.presets,
+            selectedId = creationPreset.selectedId,
+            loading = creationPreset.loading,
+            error = creationPreset.error?.ifBlank { stringResource(R.string.dsh_creation_failed) },
+            selecting = creationPreset.creating,
+            allowDefault = true,
+            enabled = creationPreset.connectionReady,
+            disabledReason = if (!creationPreset.connectionReady) stringResource(R.string.dsh_preset_connection_changed) else null,
+            onSelect = viewModel::createWithDshPreset,
+            onRefresh = viewModel::refreshCreationPresets,
+            onDismiss = viewModel::dismissCreationPresets,
+        )
     }
 
     // Quick new session dialog (recent projects)

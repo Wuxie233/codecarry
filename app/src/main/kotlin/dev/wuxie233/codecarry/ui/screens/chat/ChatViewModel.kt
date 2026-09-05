@@ -21,6 +21,11 @@ import dev.wuxie233.codecarry.data.api.ModelCapabilities
 import dev.wuxie233.codecarry.data.api.ModelLimit
 import dev.wuxie233.codecarry.data.api.toPermissionAsked
 import dev.wuxie233.codecarry.data.api.ServerConnection
+import dev.wuxie233.codecarry.data.dsh.DshModelSelection
+import dev.wuxie233.codecarry.data.dsh.dshProjectedModelSelection
+import dev.wuxie233.codecarry.data.dsh.isCurrentDshModelReceipt
+import dev.wuxie233.codecarry.data.dsh.DshAgentPresetEntry
+import dev.wuxie233.codecarry.data.dsh.canSelectDshPreset
 import dev.wuxie233.codecarry.data.dsh.DshApiClient
 import dev.wuxie233.codecarry.data.dsh.DshConnection
 import dev.wuxie233.codecarry.data.dsh.DshConnectionManager
@@ -50,6 +55,7 @@ import dev.wuxie233.codecarry.data.repository.SettingsRepository
 import dev.wuxie233.codecarry.domain.model.*
 import dev.wuxie233.codecarry.service.ForegroundResumeDispatcher
 import dev.wuxie233.codecarry.service.dismissResponseReadyNotification
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -153,6 +159,16 @@ data class ChatUiState(
     val questionUnlockEpoch: Int = 0,
 )
 
+data class DshChatPresetState(
+    val presets: List<DshAgentPresetEntry> = emptyList(),
+    val currentId: String? = null,
+    val loading: Boolean = false,
+    val selecting: Boolean = false,
+    val ready: Boolean = false,
+    val canSelect: Boolean = false,
+    val error: String? = null,
+)
+
 data class ChatQueueItem(
     val id: String,
     val placement: String,
@@ -235,6 +251,15 @@ class ChatViewModel @Inject constructor(
     }
 
     private val _isLoading = MutableStateFlow(true)
+    private val _dshPresets = MutableStateFlow(DshChatPresetState())
+    val dshPresets: StateFlow<DshChatPresetState> = _dshPresets
+    private var dshPresetLoadJob: Job? = null
+    private var dshModelCatalogDefault: DshModelSelection? = null
+    private var dshModelCatalogGeneration: Long? = null
+    private var dshModelMutationRevision = 0L
+    private var dshModelMutationPending = false
+    private var dshModelObservedGeneration: Long? = null
+    private var dshModelObservedProjection: Pair<Long, kotlinx.serialization.json.JsonElement?>? = null
     private val _error = MutableStateFlow<String?>(null)
     private val _isSending = MutableStateFlow(false)
     private val _pendingSendCount = MutableStateFlow(0)
@@ -636,8 +661,13 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch {
             dshConnectionManager.states.collect { states ->
                 val generation = states[serverId]
-                if (generation?.status == DshGenerationStatus.Ready && generation.isReady) {
+                val ready = generation?.status == DshGenerationStatus.Ready && generation.isReady
+                _dshPresets.update { it.copy(ready = ready, canSelect = canSelectDshPreset(
+                    dshReducer.state.value.sessions[sessionId], ready, sending = false,
+                )) }
+                if (ready) {
                     loadDshSession()
+                    refreshDshPresets()
                 }
             }
         }
@@ -727,6 +757,11 @@ class ChatViewModel @Inject constructor(
             eventReducer.updateSessionStatus(id, status)
         }
         val snapshot = state.sessions[sessionId]
+        applyDshProjectedModel()
+        _dshPresets.update { it.copy(
+            currentId = snapshot?.agentPreset,
+            canSelect = canSelectDshPreset(snapshot, it.ready, sending = false),
+        ) }
         val address = dshHistoryAddress()
         if (address != null && dshFollowAddress != address) {
             startDshFollow()
@@ -843,10 +878,137 @@ class ChatViewModel @Inject constructor(
         return url.removePrefix(prefix).takeIf { it.isNotBlank() }
     }
 
-    private fun loadDshProviders() {
+    fun refreshDshPresets() {
+        if (!isDsh || _dshPresets.value.selecting) return
+        dshPresetLoadJob?.cancel()
+        val generation = dshReducer.state.value.generation
+        val modelRevision = dshModelMutationRevision
+        _dshPresets.update { it.copy(loading = true, error = null) }
+        dshPresetLoadJob = viewModelScope.launch {
+            try {
+                val presets = dshApi.agentPresetList(dshConn).presets
+                val current = dshApi.sessionList(dshConn).items.firstOrNull { it.sessionId == sessionId }
+                if (dshReducer.state.value.generation == generation) {
+                    current?.agentPreset?.let { dshReducer.applyPresetSelection(sessionId, it, generation) }
+                    if (modelRevision == dshModelMutationRevision) {
+                        current?.projections?.let { projections ->
+                            dshReducer.mergeHistory(sessionId, events = emptyList(), projections = projections, replace = false)
+                        }
+                    }
+                    _dshPresets.update { it.copy(presets = presets, loading = false) }
+                } else {
+                    _dshPresets.update { it.copy(loading = false, error = appContext.getString(R.string.dsh_preset_connection_changed)) }
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                _dshPresets.update { it.copy(loading = false, error = error.message ?: appContext.getString(R.string.dsh_preset_failed)) }
+            }
+        }
+    }
+
+    fun selectDshPreset(presetId: String, onResult: (Boolean) -> Unit = {}) {
+        val state = _dshPresets.value
+        val snapshot = dshReducer.state.value.sessions[sessionId]
+        val generationState = dshConnectionManager.states.value[serverId]
+        val ready = generationState?.status == DshGenerationStatus.Ready && generationState.isReady
+        if (!isDsh || state.selecting || state.loading || dshModelMutationPending || !canSelectDshPreset(snapshot, ready, _isSending.value || pendingOpenCodeSends.isNotEmpty()) ||
+            state.presets.none { it.id == presetId && it.broken == null }) {
+            _dshPresets.update { it.copy(error = appContext.getString(R.string.dsh_preset_idle_required)) }
+            onResult(false)
+            return
+        }
+        if (snapshot?.agentPreset == presetId) {
+            onResult(true)
+            return
+        }
+        val generation = dshReducer.state.value.generation
+        dshModelMutationRevision++
+        _dshPresets.update { it.copy(selecting = true, error = null) }
+        viewModelScope.launch {
+            try {
+                val selected = dshApi.agentPresetSelect(dshConn, sessionId, presetId)
+                if (dshReducer.state.value.generation != generation ||
+                    dshConnectionManager.states.value[serverId]?.status != DshGenerationStatus.Ready) {
+                    _dshPresets.update { it.copy(error = appContext.getString(R.string.dsh_preset_connection_changed)) }
+                    onResult(false)
+                } else {
+                    dshReducer.applyPresetSelection(sessionId, selected.agentPreset, generation)
+                    loadDshProviders(refreshSelection = true)
+                    onResult(true)
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                _dshPresets.update { it.copy(error = error.message ?: appContext.getString(R.string.dsh_preset_failed)) }
+                onResult(false)
+            } finally {
+                _dshPresets.update { it.copy(selecting = false) }
+            }
+        }
+    }
+
+    private fun applyDshModelSelection(selected: DshModelSelection) {
+        _selectedProviderId.value = selected.provider
+        _selectedModelId.value = selected.model
+        _selectedVariant.value = selected.reasoningEffort
+        isModelExplicitlySelected = true
+    }
+
+    private fun applyDshProjectedModel() {
+        val state = dshReducer.state.value
+        if (dshModelObservedGeneration != state.generation) {
+            dshModelObservedGeneration = state.generation
+            dshModelObservedProjection = null
+            dshModelMutationPending = false
+        }
+        if (dshModelMutationPending) return
+        val projection = state.sessions[sessionId]?.projections?.get("modelSelection") ?: return
+        if (projection == dshModelObservedProjection) return
+        val selected = dshProjectedModelSelection(
+            projection.second,
+            dshModelCatalogDefault.takeIf { dshModelCatalogGeneration == state.generation },
+        ) ?: return
+        dshModelObservedProjection = projection
+        applyDshModelSelection(selected)
+    }
+
+    private fun submitDshModelSelection(providerId: String, modelId: String, reasoning: String?) {
+        val generation = dshReducer.state.value.generation
+        val revision = ++dshModelMutationRevision
+        dshModelObservedGeneration = generation
+        dshModelMutationPending = true
+        viewModelScope.launch {
+            try {
+                val result = dshApi.sessionSelectModel(dshConn, sessionId, providerId, modelId, reasoning)
+                if (isCurrentDshModelReceipt(generation, revision, dshReducer.state.value.generation,
+                        dshModelMutationRevision, dshConnectionManager.states.value[serverId]?.status == DshGenerationStatus.Ready)) {
+                    dshModelObservedProjection = dshReducer.state.value.sessions[sessionId]?.projections?.get("modelSelection")
+                    applyDshModelSelection(result.selected)
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                if (generation == dshReducer.state.value.generation && revision == dshModelMutationRevision) {
+                    _error.value = error.message ?: appContext.getString(R.string.dsh_model_selection_failed)
+                    dshModelObservedProjection = null
+                }
+            } finally {
+                if (generation == dshReducer.state.value.generation && revision == dshModelMutationRevision) {
+                    dshModelMutationPending = false
+                    applyDshProjectedModel()
+                }
+            }
+        }
+    }
+
+    private fun loadDshProviders(refreshSelection: Boolean = false) {
+        val generation = dshReducer.state.value.generation
+        val revision = dshModelMutationRevision
         viewModelScope.launch {
             try {
                 val models = dshApi.sessionModels(dshConn)
+                if (generation != dshReducer.state.value.generation) return@launch
                 val providers = models.groups.map { group ->
                     ProviderInfo(
                         id = group.id,
@@ -865,10 +1027,20 @@ class ChatViewModel @Inject constructor(
                 }
                 _allProviders.value = providers
                 applyProviderFilter()
-                _selectedProviderId.value = models.default.provider
-                _selectedModelId.value = models.default.model
-                _selectedVariant.value = models.default.reasoningEffort
-                isModelExplicitlySelected = true
+                dshModelCatalogDefault = models.default
+                dshModelCatalogGeneration = generation
+                // A catalog refresh never overwrites a session/user selection.
+                applyDshProjectedModel()
+                if (refreshSelection) {
+                    val current = dshApi.sessionList(dshConn).items.firstOrNull { it.sessionId == sessionId }
+                    if (isCurrentDshModelReceipt(generation, revision, dshReducer.state.value.generation,
+                            dshModelMutationRevision, dshConnectionManager.states.value[serverId]?.status == DshGenerationStatus.Ready)) {
+                        current?.projections?.let { projections ->
+                            dshReducer.mergeHistory(sessionId, events = emptyList(), projections = projections, replace = false)
+                        }
+                        applyDshProjectedModel()
+                    }
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to load DSH models", e)
             }
@@ -1146,17 +1318,14 @@ class ChatViewModel @Inject constructor(
     }
 
     fun selectVariant(name: String?) {
+        if (isDsh && _dshPresets.value.selecting) return
         _selectedVariant.value = name
         saveDraft()
         if (isDsh) {
             val providerId = _selectedProviderId.value
             val modelId = _selectedModelId.value
             if (providerId != null && modelId != null) {
-                viewModelScope.launch {
-                    runCatching {
-                        dshApi.sessionSelectModel(dshConn, sessionId, providerId, modelId, name)
-                    }.onFailure { Log.e(TAG, "Failed to select DSH reasoning", it) }
-                }
+                submitDshModelSelection(providerId, modelId, name)
             }
         }
     }
@@ -1178,6 +1347,7 @@ class ChatViewModel @Inject constructor(
      * Cycles: none -> first -> second -> ... -> last -> none (default).
      */
     fun cycleVariant() {
+        if (isDsh && _dshPresets.value.selecting) return
         val state = uiState.value
         val variants = state.variantNames
         if (variants.isEmpty()) return
@@ -1193,31 +1363,18 @@ class ChatViewModel @Inject constructor(
             val providerId = _selectedProviderId.value
             val modelId = _selectedModelId.value
             if (providerId != null && modelId != null) {
-                viewModelScope.launch {
-                    runCatching {
-                        dshApi.sessionSelectModel(dshConn, sessionId, providerId, modelId, _selectedVariant.value)
-                    }.onFailure { Log.e(TAG, "Failed to cycle DSH reasoning", it) }
-                }
+                submitDshModelSelection(providerId, modelId, _selectedVariant.value)
             }
         }
     }
 
     fun selectModel(providerId: String, modelId: String) {
+        if (isDsh && _dshPresets.value.selecting) return
         _selectedProviderId.value = providerId
         _selectedModelId.value = modelId
         isModelExplicitlySelected = true
         if (isDsh) {
-            viewModelScope.launch {
-                runCatching {
-                    dshApi.sessionSelectModel(
-                        dshConn,
-                        sessionId,
-                        providerId,
-                        modelId,
-                        _selectedVariant.value,
-                    )
-                }.onFailure { Log.e(TAG, "Failed to select DSH model", it) }
-            }
+            submitDshModelSelection(providerId, modelId, _selectedVariant.value)
         }
     }
 
@@ -1412,6 +1569,10 @@ class ChatViewModel @Inject constructor(
 
     private fun sendParts(parts: List<PromptPart>, onResult: (Boolean) -> Unit = {}) {
         if (isDsh) {
+            if (_dshPresets.value.selecting) {
+                onResult(false)
+                return
+            }
             enqueueDshSend(parts, onResult)
             return
         }
@@ -2154,7 +2315,7 @@ class ChatViewModel @Inject constructor(
     }
 
     /** Create a new session and return it. */
-    fun createNewSession(onResult: (Session?) -> Unit) {
+    fun createNewSession(agentPreset: String? = null, onResult: (Session?) -> Unit) {
         if (isCreatingSession) {
             onResult(null)
             return
@@ -2167,14 +2328,25 @@ class ChatViewModel @Inject constructor(
                 }
                 val requestedDirectory = sessionDirectory
                 if (isDsh) {
-                    val describe = dshConnectionManager.states.value[serverId]?.describe
+                    val generationState = dshConnectionManager.states.value[serverId]
+                    check(generationState?.status == DshGenerationStatus.Ready && generationState.isReady) {
+                        appContext.getString(R.string.dsh_preset_connection_changed)
+                    }
+                    val generation = dshReducer.state.value.generation
+                    val describe = generationState.describe
                     val connected = connectDshConversation(
                         client = dshApi,
                         connection = dshConn,
                         state = dshReducer.state.value,
                         path = requestedDirectory?.takeIf { it.isNotBlank() },
                         noRepoDirectory = describe?.cwd.orEmpty(),
+                        agentPreset = agentPreset,
                     )
+                    val currentGeneration = dshConnectionManager.states.value[serverId]
+                    check(dshReducer.state.value.generation == generation && currentGeneration?.generation == generation &&
+                        currentGeneration.status == DshGenerationStatus.Ready && currentGeneration.isReady) {
+                        appContext.getString(R.string.dsh_preset_connection_changed)
+                    }
                     connected.workspace?.let(dshReducer::applyWorkspace)
                     val session = Session(
                         id = connected.sessionId,

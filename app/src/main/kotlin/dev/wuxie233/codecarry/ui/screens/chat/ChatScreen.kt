@@ -1,5 +1,7 @@
 package dev.wuxie233.codecarry.ui.screens.chat
 
+import dev.wuxie233.codecarry.ui.components.DshPresetPickerSheet
+
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
@@ -1186,6 +1188,7 @@ fun ChatScreen(
     viewModel: ChatViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val dshPresets by viewModel.dshPresets.collectAsState()
     val draftText by viewModel.draftText.collectAsState()
     val draftAttachmentUris by viewModel.draftAttachmentUris.collectAsState()
     var inputText by remember { mutableStateOf(TextFieldValue("")) }
@@ -1206,6 +1209,10 @@ fun ChatScreen(
     val listState = rememberLazyListState()
     var showModelPicker by remember { mutableStateOf(false) }
     var showAgentPicker by remember { mutableStateOf(false) }
+    var showDshPresetPicker by remember { mutableStateOf(false) }
+    var createWithDshPreset by remember { mutableStateOf(false) }
+    var creatingWithDshPreset by remember { mutableStateOf(false) }
+    var dshCreateError by remember { mutableStateOf<String?>(null) }
     var showVariantPicker by remember { mutableStateOf(false) }
     var showRenameDialog by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
@@ -1871,7 +1878,11 @@ fun ChatScreen(
                                 text = { Text(stringResource(R.string.menu_new_session)) },
                                 onClick = {
                                     showMenu = false
-                                    viewModel.createNewSession { session ->
+                                    if (uiState.isDsh) {
+                                        createWithDshPreset = true
+                                        dshCreateError = null
+                                        viewModel.refreshDshPresets()
+                                    } else viewModel.createNewSession { session ->
                                         if (session != null) {
                                             onNavigateToSession(session.id, session.directory)
                                         } else {
@@ -2030,6 +2041,7 @@ fun ChatScreen(
             if (!isTerminalMode) {
                 val composerIsSending = uiState.isSending && isShellMode
                 val sendDisabledReasonResId = when {
+                    dshPresets.selecting -> R.string.dsh_preset_selecting
                     composerIsSending -> R.string.chat_send_disabled_sending
                     viewModel.sessionId.isBlank() || (isShellMode && isBusy) -> R.string.chat_send_disabled_not_ready
                     else -> null
@@ -2253,13 +2265,22 @@ fun ChatScreen(
                 },
                 modelLabel = if (uiState.supportsModelSelection) modelLabel else "",
                 selectedProviderId = uiState.selectedProviderId,
-                onModelClick = { showModelPicker = true },
+                onModelClick = { if (!dshPresets.selecting) showModelPicker = true },
                 agents = uiState.agents,
                 selectedAgent = uiState.selectedAgent,
                 onAgentClick = { showAgentPicker = true },
+                dshPresetLabel = if (uiState.isDsh) stringResource(
+                    R.string.dsh_preset_label,
+                    dshPresets.presets.find { it.id == dshPresets.currentId }?.name
+                        ?: dshPresets.currentId ?: stringResource(R.string.dsh_preset_unknown),
+                ) else null,
+                onDshPresetClick = {
+                    showDshPresetPicker = true
+                    viewModel.refreshDshPresets()
+                },
                 variantNames = if (uiState.supportsThinkingSelection) uiState.variantNames else emptyList(),
                 selectedVariant = uiState.selectedVariant,
-                onVariantClick = { showVariantPicker = true },
+                onVariantClick = { if (!dshPresets.selecting) showVariantPicker = true },
                 commands = if (uiState.supportsCommands) uiState.commands else emptyList(),
                 fileSearchResults = fileSearchResults,
                 confirmedFilePaths = confirmedFilePaths,
@@ -3030,6 +3051,47 @@ fun ChatScreen(
                 showModelPicker = false
             },
             onDismiss = { showModelPicker = false }
+        )
+    }
+
+    if (showDshPresetPicker || createWithDshPreset) {
+        val creating = createWithDshPreset
+        val canSelect = if (creating) dshPresets.ready else
+            dshPresets.canSelect && !uiState.isSending && uiState.pendingSendCount == 0
+        DshPresetPickerSheet(
+            presets = dshPresets.presets,
+            selectedId = if (creating) null else dshPresets.currentId,
+            loading = dshPresets.loading,
+            error = dshCreateError ?: dshPresets.error,
+            selecting = dshPresets.selecting || creatingWithDshPreset,
+            allowDefault = creating,
+            enabled = canSelect,
+            disabledReason = if (canSelect) null else stringResource(R.string.dsh_preset_idle_required),
+            onSelect = { presetId ->
+                if (creating) {
+                    creatingWithDshPreset = true
+                    dshCreateError = null
+                    viewModel.createNewSession(agentPreset = presetId) { session ->
+                        creatingWithDshPreset = false
+                        if (session != null) {
+                            createWithDshPreset = false
+                            onNavigateToSession(session.id, session.directory)
+                        } else {
+                            dshCreateError = context.getString(R.string.chat_session_create_failed)
+                        }
+                    }
+                } else if (presetId != null) {
+                    viewModel.selectDshPreset(presetId) { success ->
+                        if (success) showDshPresetPicker = false
+                    }
+                }
+            },
+            onRefresh = viewModel::refreshDshPresets,
+            onDismiss = {
+                showDshPresetPicker = false
+                createWithDshPreset = false
+                dshCreateError = null
+            },
         )
     }
 
@@ -7121,6 +7183,8 @@ private fun ChatInputBar(
     agents: List<AgentInfo> = emptyList(),
     selectedAgent: String = "build",
     onAgentClick: () -> Unit = {},
+    dshPresetLabel: String? = null,
+    onDshPresetClick: () -> Unit = {},
     variantNames: List<String> = emptyList(),
     selectedVariant: String? = null,
     onVariantClick: () -> Unit = {},
@@ -7438,7 +7502,7 @@ private fun ChatInputBar(
             verticalArrangement = Arrangement.spacedBy(2.dp)
         ) {
             // Agent + Model + Variant + Attach selector row — small, subtle
-            if (modelLabel.isNotEmpty() || agents.size > 1 || variantNames.isNotEmpty() || supportsAttachments) {
+            if (dshPresetLabel != null || modelLabel.isNotEmpty() || agents.size > 1 || variantNames.isNotEmpty() || supportsAttachments) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -7450,6 +7514,11 @@ private fun ChatInputBar(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
+                        dshPresetLabel?.let { label ->
+                            TextButton(onClick = onDshPresetClick) {
+                                Text(label, style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
                         // Agent selector — tap to open list picker
                         if (agents.size > 1) {
                             val agentColor = agentColor(selectedAgent, agents)

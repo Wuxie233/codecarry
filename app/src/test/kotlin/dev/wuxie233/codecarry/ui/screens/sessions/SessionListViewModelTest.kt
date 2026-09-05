@@ -6,6 +6,8 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import dev.wuxie233.codecarry.data.api.OpenCodeApi
 import dev.wuxie233.codecarry.data.dsh.DshApiClient
+import dev.wuxie233.codecarry.data.dsh.DshGenerationState
+import dev.wuxie233.codecarry.data.dsh.DshGenerationStatus
 import dev.wuxie233.codecarry.data.dsh.DshConnectionManager
 import dev.wuxie233.codecarry.data.dsh.DshSessionSummary
 import dev.wuxie233.codecarry.data.dsh.unusedDshApi
@@ -611,7 +613,7 @@ class SessionListViewModelTest {
     fun `dsh new conversation registers workspace then creates with workspaceId`() = runTest(dispatcher) {
         val captured = Collections.synchronizedList(mutableListOf<String>())
         val eventReducer = EventReducer()
-        val manager = unusedDshConnectionManager(testScope.backgroundScope, json)
+        val manager = readyDshManager()
         val vm = newSessionListViewModel(
             eventReducer = eventReducer,
             dshApi = dshSessionApi(captured),
@@ -624,6 +626,7 @@ class SessionListViewModelTest {
 
         captured.clear()
         vm.createNewSession(directory = "/work/new")
+        chooseHostDefault(vm)
         advanceUntilIoSettles { "session/create" in captured && navigated.isNotEmpty() }
 
         assertEquals(
@@ -642,7 +645,7 @@ class SessionListViewModelTest {
         val captured = Collections.synchronizedList(mutableListOf<String>())
         val vm = newSessionListViewModel(
             dshApi = dshSessionApi(captured),
-            dshConnectionManager = unusedDshConnectionManager(testScope.backgroundScope, json),
+            dshConnectionManager = readyDshManager(),
             savedStateHandle = dshSavedStateHandle(),
         )
         val navigated = Collections.synchronizedList(mutableListOf<Session>())
@@ -651,6 +654,7 @@ class SessionListViewModelTest {
 
         captured.clear()
         vm.createNoRepoSession()
+        chooseHostDefault(vm)
         advanceUntilIoSettles { "session/create" in captured && navigated.isNotEmpty() }
 
         assertEquals(listOf("session/create"), captured.filter { it == "session/create" || it == "workspace/create" })
@@ -660,7 +664,7 @@ class SessionListViewModelTest {
     @Test
     fun `dsh create reuses blank member without session create`() = runTest(dispatcher) {
         val captured = Collections.synchronizedList(mutableListOf<String>())
-        val manager = unusedDshConnectionManager(testScope.backgroundScope, json)
+        val manager = readyDshManager()
         manager.reducer("srv-session-list").applySessionList(
             listOf(
                 DshSessionSummary(
@@ -683,6 +687,7 @@ class SessionListViewModelTest {
 
         captured.clear()
         vm.createNewSession(directory = "/work/a")
+        chooseHostDefault(vm)
         advanceUntilIoSettles { navigated.isNotEmpty() }
 
         assertEquals(
@@ -692,6 +697,66 @@ class SessionListViewModelTest {
         assertEquals("blank", navigated.single().id)
     }
 
+
+    @Test
+    fun `dsh create waits for Ready before allowing preset selection`() = runTest(dispatcher) {
+        val captured = Collections.synchronizedList(mutableListOf<String>())
+        val vm = newSessionListViewModel(
+            dshApi = dshSessionApi(captured),
+            dshConnectionManager = unusedDshConnectionManager(testScope.backgroundScope, json),
+            savedStateHandle = dshSavedStateHandle(),
+        )
+        val navigated = Collections.synchronizedList(mutableListOf<Session>())
+        collectNavigation(vm) { navigated.add(it) }
+        vm.createNoRepoSession()
+        advanceUntilIdle()
+        vm.createWithDshPreset(null)
+        advanceUntilIdle()
+        assertTrue(vm.dshCreationPreset.value.visible)
+        assertFalse(vm.dshCreationPreset.value.connectionReady)
+        assertFalse("session/create" in captured)
+        assertTrue(navigated.isEmpty())
+    }
+
+    @Test
+    fun `dsh stale generation create receipt never navigates or publishes session`() = runTest(dispatcher) {
+        val captured = Collections.synchronizedList(mutableListOf<String>())
+        val manager = readyDshManager()
+        val reducer = EventReducer()
+        val vm = newSessionListViewModel(
+            eventReducer = reducer,
+            dshApi = dshSessionApi(captured, onCreate = { setDshGeneration(manager, 2) }),
+            dshConnectionManager = manager,
+            savedStateHandle = dshSavedStateHandle(),
+        )
+        val navigated = Collections.synchronizedList(mutableListOf<Session>())
+        collectNavigation(vm) { navigated.add(it) }
+        vm.createNoRepoSession()
+        chooseHostDefault(vm)
+        advanceUntilIoSettles { "session/create" in captured && !vm.dshCreationPreset.value.creating }
+        assertTrue("session/create" in captured)
+        assertTrue(vm.dshCreationPreset.value.visible)
+        assertTrue(vm.dshCreationPreset.value.error != null)
+        assertTrue(navigated.isEmpty())
+        assertTrue(reducer.sessions.value.none { it.id == "s-no-repo" })
+    }
+
+    private fun chooseHostDefault(vm: SessionListViewModel) {
+        advanceUntilIoSettles { vm.dshCreationPreset.value.visible && !vm.dshCreationPreset.value.loading }
+        assertTrue("creation first opens preset picker", vm.dshCreationPreset.value.visible)
+        vm.createWithDshPreset(null)
+    }
+
+    private fun readyDshManager(): DshConnectionManager =
+        unusedDshConnectionManager(testScope.backgroundScope, json).also { setDshGeneration(it, 1) }
+
+    private fun setDshGeneration(manager: DshConnectionManager, generation: Long) {
+        val method = DshConnectionManager::class.java.getDeclaredMethod(
+            "setState", String::class.java, DshGenerationState::class.java,
+        )
+        method.isAccessible = true
+        method.invoke(manager, "srv-session-list", DshGenerationState(generation = generation, status = DshGenerationStatus.Ready))
+    }
 
     /** MockEngine answers on real IO threads; drain the scheduler until the
      *  condition holds or the bounded budget expires. */
@@ -779,6 +844,7 @@ class SessionListViewModelTest {
     private fun dshSessionApi(
         captured: MutableList<String>,
         reuseBlank: Boolean = false,
+        onCreate: () -> Unit = {},
     ): DshApiClient {
         val engine = MockEngine { request ->
             val body = (request.body as TextContent).text
@@ -789,6 +855,7 @@ class SessionListViewModelTest {
             val payload = envelope.getValue("payload").jsonObject
             val value = when (method) {
                 "session/list" -> """{"items":[]}"""
+                "agentPresets/list" -> """{"presets":[]}"""
                 "directoryPicker/list" -> """{"path":"/root","home":"/root","crumbs":[],"entries":[],"truncated":false}"""
                 "workspace/create" -> {
                     val request = payload.getValue("args").jsonObject.getValue("request").jsonObject
@@ -797,6 +864,7 @@ class SessionListViewModelTest {
                     """{"workspace":{"workspaceId":"w1","path":"$path","folders":[],"title":"dir","sessionIds":$sessionIds,"createdAt":"t","updatedAt":"t"},"created":true}"""
                 }
                 "session/create" -> {
+                    onCreate()
                     val request = payload.getValue("args").jsonObject.getValue("request").jsonObject
                     val sessionId = if (request.isEmpty()) "s-no-repo" else "s-new"
                     """{"sessionId":"$sessionId"}"""
