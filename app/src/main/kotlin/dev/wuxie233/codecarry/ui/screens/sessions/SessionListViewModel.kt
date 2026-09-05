@@ -10,6 +10,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.wuxie233.codecarry.data.api.FileNode
 import dev.wuxie233.codecarry.data.api.OpenCodeApi
 import dev.wuxie233.codecarry.data.api.ServerConnection
+import dev.wuxie233.codecarry.data.dsh.observeServerConnection
 import dev.wuxie233.codecarry.data.dsh.DshAgentPresetEntry
 import dev.wuxie233.codecarry.data.dsh.DshApiClient
 import dev.wuxie233.codecarry.data.dsh.DshConnectWorkspaceResult
@@ -479,12 +480,24 @@ class SessionListViewModel @Inject constructor(
         presetLoadJob = viewModelScope.launch {
             try {
                 val presets = dshApi.agentPresetList(dshConn).presets
-                if (!isDshGenerationReady(generation)) return@launch
+                if (!isDshGenerationReady(generation)) {
+                    _dshCreationPreset.value = _dshCreationPreset.value.copy(
+                        loading = false, presets = emptyList(), catalogGeneration = null,
+                        connectionReady = false,
+                    )
+                    return@launch
+                }
                 _dshCreationPreset.value = _dshCreationPreset.value.copy(presets = presets, catalogGeneration = generation, loading = false)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
-                if (!isDshGenerationReady(generation)) return@launch
+                if (!isDshGenerationReady(generation)) {
+                    _dshCreationPreset.value = _dshCreationPreset.value.copy(
+                        loading = false, presets = emptyList(), catalogGeneration = null,
+                        connectionReady = false,
+                    )
+                    return@launch
+                }
                 _dshCreationPreset.value = _dshCreationPreset.value.copy(loading = false, error = e.message.orEmpty())
             }
         }
@@ -755,8 +768,7 @@ class SessionListViewModel @Inject constructor(
                 dshReducer.state.collect { applyDshState(it) }
             }
             viewModelScope.launch {
-                dshConnectionManager.states.collect { states ->
-                    val connectionState = states[serverId]
+                dshConnectionManager.states.observeServerConnection(serverId).collect { connectionState ->
                     val ready = connectionState?.status == DshGenerationStatus.Ready
                     val picker = _dshCreationPreset.value
                     val stale = picker.catalogGeneration != null && picker.catalogGeneration != connectionState?.generation

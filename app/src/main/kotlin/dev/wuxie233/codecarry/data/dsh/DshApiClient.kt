@@ -22,9 +22,12 @@ import io.ktor.websocket.close
 import io.ktor.websocket.readText
 import io.ktor.websocket.send
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.channels.ClosedReceiveChannelException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -606,7 +609,14 @@ class DshApiClient(
         )
 
     suspend fun agentPresetList(connection: DshConnection): DshAgentPresetListValue =
-        decode(callValue(connection, "agentPresets/list"))
+        // This metadata read must settle promptly even when a Host scan stalls.
+        // Convert only our deadline to a regular failure; caller cancellation
+        // must still propagate so obsolete generations cannot apply a receipt.
+        withContext(Dispatchers.IO) {
+            withTimeoutOrNull(15_000L) {
+                decode<DshAgentPresetListValue>(callValue(connection, "agentPresets/list"))
+            } ?: throw DshTransportException("agentPresets/list timed out after 15 seconds; refresh to retry")
+        }
 
     /** `agentPresets/select` takes the wire Agent identity plus preset id. */
     suspend fun agentPresetSelect(

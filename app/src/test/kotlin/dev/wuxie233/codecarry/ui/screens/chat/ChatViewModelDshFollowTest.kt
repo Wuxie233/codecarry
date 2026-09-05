@@ -29,6 +29,7 @@ import io.ktor.http.content.TextContent
 import io.ktor.http.headersOf
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.utils.io.ByteReadChannel
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -62,7 +63,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.io.File
-import java.util.Collections
+import java.util.concurrent.CopyOnWriteArrayList
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -99,7 +100,7 @@ class ChatViewModelDshFollowTest {
     @Test
     fun `opening a DSH chat follows the snapshot and never pages with a sentinel`() = runTest(dispatcher) {
         val mux = FakeDownlink()
-        val unary = Collections.synchronizedList(mutableListOf<String>())
+        val unary = CopyOnWriteArrayList<String>()
         val harness = dshHarness(mux, unary)
         val vm = newViewModel(harness.client, harness.manager)
         collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
@@ -108,6 +109,7 @@ class ChatViewModelDshFollowTest {
         runCurrent()
         pushBaselines(mux)
         harness.manager.states.first { it[SERVER_ID]?.isReady == true }
+        harness.manager.reducer(SERVER_ID).state.first { it.sessions.containsKey(SESSION_ID) }
         runCurrent()
 
         val followOpen = mux.sent.last { it.contains("\"session/follow\"") }
@@ -152,7 +154,7 @@ class ChatViewModelDshFollowTest {
     @Test
     fun `subagent list item follows with parent child and mode`() = runTest(dispatcher) {
         val mux = FakeDownlink()
-        val unary = Collections.synchronizedList(mutableListOf<String>())
+        val unary = CopyOnWriteArrayList<String>()
         val harness = dshHarness(
             mux,
             unary,
@@ -165,6 +167,7 @@ class ChatViewModelDshFollowTest {
         runCurrent()
         pushBaselines(mux)
         harness.manager.states.first { it[SERVER_ID]?.isReady == true }
+        harness.manager.reducer(SERVER_ID).state.first { it.sessions.containsKey(SESSION_ID) }
         runCurrent()
 
         val followOpen = mux.sent.last { it.contains("\"session/follow\"") }
@@ -209,7 +212,7 @@ class ChatViewModelDshFollowTest {
     @Test
     fun `subagent origin without parent does not follow as session`() = runTest(dispatcher) {
         val mux = FakeDownlink()
-        val unary = Collections.synchronizedList(mutableListOf<String>())
+        val unary = CopyOnWriteArrayList<String>()
         val harness = dshHarness(
             mux,
             unary,
@@ -222,6 +225,7 @@ class ChatViewModelDshFollowTest {
         runCurrent()
         pushBaselines(mux)
         harness.manager.states.first { it[SERVER_ID]?.isReady == true }
+        harness.manager.reducer(SERVER_ID).state.first { it.sessions.containsKey(SESSION_ID) }
         runCurrent()
         advanceUntilIdle()
 
@@ -236,7 +240,7 @@ class ChatViewModelDshFollowTest {
     @Test
     fun `load older without a follow cut does not page`() = runTest(dispatcher) {
         val mux = FakeDownlink()
-        val unary = Collections.synchronizedList(mutableListOf<String>())
+        val unary = CopyOnWriteArrayList<String>()
         val harness = dshHarness(mux, unary)
         val vm = newViewModel(harness.client, harness.manager)
         collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
@@ -250,7 +254,7 @@ class ChatViewModelDshFollowTest {
     @Test
     fun `retry without a ready mux surfaces an error instead of spinning`() = runTest(dispatcher) {
         val mux = FakeDownlink()
-        val unary = Collections.synchronizedList(mutableListOf<String>())
+        val unary = CopyOnWriteArrayList<String>()
         val harness = dshHarness(mux, unary)
         val vm = newViewModel(harness.client, harness.manager)
         collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
@@ -270,7 +274,7 @@ class ChatViewModelDshFollowTest {
     @Test
     fun `follow end while ready reopens session follow`() = runTest(dispatcher) {
         val mux = FakeDownlink()
-        val unary = Collections.synchronizedList(mutableListOf<String>())
+        val unary = CopyOnWriteArrayList<String>()
         val harness = dshHarness(mux, unary)
         val vm = newViewModel(harness.client, harness.manager)
         collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
@@ -279,6 +283,7 @@ class ChatViewModelDshFollowTest {
         runCurrent()
         pushBaselines(mux)
         harness.manager.states.first { it[SERVER_ID]?.isReady == true }
+        harness.manager.reducer(SERVER_ID).state.first { it.sessions.containsKey(SESSION_ID) }
         runCurrent()
 
         val firstFollow = mux.sent.last { it.contains("\"session/follow\"") }
@@ -316,6 +321,140 @@ class ChatViewModelDshFollowTest {
         vm.uiState.first { it.error == null && it.messages.isNotEmpty() }
     }
 
+    @Test
+    fun `preset roster is visible while the unrelated session list remains pending`() = runTest(dispatcher) {
+        val mux = FakeDownlink()
+        val unary = CopyOnWriteArrayList<String>()
+        val listStarted = CompletableDeferred<Unit>()
+        val listResponse = CompletableDeferred<Unit>()
+        val harness = dshHarness(mux, unary, beforeSessionList = {
+            listStarted.complete(Unit)
+            listResponse.await()
+        })
+        val vm = newViewModel(harness.client, harness.manager)
+        harness.manager.connect(SERVER_ID, DshConnection.from("http://127.0.0.1:3080", token = "launch-token"))
+        runCurrent()
+        pushBaselines(mux)
+        listStarted.await()
+
+        val presets = vm.dshPresets.first { it.presets.isNotEmpty() && !it.loading }
+        assertEquals("standard", presets.presets.single().id)
+        assertNull(presets.error)
+        assertFalse(listResponse.isCompleted)
+        assertEquals(1, unary.count { it.contains("\"agentPresets/list\"") })
+    }
+
+    @Test
+    fun `other server state changes do not restart the chat preset request`() = runTest(dispatcher) {
+        val mux = FakeDownlink()
+        val unary = CopyOnWriteArrayList<String>()
+        val presetStarted = CompletableDeferred<Unit>()
+        val presetResponse = CompletableDeferred<Unit>()
+        var requestCount = 0
+        val harness = dshHarness(mux, unary, beforePresetList = {
+            requestCount++
+            presetStarted.complete(Unit)
+            presetResponse.await()
+        })
+        val vm = newViewModel(harness.client, harness.manager)
+        harness.manager.connect(SERVER_ID, DshConnection.from("http://127.0.0.1:3080", token = "launch-token"))
+        runCurrent()
+        pushBaselines(mux)
+        presetStarted.await()
+        assertTrue(vm.dshPresets.value.loading)
+        repeat(4) { index ->
+            harness.manager.disconnect("other-$index")
+            runCurrent()
+        }
+        assertEquals(1, requestCount)
+        presetResponse.complete(Unit)
+        val loaded = vm.dshPresets.first { it.presets.isNotEmpty() && !it.loading }
+        assertNull(loaded.error)
+        assertEquals(1, requestCount)
+    }
+
+    @Test
+    fun `failed preset request ends loading and refresh can recover`() = runTest(dispatcher) {
+        val mux = FakeDownlink()
+        val unary = CopyOnWriteArrayList<String>()
+        var fail = true
+        val harness = dshHarness(mux, unary, beforePresetList = {
+            if (fail) error("preset transport unavailable")
+        })
+        val vm = newViewModel(harness.client, harness.manager)
+        harness.manager.connect(SERVER_ID, DshConnection.from("http://127.0.0.1:3080", token = "launch-token"))
+        runCurrent()
+        pushBaselines(mux)
+        val failed = vm.dshPresets.first { it.error != null && !it.loading }
+        assertTrue(failed.presets.isEmpty())
+        assertFalse(failed.error.isNullOrBlank())
+        fail = false
+        vm.refreshDshPresets()
+        val loaded = vm.dshPresets.first { it.presets.isNotEmpty() && !it.loading }
+        assertNull(loaded.error)
+    }
+
+    @Test
+    fun `preset deadline releases loading and a new request can succeed`() = runTest(dispatcher) {
+        val mux = FakeDownlink()
+        val unary = CopyOnWriteArrayList<String>()
+        val requestStarted = CompletableDeferred<Unit>()
+        val stalledResponse = CompletableDeferred<Unit>()
+        var stall = true
+        val harness = dshHarness(mux, unary, beforePresetList = {
+            requestStarted.complete(Unit)
+            if (stall) stalledResponse.await()
+        })
+        val vm = newViewModel(harness.client, harness.manager)
+        harness.manager.connect(SERVER_ID, DshConnection.from("http://127.0.0.1:3080", token = "launch-token"))
+        runCurrent()
+        pushBaselines(mux)
+        requestStarted.await()
+        assertTrue(vm.dshPresets.value.loading)
+
+        // Ktor MockEngine and the bounded metadata read use real IO dispatch.
+        // Await the actual deadline rather than racing a separate virtual clock.
+        val timedOut = vm.dshPresets.first { !it.loading && it.error != null }
+        assertTrue(timedOut.error!!.contains("timed out"))
+        assertTrue(timedOut.presets.isEmpty())
+        assertFalse(stalledResponse.isCompleted)
+
+        stall = false
+        vm.refreshDshPresets()
+        val loaded = vm.dshPresets.first { !it.loading && it.presets.isNotEmpty() }
+        assertNull(loaded.error)
+        assertEquals("standard", loaded.presets.single().id)
+        assertEquals(2, unary.count { it.contains("\"agentPresets/list\"") })
+    }
+
+    @Test
+    fun `disconnect cancels a pending preset request without turning it into a timeout`() = runTest(dispatcher) {
+        val mux = FakeDownlink()
+        val unary = CopyOnWriteArrayList<String>()
+        val started = CompletableDeferred<Unit>()
+        val cancelled = CompletableDeferred<Unit>()
+        val pending = CompletableDeferred<Unit>()
+        val harness = dshHarness(mux, unary, beforePresetList = {
+            started.complete(Unit)
+            try {
+                pending.await()
+            } finally {
+                cancelled.complete(Unit)
+            }
+        })
+        val vm = newViewModel(harness.client, harness.manager)
+        harness.manager.connect(SERVER_ID, DshConnection.from("http://127.0.0.1:3080", token = "launch-token"))
+        runCurrent()
+        pushBaselines(mux)
+        started.await()
+        harness.manager.disconnect(SERVER_ID)
+        cancelled.await()
+        runCurrent()
+        assertFalse(vm.dshPresets.value.loading)
+        assertFalse(vm.dshPresets.value.ready)
+        assertNull(vm.dshPresets.value.error)
+    }
+
     private data class DshHarness(
         val client: DshApiClient,
         val manager: DshConnectionManager,
@@ -324,6 +463,8 @@ class ChatViewModelDshFollowTest {
     private fun dshHarness(
         mux: FakeDownlink,
         unary: MutableList<String>,
+        beforeSessionList: suspend () -> Unit = {},
+        beforePresetList: suspend () -> Unit = {},
         listItem: String = """{"sessionId":"$SESSION_ID","updatedAt":2,"running":false,"blank":false,"cwd":"/root/CODE/Minecraft"}""",
     ): DshHarness {
         var nextStream = 0
@@ -340,11 +481,20 @@ class ChatViewModelDshFollowTest {
                 )
                 "/api/session/list" -> {
                     unary += (request.body as TextContent).text
+                    beforeSessionList()
                     respond(
                         content = ByteReadChannel(
                             """{"type":"server-response","rpcId":"fixed","result":{"ok":true,"value":{"items":[$listItem]}}}""",
                         ),
                         status = HttpStatusCode.OK,
+                        headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
+                    )
+                }
+                "/api/agentPresets/list" -> {
+                    unary += (request.body as TextContent).text
+                    beforePresetList()
+                    respond(
+                        content = """{"type":"server-response","rpcId":"fixed","result":{"ok":true,"value":{"presets":[{"id":"standard","trust":"system","isDefault":true}],"authorable":true}}}""",
                         headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
                     )
                 }

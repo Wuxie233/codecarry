@@ -29,6 +29,22 @@ class DshApiClientTest {
     private val connection = DshConnection.from("http://192.168.1.8:3080")
 
     @Test
+    fun `preset roster matches the host path free list contract`() = runTest {
+        val captured = mutableListOf<HttpRequestData>()
+        val client = api(captured) { request ->
+            val envelope = json.parseToJsonElement((request.body as TextContent).text).jsonObject
+            assertEquals("agentPresets/list", envelope.getValue("method").jsonPrimitive.content)
+            assertTrue(envelope.getValue("payload").jsonObject.getValue("args").jsonObject.isEmpty())
+            """{"type":"server-response","rpcId":"${envelope.getValue("rpcId").jsonPrimitive.content}","result":{"ok":true,"value":{"presets":[{"id":"standard","trust":"system","isDefault":true},{"id":"custom","trust":"user","isDefault":false,"name":"Custom","description":"My preset","broken":"Missing plugin"}],"authorable":true}}}"""
+        }
+        val roster = client.agentPresetList(connection)
+        assertEquals(listOf("standard", "custom"), roster.presets.map { it.id })
+        assertTrue(roster.authorable)
+        assertEquals("Missing plugin", roster.presets[1].broken)
+        assertEquals("/api/agentPresets/list", captured.single().url.encodedPath)
+    }
+
+    @Test
     fun `session list posts slash method with args underscore request`() = runTest {
         val captured = mutableListOf<HttpRequestData>()
         val client = api(captured) { request ->
