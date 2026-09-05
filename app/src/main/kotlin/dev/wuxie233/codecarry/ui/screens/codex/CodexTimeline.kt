@@ -1,7 +1,7 @@
 package dev.wuxie233.codecarry.ui.screens.codex
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -11,9 +11,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -28,6 +28,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
@@ -39,8 +41,8 @@ import dev.wuxie233.codecarry.data.codex.CodexFileChange
 import dev.wuxie233.codecarry.data.codex.CodexThreadItem
 import dev.wuxie233.codecarry.data.codex.CodexTurnPlan
 import dev.wuxie233.codecarry.ui.screens.chat.MessageMarkdownContent
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonObject
+import dev.wuxie233.codecarry.ui.screens.chat.ProcessDisclosureRow
+import dev.wuxie233.codecarry.ui.screens.chat.isAmoledTheme
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 
@@ -51,17 +53,20 @@ internal fun CodexTimelineItem(
     onOpenThread: (String) -> Unit,
     loadRemoteImage: suspend (String) -> ByteArray = { error("Remote image reader unavailable") },
 ) {
+    val amoled = isAmoledTheme()
     when (item.type) {
         "userMessage" -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
             Surface(
-                modifier = Modifier.fillMaxWidth(0.9f),
-                shape = RoundedCornerShape(16.dp),
-                color = MaterialTheme.colorScheme.primaryContainer,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(topStart = 18.dp, topEnd = 4.dp, bottomStart = 18.dp, bottomEnd = 18.dp),
+                color = if (amoled) Color.Black else MaterialTheme.colorScheme.primaryContainer,
+                border = if (amoled) BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)) else null,
+                tonalElevation = if (amoled) 0.dp else 1.dp,
             ) {
-                Column(Modifier.padding(12.dp)) {
+                Column(Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
                     if (!item.text.isNullOrBlank()) MessageMarkdownContent(
                         markdown = item.text,
-                        textColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                        textColor = if (amoled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onPrimaryContainer,
                         isUser = true,
                     )
                     CodexTimelineImages(item, loadRemoteImage)
@@ -72,6 +77,7 @@ internal fun CodexTimelineItem(
         "reasoning" -> CodexDisclosure(
             key = item.id ?: item.type,
             title = stringResource(R.string.codex_thinking),
+            icon = Icons.Default.Psychology,
             status = item.status,
         ) {
             val summary = item.reasoningSummary.joinToString("\n\n").ifBlank { item.text.orEmpty() }
@@ -205,19 +211,23 @@ private fun CodexDisclosure(
     status: String? = null,
     modifier: Modifier = Modifier,
     initiallyExpanded: Boolean = false,
+    icon: ImageVector = Icons.Default.Build,
     content: @Composable () -> Unit,
 ) {
     var expanded by rememberSaveable(key) { mutableStateOf(initiallyExpanded) }
     Column(modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-        Row(
-            Modifier.fillMaxWidth().clickable { expanded = !expanded }.padding(horizontal = 8.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore, contentDescription = stringResource(if (expanded) R.string.codex_timeline_collapse else R.string.codex_timeline_expand))
-            Text(title, Modifier.weight(1f).padding(start = 6.dp), maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelLarge)
-            status?.let { Text(codexTimelineStatus(it), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-        }
-        if (expanded) Column(Modifier.padding(start = 12.dp, end = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) { content() }
+        ProcessDisclosureRow(
+            title = title,
+            subtitle = status?.let { codexTimelineStatus(it) },
+            icon = icon,
+            expandable = true,
+            expanded = expanded,
+            running = status in setOf("inProgress", "in_progress", "running"),
+            failed = status in setOf("failed", "errored"),
+            onToggle = { expanded = !expanded },
+            toggleDescription = stringResource(if (expanded) R.string.codex_timeline_collapse else R.string.codex_timeline_expand),
+            content = content,
+        )
     }
 }
 

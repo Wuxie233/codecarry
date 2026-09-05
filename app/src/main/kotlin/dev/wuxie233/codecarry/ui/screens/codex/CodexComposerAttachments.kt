@@ -143,7 +143,7 @@ fun CodexAttachmentPicker(
     Box(modifier) {
         IconButton(onClick = { menu = true }, enabled = enabled && !imageLoading) {
             if (imageLoading) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-            else Icon(Icons.Default.AttachFile, stringResource(R.string.codex_attachment_add))
+            else Icon(Icons.Default.AttachFile, stringResource(R.string.codex_attachment_add), Modifier.size(20.dp))
         }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
             DropdownMenuItem(text = { Text(stringResource(R.string.codex_attachment_gallery)) }, onClick = {

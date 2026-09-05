@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -25,8 +26,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Compress
@@ -34,9 +33,7 @@ import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Psychology
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.TrackChanges
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -45,7 +42,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -55,7 +51,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
@@ -84,6 +79,8 @@ import androidx.lifecycle.LifecycleEventObserver
 import dev.wuxie233.codecarry.data.codex.CodexApprovalKind
 import dev.wuxie233.codecarry.data.codex.CodexMemoryMode
 import dev.wuxie233.codecarry.data.codex.CodexServerRequest
+import dev.wuxie233.codecarry.ui.screens.chat.chatComposerPrimaryWidth
+import dev.wuxie233.codecarry.ui.screens.chat.ChatHeader
 import dev.wuxie233.codecarry.ui.screens.chat.chatTextOverflow
 import dev.wuxie233.codecarry.data.codex.requestKey
 import dev.wuxie233.codecarry.ui.components.ErrorStateCard
@@ -149,40 +146,32 @@ fun CodexChatScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text(
-                            text = state.thread?.name?.takeIf(String::isNotBlank)
-                                ?: state.thread?.preview?.lineSequence()?.firstOrNull()?.take(48)
-                                ?: stringResource(R.string.codex_title),
-                            maxLines = 1,
-                        )
-                        state.thread?.cwd?.let { cwd ->
-                            Text(
-                                text = cwd,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                            )
-                        }
-                    }
-                },
-                navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.back))
-                    }
-                },
-                actions = {
-                    if (state.activeTurnId != null) {
-                        IconButton(onClick = viewModel::interruptTurn) {
-                            Icon(Icons.Default.Stop, contentDescription = stringResource(R.string.codex_stop_turn))
-                        }
-                    }
-                    Box {
-                        IconButton(onClick = { menuExpanded = true }) {
-                            Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.codex_thread_actions))
-                        }
+            ChatHeader(
+                title = state.thread?.name?.takeIf(String::isNotBlank)
+                    ?: state.thread?.preview?.lineSequence()?.firstOrNull()?.take(72)
+                    ?: stringResource(R.string.codex_title),
+                context = state.thread?.cwd.orEmpty(),
+                backendLabel = stringResource(R.string.codex_title),
+                statusLabel = stringResource(when {
+                    state.isLoading -> R.string.codex_opening_thread
+                    !state.isConnected -> R.string.codex_chat_disconnected
+                    state.isSendConfirmationPending -> R.string.codex_send_confirmation_pending
+                    state.isAwaitingAuthoritativeTurn -> R.string.codex_chat_waiting_turn
+                    state.activeTurnId != null -> R.string.codex_working
+                    else -> R.string.codex_chat_ready
+                }),
+                usageSummary = null,
+                canStop = state.activeTurnId != null,
+                showSubagents = false,
+                runningSubagentCount = 0,
+                showTerminal = false,
+                showOverflow = true,
+                onNavigateBack = onNavigateBack,
+                onStop = viewModel::interruptTurn,
+                onToggleSubagents = {},
+                onOpenTerminal = {},
+                onOpenOverflow = { menuExpanded = true },
+                overflowMenu = {
                         DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
                             DropdownMenuItem(
                                 text = { Text(stringResource(R.string.codex_chat_status)) },
@@ -214,14 +203,15 @@ fun CodexChatScreen(
                                 onClick = { menuExpanded = false; viewModel.connectAndLoad() },
                             )
                         }
-                    }
                 },
             )
         },
         bottomBar = {
             Column(
                 modifier = Modifier
+                    .chatComposerPrimaryWidth()
                     .fillMaxWidth()
+                    .navigationBarsPadding()
                     .imePadding()
                     .padding(horizontal = 12.dp, vertical = 8.dp),
             ) {
@@ -252,18 +242,6 @@ fun CodexChatScreen(
                         }
                     }
                 }
-                Text(
-                    stringResource(when {
-                        state.isLoading -> R.string.codex_opening_thread
-                        !state.isConnected -> R.string.codex_chat_disconnected
-                        state.isSendConfirmationPending -> R.string.codex_send_confirmation_pending
-                        state.isAwaitingAuthoritativeTurn -> R.string.codex_chat_waiting_turn
-                        state.activeTurnId != null -> R.string.codex_chat_steering
-                        else -> R.string.codex_chat_ready
-                    }),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
                 if (state.isSendConfirmationPending) {
                     Column(
                         modifier = Modifier.padding(bottom = 8.dp),
@@ -286,45 +264,29 @@ fun CodexChatScreen(
                 }
                 if (state.attachmentLimitReached) Text(stringResource(R.string.codex_chat_payload_limit), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 CodexAttachmentChips(attachments, enabled = !state.isSending && !state.isSendConfirmationPending, onRemove = viewModel::removeAttachment)
-                ModelControls(
-                    state = state,
-                    onModel = viewModel::selectModel,
-                    onEffort = viewModel::selectEffort,
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.Bottom,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    CodexAttachmentPicker(
-                        enabled = !state.isSending && !state.isSendConfirmationPending && attachments.size < 8,
-                        skills = state.skills, files = state.files,
-                        loading = state.attachmentsLoading, error = state.attachmentsError,
-                        onLoadSkills = viewModel::loadSkills, onSearchFiles = viewModel::searchFiles,
-                        onAdd = viewModel::addAttachment,
-                    )
-                    CodexComposerTextField(
-                        value = draft,
-                        onValueChange = viewModel::updateDraft,
-                        modifier = Modifier.weight(1f),
-                        placeholder = stringResource(if (state.activeTurnId != null) R.string.codex_chat_steer_hint else R.string.codex_message_hint),
-                    )
-                    FilledIconButton(
-                        onClick = ::submitDraft,
-                        enabled = (draft.isNotBlank() || attachments.isNotEmpty()) &&
-                            !state.isLoading &&
-                            state.isConnected &&
-                            state.thread != null &&
-                            !state.isSending &&
-                            !state.isAwaitingAuthoritativeTurn &&
-                            !state.isSendConfirmationPending,
-                    ) {
-                        if (state.isSending || state.isAwaitingAuthoritativeTurn) {
-                            CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                CodexComposerSurface(
+                    value = draft,
+                    onValueChange = viewModel::updateDraft,
+                    placeholder = stringResource(if (state.activeTurnId != null) R.string.codex_chat_steer_hint else R.string.codex_message_hint),
+                    canSend = (draft.isNotBlank() || attachments.isNotEmpty()) &&
+                        !state.isLoading && state.isConnected && state.thread != null &&
+                        !state.isSending && !state.isAwaitingAuthoritativeTurn && !state.isSendConfirmationPending,
+                    isSending = state.isSending || state.isAwaitingAuthoritativeTurn,
+                    sendLabel = stringResource(if (state.activeTurnId != null) R.string.codex_chat_steer else R.string.chat_send),
+                    onSend = ::submitDraft,
+                    controls = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CodexAttachmentPicker(
+                                enabled = !state.isSending && !state.isSendConfirmationPending && attachments.size < 8,
+                                skills = state.skills, files = state.files,
+                                loading = state.attachmentsLoading, error = state.attachmentsError,
+                                onLoadSkills = viewModel::loadSkills, onSearchFiles = viewModel::searchFiles,
+                                onAdd = viewModel::addAttachment,
+                            )
+                            CodexModelControls(state, viewModel::selectModel, viewModel::selectEffort)
                         }
-                        else Icon(Icons.AutoMirrored.Filled.Send, contentDescription = stringResource(if (state.activeTurnId != null) R.string.codex_chat_steer else R.string.chat_send))
-                    }
-                }
+                    },
+                )
             }
         },
     ) { padding ->
@@ -443,7 +405,7 @@ internal fun codexChatVisibilityForEvent(event: Lifecycle.Event): Boolean? = whe
 }
 
 @Composable
-private fun ModelControls(
+internal fun CodexModelControls(
     state: CodexChatUiState,
     onModel: (dev.wuxie233.codecarry.data.codex.CodexModel) -> Unit,
     onEffort: (String) -> Unit,
@@ -452,12 +414,12 @@ private fun ModelControls(
     var effortOpen by remember { mutableStateOf(false) }
     if (state.models.isEmpty()) return
     Row(
-        modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
+        modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Box {
+        Box(Modifier.weight(1f)) {
             TextButton(onClick = { modelsOpen = true }) {
-                Text(state.selectedModel?.displayName?.ifBlank { state.selectedModel.model } ?: stringResource(R.string.codex_model), maxLines = 1)
+                Text(state.selectedModel?.displayName?.ifBlank { state.selectedModel.model } ?: stringResource(R.string.codex_model), style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
             }
             DropdownMenu(expanded = modelsOpen, onDismissRequest = { modelsOpen = false }) {
                 state.models.filterNot { it.hidden }.forEach { model ->
@@ -484,7 +446,7 @@ private fun ModelControls(
                 TextButton(onClick = { effortOpen = true }) {
                     Icon(Icons.Default.Psychology, contentDescription = null, Modifier.size(16.dp))
                     Spacer(Modifier.width(4.dp))
-                    Text(state.selectedEffort ?: stringResource(R.string.codex_reasoning))
+                    Text(state.selectedEffort ?: stringResource(R.string.codex_reasoning), style = MaterialTheme.typography.labelSmall, maxLines = 1)
                 }
                 DropdownMenu(expanded = effortOpen, onDismissRequest = { effortOpen = false }) {
                     efforts.forEach { option ->

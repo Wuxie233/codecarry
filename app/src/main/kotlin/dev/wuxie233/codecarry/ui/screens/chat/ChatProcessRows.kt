@@ -104,7 +104,7 @@ internal fun SkillProcessRow(part: Part.Tool) {
 }
 
 @Composable
-private fun ProcessDisclosureRow(
+internal fun ProcessDisclosureRow(
     title: String,
     subtitle: String?,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
@@ -113,6 +113,7 @@ private fun ProcessDisclosureRow(
     running: Boolean,
     failed: Boolean = false,
     onToggle: () -> Unit,
+    toggleDescription: String? = null,
     content: @Composable () -> Unit,
 ) {
     val isAmoled = isAmoledTheme()
@@ -170,7 +171,7 @@ private fun ProcessDisclosureRow(
                 if (expandable) {
                     Icon(
                         imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                        contentDescription = null,
+                        contentDescription = toggleDescription,
                         modifier = Modifier.size(16.dp),
                         tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
                     )
