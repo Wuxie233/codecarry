@@ -76,6 +76,24 @@ On `like_server`, `codecarry-codex-bridge.service` uses port 18767 and
 listener on port 18766 is not stopped by this deployment. Rollback can point
 the public proxy back to that port, then stop only the bridge service.
 
+## Outbound model proxy
+
+The bridge-to-phone WSS connection and the daemon-to-model connection are
+separate. A successful list or `turn/start` response does not prove that the
+model endpoint is reachable. Verify an assistant message delta and a completed
+turn, including a mid-turn steering request when checking mobile control.
+
+On `like_server`, CPA uses Mihomo port 7897. The shared daemon is owned by the
+user unit `codex-app-server-bootstrap.service`; its `30-cpa-proxy.conf` drop-in
+sets HTTP(S) proxy variables to `http://127.0.0.1:7897`, ALL_PROXY to
+`socks5h://127.0.0.1:7897`, and keeps localhost in NO_PROXY. The shell CLI wrapper
+and the fallback unit also need the proxy environment. Setting variables on
+the bridge or in an SSH shell cannot update an already-running daemon.
+
+Apply environment changes during an idle maintenance window, after checking
+all loaded thread statuses, then reconnect and verify a real model reply.
+Keep the existing login and model provider when repairing network egress.
+
 ## Verification
 
 ```sh

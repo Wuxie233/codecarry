@@ -34,6 +34,10 @@ fork based on OC Remote; the Android namespace/applicationId is
   Terminal clients must share that daemon (`codex --remote unix://`) for live
   steering. A separate WebSocket app-server or standalone `codex exec` is a
   different live runtime. Details: `codex-bridge/README.md`.
+- When WSS connects but model turns time out, inspect the shared daemon
+  process environment. Shell proxy exports do not reach a systemd daemon;
+  configure its owning unit. See the outbound proxy section in
+  `codex-bridge/README.md`.
 - A newly started Codex thread has no durable rollout before its first turn.
   Keep its start response on the same client connection; clear that cache on
   first submission or connection failure. Thread lists set `modelProviders=[]`
