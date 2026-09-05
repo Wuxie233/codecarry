@@ -493,7 +493,7 @@ class ServerRepositoryTest {
     }
 
     @Test
-    fun dropsArchivedBackendTypesOnReadAndDoesNotRestoreThem() {
+    fun keepsCodexAndDshWhileDroppingRemovedPiBackends() {
         val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
         val raw = """
         [
@@ -506,7 +506,7 @@ class ServerRepositoryTest {
         """.trimIndent()
         val (kept, dropped) = decodePersistedServers(json, raw)
         assertTrue(dropped)
-        assertEquals(listOf("keep", "dsh"), kept.map { it.id })
-        assertEquals(listOf(ServerType.OPENCODE, ServerType.DSH), kept.map { it.type })
+        assertEquals(listOf("keep", "dsh", "codex"), kept.map { it.id })
+        assertEquals(listOf(ServerType.OPENCODE, ServerType.DSH, ServerType.CODEX), kept.map { it.type })
     }
 }

@@ -526,7 +526,7 @@ class HomeViewModel @Inject constructor(
 
         viewModelScope.launch {
             try {
-                val healthResult = serverRepository.checkHealth(server)
+                val healthResult = if (server.type == ServerType.CODEX) Result.success(Unit) else serverRepository.checkHealth(server)
                 if (healthResult.isFailure) {
                     val message = healthCheckErrorMessage(healthResult.exceptionOrNull())
                     _uiState.update {

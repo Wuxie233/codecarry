@@ -86,7 +86,7 @@ CodeCarry is an independently maintained Android client that connects developers
 - **Image optimization controls** — tune max image side (keep original or 720–2560 px) and WebP quality for attachments
 
 ### Connection
-- **Multi-server** — connect to multiple OpenCode and DSH servers
+- **Multi-server** — connect to multiple OpenCode, DSH, and Codex servers
 - **DSH** — native sessions and chat over slash Remote RPC plus one `/api/remote.mux` WebSocket; remaining host surfaces live under Server Settings
 - **DSH new conversation** — Sessions + browses the host filesystem, registers the chosen directory as a workspace, reuses a blank session when one already belongs there, or starts No Repo without a project folder
 - **Local runtime via Termux** — set up and run OpenCode directly on-device from the Home screen (setup/start/stop/sessions)
@@ -100,7 +100,7 @@ CodeCarry is an independently maintained Android client that connects developers
 ## Requirements
 
 - Android 8.0+ (API 26)
-- OpenCode or DSH endpoint accessible over the network. DSH LAN access needs the serving authority in `trustedHosts`.
+- OpenCode, DSH, or authenticated Codex WebSocket endpoint accessible over the network. DSH LAN access needs the serving authority in `trustedHosts`.
 
 ## Setup
 
@@ -158,3 +158,9 @@ Tag pushes must **not** be relied on to auto-publish releases.
 ## License
 
 MIT
+
+## Codex CLI 远程控制
+
+从 1.12.0 起支持 Codex 原生会话控制。手机连接 WSS 鉴权后端，服务器终端通过
+`codex --remote unix://` 连接同一 daemon，即可查看状态、追发和中断任务。
+连接方式、部署与边界见 [Codex 接入说明](codex-bridge/README.md)。

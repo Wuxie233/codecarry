@@ -35,6 +35,8 @@ import dev.wuxie233.codecarry.data.repository.SettingsRepository
 import dev.wuxie233.codecarry.domain.model.ServerConfig
 import dev.wuxie233.codecarry.domain.model.ServerType
 import dev.wuxie233.codecarry.domain.model.Session
+import dev.wuxie233.codecarry.ui.screens.codex.CodexChatScreen
+import dev.wuxie233.codecarry.ui.screens.codex.CodexThreadListScreen
 import dev.wuxie233.codecarry.ui.screens.chat.ChatScreen
 import dev.wuxie233.codecarry.ui.screens.diagnostics.DiagnosticsScreen
 import dev.wuxie233.codecarry.ui.screens.home.HomeScreen
@@ -188,6 +190,21 @@ fun NavGraph(
             // Consume the event so it's not replayed on recomposition
             deepLinkFlow.resetReplayCache()
             val currentRoute = navController.currentDestination?.route
+            if (deepLink.codexServerId.isNotBlank() && deepLink.codexThreadId.isNotBlank()) {
+                val route = Screen.CodexChat.createRoute(deepLink.codexServerId, deepLink.codexThreadId)
+                val currentServerId = navController.currentBackStackEntry?.arguments
+                    ?.getString("serverId")?.let(::decodeRouteArg)
+                val currentThreadId = navController.currentBackStackEntry?.arguments
+                    ?.getString("threadId")?.let(::decodeRouteArg)
+                if (currentRoute?.startsWith("codex_chat") == true &&
+                    currentServerId == deepLink.codexServerId && currentThreadId == deepLink.codexThreadId
+                ) {
+                    return@collect
+                }
+                if (currentRoute?.startsWith("codex_chat") == true) navController.popBackStack()
+                navController.navigate(route) { launchSingleTop = true }
+                return@collect
+            }
             if (BuildConfig.DEBUG) Log.d(TAG, "Deep-link received: sessionPath=${deepLink.sessionPath}, sessionId=${deepLink.sessionId}, currentRoute=$currentRoute, useNativeUi=$useNativeUi")
             
             if (useNativeUi) {
@@ -268,7 +285,7 @@ fun NavGraph(
             HomeScreen(
                 onNavigateToSessions = { serverUrl, username, password, serverName, serverId, serverType, token ->
                     navController.navigate(
-                        Screen.SessionList.createRoute(serverUrl, username, password, serverName, serverId, serverType.name, token)
+                        if (serverType == ServerType.CODEX) Screen.CodexThreads.createRoute(serverId) else Screen.SessionList.createRoute(serverUrl, username, password, serverName, serverId, serverType.name, token)
                     )
                 },
                 onNavigateToServerSettings = { serverUrl, username, password, serverName, serverId ->
@@ -499,6 +516,29 @@ fun NavGraph(
                     navController.popBackStack()
                 }
             )
+        }
+
+        composable(
+            route = "codex_threads?serverId={serverId}",
+            arguments = listOf(navArgument("serverId") { type = NavType.StringType }),
+        ) { backStackEntry ->
+            val serverId = decodeRouteArg(backStackEntry.arguments?.getString("serverId"))
+            CodexThreadListScreen(
+                onNavigateBack = { navController.popBackStack() },
+                onOpenThread = { threadId ->
+                    navController.navigate(Screen.CodexChat.createRoute(serverId, threadId))
+                },
+            )
+        }
+
+        composable(
+            route = "codex_chat?serverId={serverId}&threadId={threadId}",
+            arguments = listOf(
+                navArgument("serverId") { type = NavType.StringType },
+                navArgument("threadId") { type = NavType.StringType },
+            ),
+        ) {
+            CodexChatScreen(onNavigateBack = { navController.popBackStack() })
         }
 
         // ============ Chat Screen (native) ============

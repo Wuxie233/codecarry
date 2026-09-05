@@ -1,0 +1,20 @@
+[Unit]
+Description=CodeCarry authenticated access to the shared Codex daemon
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/CODE/oc-remote/codex-bridge
+ExecStart=/usr/bin/python3 /root/CODE/oc-remote/codex-bridge/codex_bridge.py --port 18767 --socket /root/.codex/app-server-control/app-server-control.sock --token-file /root/.config/opencode/secrets/codex-app-server.token
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=15
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target

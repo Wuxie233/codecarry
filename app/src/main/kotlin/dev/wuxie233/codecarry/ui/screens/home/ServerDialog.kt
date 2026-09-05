@@ -43,8 +43,8 @@ internal fun validateAndNormalizeUrl(input: String, serverType: ServerType = Ser
     val trimmed = input.trim()
     if (trimmed.isBlank()) return null
 
-    val allowedSchemes = setOf("http", "https")
-    val defaultScheme = "http"
+    val allowedSchemes = if (serverType == ServerType.CODEX) setOf("ws", "wss") else setOf("http", "https")
+    val defaultScheme = if (serverType == ServerType.CODEX) "wss" else "http"
     val suppliedScheme = trimmed.substringBefore("://", missingDelimiterValue = "")
     val withScheme = if (suppliedScheme !in allowedSchemes) {
         if ("://" in trimmed) return null
@@ -57,6 +57,7 @@ internal fun validateAndNormalizeUrl(input: String, serverType: ServerType = Ser
         val uri = java.net.URI(withScheme)
         if (uri.scheme !in allowedSchemes || uri.host.isNullOrBlank()) return null
         if (uri.port != -1 && uri.port !in 1..65535) return null
+        if (serverType == ServerType.CODEX && uri.scheme == "ws" && uri.host !in setOf("localhost", "127.0.0.1", "[::1]", "::1")) return null
         if (uri.userInfo != null || uri.query != null || uri.fragment != null) return null
         java.net.URI(
             uri.scheme,
@@ -170,7 +171,7 @@ fun ServerDialog(
                         style = MaterialTheme.typography.headlineSmall
                     )
 
-                    val serverTypeOptions = listOf(ServerType.OPENCODE, ServerType.DSH)
+                    val serverTypeOptions = listOf(ServerType.OPENCODE, ServerType.DSH, ServerType.CODEX)
                     Text(
                         text = stringResource(R.string.server_type),
                         style = MaterialTheme.typography.labelLarge,
@@ -182,6 +183,7 @@ fun ServerDialog(
                                 selected = serverType == option,
                                 onClick = {
                                     serverType = option
+                                    if (url in listOf("http://", "https://", "ws://", "wss://")) url = if (option == ServerType.CODEX) "wss://" else "http://"
                                     urlError = null
                                 },
                                 shape = SegmentedButtonDefaults.itemShape(index = index, count = serverTypeOptions.size),
@@ -189,6 +191,7 @@ fun ServerDialog(
                                     Text(stringResource(when (option) {
                                         ServerType.OPENCODE -> R.string.server_type_opencode
                                         ServerType.DSH -> R.string.server_type_dsh
+                                        ServerType.CODEX -> R.string.server_type_codex
                                     }))
                                 },
                             )
@@ -224,7 +227,7 @@ fun ServerDialog(
                         label = { Text(urlLabel) },
                         placeholder = {
                             Text(stringResource(
-                                if (serverType == ServerType.DSH) R.string.server_dsh_url_hint else R.string.server_url_hint
+                                if (serverType == ServerType.CODEX) R.string.server_codex_url_hint else if (serverType == ServerType.DSH) R.string.server_dsh_url_hint else R.string.server_url_hint
                             ))
                         },
                         isError = urlError != null,
@@ -233,7 +236,7 @@ fun ServerDialog(
                         } else {
                             {
                                 Text(stringResource(
-                                    if (serverType == ServerType.DSH) R.string.server_dsh_url_example else R.string.server_url_example
+                                    if (serverType == ServerType.CODEX) R.string.server_codex_url_example else if (serverType == ServerType.DSH) R.string.server_dsh_url_example else R.string.server_url_example
                                 ))
                             }
                         },
@@ -309,16 +312,19 @@ fun ServerDialog(
                             .semantics { contentDescription = passwordLabel }
                     )
 
-                    if (serverType == ServerType.DSH) {
+                    }
+
+                    if (serverType == ServerType.DSH || serverType == ServerType.CODEX) {
                         OutlinedTextField(
                             value = token,
+                            visualTransformation = PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                             onValueChange = { token = it },
-                            label = { Text(stringResource(R.string.server_dsh_token)) },
-                            placeholder = { Text(stringResource(R.string.server_dsh_token_hint)) },
+                            label = { Text(stringResource(if (serverType == ServerType.CODEX) R.string.server_codex_token else R.string.server_dsh_token)) },
+                            placeholder = { Text(stringResource(if (serverType == ServerType.CODEX) R.string.server_codex_token_hint else R.string.server_dsh_token_hint)) },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth()
                         )
-                    }
                     }
 
                     Surface(
@@ -414,7 +420,7 @@ fun ServerDialog(
                                     serverType,
                                     if (serverType == ServerType.DSH) "" else username.ifBlank { "opencode" },
                                     password.takeIf { it.isNotBlank() },
-                                    if (serverType == ServerType.DSH) token.trim().takeIf { it.isNotBlank() } else null,
+                                    if (serverType == ServerType.DSH || serverType == ServerType.CODEX) token.trim().takeIf { it.isNotBlank() } else null,
                                     autoConnect
                                 )
                             }

@@ -142,6 +142,7 @@ class ServerRepository @Inject constructor(
                     val conn = ServerConnection.from(server.url, server.username, server.password)
                     api.getHealth(conn)
                 }
+                ServerType.CODEX -> error("Codex health is established by app-server initialize")
                 ServerType.DSH -> {
                     ServerHealth(healthy = true, version = "dsh")
                 }
@@ -493,7 +494,7 @@ internal fun decodePersistedServers(json: Json, serversJson: String): Pair<List<
             continue
         }
         val typeName = obj["type"]?.jsonPrimitive?.contentOrNull ?: ServerType.OPENCODE.name
-        if (typeName !in setOf(ServerType.OPENCODE.name, ServerType.DSH.name)) {
+        if (typeName !in setOf(ServerType.OPENCODE.name, ServerType.DSH.name, ServerType.CODEX.name)) {
             dropped = true
             continue
         }

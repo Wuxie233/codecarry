@@ -9,9 +9,9 @@ fork based on OC Remote; the Android namespace/applicationId is
 
 - CodeCarry is a single-module Android application in `app/`, built with
   Kotlin, Jetpack Compose, Hilt, Ktor, coroutines, and kotlinx serialization.
-- `ServerType` is the backend boundary: `OPENCODE` and `DSH` have separate
-  transport contracts and capability routing. Codex, Pi Stack, and Pi
-  Roundtable were product-deleted in 1.9.0; persisted rows of those types
+- `ServerType` is the backend boundary: `OPENCODE`, `DSH`, and `CODEX` have separate
+  transport contracts and capability routing. Codex returned in 1.12.0.
+  Pi Stack and Pi Roundtable remain removed; persisted rows of those types
   drop on DataStore read.
 - OpenCode uses REST for snapshots and commands plus SSE for live state.
   `OpenCodeConnectionService` owns connection continuity, `EventReducer` owns
@@ -25,6 +25,19 @@ fork based on OC Remote; the Android namespace/applicationId is
   exchange, mux open, `$events` ready (`host.home`), `session/control` opening
   baseline, and `workspace/follow` opening baseline. Contract:
   `docs/specs/dsh-remote-auth-1.11.0.md`.
+- Codex uses native app-server JSON-RPC over WSS, with `CodexConnectionManager`
+  owning reconnect/generation boundaries and `CodexEventReducer` owning live
+  state. Its dedicated thread/chat screens route by `serverId`. Do not send
+  Codex through OpenCode REST/SSE or DSH RPC.
+- `codex-bridge/` forwards authenticated WebSocket frames to the existing
+  shared daemon Unix socket. It owns connections, never agent processes.
+  Terminal clients must share that daemon (`codex --remote unix://`) for live
+  steering. A separate WebSocket app-server or standalone `codex exec` is a
+  different live runtime. Details: `codex-bridge/README.md`.
+- A newly started Codex thread has no durable rollout before its first turn.
+  Keep its start response on the same client connection; clear that cache on
+  first submission or connection failure. Thread lists set `modelProviders=[]`
+  to avoid hiding sessions when the default provider changes.
 - Compose screens own presentation. Keep navigation, transport, reducer, and
   backend-specific state outside reusable UI components.
 
@@ -197,3 +210,8 @@ If generated Hilt/Kotlin caches fail, rerun the affected verification after
 - `app/src/test/`: JVM/Robolectric behavior tests.
 - `app/src/androidTest/`: device and physical-gesture tests.
 - `docs/research/`: evidence-backed design and compatibility research.
+
+- `turn/start` command responses contain an authoritative turn ID. Apply that
+  receipt before releasing the composer for steering; do not wait exclusively
+  for `turn/started`. Ignore a late start receipt when the reducer already
+  knows that turn, preserving streamed items and terminal status.

@@ -6,6 +6,7 @@ import kotlinx.serialization.Serializable
 enum class ServerType {
     OPENCODE,
     DSH,
+    CODEX,
 }
 
 /**

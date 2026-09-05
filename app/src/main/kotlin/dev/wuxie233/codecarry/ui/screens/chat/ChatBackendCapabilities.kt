@@ -22,6 +22,10 @@ internal fun chatBackendCapabilities(
         shellAndTerminal = true,
         slashCommands = true,
     )
+    ServerType.CODEX -> ChatBackendCapabilities(
+        attachments = false, fileMentions = false, modelAndAgentSelection = false,
+        sessionExtras = false, shellAndTerminal = false, slashCommands = false,
+    )
     ServerType.DSH -> ChatBackendCapabilities(
         attachments = true,
         fileMentions = true,
