@@ -52,6 +52,8 @@ data class CodexThreadProject(
     val pinned: Boolean,
     val collapsed: Boolean,
     val hidden: Boolean,
+    val roots: List<CodexThreadNode> = emptyList(),
+    val orphan: Boolean = false,
 )
 
 internal fun buildCodexThreadProjects(
@@ -59,12 +61,22 @@ internal fun buildCodexThreadProjects(
     preferences: CodexProjectPreferences,
     showHidden: Boolean,
     searching: Boolean = false,
-): List<CodexThreadProject> = threads.groupBy { it.cwd.orEmpty() }
-    .filterKeys { showHidden || it !in preferences.hidden }
-    .map { (directory, members) ->
-        CodexThreadProject(directory, members, directory in preferences.pinned,
-            !searching && directory in preferences.collapsed, directory in preferences.hidden)
+): List<CodexThreadProject> = buildCodexTopologyProjects(buildCodexThreadTopology(threads), preferences, showHidden, searching)
+
+internal fun buildCodexTopologyProjects(
+    roots: List<CodexThreadNode>,
+    preferences: CodexProjectPreferences,
+    showHidden: Boolean,
+    searching: Boolean = false,
+): List<CodexThreadProject> = roots.groupBy { node -> node.orphan to if (node.orphan) "" else node.thread.cwd.orEmpty() }
+    .filterKeys { (orphan, directory) -> orphan || showHidden || directory !in preferences.hidden }
+    .map { (key, nodes) ->
+        val (orphan, directory) = key
+        CodexThreadProject(directory, nodes.map { it.thread }, !orphan && directory in preferences.pinned,
+            !orphan && !searching && directory in preferences.collapsed, !orphan && directory in preferences.hidden,
+            nodes, orphan)
     }
     .sortedWith(compareByDescending<CodexThreadProject> { it.pinned }
-        .thenByDescending { it.threads.maxOfOrNull { thread -> thread.recencyAt ?: thread.updatedAt ?: thread.createdAt ?: 0L } ?: 0L }
+        .thenBy { it.orphan }
+        .thenByDescending { it.roots.maxOfOrNull { node -> node.recency } ?: 0L }
         .thenBy { it.directory })

@@ -1,0 +1,11 @@
+<resources>
+    <string name="chat_copy_loaded_messages">复制已加载消息</string>
+    <string name="chat_failure_retrying">正在自动重试</string>
+    <string name="chat_failure_turn">任务失败</string>
+    <string name="chat_failure_operation">操作失败</string>
+    <string name="chat_failure_details">详情</string>
+    <string name="chat_related_tasks">关联任务</string>
+    <string name="chat_related_parent">父任务</string>
+    <string name="chat_related_current">当前任务</string>
+    <string name="chat_related_child">关联任务</string>
+</resources>

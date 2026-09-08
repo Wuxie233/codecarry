@@ -4,7 +4,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
-import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
@@ -19,7 +18,8 @@ data class CodexEventState(
     val goals: Map<String, CodexGoal> = emptyMap(),
     val knownGoalThreadIds: Set<String> = emptySet(),
     val archivedThreadIds: Set<String> = emptySet(),
-    val threadErrors: Map<String, String> = emptyMap(),
+    val threadFailures: Map<String, CodexFailure> = emptyMap(),
+    val turnFailures: Map<String, Map<String, CodexFailure>> = emptyMap(),
 )
 
 class CodexEventReducer(
@@ -63,7 +63,8 @@ class CodexEventReducer(
             current.copy(
                 threads = reconciledThreads,
                 archivedThreadIds = reconciledArchivedIds,
-                threadErrors = current.threadErrors.filterKeys { it in finalIds },
+                threadFailures = current.threadFailures.filterKeys { it in finalIds },
+                turnFailures = current.turnFailures.filterKeys { it in finalIds },
                 turnPlans = current.turnPlans.filterKeys { it in finalIds },
                 turnDiffs = current.turnDiffs.filterKeys { it in finalIds },
                 turnTokenUsage = current.turnTokenUsage.filterKeys { it in finalIds },
@@ -75,7 +76,10 @@ class CodexEventReducer(
     fun upsertThread(thread: CodexThread) {
         _state.update { current ->
             val merged = current.threads[thread.id]?.mergeMetadata(thread) ?: thread
-            current.copy(threads = current.threads + (thread.id to merged))
+            current.copy(
+                threads = current.threads + (thread.id to merged),
+                threadFailures = current.retireSettledThreadRetry(merged, thread.turns),
+            )
         }
     }
 
@@ -104,7 +108,10 @@ class CodexEventReducer(
 
     fun upsertThreadAuthoritative(thread: CodexThread) {
         _state.update { current ->
-            current.copy(threads = current.threads + (thread.id to thread))
+            current.copy(
+                threads = current.threads + (thread.id to thread),
+                threadFailures = current.retireSettledThreadRetry(thread, thread.turns),
+            )
         }
     }
 
@@ -115,7 +122,8 @@ class CodexEventReducer(
                 goals = current.goals - threadId,
                 knownGoalThreadIds = current.knownGoalThreadIds - threadId,
                 archivedThreadIds = current.archivedThreadIds - threadId,
-                threadErrors = current.threadErrors - threadId,
+                threadFailures = current.threadFailures - threadId,
+                turnFailures = current.turnFailures - threadId,
                 turnPlans = current.turnPlans - threadId,
                 turnDiffs = current.turnDiffs - threadId,
                 turnTokenUsage = current.turnTokenUsage - threadId,
@@ -157,8 +165,14 @@ class CodexEventReducer(
                 updateThread(notification.threadId) { thread -> thread.upsertTurn(turn, authoritative = false) }
             }
             "turn/completed" -> notification.turn?.let { turn ->
-                updateThread(notification.threadId) { thread ->
-                    thread.upsertTurn(turn, authoritative = false)
+                val threadId = notification.threadId ?: return
+                _state.update { current ->
+                    val thread = (current.threads[threadId] ?: CodexThread(id = threadId))
+                        .upsertTurn(turn, authoritative = false)
+                    current.copy(
+                        threads = current.threads + (threadId to thread),
+                        threadFailures = current.retireSettledThreadRetry(thread, listOf(turn)),
+                    )
                 }
             }
             "item/started" -> notification.item?.let { item ->
@@ -201,7 +215,13 @@ class CodexEventReducer(
             }
             "error" -> notification.threadId?.let { threadId ->
                 _state.update { current ->
-                    current.copy(threadErrors = current.threadErrors + (threadId to notification.params.errorMessage()))
+                    val failure = CodexFailure.fromNotification(threadId, notification.turnId, notification.params)
+                    if (failure.turnId == null) {
+                        current.copy(threadFailures = current.threadFailures + (threadId to failure))
+                    } else {
+                        current.copy(turnFailures = current.turnFailures + (threadId to
+                            (current.turnFailures[threadId].orEmpty() + (failure.turnId to failure))))
+                    }
                 }
             }
         }
@@ -240,7 +260,11 @@ class CodexEventReducer(
     }
 
     private fun clearThreadError(threadId: String) {
-        _state.update { current -> current.copy(threadErrors = current.threadErrors - threadId) }
+        _state.update { current ->
+            if (current.threadFailures[threadId]?.willRetry == true) {
+                current.copy(threadFailures = current.threadFailures - threadId)
+            } else current
+        }
     }
 
     private fun appendTextDelta(notification: CodexNotification) {
@@ -320,6 +344,16 @@ class CodexEventReducer(
     }
 }
 
+/** Only fresh terminal evidence with no remaining running turn retires an unscoped retry. */
+private fun CodexEventState.retireSettledThreadRetry(
+    thread: CodexThread,
+    evidence: List<CodexTurn>,
+): Map<String, CodexFailure> = if (
+    threadFailures[thread.id]?.willRetry == true &&
+    evidence.any { it.status in terminalTurnStatuses && it.id == thread.turns.lastOrNull()?.id } &&
+    thread.turns.none { it.status == "inProgress" }
+) threadFailures - thread.id else threadFailures
+
 private fun CodexThread.mergeMetadata(incoming: CodexThread): CodexThread = incoming.copy(
     status = if (incoming.status.type == "active" && incoming.turns.isNotEmpty() &&
         incoming.turns.filter { it.status == "inProgress" }.let { running ->
@@ -369,6 +403,8 @@ private fun CodexThread.upsertTurn(turn: CodexTurn, authoritative: Boolean): Cod
 }
 
 private fun CodexTurn.mergeStarted(incoming: CodexTurn): CodexTurn = incoming.copy(
+    status = if (status in terminalTurnStatuses && incoming.status !in terminalTurnStatuses) status else incoming.status,
+    error = if (status in terminalTurnStatuses && incoming.status !in terminalTurnStatuses) error else incoming.error,
     items = incoming.items.fold(items) { current, item ->
         val existing = current.firstOrNull { candidate -> candidate.id == item.id }
         current.upsertBy(CodexThreadItem::id, existing?.mergeStarted(item) ?: item)
@@ -422,11 +458,3 @@ private fun List<String>.mergeStreamParts(incoming: List<String>): List<String> 
 
 private fun JsonObject.string(key: String): String? =
     (this[key] as? JsonPrimitive)?.contentOrNull
-
-private fun JsonObject.errorMessage(): String {
-    val error = this["error"] as? JsonObject
-    return error?.string("message")
-        ?: string("message")
-        ?: (error?.get("details") as? JsonArray)?.joinToString("\n") { element -> element.toString() }
-        ?: "Codex request failed"
-}

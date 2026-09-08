@@ -1,0 +1,7 @@
+<resources>
+    <string name="codex_topology_failed">失败</string>
+    <string name="codex_topology_orphans">子代理 · 当前视图中父任务不可用</string>
+    <string name="codex_topology_summary">%1$d 个子代理 · %2$d 个运行中 · %3$d 个失败 · %4$d 个待处理</string>
+    <string name="codex_topology_expand"> · 展开</string>
+    <string name="codex_topology_collapse"> · 收起</string>
+</resources>

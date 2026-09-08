@@ -116,6 +116,8 @@ data class CodexThread(
     val extra: JsonObject = JsonObject(emptyMap()),
     val raw: JsonObject = JsonObject(emptyMap()),
 ) {
+    val isSubagent: Boolean get() = parentThreadId != null || (source as? JsonObject)?.containsKey("subAgent") == true
+
     companion object {
         fun fromJson(value: JsonObject): CodexThread {
             val turns = (value["turns"] as? JsonArray)
@@ -136,7 +138,9 @@ data class CodexThread(
                 status = CodexThreadStatus.fromJson(value["status"]),
                 turns = turns,
                 source = value["source"].nonNull(),
-                parentThreadId = value.string("parentThreadId"),
+                parentThreadId = value.string("parentThreadId")
+                    ?: (((value["source"] as? JsonObject)?.get("subAgent") as? JsonObject)
+                        ?.get("thread_spawn") as? JsonObject)?.string("parent_thread_id"),
                 forkedFromId = value.string("forkedFromId"),
                 extra = value.without(
                     "id",

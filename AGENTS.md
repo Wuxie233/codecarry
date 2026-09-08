@@ -282,3 +282,17 @@ If generated Hilt/Kotlin caches fail, rerun the affected verification after
   receipt before releasing the composer for steering; do not wait exclusively
   for `turn/started`. Ignore a late start receipt when the reducer already
   knows that turn, preserving streamed items and terminal status.
+
+- Codex ancestry is projected by `CodexThreadTopology.kt` from the current
+  server catalog. Keep missing-parent subagents visible, and never treat
+  `forkedFromId` as a subagent parent. Chat family catalog hydration is optional
+  and must not block the resume snapshot or overwrite newer live state.
+- Codex failures retain thread/turn ownership and `willRetry`. Local operation
+  errors stay separate from remote notifications; render failures even before
+  their turn snapshot arrives, and retire transient retries on terminal state.
+- `ConversationExport.kt` copies the loaded data snapshot independently of lazy
+  rows and disclosure state. Label this as loaded messages; it does not fetch
+  older pages. Each `MessageMarkdownContent` shares prose selection within its
+  row while code, tables and WebViews keep separate interaction ownership.
+  Table measurement-only text must not expose accessibility nodes; only the
+  placed table cells belong in the semantics tree.

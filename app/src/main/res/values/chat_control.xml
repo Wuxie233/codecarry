@@ -1,0 +1,11 @@
+<resources>
+    <string name="chat_copy_loaded_messages">Copy loaded messages</string>
+    <string name="chat_failure_retrying">Retrying automatically</string>
+    <string name="chat_failure_turn">Task failed</string>
+    <string name="chat_failure_operation">Action failed</string>
+    <string name="chat_failure_details">Details</string>
+    <string name="chat_related_tasks">Related tasks</string>
+    <string name="chat_related_parent">Parent task</string>
+    <string name="chat_related_current">Current task</string>
+    <string name="chat_related_child">Related task</string>
+</resources>

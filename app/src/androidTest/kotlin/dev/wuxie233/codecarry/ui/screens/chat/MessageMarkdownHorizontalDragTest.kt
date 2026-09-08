@@ -76,7 +76,7 @@ class MessageMarkdownHorizontalDragTest {
             it.kind == MarkdownRenderBlockKind.CodeFence && it.route == MarkdownRenderRoute.Compose
         })
         assertTrue(plan.blocks.any { it.route == MarkdownRenderRoute.Katex })
-        assertTrue("expected KaTeX output in the planned math block", readKatexNodeCount(fixture.webView) > 0)
+        assertTrue("expected KaTeX output in the planned math block", readKatexNodeCount(waitForKatexWebView()) > 0)
     }
 
     @Test
@@ -549,20 +549,18 @@ class MessageMarkdownHorizontalDragTest {
             .maxByOrNull { it.config[SemanticsProperties.HorizontalScrollAxisRange].maxValue() }
             ?: throw AssertionError("expected horizontal scroll semantics for the Compose code block")
         val beforeHorizontal = codeNode.config[SemanticsProperties.HorizontalScrollAxisRange].value()
+        val maximumHorizontal = codeNode.config[SemanticsProperties.HorizontalScrollAxisRange].maxValue()
         val codeBounds = codeNode.boundsInRoot.toScreenBounds()
-        injectTimedSwipe(
-            startX = codeBounds.right - GestureEdgeInsetPx,
-            startY = codeBounds.centerY().toFloat(),
-            endX = codeBounds.left + GestureEdgeInsetPx,
-            endY = codeBounds.centerY().toFloat(),
-        )
+        // Stay inside the scroll surface and away from the top-right copy button.
+        rule.onNode(SemanticsMatcher("target code scroll") { it.id == codeNode.id }, useUnmergedTree = true)
+            .performTouchInput { swipeLeft() }
         rule.waitForIdle()
         val afterHorizontal = rule.onAllNodes(matcher, useUnmergedTree = true)
             .fetchSemanticsNodes()
             .maxOf { it.config[SemanticsProperties.HorizontalScrollAxisRange].value() }
         assertTrue(
             "expected a physical drag on the later Compose code block to advance horizontal scroll, " +
-                "before=$beforeHorizontal after=$afterHorizontal bounds=$codeBounds",
+                "before=$beforeHorizontal after=$afterHorizontal max=$maximumHorizontal bounds=$codeBounds",
             afterHorizontal > beforeHorizontal,
         )
 
@@ -586,18 +584,23 @@ class MessageMarkdownHorizontalDragTest {
 
     @Test
     fun verticalDragOnKatexWebViewScrollsComposeParent() {
-        val fixture = setKatexWebViewContent()
-        waitForWidePre(fixture.webView)
+        val math = "\\[\\begin{aligned}" +
+            List(10) { index -> "x_{$index} &= $index" }.joinToString(" \\\\ ") +
+            "\\end{aligned}\\]"
+        val fixture = setKatexWebViewContent(math + "\n\n" +
+            List(80) { "Trailing prose keeps the Compose timeline scrollable." }.joinToString("\n\n"))
+        val webView = waitForKatexWebView()
         waitUntilCanScrollForward(fixture.parentScrollState)
         assertEquals("parent should start at the top", 0, readPosition(fixture.parentScrollState).offset)
 
-        val visibleBounds = fixture.webView.globalVisibleBounds()
-        rule.onNodeWithTag(KatexMessageTag).performTouchInput {
-            drag(
-                start = Offset(centerX, visibleBounds.height() - GestureEdgeInsetPx),
-                end = Offset(centerX, GestureEdgeInsetPx),
-            )
-        }
+        val visibleBounds = webView.globalVisibleBounds()
+        assertTrue("math fixture must offer a physical drag surface", visibleBounds.height() > GestureEdgeInsetPx * 3)
+        injectTimedSwipe(
+            startX = visibleBounds.exactCenterX(),
+            startY = visibleBounds.bottom - GestureEdgeInsetPx,
+            endX = visibleBounds.exactCenterX(),
+            endY = visibleBounds.top + GestureEdgeInsetPx,
+        )
         rule.waitForIdle()
         SystemClock.sleep(GestureSettleMillis)
 
@@ -643,9 +646,18 @@ class MessageMarkdownHorizontalDragTest {
 
         val node = rule.onNodeWithTag(MessageTag)
         val before = node.captureToImage()
-        node.performTouchInput { swipeLeft() }
+        val scroll = rule.onNode(
+            SemanticsMatcher.keyIsDefined(SemanticsProperties.HorizontalScrollAxisRange),
+            useUnmergedTree = true,
+        )
+        val range = scroll.fetchSemanticsNode().config[SemanticsProperties.HorizontalScrollAxisRange]
+        val beforeOffset = range.value()
+        assertTrue("fixture must overflow horizontally", range.maxValue() > beforeOffset)
+        scroll.performTouchInput { swipeLeft() }
         rule.waitForIdle()
         val after = node.captureToImage()
+        val afterOffset = scroll.fetchSemanticsNode().config[SemanticsProperties.HorizontalScrollAxisRange].value()
+        assertTrue("physical swipe must advance content, before=$beforeOffset after=$afterOffset", afterOffset > beforeOffset)
 
         assertTrue(
             "expected horizontal drag to visibly shift wide markdown content",
@@ -833,9 +845,18 @@ class MessageMarkdownHorizontalDragTest {
 
         val node = rule.onNodeWithTag(MessageTag)
         val before = node.captureToImage()
-        node.performTouchInput { swipeLeft() }
+        val scroll = rule.onNode(
+            SemanticsMatcher.keyIsDefined(SemanticsProperties.HorizontalScrollAxisRange),
+            useUnmergedTree = true,
+        )
+        val range = scroll.fetchSemanticsNode().config[SemanticsProperties.HorizontalScrollAxisRange]
+        val beforeOffset = range.value()
+        assertTrue("fixture must overflow horizontally", range.maxValue() > beforeOffset)
+        scroll.performTouchInput { swipeLeft() }
         rule.waitForIdle()
         val after = node.captureToImage()
+        val afterOffset = scroll.fetchSemanticsNode().config[SemanticsProperties.HorizontalScrollAxisRange].value()
+        assertTrue("physical swipe must advance content, before=$beforeOffset after=$afterOffset", afterOffset > beforeOffset)
         val changed = changedPixels(before, after)
 
         assertTrue(
@@ -1190,15 +1211,10 @@ class MessageMarkdownHorizontalDragTest {
         const val LongComposeRowTag = "long-compose-row"
         const val OrderedListMessageTag = "ordered-list-markdown-message"
 
-        val KatexMarkdown = """
-            ```text
-            /root/CODE/oc-remote/${"0123456789abcdef".repeat(36)}
-            ```
-
-            Display math: \(x^2 + y^2 = z^2\).
-
-            ${List(80) { index -> "Vertical content line $index keeps the WebView taller than its Compose viewport." }.joinToString("\n\n")}
-        """.trimIndent()
+        val KatexMarkdown = "```text\n/root/CODE/oc-remote/${"0123456789abcdef".repeat(36)}\n```\n\n" +
+            "Display math: \\(x^2 + y^2 = z^2\\).\n\n" +
+            List(80) { index -> "Vertical content line $index keeps the WebView taller than its Compose viewport." }
+                .joinToString("\n\n")
 
         val TwoTableKatexMarkdown = """
             Display math: \[x^2 + y^2 = z^2\]

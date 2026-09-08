@@ -355,6 +355,7 @@ internal fun CodexListControls(
                         CodexThreadFilter.ALL -> R.string.codex_sessions_all
                         CodexThreadFilter.RUNNING -> R.string.codex_sessions_running
                         CodexThreadFilter.PENDING -> R.string.codex_sessions_pending
+                        CodexThreadFilter.FAILED -> R.string.codex_topology_failed
                     })) },
                     colors = FilterChipDefaults.filterChipColors(
                         containerColor = if (isAmoled) Color.Black else colors.surface,
@@ -399,13 +400,15 @@ internal fun CodexThreadListContent(
     onOpenThread: (String) -> Unit,
     actions: CodexThreadListActions,
 ) {
+    var expandedThreads by rememberSaveable { mutableStateOf(emptyList<String>()) }
     val clipboard = LocalClipboardManager.current
     val noWorkspace = stringResource(R.string.codex_thread_no_workspace)
     val projectsView = state.projectPreferences.viewMode == SessionListViewMode.PROJECTS
     val displayedThreads = if (projectsView) state.projects.flatMap { it.threads } else state.activityThreads
     val recentWork = remember(state.activeThreads, state.projectPreferences.hidden) {
-        state.activeThreads.filter { it.cwd.orEmpty() !in state.projectPreferences.hidden }
-            .sortedByDescending { it.recencyAt ?: it.updatedAt ?: it.createdAt ?: 0L }.take(6).map {
+        buildCodexThreadTopology(state.activeThreads).filter { !it.orphan && it.thread.cwd.orEmpty() !in state.projectPreferences.hidden }
+            .take(6).map { node ->
+                val it = node.thread
                 SessionRecentWorkItem(it.id, it.name?.takeIf(String::isNotBlank) ?: it.preview.take(72),
                     it.cwd.orEmpty(), (it.recencyAt ?: it.updatedAt ?: it.createdAt ?: 0L) * 1000,
                     if (it.status.type == "active") SessionStatus.Busy else SessionStatus.Idle)
@@ -500,30 +503,50 @@ internal fun CodexThreadListContent(
                             modifier = Modifier.padding(12.dp),
                         )
                         else -> SessionProjectsViewport(modifier = Modifier.fillMaxSize()) {
-                            fun androidx.compose.foundation.lazy.LazyListScope.threadRows(threads: List<CodexThread>, archived: Boolean) {
-                                items(threads, key = { "thread:${it.id}" }) { thread ->
-                                    CodexThreadRow(
-                                        thread = thread,
-                                        archived = archived,
-                                        pendingCount = state.pendingRequestCounts.getOrDefault(thread.id, 0),
-                                        onOpen = { onOpenThread(thread.id) },
-                                        onRename = { actions.rename(thread) },
-                                        onFork = { actions.forkThread(thread.id) },
-                                        onArchive = { actions.archiveThread(thread.id) },
-                                        onRestore = { actions.unarchiveThread(thread.id) },
-                                        onDelete = { actions.delete(thread) },
-                                    )
+                            fun androidx.compose.foundation.lazy.LazyListScope.threadRows(nodes: List<CodexThreadNode>, archived: Boolean, depth: Int = 0) {
+                                nodes.forEach { node ->
+                                    val thread = node.thread
+                                    val expanded = thread.id in expandedThreads || state.hasListConstraints
+                                    item("thread:${thread.id}") {
+                                        Column(Modifier.padding(start = (depth.coerceAtMost(5) * 12).dp)) {
+                                            CodexThreadRow(
+                                                thread = thread,
+                                                archived = archived,
+                                                pendingCount = state.pendingRequestCounts.getOrDefault(thread.id, 0),
+                                                onOpen = { onOpenThread(thread.id) },
+                                                onRename = { actions.rename(thread) },
+                                                onFork = { actions.forkThread(thread.id) },
+                                                onArchive = { actions.archiveThread(thread.id) },
+                                                onRestore = { actions.unarchiveThread(thread.id) },
+                                                onDelete = { actions.delete(thread) },
+                                            )
+                                            if (node.children.isNotEmpty()) {
+                                                TextButton(onClick = {
+                                                    expandedThreads = if (thread.id in expandedThreads) expandedThreads - thread.id else expandedThreads + thread.id
+                                                }) {
+                                                    Icon(Icons.Default.CallSplit, null, Modifier.size(16.dp))
+                                                    Text(stringResource(R.string.codex_topology_summary,
+                                                        node.members.size - 1, node.runningCount, node.failedCount,
+                                                        node.members.sumOf { state.pendingRequestCounts.getOrDefault(it.id, 0) }))
+                                                    Text(stringResource(if (expanded) R.string.codex_topology_collapse else R.string.codex_topology_expand))
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if (expanded) threadRows(node.children, archived, depth + 1)
                                 }
                             }
                             if (!projectsView) {
-                                threadRows(displayedThreads, false)
+                                threadRows(state.activityRoots, false)
                             } else state.projects.forEach { project ->
-                                item("project:${project.directory}") {
-                                    ProjectGroupHeader(
+                                item("project:${project.orphan}:${project.directory}") {
+                                    if (project.orphan) {
+                                        Text(stringResource(R.string.codex_topology_orphans), Modifier.padding(16.dp), style = MaterialTheme.typography.titleSmall)
+                                    } else ProjectGroupHeader(
                                         projectName = project.directory.trimEnd('/', '\\').substringAfterLast('/').substringAfterLast('\\').ifBlank { noWorkspace },
                                         tildeDirectory = project.directory.ifBlank { noWorkspace },
                                         sessionCount = project.threads.size,
-                                        activeCount = project.threads.count { it.status.type == "active" },
+                                        activeCount = project.roots.sumOf { it.runningCount },
                                         unreadCount = 0, additions = 0, deletions = 0,
                                         isPinned = project.pinned, isCollapsed = project.collapsed, isHidden = project.hidden,
                                         onToggleCollapsed = { actions.toggleProjectCollapsed(project.directory) },
@@ -534,7 +557,7 @@ internal fun CodexThreadListContent(
                                         onArchiveAll = if (!state.showArchived) ({ actions.archiveProject(project.directory) }) else null,
                                     )
                                 }
-                                if (!project.collapsed) threadRows(project.threads, state.showArchived)
+                                if (!project.collapsed) threadRows(project.roots, state.showArchived)
                             }
                         }
                     }

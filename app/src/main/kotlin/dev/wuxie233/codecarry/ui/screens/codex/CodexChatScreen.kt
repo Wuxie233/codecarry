@@ -116,6 +116,7 @@ fun CodexChatScreen(
     viewModel: CodexChatViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsState()
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
     val uriHandler = LocalUriHandler.current
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(viewModel, lifecycleOwner) {
@@ -133,6 +134,7 @@ fun CodexChatScreen(
     }
     val draft = state.draft
     val attachments = state.composerAttachments
+    var relatedOpen by remember { mutableStateOf(false) }
     var statusOpen by remember { mutableStateOf(false) }
     var menuExpanded by remember { mutableStateOf(false) }
     var renameOpen by remember { mutableStateOf(false) }
@@ -156,6 +158,40 @@ fun CodexChatScreen(
         }
     }
 
+    if (relatedOpen) {
+        AlertDialog(
+            onDismissRequest = { relatedOpen = false },
+            title = { Text(stringResource(R.string.chat_related_tasks)) },
+            text = {
+                androidx.compose.foundation.lazy.LazyColumn {
+                    items(state.relatedThreads, key = { it.id }) { thread ->
+                        TextButton(
+                            enabled = thread.id != state.thread?.id,
+                            onClick = { relatedOpen = false; onOpenThread(thread.id) },
+                        ) {
+                            Column(Modifier.fillMaxWidth()) {
+                                Text(thread.name?.takeIf { it.isNotBlank() } ?: thread.preview.take(72).ifBlank { thread.id })
+                                Text(
+                                    stringResource(when {
+                                        thread.id == state.thread?.parentThreadId -> R.string.chat_related_parent
+                                        thread.id == state.thread?.id -> R.string.chat_related_current
+                                        else -> R.string.chat_related_child
+                                    }) + " · " + stringResource(when (thread.status.type) {
+                                        "active" -> R.string.codex_working
+                                        "systemError" -> R.string.chat_failure_turn
+                                        else -> R.string.codex_chat_ready
+                                    }),
+                                    style = MaterialTheme.typography.labelSmall,
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { relatedOpen = false }) { Text(stringResource(R.string.chat_subagents_close)) } },
+        )
+    }
+
     Scaffold(
         topBar = {
             ChatHeader(
@@ -174,17 +210,31 @@ fun CodexChatScreen(
                 }),
                 usageSummary = null,
                 canStop = state.activeTurnId != null,
-                showSubagents = false,
-                runningSubagentCount = 0,
+                showSubagents = true,
+                runningSubagentCount = state.relatedThreads.count { it.id != state.thread?.id && it.status.type == "active" },
                 showTerminal = false,
                 showOverflow = true,
                 onNavigateBack = onNavigateBack,
                 onStop = viewModel::interruptTurn,
-                onToggleSubagents = {},
+                onToggleSubagents = { relatedOpen = true; viewModel.refreshRelatedThreads() },
                 onOpenTerminal = {},
                 onOpenOverflow = { menuExpanded = true },
                 overflowMenu = {
                         DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.chat_subagents_title)) },
+                                onClick = { menuExpanded = false; relatedOpen = true; viewModel.refreshRelatedThreads() },
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.chat_copy_loaded_messages)) },
+                                enabled = state.thread?.turns?.isNotEmpty() == true,
+                                onClick = {
+                                    menuExpanded = false
+                                    clipboard.setText(androidx.compose.ui.text.AnnotatedString(
+                                        dev.wuxie233.codecarry.ui.screens.chat.codexConversationDocument(state.thread?.turns.orEmpty()).toMarkdown(),
+                                    ))
+                                },
+                            )
                             DropdownMenuItem(
                                 text = { Text(stringResource(R.string.codex_chat_status)) },
                                 onClick = { menuExpanded = false; statusOpen = true },
@@ -343,27 +393,38 @@ fun CodexChatScreen(
                     modifier = Modifier.padding(16.dp),
                 )
                 else -> CodexTimelineViewport(
-                    contentKey = listOf(timeline, state.plans, state.diffs, state.activeTurnId, state.error),
+                    contentKey = listOf(timeline, state.plans, state.diffs, state.activeTurnId, state.error, state.threadFailure, state.turnFailures),
                     modifier = Modifier.fillMaxSize(),
                 ) {
                     state.error?.let { error ->
-                        item("error") {
-                            Surface(
-                                color = MaterialTheme.colorScheme.errorContainer,
-                                shape = RoundedCornerShape(6.dp),
-                            ) {
-                                Text(error, Modifier.padding(10.dp), color = MaterialTheme.colorScheme.onErrorContainer)
-                            }
+                        item("operation-error") {
+                            dev.wuxie233.codecarry.ui.components.ChatErrorNotice(
+                                message = error, detail = null,
+                                title = stringResource(R.string.chat_failure_operation),
+                                detailsLabel = stringResource(R.string.chat_failure_details),
+                            )
                         }
                     }
-                    items(timeline, key = { (turnId, item) -> "$turnId:${item.id ?: item.type}" }) { (_, item) ->
-                        CodexTimelineItem(
-                            item = item,
-                            onOpenThread = onOpenThread,
-                            loadRemoteImage = viewModel::loadRemoteImage,
-                            workspaceCwd = state.thread?.cwd,
-                            onOpenWorkspaceFile = viewModel::openWorkspaceFile,
-                        )
+                    state.threadFailure?.let { failure ->
+                        item("thread-error") { CodexFailureNotice(failure) }
+                    }
+                    state.thread?.turns.orEmpty().forEach { turn ->
+                        items(turn.items, key = { item -> "${turn.id}:${item.id ?: item.type}" }) { item ->
+                            CodexTimelineItem(
+                                item = item,
+                                onOpenThread = onOpenThread,
+                                loadRemoteImage = viewModel::loadRemoteImage,
+                                workspaceCwd = state.thread?.cwd,
+                                onOpenWorkspaceFile = viewModel::openWorkspaceFile,
+                            )
+                        }
+                        state.turnFailures[turn.id]?.let { failure ->
+                            item("turn-error:${turn.id}") { CodexFailureNotice(failure) }
+                        }
+                    }
+                    val knownTurnIds = state.thread?.turns.orEmpty().map { it.id }.toSet()
+                    state.turnFailures.filterKeys { it !in knownTurnIds }.forEach { (turnId, failure) ->
+                        item("turn-error:$turnId") { CodexFailureNotice(failure) }
                     }
                     state.thread?.turns?.lastOrNull()?.id?.let { turnId ->
                         state.plans[turnId]?.let { plan ->
@@ -1350,5 +1411,15 @@ private fun MemoryDialog(
         },
         confirmButton = {},
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
+    )
+}
+
+@Composable
+private fun CodexFailureNotice(failure: dev.wuxie233.codecarry.data.codex.CodexFailure) {
+    dev.wuxie233.codecarry.ui.components.ChatErrorNotice(
+        message = failure.message,
+        detail = listOfNotNull(failure.code, failure.detail).joinToString("\n").takeIf { it.isNotBlank() },
+        title = stringResource(if (failure.willRetry) R.string.chat_failure_retrying else R.string.chat_failure_turn),
+        detailsLabel = stringResource(R.string.chat_failure_details),
     )
 }

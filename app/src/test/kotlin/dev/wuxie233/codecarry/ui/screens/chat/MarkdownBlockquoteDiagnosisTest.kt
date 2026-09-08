@@ -63,9 +63,9 @@ class MarkdownBlockquoteDiagnosisTest {
         compose.onNodeWithText("Quoted item").assertExists()
         compose.onNodeWithText("Nested quote").assertExists()
         compose.onNodeWithText("quoted code", substring = true).assertExists()
-        compose.onAllNodesWithText("Key", useUnmergedTree = true).assertCountEquals(2)
-        compose.onAllNodesWithText("Value", useUnmergedTree = true).assertCountEquals(2)
-        compose.onAllNodesWithText("A", useUnmergedTree = true).assertCountEquals(2)
-        compose.onAllNodesWithText("B", useUnmergedTree = true).assertCountEquals(2)
+        compose.onAllNodesWithText("Key", useUnmergedTree = true).assertCountEquals(1)
+        compose.onAllNodesWithText("Value", useUnmergedTree = true).assertCountEquals(1)
+        compose.onAllNodesWithText("A", useUnmergedTree = true).assertCountEquals(1)
+        compose.onAllNodesWithText("B", useUnmergedTree = true).assertCountEquals(1)
     }
 }

@@ -47,6 +47,7 @@ import javax.inject.Inject
 data class CodexChatUiState(
     val draft: String = "",
     val thread: CodexThread? = null,
+    val relatedThreads: List<CodexThread> = emptyList(),
     val goal: CodexGoal? = null,
     val activeTurnId: String? = null,
     val isLoading: Boolean = true,
@@ -59,6 +60,8 @@ data class CodexChatUiState(
     val selectedEffort: String? = null,
     val pendingRequests: List<CodexServerRequest> = emptyList(),
     val error: String? = null,
+    val threadFailure: CodexFailure? = null,
+    val turnFailures: Map<String, CodexFailure> = emptyMap(),
     val isConnected: Boolean = false,
     val replyingRequestIds: Set<String> = emptySet(),
     val requestErrors: Map<String, String> = emptyMap(),
@@ -110,6 +113,7 @@ class CodexChatViewModel @Inject constructor(
     private var requestsJob: Job? = null
     private var activeThreadToken: Closeable? = null
     private var loadJob: Job? = null
+    private var relatedThreadsJob: Job? = null
     private var loadError: String? = null
     private val connectionMutex = Mutex()
     private val sendIdentity = CodexSendIdentityTracker(
@@ -183,7 +187,8 @@ class CodexChatViewModel @Inject constructor(
                             it.isAwaitingAuthoritativeTurn
                         },
                         isLoading = false,
-                        error = acquired.connection.events.value.threadErrors[threadId],
+                        threadFailure = acquired.connection.events.value.threadFailures[threadId],
+                        turnFailures = acquired.connection.events.value.failuresForThread(threadId),
                     )
                 }
                 confirmPendingSendFromThread(mergedThread)
@@ -194,6 +199,44 @@ class CodexChatViewModel @Inject constructor(
                 _uiState.update { it.copy(isLoading = false, error = loadError) }
             }
         }
+    }
+
+    /** Optional catalog hydration, invoked by the family panel; never gates thread/resume. */
+    fun refreshRelatedThreads() {
+        if (relatedThreadsJob?.isActive == true) return
+        relatedThreadsJob = viewModelScope.launch {
+            try {
+                val connected = requireConnection()
+                val generation = connected.client.currentConnectionGeneration()
+                run {
+                    var cursor: String? = null
+                    val seen = mutableSetOf<String>()
+                    do {
+                        val baseline = connected.events.value.threads
+                        val page = connected.client.listThreads(
+                            cursor = cursor, limit = 100, archived = false, modelProviders = emptyList(),
+                        )
+                        if (!connectionManager.isCurrent(connected) ||
+                            generation != connected.client.currentConnectionGeneration()) return@launch
+                        page.threads.forEach { candidate ->
+                            if (connected.events.value.threads[candidate.id] == baseline[candidate.id]) {
+                                connected.reducer.upsertThread(candidate)
+                            }
+                        }
+                        cursor = page.nextCursor?.takeIf { it.isNotBlank() && seen.add(it) }
+                    } while (cursor != null)
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                _uiState.update { it.copy(error = error.message) }
+            }
+        }
+    }
+
+    fun dismissError() {
+        loadError = null
+        _uiState.update { it.copy(error = null) }
     }
 
     fun setChatVisible(visible: Boolean) {
@@ -424,7 +467,10 @@ class CodexChatViewModel @Inject constructor(
         val turnId = _uiState.value.activeTurnId ?: return
         viewModelScope.launch {
             runCatching { requireClient().interruptTurn(threadId, turnId) }
-                .onFailure { error -> _uiState.update { it.copy(error = error.message) } }
+                .onFailure { error ->
+                    if (error is CancellationException) throw error
+                    _uiState.update { it.copy(error = error.message) }
+                }
         }
     }
 
@@ -438,24 +484,33 @@ class CodexChatViewModel @Inject constructor(
     fun setGoal(objective: String, status: String = "active", tokenBudget: Long? = null) {
         viewModelScope.launch {
             runCatching { requireClient().setGoal(threadId, objective.trim(), status, tokenBudget) }
-                .onSuccess { goal -> _uiState.update { it.copy(goal = goal, error = null) } }
-                .onFailure { error -> _uiState.update { it.copy(error = error.message) } }
+                .onSuccess { goal -> _uiState.update { it.copy(goal = goal) } }
+                .onFailure { error ->
+                    if (error is CancellationException) throw error
+                    _uiState.update { it.copy(error = error.message) }
+                }
         }
     }
 
     fun clearGoal() {
         viewModelScope.launch {
             runCatching { requireClient().clearGoal(threadId) }
-                .onSuccess { _uiState.update { it.copy(goal = null, error = null) } }
-                .onFailure { error -> _uiState.update { it.copy(error = error.message) } }
+                .onSuccess { _uiState.update { it.copy(goal = null) } }
+                .onFailure { error ->
+                    if (error is CancellationException) throw error
+                    _uiState.update { it.copy(error = error.message) }
+                }
         }
     }
 
     fun setMemoryMode(mode: CodexMemoryMode) {
         viewModelScope.launch {
             runCatching { requireClient().setMemoryMode(threadId, mode) }
-                .onSuccess { _uiState.update { it.copy(memoryMode = mode, error = null) } }
-                .onFailure { error -> _uiState.update { it.copy(error = error.message) } }
+                .onSuccess { _uiState.update { it.copy(memoryMode = mode) } }
+                .onFailure { error ->
+                    if (error is CancellationException) throw error
+                    _uiState.update { it.copy(error = error.message) }
+                }
         }
     }
 
@@ -671,6 +726,9 @@ class CodexChatViewModel @Inject constructor(
                 _uiState.update {
                     it.copy(
                         thread = thread,
+                        relatedThreads = buildCodexThreadTopology(eventState.threads.values.toList())
+                            .firstOrNull { root -> root.members.any { member -> member.id == threadId } }
+                            ?.members.orEmpty(),
                         plans = eventState.turnPlans[threadId].orEmpty(),
                         diffs = eventState.turnDiffs[threadId].orEmpty(),
                         tokenUsage = eventState.tokenUsage[threadId],
@@ -685,7 +743,8 @@ class CodexChatViewModel @Inject constructor(
                         } else {
                             it.goal
                         },
-                        error = loadError ?: eventState.threadErrors[threadId],
+                        threadFailure = eventState.threadFailures[threadId],
+                        turnFailures = eventState.failuresForThread(threadId),
                     )
                 }
             }
@@ -754,7 +813,10 @@ class CodexChatViewModel @Inject constructor(
     private fun launchAction(block: suspend (CodexAppServerClient) -> Unit) {
         viewModelScope.launch {
             runCatching { block(requireClient()) }
-                .onFailure { error -> _uiState.update { it.copy(error = error.message) } }
+                .onFailure { error ->
+                    if (error is CancellationException) throw error
+                    _uiState.update { it.copy(error = error.message) }
+                }
         }
     }
 

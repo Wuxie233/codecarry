@@ -5,6 +5,16 @@ internal sealed interface MarkdownStreamingPlanResult {
     data class Failure(val source: String, val message: String) : MarkdownStreamingPlanResult
 }
 
+/** Owned by one composed message; retains the closed prefix while its tail streams. */
+internal class MarkdownMessagePlanningState {
+    private var previous: MarkdownRenderPlan? = null
+
+    fun plan(source: String): MarkdownStreamingPlanResult =
+        planStreamingMarkdown(source, previous).also { result ->
+            previous = (result as? MarkdownStreamingPlanResult.Success)?.plan
+        }
+}
+
 internal fun planStreamingMarkdown(
     source: String,
     previous: MarkdownRenderPlan? = null,

@@ -65,8 +65,9 @@ internal fun MessageMarkdownContent(
     modifier: Modifier = Modifier,
     plannedBlock: MarkdownRenderBlock? = null,
 ) {
+    val planningState = remember { MarkdownMessagePlanningState() }
     val blocks = remember(markdown, plannedBlock) {
-        plannedBlock?.let(::listOf) ?: when (val planned = planStreamingMarkdown(markdown)) {
+        plannedBlock?.let(::listOf) ?: when (val planned = planningState.plan(markdown)) {
             is MarkdownStreamingPlanResult.Success -> planned.plan.blocks
             is MarkdownStreamingPlanResult.Failure -> emptyList()
         }
@@ -204,52 +205,55 @@ internal fun MessageMarkdownContent(
     val annotator = markdownAnnotator { content, node ->
         annotateBareMarkdownPathNode(content, node, workspaceCwd, typography.link)
     }
-    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        blocks.forEach { block ->
-            key(block.key) {
-                when {
-                    block.kind == MarkdownRenderBlockKind.Table && block.table != null -> {
-                        MeasuredMarkdownTable(
-                            table = block.table,
-                            textStyle = bodyStyle,
-                            textColor = textColor,
-                        )
-                    }
-                    block.route == MarkdownRenderRoute.Katex -> {
-                        MarkdownMessageView(
-                            block = block,
-                            textColor = textColor,
-                            codeBackground = codeBlockBg,
-                            codeForeground = codeBlockFg,
-                            linkColor = linkColor,
-                            bodyFontSizeSp = bodyFontSize.value.toInt(),
-                            onLinkClick = onMarkdownLink,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                    }
-                    block.interactionOwner == MarkdownInteractionOwner.HorizontalScroll -> {
-                        Markdown(
-                            content = block.renderSource,
-                            colors = colors,
-                            typography = typography,
-                            components = components,
-                            imageTransformer = Coil2ImageTransformerImpl,
-                            annotator = annotator,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                    }
-                    block.interactionOwner == MarkdownInteractionOwner.Passive &&
-                        block.kind == MarkdownRenderBlockKind.LinkDefinition -> Unit
-                    else -> SelectionContainer {
-                        Markdown(
-                            content = block.renderSource,
-                            colors = colors,
-                            typography = typography,
-                            components = components,
-                            imageTransformer = Coil2ImageTransformerImpl,
-                            annotator = annotator,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
+    // One selection scope per composed message row; never depend on offscreen lazy items.
+    SelectionContainer {
+        Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            blocks.forEach { block ->
+                key(block.key) {
+                    when {
+                        block.kind == MarkdownRenderBlockKind.Table && block.table != null -> DisableSelection {
+                            MeasuredMarkdownTable(
+                                table = block.table,
+                                textStyle = bodyStyle,
+                                textColor = textColor,
+                            )
+                        }
+                        block.route == MarkdownRenderRoute.Katex -> DisableSelection {
+                            MarkdownMessageView(
+                                block = block,
+                                textColor = textColor,
+                                codeBackground = codeBlockBg,
+                                codeForeground = codeBlockFg,
+                                linkColor = linkColor,
+                                bodyFontSizeSp = bodyFontSize.value.toInt(),
+                                onLinkClick = onMarkdownLink,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                        block.interactionOwner == MarkdownInteractionOwner.HorizontalScroll -> DisableSelection {
+                            Markdown(
+                                content = block.renderSource,
+                                colors = colors,
+                                typography = typography,
+                                components = components,
+                                imageTransformer = Coil2ImageTransformerImpl,
+                                annotator = annotator,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                        block.interactionOwner == MarkdownInteractionOwner.Passive &&
+                            block.kind == MarkdownRenderBlockKind.LinkDefinition -> Unit
+                        else -> {
+                            Markdown(
+                                content = block.renderSource,
+                                colors = colors,
+                                typography = typography,
+                                components = components,
+                                imageTransformer = Coil2ImageTransformerImpl,
+                                annotator = annotator,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
                     }
                 }
             }

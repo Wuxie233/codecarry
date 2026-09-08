@@ -1825,8 +1825,6 @@ fun ChatScreen(
                         is SessionStatus.Retry -> R.string.sessions_retrying
                     },
                 )
-                val showOverflow = !uiState.supportsSessionCreate || uiState.supportsFork ||
-                    uiState.supportsCompact || uiState.supportsCommands || uiState.supportsRename
                 ChatHeader(
                     title = uiState.sessionTitle,
                     context = viewModel.getSessionDirectory().orEmpty(),
@@ -1837,7 +1835,7 @@ fun ChatScreen(
                     showSubagents = true,
                     runningSubagentCount = runningSubagentCount,
                     showTerminal = uiState.supportsTerminal,
-                    showOverflow = showOverflow,
+                    showOverflow = true,
                     onNavigateBack = onNavigateBack,
                     onStop = { viewModel.abortSession() },
                     onToggleSubagents = { showSubagentDrawer = !showSubagentDrawer },
@@ -1863,6 +1861,19 @@ fun ChatScreen(
                                 onOpenTerminal = {
                                     showMenu = false
                                     isTerminalMode = true
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.chat_copy_loaded_messages)) },
+                                enabled = uiState.messages.isNotEmpty(),
+                                onClick = {
+                                    showMenu = false
+                                    clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(
+                                        chatConversationDocument(uiState.messages).toMarkdown(),
+                                    ))
+                                    coroutineScope.launch {
+                                        snackbarHostState.showSnackbar(context.getString(R.string.chat_copied_clipboard))
+                                    }
                                 },
                             )
                             if (!uiState.isDsh) DropdownMenuItem(

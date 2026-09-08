@@ -87,11 +87,11 @@ class CodexChatLoadingTest {
             """{"method":"error","params":{"threadId":"child","error":{"message":"turn failed remotely"}}}""",
         )
         runCurrent()
-        assertEquals("turn failed remotely", fixture.vm.uiState.value.error)
+        assertEquals("turn failed remotely", fixture.vm.uiState.value.threadFailure?.message)
         fixture.completeMetadata()
         assertNull(fixture.vm.uiState.value.activeTurnId)
         assertEquals("completed", fixture.vm.uiState.value.thread?.turns?.single()?.status)
-        assertEquals("turn failed remotely", fixture.vm.uiState.value.error)
+        assertEquals("turn failed remotely", fixture.vm.uiState.value.threadFailure?.message)
     }
 
     @Test
@@ -132,6 +132,57 @@ class CodexChatLoadingTest {
         assertEquals(error, fixture.vm.uiState.value.error)
         assertFalse(fixture.vm.uiState.value.isLoading)
         assertNull(fixture.vm.uiState.value.thread)
+    }
+
+    @Test
+    fun `unrelated events do not erase an operation failure`() = scope.runTest {
+        val fixture = fixture()
+        fixture.resume()
+        runCurrent()
+        fixture.completeMetadata()
+        fixture.vm.compactThread()
+        runCurrent()
+        val request = fixture.transport.next("thread/compact/start")
+        fixture.transport.incoming.send(buildJsonObject {
+            put("id", request.getValue("id"))
+            put("error", buildJsonObject {
+                put("code", -32000)
+                put("message", "cannot compact active turn")
+            })
+        }.toString())
+        runCurrent()
+        val operationError = fixture.vm.uiState.value.error
+        assertTrue(operationError.orEmpty().contains("cannot compact active turn"))
+        fixture.transport.incoming.send(
+            """{"method":"thread/name/updated","params":{"threadId":"child","threadName":"new name"}}""",
+        )
+        fixture.transport.incoming.send(
+            """{"method":"error","params":{"threadId":"child","turnId":"turn-1","willRetry":true,"error":{"message":"reconnecting model"}}}""",
+        )
+        runCurrent()
+        assertEquals(operationError, fixture.vm.uiState.value.error)
+        assertTrue(fixture.vm.uiState.value.turnFailures.getValue("turn-1").willRetry)
+        fixture.vm.dismissError()
+        assertNull(fixture.vm.uiState.value.error)
+        assertTrue(fixture.vm.uiState.value.turnFailures.getValue("turn-1").willRetry)
+    }
+
+    @Test
+    fun `family projection follows server catalog ancestry`() = scope.runTest {
+        val fixture = fixture()
+        fixture.resume()
+        runCurrent()
+        fixture.completeMetadata()
+        for (thread in listOf(
+            """{"id":"parent"}""",
+            """{"id":"child","parentThreadId":"parent"}""",
+            """{"id":"sibling","parentThreadId":"parent"}""",
+            """{"id":"unrelated"}""",
+        )) {
+            fixture.transport.incoming.send("""{"method":"thread/started","params":{"thread":$thread}}""")
+        }
+        runCurrent()
+        assertEquals(setOf("parent", "child", "sibling"), fixture.vm.uiState.value.relatedThreads.map { it.id }.toSet())
     }
 
     private suspend fun TestScope.fixture(): Fixture {

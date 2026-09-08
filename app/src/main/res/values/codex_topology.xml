@@ -1,0 +1,7 @@
+<resources>
+    <string name="codex_topology_failed">Failed</string>
+    <string name="codex_topology_orphans">Subagents · parent unavailable in this view</string>
+    <string name="codex_topology_summary">%1$d subagents · %2$d running · %3$d failed · %4$d pending</string>
+    <string name="codex_topology_expand"> · Expand</string>
+    <string name="codex_topology_collapse"> · Collapse</string>
+</resources>

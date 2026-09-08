@@ -32,7 +32,7 @@ import javax.inject.Inject
 import dev.wuxie233.codecarry.data.preferences.SessionListViewMode
 import dev.wuxie233.codecarry.data.codex.CodexDirectoryListing
 
-enum class CodexThreadFilter { ALL, RUNNING, PENDING }
+enum class CodexThreadFilter { ALL, RUNNING, PENDING, FAILED }
 
 data class CodexThreadListUiState(
     val serverName: String = "Codex",
@@ -47,33 +47,26 @@ data class CodexThreadListUiState(
     val isLoading: Boolean = true,
     val error: String? = null,
 ) {
-    val activityThreads: List<CodexThread>
-        get() = copy(showArchived = false).visibleThreads.filter {
-            it.status.type == "active" || it.status.type == "systemError" || pendingRequestCounts.getOrDefault(it.id, 0) > 0
+    val topology: List<CodexThreadNode>
+        get() = buildCodexThreadTopology(if (showArchived) archivedThreads else activeThreads)
+
+    val visibleRoots: List<CodexThreadNode>
+        get() = filterCodexThreadTopology(topology, searchQuery, filter, pendingRequestCounts)
+
+    val activityRoots: List<CodexThreadNode>
+        get() = copy(showArchived = false).visibleRoots.filter { root ->
+            root.runningCount > 0 || root.failedCount > 0 || root.members.any { pendingRequestCounts.getOrDefault(it.id, 0) > 0 }
         }
 
+    val activityThreads: List<CodexThread> get() = activityRoots.map { it.thread }
+
     val projects: List<CodexThreadProject>
-        get() = buildCodexThreadProjects(visibleThreads, projectPreferences, showHiddenProjects, searchQuery.isNotBlank())
+        get() = buildCodexTopologyProjects(visibleRoots, projectPreferences, showHiddenProjects, searchQuery.isNotBlank())
 
     val hasListConstraints: Boolean
         get() = filter != CodexThreadFilter.ALL || searchQuery.isNotBlank()
 
-    val visibleThreads: List<CodexThread>
-        get() {
-            val source = if (showArchived) archivedThreads else activeThreads
-            val query = searchQuery.trim()
-            return source.filter { thread ->
-                val matchesFilter = when (filter) {
-                    CodexThreadFilter.ALL -> true
-                    CodexThreadFilter.RUNNING -> thread.status.type == "active"
-                    CodexThreadFilter.PENDING -> pendingRequestCounts.getOrDefault(thread.id, 0) > 0
-                }
-                matchesFilter && (query.isEmpty() ||
-                    thread.name.orEmpty().contains(query, ignoreCase = true) ||
-                    thread.preview.contains(query, ignoreCase = true) ||
-                    thread.cwd.orEmpty().contains(query, ignoreCase = true))
-            }.sortedByDescending { it.recencyAt ?: it.updatedAt ?: it.createdAt ?: 0L }
-        }
+    val visibleThreads: List<CodexThread> get() = visibleRoots.flatMap { it.members }
 
     val recentDirectories: List<String>
         get() = (activeThreads + archivedThreads)
@@ -192,7 +185,9 @@ class CodexThreadListViewModel @Inject constructor(
     fun toggleShowHiddenProjects() = _uiState.update { it.copy(showHiddenProjects = !it.showHiddenProjects) }
 
     fun archiveProject(directory: String) = mutate { connected ->
-        _uiState.value.activeThreads.filter { it.cwd.orEmpty() == directory }.forEach {
+        buildCodexThreadTopology(_uiState.value.activeThreads)
+            .filter { !it.orphan && it.thread.cwd.orEmpty() == directory }
+            .flatMap { it.members }.forEach {
             connected.client.archiveThread(it.id)
         }
     }
