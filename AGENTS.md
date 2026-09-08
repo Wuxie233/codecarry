@@ -221,7 +221,10 @@ fork based on OC Remote; the Android namespace/applicationId is
   backend-specific controls. Composer model/effort are compact chips, not
   full-width menus.
 - Markdown fenced/indented code is selectable and has a one-tap copy control
-  for the inner code. Mermaid diagrams stay unselected.
+  for the inner code. Mermaid diagrams stay unselected. A successful Mermaid
+  WebView render must stay rendered: late JS/Kotlin timeout or failure cannot
+  replace the diagram with the source fence.
+
 - Tappable Markdown links and workspace paths: `http(s)` opens the system
   browser; absolute/relative workspace files open an in-app preview. Codex
   reads via `fs/readFile`; OpenCode uses `readFileText`. DSH has no file-content

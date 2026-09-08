@@ -39,7 +39,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.mikepenz.markdown.compose.components.MarkdownComponent
@@ -49,6 +48,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.intellij.markdown.ast.ASTNode
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.absoluteValue
 
 private const val MermaidAssetBaseUrl = "file:///android_asset/"
@@ -77,6 +77,46 @@ internal data class MermaidFenceBlock(
     val startLine: Int,
     val endLine: Int,
 )
+
+internal sealed interface MermaidWebRenderState {
+    data object Preparing : MermaidWebRenderState
+    data object Loading : MermaidWebRenderState
+    data object Fallback : MermaidWebRenderState
+    data class Rendered(val heightPx: Int) : MermaidWebRenderState
+}
+
+internal sealed interface MermaidWebRenderEvent {
+    data object Prepare : MermaidWebRenderEvent
+    data object Load : MermaidWebRenderEvent
+    data class Rendered(val heightPx: Int) : MermaidWebRenderEvent
+    data object Failed : MermaidWebRenderEvent
+    data object Timeout : MermaidWebRenderEvent
+}
+
+internal fun reduceMermaidWebRenderState(
+    current: MermaidWebRenderState,
+    event: MermaidWebRenderEvent,
+): MermaidWebRenderState {
+    return when (event) {
+        MermaidWebRenderEvent.Prepare -> MermaidWebRenderState.Preparing
+        MermaidWebRenderEvent.Load -> when (current) {
+            is MermaidWebRenderState.Rendered,
+            MermaidWebRenderState.Fallback -> current
+            MermaidWebRenderState.Preparing,
+            MermaidWebRenderState.Loading -> MermaidWebRenderState.Loading
+        }
+        is MermaidWebRenderEvent.Rendered -> MermaidWebRenderState.Rendered(
+            event.heightPx.coerceIn(140, 720),
+        )
+        MermaidWebRenderEvent.Failed,
+        MermaidWebRenderEvent.Timeout -> when (current) {
+            is MermaidWebRenderState.Rendered -> current
+            MermaidWebRenderState.Preparing,
+            MermaidWebRenderState.Loading,
+            MermaidWebRenderState.Fallback -> MermaidWebRenderState.Fallback
+        }
+    }
+}
 
 @Composable
 fun MermaidAwareMarkdownCodeFence(
@@ -113,21 +153,24 @@ fun MermaidMarkdownDiagram(
         mutableStateOf<String?>(null)
     }
     var renderState by remember(source) { mutableStateOf<MermaidWebRenderState>(MermaidWebRenderState.Preparing) }
-    var currentRenderKey by remember(source) { mutableStateOf(renderKeyFor(source)) }
+    var currentRenderKey by remember(source) { mutableStateOf("") }
     val latestOnRendered by rememberUpdatedState<(String, Int) -> Unit> { key, heightPx ->
         if (key == currentRenderKey) {
-            renderState = MermaidWebRenderState.Rendered(heightPx.coerceIn(140, 720).dp)
+            renderState = reduceMermaidWebRenderState(
+                renderState,
+                MermaidWebRenderEvent.Rendered(heightPx),
+            )
         }
     }
     val latestOnFailed by rememberUpdatedState<(String, String?) -> Unit> { key, _ ->
         if (key == currentRenderKey) {
-            renderState = MermaidWebRenderState.Fallback
+            renderState = reduceMermaidWebRenderState(renderState, MermaidWebRenderEvent.Failed)
         }
     }
 
     LaunchedEffect(source, backgroundColor, colorScheme.onSurface, colorScheme.primary) {
-        renderState = MermaidWebRenderState.Preparing
-        val key = renderKeyFor(source)
+        renderState = reduceMermaidWebRenderState(renderState, MermaidWebRenderEvent.Prepare)
+        val key = nextMermaidRenderKey(source)
         currentRenderKey = key
         html = withContext(Dispatchers.Default) {
             buildMermaidRenderHtml(
@@ -144,9 +187,7 @@ fun MermaidMarkdownDiagram(
     LaunchedEffect(html, currentRenderKey) {
         if (html != null) {
             delay(MermaidRenderTimeoutMillis)
-            if (renderState == MermaidWebRenderState.Preparing || renderState == MermaidWebRenderState.Loading) {
-                renderState = MermaidWebRenderState.Fallback
-            }
+            renderState = reduceMermaidWebRenderState(renderState, MermaidWebRenderEvent.Timeout)
         }
     }
 
@@ -157,7 +198,7 @@ fun MermaidMarkdownDiagram(
 
     val shape = RoundedCornerShape(10.dp)
     val height = when (val state = renderState) {
-        is MermaidWebRenderState.Rendered -> state.height
+        is MermaidWebRenderState.Rendered -> state.heightPx.dp
         MermaidWebRenderState.Loading,
         MermaidWebRenderState.Preparing,
         MermaidWebRenderState.Fallback -> 180.dp
@@ -186,7 +227,12 @@ fun MermaidMarkdownDiagram(
                     backgroundColor = backgroundColor,
                     onRendered = latestOnRendered,
                     onFailed = latestOnFailed,
-                    onLoading = { renderState = MermaidWebRenderState.Loading },
+                    onLoading = {
+                        renderState = reduceMermaidWebRenderState(
+                            renderState,
+                            MermaidWebRenderEvent.Load,
+                        )
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(height)
@@ -243,13 +289,6 @@ private fun PooledMermaidWebView(
         },
         modifier = modifier,
     )
-}
-
-private sealed interface MermaidWebRenderState {
-    data object Preparing : MermaidWebRenderState
-    data object Loading : MermaidWebRenderState
-    data object Fallback : MermaidWebRenderState
-    data class Rendered(val height: Dp) : MermaidWebRenderState
 }
 
 private object MermaidWebViewPool {
@@ -434,7 +473,7 @@ private val supportedMermaidPrefixes = listOf(
     "treemap",
 )
 
-private fun buildMermaidRenderHtml(
+internal fun buildMermaidRenderHtml(
     source: String,
     renderKey: String,
     darkMode: Boolean,
@@ -470,11 +509,16 @@ private fun buildMermaidRenderHtml(
               const source = $sourceLiteral;
               const renderKey = $keyLiteral;
               const bridge = window.AndroidMermaidBridge;
+              let completed = false;
               function fail(error) {
+                if (completed) return;
+                completed = true;
                 const message = error && (error.message || error.toString()) || 'Mermaid render failed';
                 if (bridge && bridge.failed) bridge.failed(renderKey, message);
               }
               function rendered() {
+                if (completed) return;
+                completed = true;
                 requestAnimationFrame(function() {
                   const doc = document.documentElement;
                   const body = document.body;
@@ -506,6 +550,7 @@ private fun buildMermaidRenderHtml(
                   });
                   Promise.resolve(mermaid.render('mermaid-diagram-' + renderKey, source))
                     .then(function(result) {
+                      if (completed) return;
                       document.getElementById('container').innerHTML = result.svg;
                       rendered();
                     })
@@ -519,7 +564,6 @@ private fun buildMermaidRenderHtml(
               } else {
                 render();
               }
-              setTimeout(function() { fail('Mermaid render timed out'); }, 3500);
             })();
           </script>
         </body>
@@ -527,8 +571,10 @@ private fun buildMermaidRenderHtml(
     """.trimIndent()
 }
 
-private fun renderKeyFor(source: String): String {
-    return source.hashCode().absoluteValue.toString(36)
+private val mermaidRenderKeySequence = AtomicLong(0)
+
+internal fun nextMermaidRenderKey(source: String): String {
+    return source.hashCode().absoluteValue.toString(36) + "-" + mermaidRenderKeySequence.incrementAndGet()
 }
 
 private fun cssColor(color: Color): String {
