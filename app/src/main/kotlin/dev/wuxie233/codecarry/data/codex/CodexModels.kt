@@ -101,6 +101,7 @@ data class CodexThread(
     val sessionId: String? = null,
     val name: String? = null,
     val preview: String = "",
+    val agentNickname: String? = null,
     val cwd: String? = null,
     val modelProvider: String? = null,
     val cliVersion: String? = null,
@@ -118,6 +119,10 @@ data class CodexThread(
 ) {
     val isSubagent: Boolean get() = parentThreadId != null || (source as? JsonObject)?.containsKey("subAgent") == true
 
+    val displayTitle: String? get() = name?.takeIf(String::isNotBlank)
+        ?: agentNickname?.takeIf(String::isNotBlank)
+        ?: preview.lineSequence().firstOrNull()?.takeIf(String::isNotBlank)
+
     companion object {
         fun fromJson(value: JsonObject): CodexThread {
             val turns = (value["turns"] as? JsonArray)
@@ -128,6 +133,9 @@ data class CodexThread(
                 sessionId = value.string("sessionId"),
                 name = value.string("name"),
                 preview = value.string("preview").orEmpty(),
+                agentNickname = value.string("agentNickname")?.takeIf(String::isNotBlank)
+                    ?: (((value["source"] as? JsonObject)?.get("subAgent") as? JsonObject)
+                        ?.get("thread_spawn") as? JsonObject)?.string("agent_nickname"),
                 cwd = value.string("cwd"),
                 modelProvider = value.string("modelProvider"),
                 cliVersion = value.string("cliVersion"),
@@ -147,6 +155,7 @@ data class CodexThread(
                     "sessionId",
                     "name",
                     "preview",
+                    "agentNickname",
                     "cwd",
                     "modelProvider",
                     "cliVersion",

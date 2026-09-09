@@ -19,6 +19,22 @@ class CodexThreadTopologyTest {
         assertFalse(CodexThread("fork", forkedFromId = "parent").isSubagent)
     }
 
+    @Test fun `subagent nickname supplies title and remains searchable`() {
+        val child = CodexThread.fromJson(Json.parseToJsonElement("""{"id":"child","name":null,"agentNickname":"Kepler","preview":"Do the research","source":{"subAgent":{"thread_spawn":{"parent_thread_id":"parent","agent_nickname":"Old name","depth":1}}}}""").jsonObject)
+        assertEquals("Kepler", child.displayTitle)
+        assertEquals("Custom", child.copy(name = "Custom").displayTitle)
+        assertEquals("Kepler", child.copy(name = " ").displayTitle)
+        val state = CodexThreadListUiState(activeThreads = listOf(root, child), searchQuery = "kepler")
+        assertEquals(listOf("parent", "child"), state.visibleThreads.map { it.id })
+    }
+
+    @Test fun `legacy spawn nickname precedes preview while ordinary title fallback stays intact`() {
+        val child = CodexThread.fromJson(Json.parseToJsonElement("""{"id":"child","source":{"subAgent":{"thread_spawn":{"parent_thread_id":"parent","agent_nickname":"Darwin","depth":1}}}}""").jsonObject)
+        assertEquals("Darwin", child.displayTitle)
+        assertEquals("First line", CodexThread("normal", preview = "First line\nSecond line").displayTitle)
+        assertNull(CodexThread("empty", name = " ", preview = " ").displayTitle)
+    }
+
     @Test fun `child without cwd belongs to parent project and contributes activity`() {
         val state = CodexThreadListUiState(activeThreads = listOf(root, child))
         val project = state.projects.single()

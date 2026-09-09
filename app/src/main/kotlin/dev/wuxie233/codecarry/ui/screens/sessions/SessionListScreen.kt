@@ -64,6 +64,7 @@ import java.text.SimpleDateFormat
 import java.util.*
 import androidx.compose.animation.core.*
 import androidx.compose.ui.graphics.graphicsLayer
+import dev.wuxie233.codecarry.ui.screens.sessions.components.SubagentDisclosureRow
 import dev.wuxie233.codecarry.ui.screens.sessions.components.McpManagementSheet
 import dev.wuxie233.codecarry.ui.screens.sessions.components.ProjectGroupHeader
 import dev.wuxie233.codecarry.ui.screens.sessions.components.SessionActivityQueueView
@@ -954,44 +955,6 @@ private fun SessionRowWithSubagents(
                 )
             }
         }
-    }
-}
-
-@Composable
-private fun SubagentDisclosureRow(
-    label: String,
-    expanded: Boolean,
-    onToggle: () -> Unit,
-    secondary: Boolean = false,
-) {
-    val colors = MaterialTheme.colorScheme
-    val tint = if (secondary) {
-        colors.onSurface.copy(alpha = 0.55f)
-    } else {
-        colors.primary.copy(alpha = 0.85f)
-    }
-    Row(
-        modifier = Modifier
-            .padding(start = if (secondary) 32.dp else 16.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .clickable(onClick = onToggle)
-            .padding(horizontal = 12.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Icon(
-            imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-            contentDescription = stringResource(
-                if (expanded) R.string.sessions_subagents_hide else R.string.sessions_subagents_show,
-            ),
-            modifier = Modifier.size(16.dp),
-            tint = tint,
-        )
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelMedium,
-            color = tint,
-        )
     }
 }
 

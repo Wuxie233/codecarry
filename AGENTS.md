@@ -299,3 +299,9 @@ If generated Hilt/Kotlin caches fail, rerun the affected verification after
   row while code, tables and WebViews keep separate interaction ownership.
   Table measurement-only text must not expose accessibility nodes; only the
   placed table cells belong in the semantics tree.
+
+- Codex thread display titles fall back from explicit `name` to `agentNickname`
+  (legacy `source.subAgent.thread_spawn.agent_nickname`) before preview. Keep
+  list, chat, related-thread labels and search aligned with that identity.
+- Codex pending image attachment bodies open the shared image preview; only
+  the separate remove button deletes an attachment.

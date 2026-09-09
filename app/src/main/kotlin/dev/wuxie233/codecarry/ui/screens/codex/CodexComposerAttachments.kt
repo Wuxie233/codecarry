@@ -21,7 +21,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
@@ -30,6 +32,7 @@ import dev.wuxie233.codecarry.R
 import dev.wuxie233.codecarry.data.codex.CodexFileMatch
 import dev.wuxie233.codecarry.data.codex.CodexSkill
 import dev.wuxie233.codecarry.data.codex.CodexUserInput
+import dev.wuxie233.codecarry.ui.screens.chat.ImagePreviewDialog
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -224,14 +227,40 @@ fun CodexAttachmentChips(
     onRemove: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var previewId by remember { mutableStateOf<String?>(null) }
     FlowRow(modifier, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         attachments.forEach { attachment ->
-            InputChip(selected = false, enabled = enabled, onClick = { onRemove(attachment.id) },
-                label = { Text(attachment.label) },
-                avatar = { attachment.previewBytes?.let { bytes ->
-                    AsyncImage(bytes, contentDescription = attachment.label, modifier = Modifier.size(32.dp))
-                } },
-                trailingIcon = { Icon(Icons.Default.Close, stringResource(R.string.codex_attachment_remove)) })
+            key(attachment.id) {
+                InputChip(selected = false, enabled = enabled, onClick = {
+                    if (attachment.previewBytes != null) previewId = attachment.id
+                    else onRemove(attachment.id)
+                },
+                    modifier = Modifier.testTag("codex_attachment:${attachment.id}"),
+                    label = { Text(attachment.label) },
+                    avatar = { attachment.previewBytes?.let { bytes ->
+                        AsyncImage(bytes, contentDescription = attachment.label, modifier = Modifier.size(32.dp))
+                    } },
+                    trailingIcon = {
+                        IconButton(
+                            onClick = { onRemove(attachment.id) },
+                            enabled = enabled,
+                            modifier = Modifier.size(48.dp).testTag("codex_attachment_remove:${attachment.id}"),
+                        ) {
+                            Icon(Icons.Default.Close, stringResource(R.string.codex_attachment_remove))
+                        }
+                    })
+            }
         }
+    }
+    val preview = attachments.firstOrNull { it.id == previewId }
+    val bitmap = remember(preview?.previewBytes) {
+        preview?.previewBytes?.let { BitmapFactory.decodeByteArray(it, 0, it.size)?.asImageBitmap() }
+    }
+    if (preview != null && bitmap != null) {
+        ImagePreviewDialog(
+            bitmap = bitmap,
+            contentDescription = preview.label,
+            onDismiss = { previewId = null },
+        )
     }
 }

@@ -6920,11 +6920,11 @@ private fun ImageThumbnailRow(
 
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
-private fun ImagePreviewDialog(
+internal fun ImagePreviewDialog(
     bitmap: androidx.compose.ui.graphics.ImageBitmap,
     contentDescription: String?,
     onDismiss: () -> Unit,
-    onSave: () -> Unit,
+    onSave: (() -> Unit)? = null,
 ) {
     val isAmoled = isAmoledTheme()
     BasicAlertDialog(onDismissRequest = onDismiss) {
@@ -6963,7 +6963,7 @@ private fun ImagePreviewDialog(
                     val actionBorderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = if (isAmoled) 0.85f else 0.8f)
                     val actionTintColor = MaterialTheme.colorScheme.onSurface
 
-                    Surface(
+                    if (onSave != null) Surface(
                         shape = RoundedCornerShape(10.dp),
                         color = actionContainerColor,
                         border = BorderStroke(1.dp, actionBorderColor),

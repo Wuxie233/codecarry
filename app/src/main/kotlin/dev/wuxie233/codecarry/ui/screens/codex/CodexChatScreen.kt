@@ -170,7 +170,7 @@ fun CodexChatScreen(
                             onClick = { relatedOpen = false; onOpenThread(thread.id) },
                         ) {
                             Column(Modifier.fillMaxWidth()) {
-                                Text(thread.name?.takeIf { it.isNotBlank() } ?: thread.preview.take(72).ifBlank { thread.id })
+                                Text(thread.displayTitle?.take(72) ?: thread.id)
                                 Text(
                                     stringResource(when {
                                         thread.id == state.thread?.parentThreadId -> R.string.chat_related_parent
@@ -195,8 +195,7 @@ fun CodexChatScreen(
     Scaffold(
         topBar = {
             ChatHeader(
-                title = state.thread?.name?.takeIf(String::isNotBlank)
-                    ?: state.thread?.preview?.lineSequence()?.firstOrNull()?.take(72)
+                title = state.thread?.displayTitle?.take(72)
                     ?: stringResource(R.string.codex_title),
                 context = state.thread?.cwd.orEmpty(),
                 backendLabel = stringResource(R.string.codex_title),

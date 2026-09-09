@@ -659,8 +659,7 @@ class OpenCodeConnectionService : Service() {
 
     private suspend fun showCodexResponseNotification(server: ServerConfig, threadId: String) {
         val thread = codexConnectionManager.get(server.id)?.events?.value?.threads?.get(threadId)
-        val body = thread?.name?.takeIf(String::isNotBlank)
-            ?: thread?.preview?.lineSequence()?.firstOrNull()?.take(80)
+        val body = thread?.displayTitle?.take(80)
             ?: getString(R.string.notification_new_session)
         val id = CodexNotificationIdentity.responseReadyId(server.id, threadId)
         val silent = settingsRepository.silentNotifications.first()

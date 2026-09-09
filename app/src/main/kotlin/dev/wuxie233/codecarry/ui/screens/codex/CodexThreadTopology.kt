@@ -53,7 +53,7 @@ internal fun filterCodexThreadTopology(
             CodexThreadFilter.PENDING -> pending.getOrDefault(thread.id, 0) > 0
             CodexThreadFilter.FAILED -> thread.status.type == "systemError" || thread.turns.lastOrNull()?.status == "failed"
         }
-        matchesFilter && (query.isBlank() || listOf(thread.name.orEmpty(), thread.preview, thread.cwd.orEmpty(), thread.id)
+        matchesFilter && (query.isBlank() || listOf(thread.name.orEmpty(), thread.agentNickname.orEmpty(), thread.preview, thread.cwd.orEmpty(), thread.id)
             .any { it.contains(query.trim(), ignoreCase = true) })
     }
 }

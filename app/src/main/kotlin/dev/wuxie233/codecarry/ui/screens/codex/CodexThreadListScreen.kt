@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -162,6 +163,7 @@ internal fun CodexThreadRow(
     onArchive: () -> Unit,
     onRestore: () -> Unit,
     onDelete: () -> Unit,
+    isSubagent: Boolean = false,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     val colors = MaterialTheme.colorScheme
@@ -198,16 +200,17 @@ internal fun CodexThreadRow(
     ) {
         Card(
             modifier = Modifier.fillMaxWidth().clickable(onClick = onOpen),
-            colors = CardDefaults.cardColors(containerColor = if (isAmoled) Color.Black else colors.surfaceVariant),
+            colors = CardDefaults.cardColors(containerColor = if (isSubagent) {
+                if (isAmoled) colors.surfaceContainerLow else colors.surface
+            } else if (isAmoled) Color.Black else colors.surfaceVariant),
             border = if (isAmoled) BorderStroke(1.dp, colors.outlineVariant.copy(alpha = 0.65f)) else null,
         ) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = if (isSubagent) 12.dp else 16.dp, vertical = if (isSubagent) 6.dp else 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(
-                        thread.name?.takeIf(String::isNotBlank)
-                            ?: thread.preview.lineSequence().firstOrNull()?.takeIf(String::isNotBlank)
+                        thread.displayTitle
                             ?: stringResource(R.string.session_untitled),
-                        style = MaterialTheme.typography.bodyLarge,
+                        style = if (isSubagent) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.bodyLarge,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -400,7 +403,8 @@ internal fun CodexThreadListContent(
     onOpenThread: (String) -> Unit,
     actions: CodexThreadListActions,
 ) {
-    var expandedThreads by rememberSaveable { mutableStateOf(emptyList<String>()) }
+    var collapsedRunning by rememberSaveable { mutableStateOf(emptyList<String>()) }
+    var expandedHistory by rememberSaveable { mutableStateOf(emptyList<String>()) }
     val clipboard = LocalClipboardManager.current
     val noWorkspace = stringResource(R.string.codex_thread_no_workspace)
     val projectsView = state.projectPreferences.viewMode == SessionListViewMode.PROJECTS
@@ -409,7 +413,7 @@ internal fun CodexThreadListContent(
         buildCodexThreadTopology(state.activeThreads).filter { !it.orphan && it.thread.cwd.orEmpty() !in state.projectPreferences.hidden }
             .take(6).map { node ->
                 val it = node.thread
-                SessionRecentWorkItem(it.id, it.name?.takeIf(String::isNotBlank) ?: it.preview.take(72),
+                SessionRecentWorkItem(it.id, it.displayTitle.orEmpty(),
                     it.cwd.orEmpty(), (it.recencyAt ?: it.updatedAt ?: it.createdAt ?: 0L) * 1000,
                     if (it.status.type == "active") SessionStatus.Busy else SessionStatus.Idle)
             }
@@ -506,11 +510,19 @@ internal fun CodexThreadListContent(
                             fun androidx.compose.foundation.lazy.LazyListScope.threadRows(nodes: List<CodexThreadNode>, archived: Boolean, depth: Int = 0) {
                                 nodes.forEach { node ->
                                     val thread = node.thread
-                                    val expanded = thread.id in expandedThreads || state.hasListConstraints
                                     item("thread:${thread.id}") {
-                                        Column(Modifier.padding(start = (depth.coerceAtMost(5) * 12).dp)) {
+                                        Row(
+                                            Modifier.padding(start = (depth.coerceAtMost(4) * 24).dp),
+                                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                        ) {
+                                            if (depth > 0 || node.orphan) {
+                                                Box(Modifier.padding(top = 10.dp).width(2.dp).height(36.dp)
+                                                    .clip(RoundedCornerShape(999.dp))
+                                                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)))
+                                            }
                                             CodexThreadRow(
                                                 thread = thread,
+                                                isSubagent = depth > 0 || node.orphan,
                                                 archived = archived,
                                                 pendingCount = state.pendingRequestCounts.getOrDefault(thread.id, 0),
                                                 onOpen = { onOpenThread(thread.id) },
@@ -520,20 +532,41 @@ internal fun CodexThreadListContent(
                                                 onRestore = { actions.unarchiveThread(thread.id) },
                                                 onDelete = { actions.delete(thread) },
                                             )
-                                            if (node.children.isNotEmpty()) {
-                                                TextButton(onClick = {
-                                                    expandedThreads = if (thread.id in expandedThreads) expandedThreads - thread.id else expandedThreads + thread.id
-                                                }) {
-                                                    Icon(Icons.Default.CallSplit, null, Modifier.size(16.dp))
-                                                    Text(stringResource(R.string.codex_topology_summary,
-                                                        node.members.size - 1, node.runningCount, node.failedCount,
-                                                        node.members.sumOf { state.pendingRequestCounts.getOrDefault(it.id, 0) }))
-                                                    Text(stringResource(if (expanded) R.string.codex_topology_collapse else R.string.codex_topology_expand))
-                                                }
-                                            }
                                         }
                                     }
-                                    if (expanded) threadRows(node.children, archived, depth + 1)
+                                    val (running, historical) = node.children.partition { it.runningCount > 0 }
+                                    fun androidx.compose.foundation.lazy.LazyListScope.childGroup(
+                                        children: List<CodexThreadNode>,
+                                        history: Boolean,
+                                    ) {
+                                        if (children.isEmpty()) return
+                                        val expanded = state.hasListConstraints || if (history) {
+                                            thread.id in expandedHistory
+                                        } else thread.id !in collapsedRunning
+                                        item("disclosure:${thread.id}:$history") {
+                                            SubagentDisclosureRow(
+                                                label = stringResource(
+                                                    if (history) R.string.sessions_subagents_historical_toggle
+                                                    else R.string.sessions_subagents_running_toggle,
+                                                    children.size,
+                                                ),
+                                                expanded = expanded,
+                                                secondary = history,
+                                                modifier = Modifier.padding(start = (depth.coerceAtMost(4) * 24).dp)
+                                                    .testTag("codex_subagents:${thread.id}:$history"),
+                                                onToggle = {
+                                                    if (history) {
+                                                        expandedHistory = if (thread.id in expandedHistory) expandedHistory - thread.id else expandedHistory + thread.id
+                                                    } else {
+                                                        collapsedRunning = if (thread.id in collapsedRunning) collapsedRunning - thread.id else collapsedRunning + thread.id
+                                                    }
+                                                },
+                                            )
+                                        }
+                                        if (expanded) threadRows(children, archived, depth + 1)
+                                    }
+                                    childGroup(running, history = false)
+                                    childGroup(historical, history = true)
                                 }
                             }
                             if (!projectsView) {
