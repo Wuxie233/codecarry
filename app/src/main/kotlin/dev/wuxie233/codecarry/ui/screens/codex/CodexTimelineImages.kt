@@ -1,6 +1,11 @@
 package dev.wuxie233.codecarry.ui.screens.codex
 
 import android.util.Base64
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.core.graphics.drawable.toBitmap
+import dev.wuxie233.codecarry.ui.screens.chat.ImagePreviewDialog
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -34,8 +39,17 @@ import kotlinx.serialization.json.contentOrNull
 
 internal data class CodexTimelineImage(val type: String, val source: String?)
 
-internal fun CodexThreadItem.timelineImages(): List<CodexTimelineImage> =
-    (raw["content"] as? JsonArray).orEmpty().mapNotNull { block ->
+internal fun CodexThreadItem.timelineImages(): List<CodexTimelineImage> {
+    if (type == "imageGeneration") {
+        val result = (raw["result"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+        val path = (raw["savedPath"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
+        return when {
+            result != null -> listOf(CodexTimelineImage("generatedImage", result))
+            path != null -> listOf(CodexTimelineImage("localImage", path))
+            else -> emptyList()
+        }
+    }
+    return (raw["content"] as? JsonArray).orEmpty().mapNotNull { block ->
         val value = block as? JsonObject ?: return@mapNotNull null
         val type = (value["type"] as? JsonPrimitive)?.contentOrNull
         when (type) {
@@ -45,6 +59,8 @@ internal fun CodexThreadItem.timelineImages(): List<CodexTimelineImage> =
         }
     }
 
+}
+
 /** Paths belong to the selected daemon; they are never interpreted as Android files. */
 @Composable
 internal fun CodexTimelineImages(item: CodexThreadItem, loadRemoteImage: suspend (String) -> ByteArray) {
@@ -52,6 +68,8 @@ internal fun CodexTimelineImages(item: CodexThreadItem, loadRemoteImage: suspend
     val images = remember(item.raw) { item.timelineImages() }
     images.forEachIndexed { index, image ->
         var attempt by remember(image) { mutableStateOf(0) }
+        var preview by remember(image, attempt) { mutableStateOf(false) }
+        var bitmap by remember(image, attempt) { mutableStateOf<ImageBitmap?>(null) }
         val loaded by produceState<Result<Any>?>(null, image, attempt) {
             value = null
             value = try {
@@ -66,6 +84,10 @@ internal fun CodexTimelineImages(item: CodexThreadItem, loadRemoteImage: suspend
                             Base64.decode(source.substring(delimiter + 1), Base64.DEFAULT)
                         }
                         source.startsWith("https://") || source.startsWith("http://") -> source
+                        image.type == "generatedImage" -> {
+                            require(source.length <= 16 * 1024 * 1024)
+                            Base64.decode(source, Base64.DEFAULT)
+                        }
                         else -> error("Unsupported image source")
                     }
                 })
@@ -85,11 +107,20 @@ internal fun CodexTimelineImages(item: CodexThreadItem, loadRemoteImage: suspend
                     contentDescription = stringResource(R.string.codex_image_description, index + 1),
                     contentScale = ContentScale.Fit,
                     modifier = Modifier.fillMaxSize()
-                        .testTag("codex_timeline_image:$index"),
+                        .testTag("codex_timeline_image:$index")
+                        .clickable(enabled = bitmap != null) { preview = true },
+                    onSuccess = { bitmap = it.result.drawable.toBitmap().asImageBitmap() },
                     loading = { CircularProgressIndicator() },
                     error = { CodexImageRetry { attempt++ } },
                 ) }
             }
+        }
+        if (preview) bitmap?.let {
+            ImagePreviewDialog(
+                bitmap = it,
+                contentDescription = stringResource(R.string.codex_image_description, index + 1),
+                onDismiss = { preview = false },
+            )
         }
     }
 }

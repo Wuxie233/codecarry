@@ -79,6 +79,14 @@ internal fun CodexTimelineItem(
             }
         }
         "agentMessage" -> CodexTimelineMarkdown(item.text.orEmpty(), workspaceCwd, onOpenWorkspaceFile)
+        "imageGeneration" -> Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(stringResource(R.string.codex_image_generation), style = MaterialTheme.typography.labelMedium)
+            item.status?.let { Text(codexTimelineStatus(it), style = MaterialTheme.typography.bodySmall) }
+            CodexTimelineImages(item, loadRemoteImage)
+            if (item.timelineImages().isEmpty() && item.status == "completed") {
+                Text(stringResource(R.string.codex_image_unavailable))
+            }
+        }
         "reasoning" -> CodexDisclosure(
             key = item.id ?: item.type,
             title = stringResource(R.string.codex_thinking),

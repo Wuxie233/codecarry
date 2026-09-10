@@ -8,6 +8,8 @@ import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onRoot
@@ -78,6 +80,42 @@ class CodexSentImageInteractionTest {
         rule.onNodeWithText("Historical screenshot").assertIsDisplayed()
         rule.runOnIdle { assertEquals(listOf(remotePath, remotePath), requests) }
     }
+
+    @Test fun generatedBase64ImageRendersAndOpensPreview() {
+        val item = generatedItem(result = Base64.encodeToString(greenPngBytes(), Base64.NO_WRAP))
+        rule.setContent { MaterialTheme { CodexTimelineItem(item, onOpenThread = {}) } }
+        rule.waitUntil(timeoutMillis = 5_000) { renderedGreenPixelCount() >= 20 }
+        rule.onNodeWithTag("codex_timeline_image:0").performClick()
+        val close = InstrumentationRegistry.getInstrumentation().targetContext.getString(R.string.close)
+        rule.onNodeWithContentDescription(close).assertIsDisplayed().performClick()
+        rule.onNodeWithTag("codex_timeline_image:0").assertIsDisplayed()
+    }
+
+    @Test fun generatedSavedPathLoadsThroughDaemonAndRetries() {
+        val path = "/remote/generated/result.png"
+        val requests = mutableListOf<String>()
+        val item = generatedItem(path = path)
+        rule.setContent { MaterialTheme {
+            CodexTimelineItem(item, onOpenThread = {}, loadRemoteImage = {
+                requests.add(it)
+                if (requests.size == 1) error("Temporary remote read failure")
+                greenPngBytes()
+            })
+        } }
+        val retry = InstrumentationRegistry.getInstrumentation().targetContext.getString(R.string.codex_image_retry)
+        rule.waitUntil(timeoutMillis = 5_000) { rule.onAllNodesWithText(retry).fetchSemanticsNodes().isNotEmpty() }
+        rule.onNodeWithText(retry).performClick()
+        rule.waitUntil(timeoutMillis = 5_000) { renderedGreenPixelCount() >= 20 }
+        rule.runOnIdle { assertEquals(listOf(path, path), requests) }
+    }
+
+    private fun generatedItem(result: String = "", path: String? = null) = CodexThreadItem.fromJson(buildJsonObject {
+        put("id", "generated-image")
+        put("type", "imageGeneration")
+        put("status", "completed")
+        put("result", result)
+        path?.let { put("savedPath", it) }
+    })
 
     private fun localImageItem(path: String) = CodexThreadItem.fromJson(buildJsonObject {
         put("id", "historical-image-message")

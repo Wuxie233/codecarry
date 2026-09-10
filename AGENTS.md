@@ -320,3 +320,8 @@ If generated Hilt/Kotlin caches fail, rerun the affected verification after
 - Reconnect `thread/resume` must merge full history with newer live turns and
   items, preserving snapshot order and appending live-only entries. Do not
   replace the thread wholesale with a late resume receipt.
+
+- Codex `imageGeneration` items render inline from `result` (raw base64), with
+  `savedPath` read through the daemon when inline bytes are absent. Reuse the
+  timeline image retry and preview UI. A late in-progress resume snapshot must
+  preserve completed image `raw`/`extra`, where its output bytes are stored.

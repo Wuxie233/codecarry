@@ -399,6 +399,8 @@ private fun <T, K> List<T>.mergeOrderedSnapshot(
 private val terminalTurnStatuses = setOf("completed", "failed", "interrupted")
 
 private fun CodexThreadItem.mergeSnapshot(incoming: CodexThreadItem): CodexThreadItem = incoming.copy(
+    raw = if (type == "imageGeneration" && advancesCompletionOf(incoming)) raw else incoming.raw,
+    extra = if (type == "imageGeneration" && advancesCompletionOf(incoming)) extra else incoming.extra,
     status = if (advancesCompletionOf(incoming)) status else incoming.status,
     fileChanges = if (incoming.advancesCompletionOf(this)) incoming.fileChanges else fileChanges.ifEmpty { incoming.fileChanges },
     collabAgentCall = if (incoming.advancesCompletionOf(this)) incoming.collabAgentCall else collabAgentCall ?: incoming.collabAgentCall,
