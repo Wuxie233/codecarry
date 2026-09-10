@@ -147,10 +147,10 @@ class CodexThreadListViewModel @Inject constructor(
                     it.copy(
                         serverName = server.displayName,
                         activeThreads = eventState.threads.values.filter { thread ->
-                            thread.id !in eventState.archivedThreadIds
+                            thread.hasMetadata && thread.id !in eventState.archivedThreadIds
                         },
                         archivedThreads = eventState.threads.values.filter { thread ->
-                            thread.id in eventState.archivedThreadIds
+                            thread.hasMetadata && thread.id in eventState.archivedThreadIds
                         },
                         isLoading = false,
                         error = null,
@@ -335,6 +335,11 @@ internal fun CodexThreadListUiState.applyCodexEventState(
     }
 
     current.threads.forEach { (threadId, thread) ->
+        if (!thread.hasMetadata) {
+            active.remove(threadId)
+            archived.remove(threadId)
+            return@forEach
+        }
         when {
             active.containsKey(threadId) -> active[threadId] = thread
             archived.containsKey(threadId) -> archived[threadId] = thread

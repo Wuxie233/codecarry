@@ -48,6 +48,12 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 
+// An omitted or empty source filter only returns interactive threads on the daemon.
+internal val CODEX_ALL_THREAD_SOURCE_KINDS = listOf(
+    "cli", "vscode", "exec", "appServer", "subAgent", "subAgentReview",
+    "subAgentCompact", "subAgentThreadSpawn", "subAgentOther", "unknown",
+)
+
 class CodexRpcException(
     val code: Long? = null,
     override val message: String,
@@ -369,7 +375,7 @@ open class CodexAppServerClient internal constructor(
         cwd: String? = null,
         cwdFilters: List<String>? = null,
         modelProviders: List<String>? = null,
-        sourceKinds: List<String>? = null,
+        sourceKinds: List<String>? = CODEX_ALL_THREAD_SOURCE_KINDS,
         searchTerm: String? = null,
         sortKey: String? = null,
         sortDirection: String? = null,

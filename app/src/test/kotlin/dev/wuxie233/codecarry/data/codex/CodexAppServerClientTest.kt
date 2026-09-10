@@ -34,6 +34,57 @@ class CodexAppServerClientTest {
     }
 
     @Test
+    fun `thread catalogs explicitly include all source kinds by default`() = runTest {
+        val transport = FakeTransport()
+        val client = newClient(transport, backgroundScope)
+        initialize(client, transport)
+        val catalogs: List<suspend () -> CodexThreadListPage> = listOf(
+            { client.listThreads() },
+            { client.listThreads(archived = true) },
+            { client.listThreads(cursor = "next", cwd = "/repo") },
+            { client.listThreads(parentThreadId = "parent") },
+            { client.listThreads(ancestorThreadId = "ancestor") },
+        )
+        val expected = json.parseToJsonElement(
+            """["cli","vscode","exec","appServer","subAgent","subAgentReview","subAgentCompact","subAgentThreadSpawn","subAgentOther","unknown"]""",
+        )
+        for (catalog in catalogs) {
+            val listing = async { catalog() }
+            val request = transport.takeSentObject()
+            assertEquals("thread/list", request["method"]?.jsonPrimitive?.content)
+            assertEquals(expected, request["params"]?.jsonObject?.get("sourceKinds"))
+            transport.respond(request.getValue("id").jsonPrimitive, json.parseToJsonElement(
+                """{"data":[],"nextCursor":null}""",
+            ))
+            assertTrue(listing.await().threads.isEmpty())
+        }
+    }
+
+    @Test
+    fun `thread catalogs preserve explicit source filters`() = runTest {
+        val transport = FakeTransport()
+        val client = newClient(transport, backgroundScope)
+        initialize(client, transport)
+        for (sources in listOf(listOf("subAgentThreadSpawn"), emptyList(), null)) {
+            val listing = async { client.listThreads(sourceKinds = sources) }
+            val request = transport.takeSentObject()
+            val params = request.getValue("params").jsonObject
+            if (sources == null) {
+                assertFalse(params.containsKey("sourceKinds"))
+            } else {
+                assertEquals(
+                    kotlinx.serialization.json.JsonArray(sources.map(::JsonPrimitive)),
+                    params["sourceKinds"],
+                )
+            }
+            transport.respond(request.getValue("id").jsonPrimitive, json.parseToJsonElement(
+                """{"data":[],"nextCursor":null}""",
+            ))
+            assertTrue(listing.await().threads.isEmpty())
+        }
+    }
+
+    @Test
     fun `skill discovery retains valid skills alongside load warnings`() = runTest {
         val transport = FakeTransport()
         val client = newClient(transport, backgroundScope)

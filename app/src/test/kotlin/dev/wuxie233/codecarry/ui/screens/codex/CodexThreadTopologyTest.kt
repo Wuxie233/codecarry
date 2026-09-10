@@ -1,6 +1,8 @@
 package dev.wuxie233.codecarry.ui.screens.codex
 
 import dev.wuxie233.codecarry.data.codex.CodexThread
+import dev.wuxie233.codecarry.data.codex.CodexEventReducer
+import dev.wuxie233.codecarry.data.codex.CodexNotification
 import dev.wuxie233.codecarry.data.codex.CodexThreadStatus
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -11,6 +13,38 @@ class CodexThreadTopologyTest {
     private val root = CodexThread("parent", cwd = "/repo", updatedAt = 1)
     private val child = CodexThread("child", name = "Research", parentThreadId = "parent", updatedAt = 9,
         status = CodexThreadStatus(type = "active"))
+
+    @Test fun `unverified event threads stay hidden until snapshot supplies ancestry`() {
+        val reducer = CodexEventReducer(listOf(root))
+        reducer.process(CodexNotification.fromJson(
+            Json.parseToJsonElement("""{"method":"item/agentMessage/delta","params":{"threadId":"child","turnId":"turn","itemId":"item","delta":"live"}}""").jsonObject,
+        ))
+        val pending = reducer.state.value.threads.getValue("child")
+        assertFalse(pending.hasMetadata)
+        val list = CodexThreadListUiState().applyCodexEventState(null, reducer.state.value)
+        assertEquals(listOf("parent"), list.activeThreads.map { it.id })
+        assertEquals(listOf("parent"), buildCodexThreadTopology(reducer.state.value.threads.values.toList()).map { it.thread.id })
+
+        val baseline = reducer.state.value
+        reducer.reconcileThreads(listOf(root, child), emptyList(), baseline)
+        val hydrated = reducer.state.value.threads.getValue("child")
+        assertTrue(hydrated.hasMetadata)
+        assertEquals("live", hydrated.turns.single().items.single().text)
+        assertEquals("child", buildCodexThreadTopology(reducer.state.value.threads.values.toList()).single().children.single().thread.id)
+    }
+
+    @Test fun `control and completion events cannot advertise phantom threads`() {
+        listOf(
+            """{"method":"turn/completed","params":{"threadId":"ghost","turn":{"id":"turn","status":"completed"}}}""",
+            """{"method":"turn/diff/updated","params":{"threadId":"ghost","turnId":"turn","diff":"patch"}}""",
+            """{"method":"thread/status/changed","params":{"threadId":"ghost","status":{"type":"active"}}}""",
+        ).forEach { wire ->
+            val reducer = CodexEventReducer()
+            reducer.process(CodexNotification.fromJson(Json.parseToJsonElement(wire).jsonObject))
+            assertFalse(reducer.state.value.threads.getValue("ghost").hasMetadata)
+            assertTrue(buildCodexThreadTopology(reducer.state.value.threads.values.toList()).isEmpty())
+        }
+    }
 
     @Test fun `wire source supplies subagent ancestry without treating forks as children`() {
         val thread = CodexThread.fromJson(Json.parseToJsonElement("""{"id":"child","source":{"subAgent":{"thread_spawn":{"parent_thread_id":"parent","depth":1}}}}""").jsonObject)

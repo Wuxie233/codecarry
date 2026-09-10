@@ -42,6 +42,11 @@ fork based on OC Remote; the Android namespace/applicationId is
   Keep its start response on the same client connection; clear that cache on
   first submission or connection failure. Thread lists set `modelProviders=[]`
   to avoid hiding sessions when the default provider changes.
+  Catalog requests also explicitly enumerate `sourceKinds`: omitted or empty
+  defaults to interactive sources and excludes subagents. Event-only thread
+  accumulators have `hasMetadata=false`; keep their deltas but exclude them
+  from navigable topology until a thread snapshot supplies metadata. Internal
+  background tasks may emit events without leaving a resumable rollout.
 - Compose screens own presentation. Keep navigation, transport, reducer, and
   backend-specific state outside reusable UI components.
 

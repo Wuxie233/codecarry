@@ -410,7 +410,7 @@ internal fun CodexThreadListContent(
     val projectsView = state.projectPreferences.viewMode == SessionListViewMode.PROJECTS
     val displayedThreads = if (projectsView) state.projects.flatMap { it.threads } else state.activityThreads
     val recentWork = remember(state.activeThreads, state.projectPreferences.hidden) {
-        buildCodexThreadTopology(state.activeThreads).filter { !it.orphan && it.thread.cwd.orEmpty() !in state.projectPreferences.hidden }
+        buildCodexThreadTopology(state.activeThreads).filter { !it.orphan && (it.thread.recencyAt ?: it.thread.updatedAt ?: it.thread.createdAt ?: 0L) > 0L && it.thread.cwd.orEmpty() !in state.projectPreferences.hidden }
             .take(6).map { node ->
                 val it = node.thread
                 SessionRecentWorkItem(it.id, it.displayTitle.orEmpty(),

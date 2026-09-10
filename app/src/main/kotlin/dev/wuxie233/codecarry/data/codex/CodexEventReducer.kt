@@ -167,7 +167,7 @@ class CodexEventReducer(
             "turn/completed" -> notification.turn?.let { turn ->
                 val threadId = notification.threadId ?: return
                 _state.update { current ->
-                    val thread = (current.threads[threadId] ?: CodexThread(id = threadId))
+                    val thread = (current.threads[threadId] ?: CodexThread(id = threadId, hasMetadata = false))
                         .upsertTurn(turn, authoritative = false)
                     current.copy(
                         threads = current.threads + (threadId to thread),
@@ -232,7 +232,7 @@ class CodexEventReducer(
         val turnId = notification.turnId ?: return
         _state.update { current ->
             val withThread = if (threadId in current.threads) current else current.copy(
-                threads = current.threads + (threadId to CodexThread(id = threadId)),
+                threads = current.threads + (threadId to CodexThread(id = threadId, hasMetadata = false)),
             )
             when (notification.method) {
                 "turn/plan/updated" -> withThread.copy(turnPlans = current.turnPlans + (threadId to
@@ -338,7 +338,7 @@ class CodexEventReducer(
     ) {
         val resolvedThreadId = threadId ?: return
         _state.update { current ->
-            val existing = current.threads[resolvedThreadId] ?: CodexThread(id = resolvedThreadId)
+            val existing = current.threads[resolvedThreadId] ?: CodexThread(id = resolvedThreadId, hasMetadata = false)
             current.copy(threads = current.threads + (resolvedThreadId to transform(existing)))
         }
     }

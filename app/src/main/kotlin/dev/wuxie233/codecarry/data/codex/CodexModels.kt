@@ -109,6 +109,8 @@ data class CodexThread(
     val updatedAt: Long? = null,
     val recencyAt: Long? = null,
     val ephemeral: Boolean = false,
+    // False only for event accumulators awaiting a thread snapshot.
+    val hasMetadata: Boolean = true,
     val status: CodexThreadStatus = CodexThreadStatus(),
     val turns: List<CodexTurn> = emptyList(),
     val source: JsonElement? = null,
