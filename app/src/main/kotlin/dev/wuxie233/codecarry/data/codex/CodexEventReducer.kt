@@ -10,6 +10,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 
 data class CodexEventState(
+    val resetGeneration: Long = 0,
     val turnPlans: Map<String, Map<String, CodexTurnPlan>> = emptyMap(),
     val turnDiffs: Map<String, Map<String, String>> = emptyMap(),
     val turnTokenUsage: Map<String, Map<String, CodexThreadTokenUsage>> = emptyMap(),
@@ -48,7 +49,7 @@ class CodexEventReducer(
                 val fresh = incoming[id]
                 val live = current.threads[id]
                 when {
-                    fresh != null && live != null -> live.mergeMetadata(fresh)
+                    fresh != null && live != null -> live.mergeMetadata(fresh, baseline.threads[id])
                     fresh != null -> fresh
                     else -> requireNotNull(live)
                 }
@@ -73,9 +74,11 @@ class CodexEventReducer(
         }
     }
 
-    fun upsertThread(thread: CodexThread) {
+    fun upsertThread(thread: CodexThread) = upsertThreadSnapshot(thread, _state.value.threads[thread.id])
+
+    fun upsertThreadSnapshot(thread: CodexThread, baseline: CodexThread?) {
         _state.update { current ->
-            val merged = current.threads[thread.id]?.mergeMetadata(thread) ?: thread
+            val merged = current.threads[thread.id]?.mergeMetadata(thread, baseline) ?: thread
             current.copy(
                 threads = current.threads + (thread.id to merged),
                 threadFailures = current.retireSettledThreadRetry(merged, thread.turns),
@@ -256,7 +259,7 @@ class CodexEventReducer(
     }
 
     fun clear() {
-        _state.value = CodexEventState()
+        _state.update { CodexEventState(resetGeneration = it.resetGeneration + 1) }
     }
 
     private fun clearThreadError(threadId: String) {
@@ -354,17 +357,20 @@ private fun CodexEventState.retireSettledThreadRetry(
     thread.turns.none { it.status == "inProgress" }
 ) threadFailures - thread.id else threadFailures
 
-private fun CodexThread.mergeMetadata(incoming: CodexThread): CodexThread = incoming.copy(
-    status = if (incoming.status.type == "active" && incoming.turns.isNotEmpty() &&
+private fun CodexThread.mergeMetadata(incoming: CodexThread, baseline: CodexThread?): CodexThread = incoming.copy(
+    name = if (name != baseline?.name) name else incoming.name,
+    status = if (status != (baseline?.status ?: CodexThreadStatus()) || turns.any { live ->
+        live.status == "inProgress" && baseline?.turns.orEmpty().none { it.id == live.id } &&
+            incoming.turns.none { it.id == live.id }
+    }) status else if (incoming.status.type == "active" && incoming.turns.isNotEmpty() &&
         incoming.turns.filter { it.status == "inProgress" }.let { running ->
             running.isNotEmpty() && running.all { stale ->
                 turns.any { it.id == stale.id && it.status in terminalTurnStatuses }
             }
         }
     ) status else incoming.status,
-    turns = if (incoming.turns.isEmpty()) turns else incoming.turns.fold(turns) { current, turn ->
-        val existing = current.firstOrNull { candidate -> candidate.id == turn.id }
-        current.upsertBy(CodexTurn::id, existing?.mergeSnapshot(turn) ?: turn)
+    turns = turns.mergeOrderedSnapshot(incoming.turns, CodexTurn::id) { live, snapshot ->
+        live.mergeSnapshot(snapshot)
     },
 )
 
@@ -373,11 +379,22 @@ private fun CodexTurn.mergeSnapshot(incoming: CodexTurn): CodexTurn = incoming.c
     error = if (status in terminalTurnStatuses && incoming.status !in terminalTurnStatuses) error else incoming.error,
     completedAt = completedAt ?: incoming.completedAt,
     durationMs = durationMs ?: incoming.durationMs,
-    items = incoming.items.fold(items) { current, item ->
-        val existing = current.firstOrNull { candidate -> candidate.id == item.id }
-        current.upsertBy(CodexThreadItem::id, existing?.mergeSnapshot(item) ?: item)
+    items = items.mergeOrderedSnapshot(incoming.items, CodexThreadItem::id) { live, snapshot ->
+        live.mergeSnapshot(snapshot)
     },
 )
+
+/** Full history supplies ordering; live-only entries arrived after that snapshot. */
+private fun <T, K> List<T>.mergeOrderedSnapshot(
+    incoming: List<T>,
+    key: (T) -> K,
+    merge: (T, T) -> T,
+): List<T> {
+    val remaining = associateByTo(linkedMapOf(), key)
+    return incoming.map { snapshot ->
+        remaining.remove(key(snapshot))?.let { live -> merge(live, snapshot) } ?: snapshot
+    } + remaining.values
+}
 
 private val terminalTurnStatuses = setOf("completed", "failed", "interrupted")
 

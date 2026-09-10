@@ -55,7 +55,7 @@ class CodexThreadListUiStateTest {
     }
 
     @Test
-    fun `pagination loads every page deduplicates threads and stops cursor cycles`() = runTest {
+    fun `pagination loads every page and deduplicates threads`() = runTest {
         val requestedCursors = mutableListOf<String?>()
         val pages = mapOf(
             null to CodexThreadListPage(
@@ -68,7 +68,7 @@ class CodexThreadListUiStateTest {
             ),
             "page-3" to CodexThreadListPage(
                 threads = listOf(CodexThread(id = "fourth")),
-                nextCursor = "page-2",
+                nextCursor = null,
             ),
         )
 
@@ -80,6 +80,32 @@ class CodexThreadListUiStateTest {
         assertEquals(listOf(null, "page-2", "page-3"), requestedCursors)
         assertEquals(listOf("active-1", "archived-1", "third", "fourth"), result.map(CodexThread::id))
         assertEquals("Updated release notes", result[1].name)
+    }
+
+    @Test
+    fun `cursor cycle fails instead of publishing an incomplete catalog`() = runTest {
+        val result = runCatching {
+            loadAllCodexThreads { CodexThreadListPage(listOf(active), nextCursor = "cycle") }
+        }
+        org.junit.Assert.assertTrue(result.exceptionOrNull() is IllegalStateException)
+    }
+
+    @Test
+    fun `connection reset and event only updates preserve loaded catalog and archives`() {
+        val reducer = dev.wuxie233.codecarry.data.codex.CodexEventReducer(listOf(active, archived))
+        val before = reducer.state.value.copy(archivedThreadIds = setOf(archived.id))
+        val ui = CodexThreadListUiState(activeThreads = listOf(active), archivedThreads = listOf(archived))
+        reducer.clear()
+        val reset = reducer.state.value
+        val retained = ui.applyCodexEventState(before, reset)
+        assertEquals(ui.activeThreads, retained.activeThreads)
+        assertEquals(ui.archivedThreads, retained.archivedThreads)
+        val events = reset.copy(threads = mapOf(active.id to CodexThread(active.id, hasMetadata = false)))
+        val after = retained.applyCodexEventState(reset, events)
+        assertEquals(ui.activeThreads, after.activeThreads)
+        assertEquals(ui.archivedThreads, after.archivedThreads)
+        // StateFlow may conflate away the empty reset frame.
+        assertEquals(after, ui.applyCodexEventState(before, events))
     }
 
     @Test

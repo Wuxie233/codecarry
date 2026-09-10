@@ -4,6 +4,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dev.wuxie233.codecarry.data.codex.CodexClientConnectionState
 import dev.wuxie233.codecarry.data.codex.CodexConnectionLease
 import dev.wuxie233.codecarry.data.codex.CodexConnectionManager
 import dev.wuxie233.codecarry.data.codex.CodexEventState
@@ -22,6 +23,8 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.coroutines.launch
@@ -98,11 +101,20 @@ class CodexThreadListViewModel @Inject constructor(
     private var lease: CodexConnectionLease? = null
     private var connection: CodexServerConnection? = null
     private var eventsJob: Job? = null
+    private var connectionStateJob: Job? = null
     private var observedEventState: CodexEventState? = null
     private var refreshJob: Job? = null
     private val connectionMutex = Mutex()
 
     init {
+        viewModelScope.launch {
+            connectionManager.connections.map { it[serverId]?.connectionId }.distinctUntilChanged().collect { connectionId ->
+                val observed = connection
+                if (observed != null && connectionId != null && !connectionManager.isCurrent(observed)) {
+                    refresh()
+                }
+            }
+        }
         viewModelScope.launch {
             projectPreferencesRepository.observe(serverId).collect { preferences ->
                 _uiState.update { it.copy(projectPreferences = preferences) }
@@ -119,27 +131,38 @@ class CodexThreadListViewModel @Inject constructor(
                 val server = serverRepository.getServer(serverId) ?: error("Codex server is no longer configured")
                 val acquired = acquireCurrentConnection(server)
                 acquired.connection.client.connect()
+                val generation = acquired.connection.client.currentConnectionGeneration()
+                fun ensureCurrent() {
+                    check(connectionManager.isCurrent(acquired.connection) &&
+                        acquired.connection.client.currentConnectionGeneration() == generation) {
+                        "Codex connection changed while loading threads; retry the refresh"
+                    }
+                }
                 val baseline = acquired.connection.events.value
+                // Creation time is stable while live activity changes recency during pagination.
                 val active = loadAllCodexThreads { cursor ->
+                    ensureCurrent()
                     acquired.connection.client.listThreads(
                         cursor = cursor,
                         archived = false,
                         limit = 200,
                         modelProviders = emptyList(),
-                        sortKey = "recency_at",
+                        sortKey = "created_at",
                         sortDirection = "desc",
                     )
                 }
                 val archived = loadAllCodexThreads { cursor ->
+                    ensureCurrent()
                     acquired.connection.client.listThreads(
                         cursor = cursor,
                         archived = true,
                         limit = 200,
                         modelProviders = emptyList(),
-                        sortKey = "recency_at",
+                        sortKey = "created_at",
                         sortDirection = "desc",
                     )
                 }
+                ensureCurrent()
                 acquired.connection.reducer.reconcileThreads(active, archived, baseline)
                 val eventState = acquired.connection.events.value
                 observedEventState = eventState
@@ -248,6 +271,16 @@ class CodexThreadListViewModel @Inject constructor(
 
     private fun observeEvents(connected: CodexServerConnection) {
         eventsJob?.cancel()
+        connectionStateJob?.cancel()
+        connectionStateJob = viewModelScope.launch {
+            var seenConnected = false
+            connected.state.collect { state ->
+                if (state is CodexClientConnectionState.Connected) {
+                    if (seenConnected || refreshJob?.isActive != true) refresh()
+                    seenConnected = true
+                }
+            }
+        }
         eventsJob = viewModelScope.launch {
             combine(connected.events, connected.pendingRequests) { events, requests ->
                 events to codexPendingRequestCounts(requests)
@@ -284,6 +317,8 @@ class CodexThreadListViewModel @Inject constructor(
     private fun resetConnectionLocked() {
         eventsJob?.cancel()
         eventsJob = null
+        connectionStateJob?.cancel()
+        connectionStateJob = null
         observedEventState = null
         _uiState.update { it.copy(pendingRequestCounts = emptyMap()) }
         lease?.close()
@@ -301,6 +336,7 @@ class CodexThreadListViewModel @Inject constructor(
         lease?.close()
         lease = null
         connection = null
+        connectionStateJob?.cancel()
         super.onCleared()
     }
 }
@@ -315,7 +351,7 @@ internal suspend fun loadAllCodexThreads(
         val page = loadPage(cursor)
         page.threads.forEach { thread -> threadsById[thread.id] = thread }
         val nextCursor = page.nextCursor?.takeIf(String::isNotBlank) ?: break
-        if (!seenCursors.add(nextCursor)) break
+        check(seenCursors.add(nextCursor)) { "Codex thread pagination repeated a cursor; retry the refresh" }
         cursor = nextCursor
     }
     return threadsById.values.toList()
@@ -328,7 +364,9 @@ internal fun CodexThreadListUiState.applyCodexEventState(
     val active = activeThreads.associateByTo(linkedMapOf(), CodexThread::id)
     val archived = archivedThreads.associateByTo(linkedMapOf(), CodexThread::id)
 
-    val deletedIds = previous?.threads?.keys.orEmpty() - current.threads.keys
+    // A connection reset is not a server-side deletion or unarchive.
+    val comparablePrevious = previous?.takeIf { it.resetGeneration == current.resetGeneration }
+    val deletedIds = comparablePrevious?.threads?.keys.orEmpty() - current.threads.keys
     deletedIds.forEach { threadId ->
         active.remove(threadId)
         archived.remove(threadId)
@@ -336,8 +374,6 @@ internal fun CodexThreadListUiState.applyCodexEventState(
 
     current.threads.forEach { (threadId, thread) ->
         if (!thread.hasMetadata) {
-            active.remove(threadId)
-            archived.remove(threadId)
             return@forEach
         }
         when {
@@ -351,7 +387,7 @@ internal fun CodexThreadListUiState.applyCodexEventState(
     current.archivedThreadIds.forEach { threadId ->
         active.remove(threadId)?.let { thread -> archived[threadId] = thread }
     }
-    val unarchivedIds = previous?.archivedThreadIds.orEmpty() - current.archivedThreadIds
+    val unarchivedIds = comparablePrevious?.archivedThreadIds.orEmpty() - current.archivedThreadIds
     unarchivedIds.forEach { threadId ->
         archived.remove(threadId)?.let { thread -> active[threadId] = thread }
     }

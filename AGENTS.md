@@ -310,3 +310,13 @@ If generated Hilt/Kotlin caches fail, rerun the affected verification after
   list, chat, related-thread labels and search aligned with that identity.
 - Codex pending image attachment bodies open the shared image preview; only
   the separate remove button deletes an attachment.
+
+- Codex catalogs page by stable `created_at` while presentation keeps recency
+  order. Repeated cursors fail the refresh; publish only complete active plus
+  archived snapshots from the same connection generation. Reducer reset
+  generations distinguish connection teardown from thread deletion. List
+  screens retain loaded metadata across resets and rebind on manager entry
+  replacement; socket reconnect refetches the catalog.
+- Reconnect `thread/resume` must merge full history with newer live turns and
+  items, preserving snapshot order and appending live-only entries. Do not
+  replace the thread wholesale with a late resume receipt.

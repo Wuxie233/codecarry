@@ -9,6 +9,58 @@ import org.junit.Test
 
 class CodexEventReducerTest {
     @Test
+    fun `new turn remains active when baseline was also active`() {
+        val original = CodexThread(id = "thread", status = CodexThreadStatus("active"),
+            turns = listOf(CodexTurn(id = "first", status = "inProgress")))
+        val reducer = CodexEventReducer(listOf(original))
+        val completed = original.copy(status = CodexThreadStatus("idle"),
+            turns = listOf(CodexTurn(id = "first", status = "completed")))
+        reducer.upsertThread(completed)
+        reducer.acceptTurnStart("thread", CodexTurn(id = "next", status = "inProgress"))
+        reducer.upsertThreadSnapshot(completed, original)
+        assertEquals("active", reducer.state.value.threads.getValue("thread").status.type)
+        assertEquals(listOf("first", "next"), reducer.state.value.threads.getValue("thread").turns.map { it.id })
+    }
+
+    @Test
+    fun `late catalog and resume preserve name and active state changed during loading`() {
+        val original = CodexThread(id = "thread", name = "Before", status = CodexThreadStatus("idle"))
+        val reducer = CodexEventReducer(listOf(original))
+        val baseline = reducer.state.value
+        reducer.acceptTurnStart("thread", CodexTurn(id = "live", status = "inProgress"))
+        reducer.process(notification("""
+            {"method":"thread/name/updated","params":{"threadId":"thread","threadName":"Renamed live"}}
+        """))
+        val stale = original.copy(turns = listOf(CodexTurn(id = "older", status = "completed")))
+        reducer.reconcileThreads(listOf(stale), emptyList(), baseline)
+        assertEquals("active", reducer.state.value.threads.getValue("thread").status.type)
+        assertEquals("Renamed live", reducer.state.value.threads.getValue("thread").name)
+        reducer.upsertThreadSnapshot(stale, original)
+        val merged = reducer.state.value.threads.getValue("thread")
+        assertEquals("active", merged.status.type)
+        assertEquals("Renamed live", merged.name)
+        assertEquals(listOf("older", "live"), merged.turns.map { it.id })
+        // With no intervening notification, the snapshot can apply offline changes.
+        reducer.upsertThreadSnapshot(merged.copy(name = "Changed offline"), merged)
+        assertEquals("Changed offline", reducer.state.value.threads.getValue("thread").name)
+    }
+
+    @Test
+    fun `resume restores earlier items before streamed items in the same turn`() {
+        val live = CodexThread(id = "thread", turns = listOf(CodexTurn(id = "turn", items = listOf(
+            CodexThreadItem(id = "answer", type = "agentMessage", text = "Live answer"),
+        ))))
+        val reducer = CodexEventReducer(listOf(live))
+        reducer.upsertThread(live.copy(turns = listOf(CodexTurn(id = "turn", items = listOf(
+            CodexThreadItem(id = "prompt", type = "userMessage", text = "Question"),
+            CodexThreadItem(id = "answer", type = "agentMessage", text = "Live"),
+        )))))
+        val items = reducer.state.value.threads.getValue("thread").turns.single().items
+        assertEquals(listOf("prompt", "answer"), items.map { it.id })
+        assertEquals("Live answer", items.last().text)
+    }
+
+    @Test
     fun `late resume snapshot cannot reactivate a completed turn`() {
         val completed = CodexTurn(id = "turn", status = "completed", completedAt = 42)
         val reducer = CodexEventReducer(listOf(CodexThread(

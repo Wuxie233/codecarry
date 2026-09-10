@@ -222,6 +222,67 @@ class CodexConnectionManagerTest {
     }
 
     @Test
+    fun `late reconnect snapshot preserves live completion and restores older history`() = runTest {
+        lateinit var transport: FakeTransport
+        val manager = CodexConnectionManager(
+            createClient = {
+                FakeTransport().also { transport = it }.newClient(backgroundScope)
+            },
+            scope = backgroundScope,
+            reconnectInitialMillis = 1,
+            reconnectMaxMillis = 4,
+        )
+        val leaseDeferred = async { manager.acquire(server, threadId = "thread-1") }
+        runCurrent()
+        initialize(transport)
+        val lease = leaseDeferred.await()
+        transport.takeSentObject()
+
+        transport.disconnect()
+        runCurrent()
+        advanceTimeBy(1)
+        runCurrent()
+        initialize(transport)
+        transport.takeSentObject()
+        val resume = transport.takeSentObject()
+        assertEquals("thread/resume", resume["method"]?.jsonPrimitive?.content)
+        transport.incoming.send(
+            """{"method":"thread/started","params":{"thread":{"id":"thread-1","status":{"type":"active"},"turns":[]}}}""",
+        )
+        transport.incoming.send(
+            """{"method":"turn/started","params":{"threadId":"thread-1","turn":{"id":"current","status":"inProgress","items":[]}}}""",
+        )
+        transport.incoming.send(
+            """{"method":"item/agentMessage/delta","params":{"threadId":"thread-1","turnId":"current","itemId":"answer","delta":"Live complete answer"}}""",
+        )
+        transport.incoming.send(
+            """{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"current","status":"completed","items":[]}}}""",
+        )
+        transport.incoming.send(
+            """{"method":"thread/status/changed","params":{"threadId":"thread-1","status":{"type":"idle"}}}""",
+        )
+        runCurrent()
+
+        transport.respond(resume.getValue("id").jsonPrimitive, json.parseToJsonElement("""
+            {"thread":{"id":"thread-1","status":{"type":"active"},"turns":[
+                {"id":"older","status":"completed","items":[{"id":"history","type":"agentMessage","text":"Older history"}]},
+                {"id":"current","status":"inProgress","items":[{"id":"answer","type":"agentMessage","text":"Live"}]}
+            ]},"model":"gpt-5","modelProvider":"openai","cwd":"/workspace"}
+        """))
+        runCurrent()
+
+        val thread = lease.connection.events.value.threads.getValue("thread-1")
+        assertEquals(listOf("older", "current"), thread.turns.map { it.id })
+        assertEquals("idle", thread.status.type)
+        assertEquals("completed", thread.turns.single { it.id == "current" }.status)
+        assertEquals("Live complete answer", thread.turns.single { it.id == "current" }.items.single().text)
+        assertEquals("Older history", thread.turns.single { it.id == "older" }.items.single().text)
+        assertTrue(lease.connection.state.value is CodexClientConnectionState.Connected)
+        lease.close()
+        manager.closeForTest()
+    }
+
+    @Test
     fun `failed thread resume retries on the current connection until it succeeds`() = runTest {
         lateinit var transport: FakeTransport
         val manager = CodexConnectionManager(

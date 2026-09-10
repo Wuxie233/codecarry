@@ -701,6 +701,7 @@ class CodexConnectionManager {
             if (restoredThreads[threadId] == lifecycleVersion) continue
             try {
                 entry.reducer.invalidateThreadControlState(threadId)
+                val baseline = entry.reducer.state.value.threads[threadId]
                 val resumed = entry.client.resumeThread(threadId, excludeTurns = false)
                 val stillCurrent = synchronized(lock) {
                     entries[entry.connection.serverId] === entry &&
@@ -708,7 +709,9 @@ class CodexConnectionManager {
                         entry.threadLifecycleVersions.getOrDefault(threadId, 0L) == lifecycleVersion
                 }
                 if (stillCurrent) {
-                    entry.reducer.upsertThreadAuthoritative(resumed.thread)
+                    // Resume can race with the rejoined thread's live notifications.
+                    // Merge missing history without rolling back streamed or terminal items.
+                    entry.reducer.upsertThreadSnapshot(resumed.thread, baseline)
                     restoredThreads[threadId] = lifecycleVersion
                     reconcileRetainedThread(entry, threadId)
                 }
