@@ -16,4 +16,9 @@
     <string name="codex_timeline_collapse">Collapse</string>
     <string name="codex_timeline_expand">Expand</string>
     <string name="codex_timeline_subagent_activity">Subtask activity</string>
+    <string name="codex_timeline_named_subagent_activity">Subtask activity · %1$s</string>
+    <string name="codex_timeline_subagent_interacted">Interaction received</string>
+    <string name="codex_timeline_subagent_created">Created</string>
+    <string name="codex_timeline_subagent_started">Started</string>
+    <string name="codex_timeline_subagent_closed">Closed</string>
 </resources>

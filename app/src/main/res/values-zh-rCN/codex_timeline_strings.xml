@@ -16,4 +16,9 @@
     <string name="codex_timeline_collapse">收起</string>
     <string name="codex_timeline_expand">展开</string>
     <string name="codex_timeline_subagent_activity">子任务动态</string>
+    <string name="codex_timeline_named_subagent_activity">子任务动态 · %1$s</string>
+    <string name="codex_timeline_subagent_interacted">收到交互</string>
+    <string name="codex_timeline_subagent_created">已创建</string>
+    <string name="codex_timeline_subagent_started">已启动</string>
+    <string name="codex_timeline_subagent_closed">已关闭</string>
 </resources>

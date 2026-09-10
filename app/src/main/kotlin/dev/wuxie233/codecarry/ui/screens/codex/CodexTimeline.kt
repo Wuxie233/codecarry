@@ -141,10 +141,18 @@ private fun CodexSubAgentActivityRow(item: CodexThreadItem, onOpenThread: (Strin
     val threadId = (item.raw["agentThreadId"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
     val path = (item.raw["agentPath"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
     val kind = (item.raw["kind"] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
-    Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp)) {
-        Text(stringResource(R.string.codex_timeline_subagent_activity), style = MaterialTheme.typography.labelLarge)
-        path?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-        kind?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+    val name = path?.trimEnd('/')?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
+    val title = name?.let { stringResource(R.string.codex_timeline_named_subagent_activity, it) }
+        ?: stringResource(R.string.codex_timeline_subagent_activity)
+    val activity = kind?.let { codexSubAgentActivityKind(it) }
+    CodexDisclosure(
+        key = item.id ?: item.type,
+        title = title,
+        status = item.status,
+        subtitle = item.status?.let { codexTimelineStatus(it) } ?: activity,
+    ) {
+        path?.let { CodexMonospaceContent(it) }
+        activity?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         item.status?.let { Text(codexTimelineStatus(it), style = MaterialTheme.typography.labelSmall) }
         if (threadId != null) TextButton(onClick = { onOpenThread(threadId) }) {
             Text(stringResource(R.string.codex_timeline_open_subagent))
@@ -222,13 +230,14 @@ private fun CodexDisclosure(
     modifier: Modifier = Modifier,
     initiallyExpanded: Boolean = false,
     icon: ImageVector = Icons.Default.Build,
+    subtitle: String? = status?.let { codexTimelineStatus(it) },
     content: @Composable () -> Unit,
 ) {
     var expanded by rememberSaveable(key) { mutableStateOf(initiallyExpanded) }
     Column(modifier.fillMaxWidth().padding(vertical = 4.dp)) {
         ProcessDisclosureRow(
             title = title,
-            subtitle = status?.let { codexTimelineStatus(it) },
+            subtitle = subtitle,
             icon = icon,
             expandable = true,
             expanded = expanded,
@@ -239,6 +248,15 @@ private fun CodexDisclosure(
             content = content,
         )
     }
+}
+
+@Composable
+private fun codexSubAgentActivityKind(kind: String): String = when (kind) {
+    "interacted" -> stringResource(R.string.codex_timeline_subagent_interacted)
+    "spawned", "created" -> stringResource(R.string.codex_timeline_subagent_created)
+    "started" -> stringResource(R.string.codex_timeline_subagent_started)
+    "closed" -> stringResource(R.string.codex_timeline_subagent_closed)
+    else -> codexTimelineStatus(kind)
 }
 
 @Composable
