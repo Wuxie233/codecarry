@@ -484,7 +484,7 @@ internal fun CodexThreadListContent(
                 }
                 Box(Modifier.fillMaxSize()) {
                     when {
-                        state.isLoading && state.activeThreads.isEmpty() && state.archivedThreads.isEmpty() -> LoadingStateCard(Modifier.padding(12.dp), stringResource(R.string.codex_thread_loading))
+                        (if (state.showArchived) state.isLoadingArchived && state.archivedThreads.isEmpty() else state.isLoading && state.activeThreads.isEmpty()) -> LoadingStateCard(Modifier.padding(12.dp), stringResource(R.string.codex_thread_loading))
                         state.error != null && state.activeThreads.isEmpty() && state.archivedThreads.isEmpty() -> ErrorStateCard(
                             title = stringResource(R.string.codex_thread_load_failed),
                             message = state.error.orEmpty(),

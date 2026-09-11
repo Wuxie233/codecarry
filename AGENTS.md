@@ -312,14 +312,27 @@ If generated Hilt/Kotlin caches fail, rerun the affected verification after
   the separate remove button deletes an attachment.
 
 - Codex catalogs page by stable `created_at` while presentation keeps recency
-  order. Repeated cursors fail the refresh; publish only complete active plus
-  archived snapshots from the same connection generation. Reducer reset
+  order. Database-only pages publish progressively without deleting omitted
+  threads; archives load on demand. Repeated cursors fail the refresh. Only
+  complete active plus archived repair snapshots from the same connection
+  generation may reconcile omissions. Filesystem repair is delayed and
+  throttled, never part of first-page readiness. Reducer reset
   generations distinguish connection teardown from thread deletion. List
   screens retain loaded metadata across resets and rebind on manager entry
   replacement; socket reconnect refetches the catalog.
 - Reconnect `thread/resume` must merge full history with newer live turns and
   items, preserving snapshot order and appending live-only entries. Do not
   replace the thread wholesale with a late resume receipt.
+- Codex socket readiness and thread subscription readiness are independent.
+  Use manager-owned, generation-fenced `resumeThread` for shared full-history
+  recovery and gate thread controls with `isThreadReady`. Recently closed
+  subscriptions have a bounded grace period; a sent unsubscribe must finish
+  before resuming. Cache acknowledgements of model/effort/service tier so a
+  reused subscription cannot restore obsolete composer choices.
+- Keep cached chat history visible during recovery. Optional goal/model loads
+  cannot block history or overwrite newer choices. List and family projections
+  exclude historical items, and unrelated thread deltas must not rebuild the
+  current chat. Decode large RPC thread payloads off the UI dispatcher.
 
 - Codex `imageGeneration` items render inline from `result` (raw base64), with
   `savedPath` read through the daemon when inline bytes are absent. Reuse the

@@ -227,4 +227,54 @@ class CodexThreadListUiStateTest {
         assertEquals(emptyList<CodexThread>(), state.copy(filter = CodexThreadFilter.PENDING).visibleThreads)
     }
 
+    @Test
+    fun `first page is published before later pages are requested`() = runTest {
+        val published = mutableListOf<String>()
+        val result = loadAllCodexThreads(onPage = { page ->
+            published += page.threads.map { it.id }
+        }) { cursor ->
+            if (cursor == null) CodexThreadListPage(listOf(active), "older")
+            else {
+                assertEquals(listOf(active.id), published)
+                CodexThreadListPage(listOf(archived))
+            }
+        }
+        assertEquals(listOf(active.id, archived.id), result.map { it.id })
+    }
+
+    @Test
+    fun `later page failure retains published first page`() = runTest {
+        val published = mutableListOf<String>()
+        val result = runCatching {
+            loadAllCodexThreads(onPage = { page -> published += page.threads.map { it.id } }) { cursor ->
+                if (cursor == null) CodexThreadListPage(listOf(active), "older") else error("offline")
+            }
+        }
+        org.junit.Assert.assertTrue(result.isFailure)
+        assertEquals(listOf(active.id), published)
+    }
+
+    @Test
+    fun `catalog projection ignores token deltas but retains status and ancestry`() {
+        val turn = dev.wuxie233.codecarry.data.codex.CodexTurn(id = "turn", status = "inProgress")
+        val thread = active.copy(parentThreadId = "parent", turns = listOf(turn))
+        val before = CodexEventState(threads = mapOf(thread.id to thread))
+        val streamed = thread.copy(turns = listOf(turn.copy(items = listOf(
+            dev.wuxie233.codecarry.data.codex.CodexThreadItem(id = "item", type = "agentMessage", text = "new token"),
+        ))))
+        val after = before.copy(threads = mapOf(thread.id to streamed))
+        assertEquals(before.toCodexCatalogState(), after.toCodexCatalogState())
+        val failed = after.copy(threads = mapOf(thread.id to streamed.copy(turns = listOf(turn.copy(status = "failed")))))
+        org.junit.Assert.assertNotEquals(after.toCodexCatalogState(), failed.toCodexCatalogState())
+        assertEquals("parent", failed.toCodexCatalogState().threads[thread.id]?.parentThreadId)
+        assertEquals(1, CodexThreadListUiState(activeThreads = failed.toCodexCatalogState().threads.values.toList()).topology.single().failedCount)
+    }
+
+    @Test
+    fun `database fallback only recognizes unsupported option errors`() {
+        assertEquals(true, codexStateDbUnsupported(dev.wuxie233.codecarry.data.codex.CodexRpcException(-32602L, "unknown field useStateDbOnly")))
+        assertEquals(false, codexStateDbUnsupported(dev.wuxie233.codecarry.data.codex.CodexRpcException(-32602L, "invalid cursor")))
+        assertEquals(false, codexStateDbUnsupported(dev.wuxie233.codecarry.data.codex.CodexRpcException(-32000L, "useStateDbOnly database unavailable")))
+    }
+
 }

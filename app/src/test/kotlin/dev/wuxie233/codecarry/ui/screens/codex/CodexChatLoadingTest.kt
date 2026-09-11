@@ -182,6 +182,7 @@ class CodexChatLoadingTest {
             fixture.transport.incoming.send("""{"method":"thread/started","params":{"thread":$thread}}""")
         }
         runCurrent()
+        fixture.vm.refreshRelatedThreads()
         assertEquals(setOf("parent", "child", "sibling"), fixture.vm.uiState.value.relatedThreads.map { it.id }.toSet())
     }
 
@@ -221,33 +222,63 @@ class CodexChatLoadingTest {
     }
 
     @Test
-    fun delayedMetadataCannotRestoreOldTierAfterFastWasSubmitted() = scope.runTest {
+    fun cachedResumeKeepsHistoryAndDoesNotRepeatResumeOrModelRpc() = scope.runTest {
         val fixture = fixture()
-        val models = """{"data":[{"id":"gpt-5","model":"gpt-5","displayName":"GPT","serviceTiers":[{"id":"fast","name":"Fast"}]}]}"""
         fixture.resume()
         runCurrent()
-        fixture.completeMetadata(models)
+        fixture.completeMetadata()
+        val history = fixture.vm.uiState.value.thread
+        fixture.vm.connectAndLoad()
+        assertEquals(history, fixture.vm.uiState.value.thread)
+        runCurrent()
+        assertFalse(fixture.vm.uiState.value.isLoading)
+        assertTrue(fixture.vm.uiState.value.isConnected)
+        assertEquals(1, fixture.transport.methods.count { it == "thread/resume" })
+        assertEquals(1, fixture.transport.methods.count { it == "model/list" })
+        fixture.transport.replyNext("thread/goal/get", "{\"goal\":null}")
+        runCurrent()
+    }
+
+    @Test
+    fun delayedModelCatalogPreservesExplicitModelAndEffortSelection() = scope.runTest {
+        val fixture = fixture()
+        fixture.resume()
+        runCurrent()
+        val selected = dev.wuxie233.codecarry.data.codex.CodexModel(
+            id = "chosen", model = "chosen", displayName = "Chosen", defaultReasoningEffort = "high",
+        )
+        fixture.vm.selectModel(selected)
+        fixture.completeMetadata("""{"data":[{"id":"gpt-5","model":"gpt-5","displayName":"Default"}]}""")
+        assertEquals("chosen", fixture.vm.uiState.value.selectedModel?.model)
+        assertEquals("high", fixture.vm.uiState.value.selectedEffort)
+    }
+
+    @Test
+    fun failedResumeKeepsCachedHistoryAndCanBeRetried() = scope.runTest {
+        val fixture = fixture()
+        val cached = dev.wuxie233.codecarry.data.codex.CodexThread(
+            id = "child", turns = listOf(dev.wuxie233.codecarry.data.codex.CodexTurn(id = "cached")),
+        )
+        fixture.connection.reducer.upsertThread(cached)
+        runCurrent()
+        val request = fixture.transport.next("thread/resume")
+        fixture.transport.incoming.send(buildJsonObject {
+            put("id", request.getValue("id"))
+            put("error", buildJsonObject { put("code", -32000); put("message", "temporarily unavailable") })
+        }.toString())
+        runCurrent()
+        assertEquals(cached, fixture.vm.uiState.value.thread)
+        assertTrue(fixture.vm.uiState.value.canRetryConnection)
+        assertFalse(fixture.vm.uiState.value.isConnected)
         fixture.vm.connectAndLoad()
         runCurrent()
+        assertEquals(cached, fixture.vm.uiState.value.thread)
+        assertFalse(fixture.vm.uiState.value.canRetryConnection)
         fixture.resume()
         runCurrent()
-        val delayedGoal = fixture.transport.next("thread/goal/get")
-        fixture.vm.toggleFast()
-        fixture.completeTurn()
-        runCurrent()
-        fixture.vm.sendMessage("fast next turn")
-        runCurrent()
-        val start = fixture.transport.next("turn/start")
-        fixture.transport.reply(start, """{"turn":{"id":"turn-fast","status":"completed","items":[]}}""")
-        runCurrent()
-        assertTrue(fixture.vm.uiState.value.fastEnabled)
-        assertFalse(fixture.vm.uiState.value.fastSelectionPending)
-        fixture.transport.reply(delayedGoal, "{\"goal\":null}")
-        runCurrent()
-        fixture.transport.replyNext("model/list", models)
-        runCurrent()
-        assertTrue(fixture.vm.uiState.value.fastEnabled)
-        assertFalse(fixture.vm.uiState.value.fastSelectionPending)
+        assertTrue(fixture.vm.uiState.value.isConnected)
+        assertFalse(fixture.vm.uiState.value.canRetryConnection)
+        fixture.completeMetadata()
     }
 
     private suspend fun TestScope.fixture(): Fixture {
@@ -270,13 +301,14 @@ class CodexChatLoadingTest {
             repository,
         ).also(viewModels::add)
         runCurrent()
-        return Fixture(vm, transport, this)
+        return Fixture(vm, transport, this, requireNotNull(manager.get(server.id)))
     }
 
     private inner class Fixture(
         val vm: CodexChatViewModel,
         val transport: FakeTransport,
         val testScope: TestScope,
+        val connection: dev.wuxie233.codecarry.data.codex.CodexServerConnection,
     ) {
         suspend fun resume() {
             val request = transport.next("thread/resume")

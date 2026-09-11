@@ -21,6 +21,7 @@ import dev.wuxie233.codecarry.data.codex.CodexPermissionGrantScope
 import dev.wuxie233.codecarry.data.repository.ServerRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -80,6 +81,7 @@ data class CodexChatUiState(
     val attachmentsError: String? = null,
     val filePreview: CodexFilePreviewState? = null,
 ) {
+    val canRetryConnection: Boolean get() = !isConnected && !isLoading
     val fastPending: Boolean get() = fastSelectionPending && activeTurnId != null
 }
 
@@ -104,6 +106,7 @@ class CodexChatViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(
         CodexChatUiState(
             draft = savedStateHandle.get<String>("codexDraft").orEmpty(),
+            thread = connectionManager.get(serverId)?.events?.value?.threads?.get(threadId),
             isSendConfirmationPending = restoredPendingSendContent != null && restoredPendingSendId != null,
             isAwaitingAuthoritativeTurn = authoritativeTurnTracker.isAwaiting,
         ),
@@ -124,6 +127,10 @@ class CodexChatViewModel @Inject constructor(
     private var loadJob: Job? = null
     private var relatedThreadsJob: Job? = null
     private var loadError: String? = null
+    private var selectionRevision = 0L
+    private var selectionPending = false
+    private var familyVisible = false
+    private val familyProjection = CodexChatFamilyProjection()
     private val connectionMutex = Mutex()
     private val sendIdentity = CodexSendIdentityTracker(
         createId = { UUID.randomUUID().toString() },
@@ -141,80 +148,83 @@ class CodexChatViewModel @Inject constructor(
         loadJob?.cancel()
         loadJob = viewModelScope.launch {
             loadError = null
-            _uiState.update { it.copy(isLoading = true, error = null) }
+            _uiState.update { it.copy(isLoading = true, isConnected = false, error = null) }
             try {
                 val server = serverRepository.getServer(serverId) ?: error("Codex server is no longer configured")
                 val acquired = acquireCurrentConnection(server)
                 if (authoritativeTurnTracker.isAwaiting) {
                     connectionManager.retainProvisionalTurn(serverId, threadId)
                 }
-                val connected = acquired.connection.client
-                connected.connect()
-                // Resume rejoins the live thread and returns its history. A subsequent
-                // disk-backed read can fail for a running, not-yet-materialized subagent.
-                val resumed = connected.resumeThread(threadId, excludeTurns = false)
-                val thread = resumed.thread
-                acquired.connection.reducer.upsertThread(thread)
-                val openedThread = acquired.connection.events.value.threads[threadId] ?: thread
-                _uiState.update { it.copy(
-                    thread = openedThread,
+                val connected = acquired.connection
+                val selectionAtStart = selectionRevision
+                val resumed = connectionManager.resumeThread(connected, threadId)
+                val generation = connected.client.currentConnectionGeneration()
+                fun current() = connectionManager.isCurrent(connected) &&
+                    generation == connected.client.currentConnectionGeneration()
+                if (!current()) return@launch
+                val thread = connected.events.value.threads[threadId] ?: resumed.thread
+                val receivedAuthoritativeTurn = consumeAuthoritativeTurn(thread)
+                _uiState.update { state -> state.copy(
+                    thread = thread,
                     fastEnabled = fastPreferences.pending(serverId, threadId) ?: isCodexFastTier(resumed.serviceTier),
                     fastSelectionPending = fastPreferences.pending(serverId, threadId) != null,
-                    activeTurnId = openedThread.turns.lastOrNull { turn -> turn.status == "inProgress" }?.id,
+                    activeTurnId = thread.turns.lastOrNull { it.status == "inProgress" }?.id,
+                    isAwaitingAuthoritativeTurn = if (receivedAuthoritativeTurn) false else state.isAwaitingAuthoritativeTurn,
+                    isConnected = connectionManager.isThreadReady(connected, threadId),
                     isLoading = false,
                 ) }
-                val goal = runCatching { connected.getGoal(threadId) }.getOrElse {
-                    if (it is CancellationException) throw it
-                    null
-                }
-                val models = runCatching { connected.listModels(limit = 100).models }.getOrElse {
-                    if (it is CancellationException) throw it
-                    emptyList()
-                }
-                val selectedModel = models.firstOrNull { it.model == resumed.model || it.id == resumed.model }
-                    ?: resumed.model?.let { model ->
-                        CodexModel(id = model, model = model, displayName = model)
+                confirmPendingSendFromThread(thread)
+                // Optional metadata loads independently; neither blocks history or control readiness.
+                coroutineScope {
+                    launch {
+                        val goalBaseline = connected.events.value.goals[threadId]
+                        val knownBaseline = threadId in connected.events.value.knownGoalThreadIds
+                        val goal = runCatching { connected.client.getGoal(threadId) }.getOrElse {
+                            if (it is CancellationException) throw it
+                            return@launch
+                        }
+                        if (current() && connected.events.value.goals[threadId] == goalBaseline &&
+                            (threadId in connected.events.value.knownGoalThreadIds) == knownBaseline) {
+                            _uiState.update { it.copy(goal = goal) }
+                        }
                     }
-                    ?: models.firstOrNull { it.isDefault }
-                    ?: models.firstOrNull()
-                val visibleModels = if (selectedModel != null && models.none { it.model == selectedModel.model }) {
-                    listOf(selectedModel) + models
-                } else {
-                    models
+                    launch {
+                        val models = runCatching { connectionManager.listModels(connected) }.getOrElse {
+                            if (it is CancellationException) throw it
+                            return@launch
+                        }
+                        if (!current()) return@launch
+                        _uiState.update { state ->
+                            val untouched = selectionAtStart == selectionRevision && !selectionPending
+                            val modelName = if (untouched) resumed.model else state.selectedModel?.model
+                            val selected = models.firstOrNull { it.model == modelName || it.id == modelName }
+                                ?: state.selectedModel?.takeIf { !untouched && it.model == modelName }
+                                ?: modelName?.let { CodexModel(id = it, model = it, displayName = it) }
+                                ?: models.firstOrNull { it.isDefault } ?: models.firstOrNull()
+                            state.copy(
+                                models = if (selected != null && models.none { it.model == selected.model }) listOf(selected) + models else models,
+                                selectedModel = selected,
+                                selectedEffort = if (untouched) resumed.reasoningEffort ?: selected?.defaultReasoningEffort else state.selectedEffort,
+                                fastAvailable = selected.codexFastTier() != null,
+                            )
+                        }
+                    }
                 }
-                val mergedThread = acquired.connection.events.value.threads[threadId] ?: thread
-                val receivedAuthoritativeTurn = consumeAuthoritativeTurn(mergedThread)
-                _uiState.update {
-                    it.copy(
-                        thread = mergedThread,
-                        goal = goal,
-                        models = visibleModels,
-                        selectedModel = selectedModel,
-                        selectedEffort = resumed.reasoningEffort ?: selectedModel?.defaultReasoningEffort,
-                        fastAvailable = selectedModel.codexFastTier() != null,
-                        activeTurnId = mergedThread.turns.lastOrNull { turn -> turn.status == "inProgress" }?.id,
-                        isAwaitingAuthoritativeTurn = if (receivedAuthoritativeTurn) {
-                            false
-                        } else {
-                            it.isAwaitingAuthoritativeTurn
-                        },
-                        isLoading = false,
-                        threadFailure = acquired.connection.events.value.threadFailures[threadId],
-                        turnFailures = acquired.connection.events.value.failuresForThread(threadId),
-                    )
-                }
-                confirmPendingSendFromThread(mergedThread)
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Throwable) {
                 loadError = error.message ?: "Failed to open Codex thread"
-                _uiState.update { it.copy(isLoading = false, error = loadError) }
+                _uiState.update { it.copy(isLoading = false, isConnected = false, error = loadError) }
             }
         }
     }
 
     /** Optional catalog hydration, invoked by the family panel; never gates thread/resume. */
     fun refreshRelatedThreads() {
+        familyVisible = true
+        connection?.events?.value?.let { event ->
+            _uiState.update { it.copy(relatedThreads = familyProjection.project(event.threads, threadId)) }
+        }
         if (relatedThreadsJob?.isActive == true) return
         relatedThreadsJob = viewModelScope.launch {
             try {
@@ -223,11 +233,18 @@ class CodexChatViewModel @Inject constructor(
                 run {
                     var cursor: String? = null
                     val seen = mutableSetOf<String>()
+                    var databaseOnly = true
                     do {
                         val baseline = connected.events.value.threads
-                        val page = connected.client.listThreads(
+                        suspend fun pageRequest() = connected.client.listThreads(
                             cursor = cursor, limit = 100, archived = false, modelProviders = emptyList(),
+                            useStateDbOnly = databaseOnly,
                         )
+                        val page = try { pageRequest() } catch (error: CodexRpcException) {
+                            if (!databaseOnly || !codexStateDbUnsupported(error)) throw error
+                            databaseOnly = false
+                            pageRequest()
+                        }
                         if (!connectionManager.isCurrent(connected) ||
                             generation != connected.client.currentConnectionGeneration()) return@launch
                         page.threads.forEach { candidate ->
@@ -245,6 +262,8 @@ class CodexChatViewModel @Inject constructor(
             }
         }
     }
+
+    fun hideRelatedThreads() { familyVisible = false }
 
     fun dismissError() {
         loadError = null
@@ -305,6 +324,7 @@ class CodexChatViewModel @Inject constructor(
                     return@launch
                 }
                 val sendingState = _uiState.value
+                val sendingSelectionRevision = selectionRevision
                 val selected = sendingState.selectedModel
                 val fastOverride = codexFastTurnParams(
                     selected, sendingState.fastEnabled, sendingState.fastSelectionPending,
@@ -320,6 +340,14 @@ class CodexChatViewModel @Inject constructor(
                     clientUserMessageId = clientUserMessageId,
                     extraParams = fastOverride,
                 )
+                if (sendingSelectionRevision == selectionRevision) selectionPending = false
+                connection?.let { connected ->
+                    connectionManager.updateThreadSession(connected, threadId) { session -> session.copy(
+                        model = selected?.model ?: session.model,
+                        reasoningEffort = sendingState.selectedEffort ?: session.reasoningEffort,
+                        serviceTier = if (fastOverride.containsKey("serviceTier")) fastOverride.string("serviceTier") else session.serviceTier,
+                    ) }
+                }
                 if (fastOverride.containsKey("serviceTier") &&
                     fastPreferences.pending(serverId, threadId) == sendingState.fastEnabled
                 ) {
@@ -539,6 +567,8 @@ class CodexChatViewModel @Inject constructor(
     }
 
     fun selectModel(model: CodexModel) {
+        selectionRevision++
+        selectionPending = true
         val disableFast = model.codexFastTier() == null && _uiState.value.fastEnabled
         if (disableFast) fastPreferences.setPending(serverId, threadId, false)
         _uiState.update {
@@ -573,6 +603,8 @@ class CodexChatViewModel @Inject constructor(
             .orEmpty()
             .map { it.reasoningEffort }
         if (effort !in advertised) return
+        selectionRevision++
+        selectionPending = true
         _uiState.update { it.copy(selectedEffort = effort) }
     }
 
@@ -763,16 +795,18 @@ class CodexChatViewModel @Inject constructor(
     private fun observeEvents(connected: CodexServerConnection) {
         eventsJob?.cancel()
         eventsJob = viewModelScope.launch {
+            var previous: CodexEventState? = null
             connected.events.collect { eventState ->
+                val prior = previous
+                previous = eventState
+                if (!familyVisible && prior != null && sameCodexChatProjection(prior, eventState, threadId)) return@collect
                 val thread = eventState.threads[threadId] ?: _uiState.value.thread
                 confirmPendingSendFromThread(thread)
                 val receivedAuthoritativeTurn = consumeAuthoritativeTurn(thread)
                 _uiState.update {
                     it.copy(
                         thread = thread,
-                        relatedThreads = buildCodexThreadTopology(eventState.threads.values.toList())
-                            .firstOrNull { root -> root.members.any { member -> member.id == threadId } }
-                            ?.members.orEmpty(),
+                        relatedThreads = if (familyVisible) familyProjection.project(eventState.threads, threadId) else it.relatedThreads,
                         plans = eventState.turnPlans[threadId].orEmpty(),
                         diffs = eventState.turnDiffs[threadId].orEmpty(),
                         tokenUsage = eventState.tokenUsage[threadId],
@@ -841,15 +875,28 @@ class CodexChatViewModel @Inject constructor(
 
     private fun observePendingRequests() {
         requestsJob = viewModelScope.launch {
+            var previousClient: CodexAppServerClient? = null
+            var previousGeneration: Long? = null
             connectionManager.connections.collect { connections ->
+                val managed = connections[serverId]
+                val connected = connectionManager.get(serverId)
+                val socketReady = managed?.state is CodexClientConnectionState.Connected
+                val generation = if (socketReady) managed?.client?.currentConnectionGeneration() else null
+                val needsResume = socketReady && (previousClient !== managed?.client || previousGeneration != generation)
+                val wasReady = previousGeneration != null
+                previousClient = managed?.client
+                previousGeneration = generation
                 _uiState.update { state ->
                     state.copy(
-                        isConnected = connections[serverId]?.state is CodexClientConnectionState.Connected,
-                        pendingRequests = connections[serverId]?.pendingRequests
-                            .orEmpty()
-                            .filter { request -> request.params.string("threadId") == threadId },
+                        isConnected = socketReady && connected != null && connectionManager.isThreadReady(connected, threadId),
+                        pendingRequests = if (socketReady) managed?.pendingRequests.orEmpty()
+                            .filter { request -> request.params.string("threadId") == threadId } else emptyList(),
                     )
                 }
+                if (!socketReady && wasReady) {
+                    loadJob?.cancel()
+                    loadJob = null
+                } else if (needsResume && loadJob?.isActive != true) connectAndLoad()
             }
         }
     }
@@ -866,12 +913,16 @@ class CodexChatViewModel @Inject constructor(
 
     private suspend fun requireClient(): CodexAppServerClient {
         val server = serverRepository.getServer(serverId) ?: error("Codex server is no longer configured")
-        return acquireCurrentConnection(server).connection.client
+        val acquired = acquireCurrentConnection(server).connection
+        check(connectionManager.isThreadReady(acquired, threadId)) { "Codex thread is reconnecting" }
+        return acquired.client
     }
 
     private suspend fun requireConnection(): CodexServerConnection {
         val server = serverRepository.getServer(serverId) ?: error("Codex server is no longer configured")
-        return acquireCurrentConnection(server).connection
+        val acquired = acquireCurrentConnection(server).connection
+        check(connectionManager.isThreadReady(acquired, threadId)) { "Codex thread is reconnecting" }
+        return acquired
     }
 
     private suspend fun acquireCurrentConnection(server: dev.wuxie233.codecarry.domain.model.ServerConfig): CodexConnectionLease {

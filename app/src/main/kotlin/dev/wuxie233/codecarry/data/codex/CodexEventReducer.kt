@@ -31,6 +31,28 @@ class CodexEventReducer(
     )
     val state: StateFlow<CodexEventState> = _state.asStateFlow()
 
+    /** A fast catalog page is partial evidence; only a complete repair may remove omissions. */
+    fun mergeThreadPage(threads: List<CodexThread>, archived: Boolean, baseline: CodexEventState) {
+        _state.update { current ->
+            if (current.resetGeneration != baseline.resetGeneration) return@update current
+            val merged = current.threads.toMutableMap()
+            val archivedIds = current.archivedThreadIds.toMutableSet()
+            threads.forEach { incoming ->
+                val id = incoming.id
+                // A page started before a live deletion must not resurrect that thread.
+                if (id in baseline.threads && id !in current.threads) return@forEach
+                val live = current.threads[id]
+                merged[id] = live?.mergeMetadata(incoming, baseline.threads[id]) ?: incoming
+                val archiveChanged = (id in baseline.archivedThreadIds) != (id in current.archivedThreadIds)
+                val createdDuringLoad = id !in baseline.threads && live != null
+                if (!archiveChanged && !createdDuringLoad) {
+                    if (archived) archivedIds.add(id) else archivedIds.remove(id)
+                }
+            }
+            current.copy(threads = merged, archivedThreadIds = archivedIds)
+        }
+    }
+
     fun reconcileThreads(
         activeThreads: List<CodexThread>,
         archivedThreads: List<CodexThread>,

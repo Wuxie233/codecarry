@@ -12,6 +12,8 @@ import io.ktor.websocket.readText
 import io.ktor.websocket.send
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlin.coroutines.ContinuationInterceptor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -155,6 +157,9 @@ open class CodexAppServerClient internal constructor(
     private val currentTimeSeconds: () -> Long = { System.currentTimeMillis() / 1_000L },
     scope: CoroutineScope? = null,
 ) : Closeable {
+    // Test scopes supply their scheduler; production DTO work never runs on the caller UI thread.
+    private val decodingDispatcher = (scope?.coroutineContext?.get(ContinuationInterceptor) as? CoroutineDispatcher)
+        ?: Dispatchers.Default
     private val ownsScope = scope == null
     private val clientScope = scope ?: CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val requestIds = AtomicLong(0)
@@ -398,7 +403,7 @@ open class CodexAppServerClient internal constructor(
             "ancestorThreadId" to ancestorThreadId,
             "useStateDbOnly" to useStateDbOnly.takeIf { it },
         ),
-    ).let(CodexThreadListPage::fromJson)
+    ).let { payload -> withContext(decodingDispatcher) { CodexThreadListPage.fromJson(payload) } }
 
     suspend fun readThread(threadId: String, includeTurns: Boolean = true): CodexThread {
         freshThreads[threadId]?.let { return it.thread }
@@ -406,7 +411,7 @@ open class CodexAppServerClient internal constructor(
             "thread/read",
             paramsOf("threadId" to threadId, "includeTurns" to includeTurns),
         ).objectOrEmpty()
-        return CodexThread.fromJson(result["thread"].objectOrEmpty())
+        return withContext(decodingDispatcher) { CodexThread.fromJson(result["thread"].objectOrEmpty()) }
     }
 
     suspend fun startThread(
@@ -430,7 +435,7 @@ open class CodexAppServerClient internal constructor(
             "serviceTier" to serviceTier,
             extras = extraParams,
         ),
-    ).let(CodexThreadSession::fromJson).also { freshThreads[it.thread.id] = it }
+    ).let { payload -> withContext(decodingDispatcher) { CodexThreadSession.fromJson(payload) } }.also { freshThreads[it.thread.id] = it }
 
     suspend fun resumeThread(
         threadId: String,
@@ -449,7 +454,7 @@ open class CodexAppServerClient internal constructor(
             "excludeTurns" to excludeTurns.takeIf { it },
             extras = extraParams,
         ),
-    ).let(CodexThreadSession::fromJson)
+    ).let { payload -> withContext(decodingDispatcher) { CodexThreadSession.fromJson(payload) } }
 
     suspend fun forkThread(
         threadId: String,
@@ -474,7 +479,7 @@ open class CodexAppServerClient internal constructor(
             "excludeTurns" to excludeTurns.takeIf { it },
             extras = extraParams,
         ),
-    ).let(CodexThreadSession::fromJson)
+    ).let { payload -> withContext(decodingDispatcher) { CodexThreadSession.fromJson(payload) } }
 
     suspend fun readAccountRateLimits(): JsonObject =
         request("account/rateLimits/read", JsonObject(emptyMap())).objectOrEmpty()
@@ -485,7 +490,7 @@ open class CodexAppServerClient internal constructor(
 
     suspend fun unarchiveThread(threadId: String): CodexThread {
         val result = request("thread/unarchive", paramsOf("threadId" to threadId)).objectOrEmpty()
-        return CodexThread.fromJson(result["thread"].objectOrEmpty())
+        return withContext(decodingDispatcher) { CodexThread.fromJson(result["thread"].objectOrEmpty()) }
     }
 
     suspend fun deleteThread(threadId: String) {

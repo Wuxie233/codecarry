@@ -2,6 +2,14 @@ package dev.wuxie233.codecarry.data.codex
 
 import dev.wuxie233.codecarry.domain.model.ServerConfig
 import dev.wuxie233.codecarry.data.repository.SettingsRepository
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -20,6 +28,8 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
@@ -259,6 +269,7 @@ class CodexConnectionManager {
             getOrCreateLocked(server).also { current ->
                 current.references += 1
                 threadId?.let { id ->
+                    current.recentThreadJobs.remove(id)?.cancel()
                     current.openThreadReferences[id] = current.openThreadReferences.getOrDefault(id, 0) + 1
                 }
                 current.idleDisconnectJob?.cancel()
@@ -287,6 +298,131 @@ class CodexConnectionManager {
 
     fun isCurrent(connection: CodexServerConnection): Boolean = synchronized(lock) {
         entries[connection.serverId]?.connection === connection
+    }
+
+    // A failed optional/shared RPC must not cancel the manager's owning scope.
+    private fun <T> sharedRead(block: suspend () -> T): Deferred<Result<T>> =
+        scope.async(start = CoroutineStart.LAZY) {
+            try {
+                Result.success(block())
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                Result.failure(error)
+            }
+        }
+
+    /** Full-history subscription shared by screen entry and reconnect; waiter cancellation never cancels it. */
+    suspend fun resumeThread(connection: CodexServerConnection, threadId: String): CodexThreadSession {
+        val entry = synchronized(lock) {
+            entries[connection.serverId]?.takeIf { it.connection === connection }
+                ?: error("Codex server connection is no longer current")
+        }
+        synchronized(lock) { entry.threadUnsubscribeJobs[threadId] }?.join()
+        val task = synchronized(lock) {
+            check(entries[connection.serverId] === entry)
+            check(entry.client.connectionState.value is CodexClientConnectionState.Connected)
+            val generation = entry.client.currentConnectionGeneration()
+            val version = entry.threadLifecycleVersions.getOrDefault(threadId, 0L)
+            entry.threadSessions[threadId]?.takeIf {
+                it.generation == generation && it.lifecycleVersion == version
+            }?.let { cached ->
+                return cached.session.copy(thread = entry.reducer.state.value.threads[threadId] ?: cached.session.thread)
+            }
+            entry.threadResumeJobs[threadId]?.takeIf {
+                it.isActive && entry.threadResumeIdentities[threadId] == (generation to version)
+            } ?: sharedRead {
+                entry.reducer.invalidateThreadControlState(threadId)
+                val baseline = entry.reducer.state.value.threads[threadId]
+                val resumed = entry.client.resumeThread(threadId, excludeTurns = false)
+                val payloadBytes = jsonPayloadBytes(resumed.thread.raw)
+                synchronized(lock) {
+                    check(entries[connection.serverId] === entry &&
+                        entry.client.currentConnectionGeneration() == generation &&
+                        entry.client.connectionState.value is CodexClientConnectionState.Connected &&
+                        entry.threadLifecycleVersions.getOrDefault(threadId, 0L) == version) {
+                        "Codex thread resume belongs to an earlier connection or subscription"
+                    }
+                    entry.reducer.upsertThreadSnapshot(resumed.thread, baseline)
+                    // The reducer owns history; the subscription cache keeps only session metadata.
+                    val metadata = resumed.copy(
+                        thread = resumed.thread.copy(turns = emptyList(), raw = JsonObject(resumed.thread.raw - "turns")),
+                        raw = JsonObject(resumed.raw - "thread"),
+                    )
+                    entry.threadSessions[threadId] = ResumedThread(generation, version, metadata, payloadBytes)
+                    reconcileRetainedThread(entry, threadId)
+                    resumed.copy(thread = entry.reducer.state.value.threads[threadId] ?: resumed.thread)
+                }
+            }.also { deferred ->
+                entry.threadResumeJobs[threadId] = deferred
+                entry.threadResumeIdentities[threadId] = generation to version
+                deferred.invokeOnCompletion {
+                    synchronized(lock) {
+                        if (entry.threadResumeJobs[threadId] === deferred) {
+                            entry.threadResumeJobs.remove(threadId)
+                            entry.threadResumeIdentities.remove(threadId)
+                        }
+                    }
+                }
+                deferred.start()
+            }
+        }
+        return task.await().getOrThrow()
+    }
+
+    fun updateThreadSession(
+        connection: CodexServerConnection,
+        threadId: String,
+        update: (CodexThreadSession) -> CodexThreadSession,
+    ) = synchronized(lock) {
+        val entry = entries[connection.serverId]?.takeIf { it.connection === connection } ?: return@synchronized
+        val cached = entry.threadSessions[threadId] ?: return@synchronized
+        if (isThreadReady(connection, threadId)) {
+            entry.threadSessions[threadId] = cached.copy(session = update(cached.session))
+        }
+    }
+
+    suspend fun listModels(connection: CodexServerConnection): List<CodexModel> {
+        val task = synchronized(lock) {
+            val entry = entries[connection.serverId]?.takeIf { it.connection === connection }
+                ?: error("Codex server connection is no longer current")
+            val generation = entry.client.currentConnectionGeneration()
+            check(entry.client.connectionState.value is CodexClientConnectionState.Connected)
+            entry.modelCatalog?.takeIf { it.first == generation }?.let { return it.second }
+            entry.modelJob?.takeIf { it.isActive && entry.modelJobGeneration == generation } ?: sharedRead {
+                val models = mutableListOf<CodexModel>()
+                val cursors = mutableSetOf<String>()
+                var cursor: String? = null
+                do {
+                    val page = entry.client.listModels(cursor = cursor, limit = 100)
+                    models += page.models
+                    cursor = page.nextCursor
+                    check(cursor == null || cursors.add(cursor)) { "Codex model catalog repeated a cursor" }
+                } while (cursor != null)
+                synchronized(lock) {
+                    check(entries[connection.serverId] === entry &&
+                        entry.client.currentConnectionGeneration() == generation &&
+                        entry.client.connectionState.value is CodexClientConnectionState.Connected)
+                    models.toList().also { entry.modelCatalog = generation to it }
+                }
+            }.also { deferred ->
+                entry.modelJob = deferred
+                entry.modelJobGeneration = generation
+                deferred.invokeOnCompletion {
+                    synchronized(lock) { if (entry.modelJob === deferred) entry.modelJob = null }
+                }
+                deferred.start()
+            }
+        }
+        return task.await().getOrThrow()
+    }
+
+    fun isThreadReady(connection: CodexServerConnection, threadId: String): Boolean = synchronized(lock) {
+        val entry = entries[connection.serverId]?.takeIf { it.connection === connection } ?: return false
+        val cached = entry.threadSessions[threadId] ?: return false
+        entry.client.connectionState.value is CodexClientConnectionState.Connected &&
+            cached.generation == entry.client.currentConnectionGeneration() &&
+            cached.lifecycleVersion == entry.threadLifecycleVersions.getOrDefault(threadId, 0L)
     }
 
     fun disconnect(serverId: String) {
@@ -383,7 +519,7 @@ class CodexConnectionManager {
                 if (remaining > 0) entry.openThreadReferences[id] = remaining
                 else {
                     entry.openThreadReferences.remove(id)
-                    scheduleThreadUnsubscribeLocked(entry, id)
+                    retainRecentThreadLocked(entry, id)
                 }
             }
             scheduleIdleDisconnectLocked(entry)
@@ -476,6 +612,11 @@ class CodexConnectionManager {
                         reducer.process(notification)
                         when (notification.method) {
                             "thread/deleted" -> notification.threadId?.let { threadId ->
+                                synchronized(lock) {
+                                    entry.threadSessions.remove(threadId)
+                                    entry.threadResumeJobs.remove(threadId)?.cancel()
+                                    entry.recentThreadJobs.remove(threadId)?.cancel()
+                                }
                                 releaseRetainedThread(entry, threadId)
                             }
                             "serverRequest/resolved" -> {
@@ -524,6 +665,12 @@ class CodexConnectionManager {
                     clientState is CodexClientConnectionState.Failed
                 ) {
                     synchronized(lock) {
+                        entry.threadResumeJobs.values.toList().forEach { it.cancel() }
+                        entry.threadResumeJobs.clear()
+                        entry.threadSessions.clear()
+                        entry.modelJob?.cancel()
+                        entry.modelJob = null
+                        entry.modelCatalog = null
                         entry.usageJob?.cancel()
                         entry.usageJob = null
                         entry.usage.invalidate()
@@ -533,14 +680,7 @@ class CodexConnectionManager {
                     entry.state.value = clientState
                     scheduleReconnect(entry)
                 } else {
-                    val recovering = synchronized(lock) { entry.recovering }
-                    entry.state.value = if (
-                        recovering && clientState is CodexClientConnectionState.Connected
-                    ) {
-                        CodexClientConnectionState.Connecting
-                    } else {
-                        clientState
-                    }
+                    entry.state.value = clientState
                 }
                 if (clientState is CodexClientConnectionState.Connected) refreshUsage(server.id)
                 publish(entry)
@@ -649,10 +789,35 @@ class CodexConnectionManager {
         }
     }
 
+    private fun retainRecentThreadLocked(entry: Entry, threadId: String) {
+        if ((entry.threadSessions[threadId]?.payloadBytes ?: Long.MAX_VALUE) > 16L * 1024 * 1024) {
+            scheduleThreadUnsubscribeLocked(entry, threadId)
+            return
+        }
+        entry.recentThreadJobs.remove(threadId)?.cancel()
+        entry.recentThreadJobs[threadId] = scope.launch {
+            delay(30_000)
+            synchronized(lock) {
+                entry.recentThreadJobs.remove(threadId)
+                scheduleThreadUnsubscribeLocked(entry, threadId)
+            }
+        }
+        // Only three recently closed subscriptions; active and running threads retain their normal ownership.
+        while (entry.recentThreadJobs.size > 3 ||
+            entry.recentThreadJobs.keys.sumOf { entry.threadSessions[it]?.payloadBytes ?: 0L } > 32L * 1024 * 1024) {
+            val oldest = entry.recentThreadJobs.keys.first()
+            entry.recentThreadJobs.remove(oldest)?.cancel()
+            scheduleThreadUnsubscribeLocked(entry, oldest)
+        }
+    }
+
     private fun scheduleThreadUnsubscribeLocked(entry: Entry, threadId: String) {
-        if (entry.openThreadReferences.containsKey(threadId) || threadId in entry.retainedThreadIds) return
+        if (entry.openThreadReferences.containsKey(threadId) || threadId in entry.retainedThreadIds ||
+            threadId in entry.recentThreadJobs) return
         if (entry.threadUnsubscribeJobs[threadId]?.isActive == true) return
         if (entry.client.connectionState.value !is CodexClientConnectionState.Connected) return
+        entry.threadSessions.remove(threadId)
+        entry.threadResumeJobs.remove(threadId)?.cancel()
         entry.threadLifecycleVersions[threadId] = entry.threadLifecycleVersions.getOrDefault(threadId, 0L) + 1L
         lateinit var unsubscribeJob: Job
         unsubscribeJob = scope.launch(start = CoroutineStart.LAZY) {
@@ -737,7 +902,8 @@ class CodexConnectionManager {
         val finished = synchronized(lock) {
             if (entries[entry.connection.serverId] !== entry) return@synchronized false
             val fullyRestored = entry.requiredThreadIdsLocked().all { threadId ->
-                restoredThreads[threadId] == entry.threadLifecycleVersions.getOrDefault(threadId, 0L)
+                restoredThreads[threadId] == entry.threadLifecycleVersions.getOrDefault(threadId, 0L) &&
+                    isThreadReady(entry.connection, threadId)
             }
             if (!fullyRestored) {
                 return@synchronized false
@@ -755,47 +921,38 @@ class CodexConnectionManager {
         restoredThreads: MutableMap<String, Long>,
     ): Boolean {
         val openThreads = synchronized(lock) {
-            entry.requiredThreadIdsLocked()
-        }
-        restoredThreads.keys.retainAll(openThreads)
-        for (threadId in openThreads) {
-            synchronized(lock) { entry.threadUnsubscribeJobs[threadId] }?.join()
-            val lifecycleVersion = synchronized(lock) {
-                if (
-                    entries[entry.connection.serverId] !== entry ||
-                    threadId !in entry.requiredThreadIdsLocked()
-                ) {
-                    null
-                } else {
-                    entry.threadLifecycleVersions.getOrDefault(threadId, 0L)
-                }
-            } ?: continue
-            if (restoredThreads[threadId] == lifecycleVersion) continue
-            try {
-                entry.reducer.invalidateThreadControlState(threadId)
-                val baseline = entry.reducer.state.value.threads[threadId]
-                val resumed = entry.client.resumeThread(threadId, excludeTurns = false)
-                val stillCurrent = synchronized(lock) {
-                    entries[entry.connection.serverId] === entry &&
-                        threadId in entry.requiredThreadIdsLocked() &&
-                        entry.threadLifecycleVersions.getOrDefault(threadId, 0L) == lifecycleVersion
-                }
-                if (stillCurrent) {
-                    // Resume can race with the rejoined thread's live notifications.
-                    // Merge missing history without rolling back streamed or terminal items.
-                    entry.reducer.upsertThreadSnapshot(resumed.thread, baseline)
-                    restoredThreads[threadId] = lifecycleVersion
-                    reconcileRetainedThread(entry, threadId)
-                }
-            } catch (error: CancellationException) {
-                throw error
-            } catch (_: Throwable) {
-                val stillOpen = synchronized(lock) {
-                    entries[entry.connection.serverId] === entry &&
-                        threadId in entry.requiredThreadIdsLocked()
-                }
-                if (stillOpen) return false
+            entry.requiredThreadIdsLocked().sortedBy { id ->
+                if (CodexThreadKey(entry.connection.serverId, id) in activeThreadReferences) 0
+                else if (id in entry.openThreadReferences) 1 else 2
             }
+        }
+        restoredThreads.keys.retainAll(openThreads.toSet())
+        val permits = Semaphore(3)
+        coroutineScope {
+            openThreads.map { threadId ->
+                async {
+                    permits.withPermit {
+                        val lifecycleVersion = synchronized(lock) {
+                            if (entries[entry.connection.serverId] !== entry ||
+                                threadId !in entry.requiredThreadIdsLocked()) null
+                            else entry.threadLifecycleVersions.getOrDefault(threadId, 0L)
+                        } ?: return@withPermit
+                        if (synchronized(lock) {
+                            restoredThreads[threadId] == lifecycleVersion && isThreadReady(entry.connection, threadId)
+                        }) return@withPermit
+                        try {
+                            resumeThread(entry.connection, threadId)
+                            synchronized(lock) {
+                                if (isThreadReady(entry.connection, threadId)) restoredThreads[threadId] = lifecycleVersion
+                            }
+                        } catch (error: CancellationException) {
+                            currentCoroutineContext().ensureActive()
+                        } catch (_: Throwable) {
+                            // Other subscriptions become usable independently; only this thread retries.
+                        }
+                    }
+                }
+            }.awaitAll()
         }
         val latestOpenThreads = synchronized(lock) {
             if (entries[entry.connection.serverId] !== entry) return@synchronized emptyMap()
@@ -805,7 +962,7 @@ class CodexConnectionManager {
         }
         restoredThreads.keys.retainAll(latestOpenThreads.keys)
         return latestOpenThreads.all { (threadId, lifecycleVersion) ->
-            restoredThreads[threadId] == lifecycleVersion
+            restoredThreads[threadId] == lifecycleVersion && isThreadReady(entry.connection, threadId)
         }
     }
 
@@ -822,6 +979,13 @@ class CodexConnectionManager {
 
     private suspend fun nextReconnectDelay(current: Long): Long =
         (current.coerceAtLeast(1) * 2).coerceAtMost(reconnectMaxMillis())
+
+    private data class ResumedThread(
+        val generation: Long,
+        val lifecycleVersion: Long,
+        val session: CodexThreadSession,
+        val payloadBytes: Long,
+    )
 
     private data class ConnectionKey(val url: String, val token: String?)
 
@@ -844,17 +1008,29 @@ class CodexConnectionManager {
         var reconnectJob: Job? = null,
         var stateJob: Job? = null,
         var recovering: Boolean = false,
+        var modelJobGeneration: Long = -1L,
+        var modelCatalog: Pair<Long, List<CodexModel>>? = null,
+        var modelJob: Deferred<Result<List<CodexModel>>>? = null,
+        val threadSessions: MutableMap<String, ResumedThread> = mutableMapOf(),
+        val threadResumeIdentities: MutableMap<String, Pair<Long, Long>> = mutableMapOf(),
+        val threadResumeJobs: MutableMap<String, Deferred<Result<CodexThreadSession>>> = mutableMapOf(),
+        val recentThreadJobs: MutableMap<String, Job> = linkedMapOf(),
         val openThreadReferences: MutableMap<String, Int> = mutableMapOf(),
         val retainedThreadIds: MutableSet<String> = mutableSetOf(),
         val provisionalThreadIds: MutableSet<String> = mutableSetOf(),
         val threadUnsubscribeJobs: MutableMap<String, Job> = mutableMapOf(),
         val threadLifecycleVersions: MutableMap<String, Long> = mutableMapOf(),
     ) {
-        fun requiredThreadIdsLocked(): Set<String> = openThreadReferences.keys + retainedThreadIds
+        fun requiredThreadIdsLocked(): Set<String> = openThreadReferences.keys + retainedThreadIds + recentThreadJobs.keys
 
         fun hasOwnersLocked(): Boolean = persistent || references > 0 || retainedThreadIds.isNotEmpty()
 
         fun close() {
+            modelJob?.cancel()
+            threadResumeJobs.values.toList().forEach { it.cancel() }
+            threadResumeJobs.clear()
+            recentThreadJobs.values.forEach(Job::cancel)
+            recentThreadJobs.clear()
             usageJob?.cancel()
             usageClosed()
             idleDisconnectJob?.cancel()
@@ -879,3 +1055,10 @@ internal fun JsonPrimitive.requestKey(): String =
 
 private fun CodexServerRequest.threadId(): String? =
     (params["threadId"] as? JsonPrimitive)?.contentOrNull
+
+// Conservative UTF-16 payload accounting without serializing image-bearing history into a second large string.
+private fun jsonPayloadBytes(value: JsonElement): Long = when (value) {
+    is JsonPrimitive -> value.content.length.toLong() * 2 + 32
+    is JsonArray -> value.sumOf(::jsonPayloadBytes) + 32
+    is JsonObject -> value.entries.sumOf { (key, item) -> key.length * 2L + jsonPayloadBytes(item) + 32 }
+}

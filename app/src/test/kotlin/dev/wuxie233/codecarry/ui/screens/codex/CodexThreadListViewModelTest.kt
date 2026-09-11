@@ -36,6 +36,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -96,32 +97,55 @@ class CodexThreadListViewModelTest {
         replacement.incoming.send(
             """{"method":"thread/name/updated","params":{"threadId":"replacement","threadName":"New connection event"}}""",
         )
-        runCurrent()
+        f.awaitUi { it.activeThreads.any { thread -> thread.id == "replacement" && thread.name == "New connection event" } }
         assertEquals(setOf("old", "replacement"), f.ids().toSet())
         assertEquals("New connection event", f.vm.uiState.value.activeThreads.single { it.id == "replacement" }.name)
         assertFalse(f.vm.uiState.value.isLoading)
     }
 
-    @Test fun `interrupted pagination cannot publish a partial or late old generation catalog`() = scope.runTest {
+    @Test fun `interrupted pagination retains safe partial results but rejects late old generation pages`() = scope.runTest {
         val f = fixture()
         f.completeCatalog(f.transport, "old")
         f.vm.refresh()
         runCurrent()
         f.transport.reply(f.transport.nextList(), """{"data":[{"id":"partial"}],"nextCursor":"page-2"}""")
         runCurrent()
+        f.awaitUi { it.activeThreads.any { thread -> thread.id == "partial" } }
+        assertEquals(setOf("old", "partial"), f.ids().toSet())
         val delayed = f.transport.nextList()
         assertEquals("page-2", delayed["params"]?.jsonObject?.get("cursor")?.jsonPrimitive?.content)
         f.transport.disconnect()
         runCurrent()
-        assertEquals(listOf("old"), f.ids())
+        assertEquals(setOf("old", "partial"), f.ids().toSet())
         advanceTimeBy(1)
         runCurrent()
         f.completeCatalog(f.transport, "current")
         f.transport.reply(delayed, """{"data":[{"id":"stale"}],"nextCursor":null}""")
         runCurrent()
-        assertEquals(listOf("current"), f.ids())
+        assertEquals(setOf("old", "partial", "current"), f.ids().toSet())
+        assertFalse(f.ids().contains("stale"))
         assertFalse(f.vm.uiState.value.isLoading)
         assertNull(f.vm.uiState.value.error)
+    }
+
+    @Test fun `archives load on selection and do not delay active first paint`() = scope.runTest {
+        val f = fixture()
+        f.completeCatalog(f.transport, "active")
+        assertFalse(f.transport.hasPendingRequests())
+        f.vm.showArchived(true)
+        runCurrent()
+        val archived = f.transport.nextList()
+        assertEquals("true", archived["params"]?.jsonObject?.get("archived")?.jsonPrimitive?.content)
+        assertEquals("true", archived["params"]?.jsonObject?.get("useStateDbOnly")?.jsonPrimitive?.content)
+        assertEquals(listOf("active"), f.ids())
+        assertTrue(f.vm.uiState.value.isLoadingArchived)
+        f.transport.reply(archived, """{"data":[{"id":"archive"}],"nextCursor":null}""")
+        f.awaitUi { it.archivedThreads.any { thread -> thread.id == "archive" } && !it.isLoadingArchived }
+        assertEquals(listOf("active"), f.ids())
+        f.vm.showArchived(false)
+        f.vm.showArchived(true)
+        runCurrent()
+        assertFalse("Already loaded archives should be reused", f.transport.hasPendingRequests())
     }
 
     private suspend fun TestScope.fixture(): Fixture {
@@ -165,11 +189,21 @@ class CodexThreadListViewModelTest {
             assertEquals("false", active["params"]?.jsonObject?.get("archived")?.jsonPrimitive?.content)
             transport.reply(active, """{"data":[${ids.joinToString { """{"id":"$it"}""" }}],"nextCursor":null}""")
             testScope.runCurrent()
-            val archived = transport.nextList()
-            assertEquals("true", archived["params"]?.jsonObject?.get("archived")?.jsonPrimitive?.content)
-            transport.reply(archived, """{"data":[],"nextCursor":null}""")
-            testScope.runCurrent()
+            assertEquals("true", active["params"]?.jsonObject?.get("useStateDbOnly")?.jsonPrimitive?.content)
+            awaitUi { state -> ids.all { id -> state.activeThreads.any { it.id == id } } && !state.isLoading }
+            assertFalse("Fast first paint must not request archives", transport.hasPendingRequests())
         }
+        suspend fun awaitUi(predicate: (CodexThreadListUiState) -> Boolean) {
+            // Catalog projection intentionally runs on Default rather than Android Main.
+            // Yield real worker time while keeping transport/Main under the test scheduler.
+            repeat(1_000) {
+                testScope.runCurrent()
+                if (predicate(vm.uiState.value)) return
+                Thread.sleep(1)
+            }
+            assertTrue("Catalog projection did not reach expected state", predicate(vm.uiState.value))
+        }
+
     }
 
     private inner class FakeTransport : CodexRpcTransport {
@@ -193,6 +227,7 @@ class CodexThreadListViewModelTest {
                 else -> requests.send(request)
             }
         }
+        fun hasPendingRequests(): Boolean = !requests.isEmpty
         fun nextList(): JsonObject = checkNotNull(requests.tryReceive().getOrNull()) {
             "Expected automatic thread/list request"
         }.also { assertEquals("thread/list", it["method"]?.jsonPrimitive?.content) }

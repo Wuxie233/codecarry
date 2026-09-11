@@ -144,9 +144,8 @@ fun CodexChatScreen(
     var renameOpen by remember { mutableStateOf(false) }
     var goalOpen by remember { mutableStateOf(false) }
     var memoryOpen by remember { mutableStateOf(false) }
-    val timeline = remember(state.thread) {
-        state.thread?.turns.orEmpty().flatMap { turn -> turn.items.map { turn.id to it } }
-    }
+    // Turns already carry stable immutable identities; flattening duplicates every historical item per delta.
+    val timeline = state.thread?.turns.orEmpty()
 
     fun submitDraft() {
         if (
@@ -168,14 +167,14 @@ fun CodexChatScreen(
 
     if (relatedOpen) {
         AlertDialog(
-            onDismissRequest = { relatedOpen = false },
+            onDismissRequest = { relatedOpen = false; viewModel.hideRelatedThreads() },
             title = { Text(stringResource(R.string.chat_related_tasks)) },
             text = {
                 androidx.compose.foundation.lazy.LazyColumn {
                     items(state.relatedThreads, key = { it.id }) { thread ->
                         TextButton(
                             enabled = thread.id != state.thread?.id,
-                            onClick = { relatedOpen = false; onOpenThread(thread.id) },
+                            onClick = { relatedOpen = false; viewModel.hideRelatedThreads(); onOpenThread(thread.id) },
                         ) {
                             Column(Modifier.fillMaxWidth()) {
                                 Text(thread.displayTitle?.take(72) ?: thread.id)
@@ -196,7 +195,7 @@ fun CodexChatScreen(
                     }
                 }
             },
-            confirmButton = { TextButton(onClick = { relatedOpen = false }) { Text(stringResource(R.string.chat_subagents_close)) } },
+            confirmButton = { TextButton(onClick = { relatedOpen = false; viewModel.hideRelatedThreads() }) { Text(stringResource(R.string.chat_subagents_close)) } },
         )
     }
 
@@ -400,7 +399,7 @@ fun CodexChatScreen(
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
             when {
-                state.isLoading -> LoadingStateCard(Modifier.padding(16.dp), stringResource(R.string.codex_opening_thread))
+                state.isLoading && state.thread?.turns.isNullOrEmpty() -> LoadingStateCard(Modifier.padding(16.dp), stringResource(R.string.codex_opening_thread))
                 state.thread == null && state.error != null -> ErrorStateCard(
                     title = stringResource(R.string.codex_open_thread_failed),
                     message = state.error.orEmpty(),
@@ -418,6 +417,11 @@ fun CodexChatScreen(
                                 title = stringResource(R.string.chat_failure_operation),
                                 detailsLabel = stringResource(R.string.chat_failure_details),
                             )
+                        }
+                    }
+                    if (state.canRetryConnection) {
+                        item("retry-connection") {
+                            TextButton(onClick = viewModel::connectAndLoad) { Text(stringResource(R.string.retry)) }
                         }
                     }
                     state.threadFailure?.let { failure ->
@@ -461,7 +465,7 @@ fun CodexChatScreen(
                             }
                         }
                     }
-                    if (state.activeTurnId != null && timeline.none { it.second.type == "agentMessage" && it.second.text.isNullOrEmpty() }) {
+                    if (state.activeTurnId != null && state.thread?.turns?.lastOrNull { it.id == state.activeTurnId }?.items.orEmpty().none { it.type == "agentMessage" && it.text.isNullOrEmpty() }) {
                         item("working") {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)

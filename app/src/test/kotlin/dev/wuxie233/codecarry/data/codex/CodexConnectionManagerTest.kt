@@ -315,10 +315,10 @@ class CodexConnectionManagerTest {
             message = "thread temporarily unavailable",
         )
         runCurrent()
-        assertTrue(lease.connection.state.value is CodexClientConnectionState.Connecting)
+        assertTrue(lease.connection.state.value is CodexClientConnectionState.Connected)
         assertTrue(
             manager.connections.value.getValue(server.id).state is
-                CodexClientConnectionState.Connecting,
+                CodexClientConnectionState.Connected,
         )
 
         advanceTimeBy(2)
@@ -1066,6 +1066,171 @@ class CodexConnectionManagerTest {
         runCurrent()
 
         assertNull(manager.get(server.id))
+    }
+
+    @Test
+    fun `shared full resume survives waiter cancellation and reuses recent subscription`() = runTest {
+        lateinit var transport: FakeTransport
+        val manager = CodexConnectionManager(
+            createClient = { FakeTransport().also { transport = it }.newClient(backgroundScope) },
+            scope = backgroundScope,
+            idleDisconnectMillis = 60_000,
+        )
+        val acquiring = async { manager.acquire(server, "thread-1") }
+        runCurrent()
+        initialize(transport)
+        val lease = acquiring.await()
+        transport.takeSentObject() // initialized
+        val first = async { manager.resumeThread(lease.connection, "thread-1") }
+        val second = async { manager.resumeThread(lease.connection, "thread-1") }
+        runCurrent()
+        val resume = transport.takeSentObject()
+        assertEquals("thread/resume", resume["method"]?.jsonPrimitive?.content)
+        assertNull(transport.tryTakeSentObject())
+        first.cancel()
+        transport.respond(resume.getValue("id").jsonPrimitive, threadSession("thread-1"))
+        runCurrent()
+        assertEquals("thread-1", second.await().thread.id)
+        assertTrue(manager.isThreadReady(lease.connection, "thread-1"))
+        manager.updateThreadSession(lease.connection, "thread-1") { it.copy(serviceTier = "fast") }
+        lease.close()
+        runCurrent()
+        assertNull(transport.tryTakeSentObject())
+        advanceTimeBy(1_000)
+        val reopened = manager.acquire(server, "thread-1")
+        assertEquals("fast", manager.resumeThread(reopened.connection, "thread-1").serviceTier)
+        assertEquals(1, transport.resumeAttempts)
+        advanceTimeBy(30_000)
+        runCurrent()
+        assertNull(transport.tryTakeSentObject())
+        reopened.close()
+        manager.closeForTest()
+    }
+
+    @Test
+    fun `recent subscription expiration invalidates readiness and reacquire waits for unsubscribe`() = runTest {
+        lateinit var transport: FakeTransport
+        val manager = CodexConnectionManager(
+            createClient = { FakeTransport().also { transport = it }.newClient(backgroundScope) },
+            scope = backgroundScope,
+            idleDisconnectMillis = 60_000,
+        )
+        val acquiring = async { manager.acquire(server, "thread-1") }
+        runCurrent()
+        initialize(transport)
+        val lease = acquiring.await()
+        transport.takeSentObject()
+        val loading = async { manager.resumeThread(lease.connection, "thread-1") }
+        runCurrent()
+        val resume = transport.takeSentObject()
+        transport.respond(resume.getValue("id").jsonPrimitive, threadSession("thread-1"))
+        loading.await()
+        lease.close()
+        advanceTimeBy(30_000)
+        runCurrent()
+        val unsubscribe = transport.takeSentObject()
+        assertEquals("thread/unsubscribe", unsubscribe["method"]?.jsonPrimitive?.content)
+        assertFalse(manager.isThreadReady(lease.connection, "thread-1"))
+        val reopening = async { manager.acquire(server, "thread-1") }
+        runCurrent()
+        assertFalse(reopening.isCompleted)
+        transport.respond(unsubscribe.getValue("id").jsonPrimitive, buildJsonObject { put("status", "unsubscribed") })
+        val reopened = reopening.await()
+        val reloading = async { manager.resumeThread(reopened.connection, "thread-1") }
+        runCurrent()
+        val nextResume = transport.takeSentObject()
+        transport.respond(nextResume.getValue("id").jsonPrimitive, threadSession("thread-1"))
+        reloading.await()
+        assertEquals(2, transport.resumeAttempts)
+        manager.closeForTest()
+    }
+
+    @Test
+    fun `slow reconnect thread does not block socket or another thread readiness`() = runTest {
+        lateinit var transport: FakeTransport
+        val manager = CodexConnectionManager(
+            createClient = { FakeTransport().also { transport = it }.newClient(backgroundScope) },
+            scope = backgroundScope,
+            reconnectInitialMillis = 1,
+        )
+        val acquiring = async { manager.acquire(server, "slow") }
+        runCurrent()
+        initialize(transport)
+        val slow = acquiring.await()
+        val fast = manager.acquire(server, "fast")
+        val visible = manager.activateThread(CodexThreadKey(server.id, "fast"))
+        transport.takeSentObject()
+        transport.disconnect()
+        runCurrent()
+        advanceTimeBy(1)
+        runCurrent()
+        initialize(transport)
+        transport.takeSentObject()
+        val first = transport.takeSentObject()
+        val second = transport.takeSentObject()
+        assertEquals("fast", first["params"]?.jsonObject?.get("threadId")?.jsonPrimitive?.content)
+        assertTrue(fast.connection.state.value is CodexClientConnectionState.Connected)
+        transport.respond(first.getValue("id").jsonPrimitive, threadSession("fast"))
+        runCurrent()
+        assertTrue(manager.isThreadReady(fast.connection, "fast"))
+        assertFalse(manager.isThreadReady(slow.connection, "slow"))
+        val concurrentScreen = async { manager.resumeThread(slow.connection, "slow") }
+        runCurrent()
+        assertNull(transport.tryTakeSentObject())
+        transport.respond(second.getValue("id").jsonPrimitive, threadSession("slow"))
+        concurrentScreen.await()
+        assertEquals(2, transport.resumeAttempts)
+        visible.close()
+        manager.closeForTest()
+    }
+
+    @Test
+    fun `screen reconnect cannot reuse restored markers from previous socket`() = runTest {
+        lateinit var transport: FakeTransport
+        val manager = CodexConnectionManager(
+            createClient = { FakeTransport().also { transport = it }.newClient(backgroundScope) },
+            scope = backgroundScope,
+            reconnectInitialMillis = 10,
+        )
+        val acquiring = async { manager.acquire(server, "first") }
+        runCurrent()
+        initialize(transport)
+        val first = acquiring.await()
+        manager.acquire(server, "second")
+        transport.takeSentObject()
+        transport.disconnect()
+        runCurrent()
+        advanceTimeBy(10)
+        runCurrent()
+        initialize(transport)
+        transport.takeSentObject()
+        val requests = listOf(transport.takeSentObject(), transport.takeSentObject())
+        val firstRequest = requests.first { it["params"]?.jsonObject?.get("threadId")?.jsonPrimitive?.content == "first" }
+        val secondRequest = requests.first { it !== firstRequest }
+        transport.respond(firstRequest.getValue("id").jsonPrimitive, threadSession("first"))
+        transport.respondError(secondRequest.getValue("id").jsonPrimitive, -32_000, "temporarily unavailable")
+        runCurrent()
+        assertTrue(manager.isThreadReady(first.connection, "first"))
+        transport.disconnect()
+        runCurrent()
+        val screenReconnect = async { manager.acquire(server, "first") }
+        runCurrent()
+        initialize(transport)
+        screenReconnect.await()
+        transport.takeSentObject()
+        advanceTimeBy(20)
+        runCurrent()
+        val restored = listOf(transport.takeSentObject(), transport.takeSentObject())
+        assertEquals(setOf("first", "second"), restored.map {
+            it["params"]?.jsonObject?.get("threadId")?.jsonPrimitive?.content
+        }.toSet())
+        restored.forEach { request ->
+            val id = request["params"]!!.jsonObject.getValue("threadId").jsonPrimitive.content
+            transport.respond(request.getValue("id").jsonPrimitive, threadSession(id))
+        }
+        runCurrent()
+        assertTrue(manager.isThreadReady(first.connection, "first"))
+        manager.closeForTest()
     }
 
     private suspend fun initialize(transport: FakeTransport) {

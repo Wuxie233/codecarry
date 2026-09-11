@@ -15,6 +15,11 @@ import dev.wuxie233.codecarry.data.codex.CodexThreadListPage
 import dev.wuxie233.codecarry.data.repository.ServerRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.flowOn
+import dev.wuxie233.codecarry.data.codex.CodexRpcException
+import kotlinx.serialization.json.JsonObject
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -48,23 +53,28 @@ data class CodexThreadListUiState(
     val filter: CodexThreadFilter = CodexThreadFilter.ALL,
     val pendingRequestCounts: Map<String, Int> = emptyMap(),
     val isLoading: Boolean = true,
+    val isLoadingArchived: Boolean = false,
     val error: String? = null,
 ) {
-    val topology: List<CodexThreadNode>
-        get() = buildCodexThreadTopology(if (showArchived) archivedThreads else activeThreads)
+    val topology: List<CodexThreadNode> by lazy {
+        buildCodexThreadTopology(if (showArchived) archivedThreads else activeThreads)
+    }
 
-    val visibleRoots: List<CodexThreadNode>
-        get() = filterCodexThreadTopology(topology, searchQuery, filter, pendingRequestCounts)
+    val visibleRoots: List<CodexThreadNode> by lazy {
+        filterCodexThreadTopology(topology, searchQuery, filter, pendingRequestCounts)
+    }
 
-    val activityRoots: List<CodexThreadNode>
-        get() = copy(showArchived = false).visibleRoots.filter { root ->
+    val activityRoots: List<CodexThreadNode> by lazy {
+        (if (showArchived) copy(showArchived = false).visibleRoots else visibleRoots).filter { root ->
             root.runningCount > 0 || root.failedCount > 0 || root.members.any { pendingRequestCounts.getOrDefault(it.id, 0) > 0 }
         }
+    }
 
     val activityThreads: List<CodexThread> get() = activityRoots.map { it.thread }
 
-    val projects: List<CodexThreadProject>
-        get() = buildCodexTopologyProjects(visibleRoots, projectPreferences, showHiddenProjects, searchQuery.isNotBlank())
+    val projects: List<CodexThreadProject> by lazy {
+        buildCodexTopologyProjects(visibleRoots, projectPreferences, showHiddenProjects, searchQuery.isNotBlank())
+    }
 
     val hasListConstraints: Boolean
         get() = filter != CodexThreadFilter.ALL || searchQuery.isNotBlank()
@@ -104,6 +114,10 @@ class CodexThreadListViewModel @Inject constructor(
     private var connectionStateJob: Job? = null
     private var observedEventState: CodexEventState? = null
     private var refreshJob: Job? = null
+    private var archiveJob: Job? = null
+    private var calibrationJob: Job? = null
+    private var archivesLoaded = false
+    private var stateDbSupported = true
     private val connectionMutex = Mutex()
 
     init {
@@ -138,47 +152,24 @@ class CodexThreadListViewModel @Inject constructor(
                         "Codex connection changed while loading threads; retry the refresh"
                     }
                 }
-                val baseline = acquired.connection.events.value
-                // Creation time is stable while live activity changes recency during pagination.
-                val active = loadAllCodexThreads { cursor ->
+                var pageBaseline = acquired.connection.events.value
+                _uiState.update { it.copy(serverName = server.displayName) }
+                // Publish each database page immediately. A partial or database-only catalog
+                // must never infer deletion from absence.
+                loadAllCodexThreads(onPage = { page ->
                     ensureCurrent()
-                    acquired.connection.client.listThreads(
-                        cursor = cursor,
-                        archived = false,
-                        limit = 200,
-                        modelProviders = emptyList(),
-                        sortKey = "created_at",
-                        sortDirection = "desc",
-                    )
-                }
-                val archived = loadAllCodexThreads { cursor ->
+                    acquired.connection.reducer.mergeThreadPage(page.threads, false, pageBaseline)
+                    _uiState.update { it.copy(isLoading = false) }
+                }) { cursor ->
                     ensureCurrent()
-                    acquired.connection.client.listThreads(
-                        cursor = cursor,
-                        archived = true,
-                        limit = 200,
-                        modelProviders = emptyList(),
-                        sortKey = "created_at",
-                        sortDirection = "desc",
-                    )
+                    pageBaseline = acquired.connection.events.value
+                    loadCatalogPage(acquired.connection, cursor, archived = false)
                 }
                 ensureCurrent()
-                acquired.connection.reducer.reconcileThreads(active, archived, baseline)
-                val eventState = acquired.connection.events.value
-                observedEventState = eventState
-                _uiState.update {
-                    it.copy(
-                        serverName = server.displayName,
-                        activeThreads = eventState.threads.values.filter { thread ->
-                            thread.hasMetadata && thread.id !in eventState.archivedThreadIds
-                        },
-                        archivedThreads = eventState.threads.values.filter { thread ->
-                            thread.hasMetadata && thread.id in eventState.archivedThreadIds
-                        },
-                        isLoading = false,
-                        error = null,
-                    )
-                }
+                _uiState.update { it.copy(isLoading = false) }
+                if (_uiState.value.showArchived) loadArchives()
+                scheduleCalibration(acquired.connection, generation)
+
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Throwable) {
@@ -227,7 +218,87 @@ class CodexThreadListViewModel @Inject constructor(
 
     fun setFilter(filter: CodexThreadFilter) = _uiState.update { it.copy(filter = filter) }
 
-    fun showArchived(show: Boolean) = _uiState.update { it.copy(showArchived = show) }
+    fun showArchived(show: Boolean) {
+        _uiState.update { it.copy(showArchived = show) }
+        if (show && !archivesLoaded) loadArchives()
+    }
+
+    private suspend fun loadCatalogPage(
+        connected: CodexServerConnection,
+        cursor: String?,
+        archived: Boolean,
+        databaseOnly: Boolean = stateDbSupported,
+    ): CodexThreadListPage = try {
+        connected.client.listThreads(
+            cursor = cursor, archived = archived, limit = 200,
+            modelProviders = emptyList(), sortKey = "created_at", sortDirection = "desc",
+            useStateDbOnly = databaseOnly,
+        )
+    } catch (error: CodexRpcException) {
+        if (!databaseOnly || !codexStateDbUnsupported(error)) throw error
+        stateDbSupported = false
+        loadCatalogPage(connected, cursor, archived, databaseOnly = false)
+    }
+
+    private fun loadArchives() {
+        if (archiveJob?.isActive == true) return
+        archiveJob = viewModelScope.launch {
+            _uiState.update { it.copy(isLoadingArchived = true) }
+            try {
+                val connected = requireConnection()
+                connected.client.connect()
+                val generation = connected.client.currentConnectionGeneration()
+                var baseline = connected.events.value
+                loadAllCodexThreads(onPage = { page ->
+                    check(connectionManager.isCurrent(connected) && connected.client.currentConnectionGeneration() == generation)
+                    connected.reducer.mergeThreadPage(page.threads, true, baseline)
+                    _uiState.update { it.copy(isLoadingArchived = false) }
+                }) { cursor ->
+                    check(connectionManager.isCurrent(connected) && connected.client.currentConnectionGeneration() == generation)
+                    baseline = connected.events.value
+                    loadCatalogPage(connected, cursor, archived = true)
+                }
+                archivesLoaded = true
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                showError(error)
+            } finally {
+                _uiState.update { it.copy(isLoadingArchived = false) }
+            }
+        }
+    }
+
+    private fun scheduleCalibration(connected: CodexServerConnection, generation: Long) {
+        if (calibrationJob?.isActive == true) return
+        calibrationJob = viewModelScope.launch {
+            // Keep filesystem repair scans away from first paint and initial chat opening.
+            delay(30_000)
+            if (!connectionManager.isCurrent(connected) || connected.client.currentConnectionGeneration() != generation) return@launch
+            if (!CodexCatalogCalibration.claim(connected, System.nanoTime())) return@launch
+            try {
+                fun ensureCurrent() {
+                    check(connectionManager.isCurrent(connected) && connected.client.currentConnectionGeneration() == generation)
+                }
+                val baseline = connected.events.value
+                val active = loadAllCodexThreads { cursor ->
+                    ensureCurrent()
+                    loadCatalogPage(connected, cursor, archived = false, databaseOnly = false)
+                }
+                val archived = loadAllCodexThreads { cursor ->
+                    ensureCurrent()
+                    loadCatalogPage(connected, cursor, archived = true, databaseOnly = false)
+                }
+                ensureCurrent()
+                connected.reducer.reconcileThreads(active, archived, baseline)
+                archivesLoaded = true
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Throwable) {
+                // Fast catalog remains usable; a later refresh retries low-frequency repair.
+            }
+        }
+    }
 
     fun createThread(cwd: String) {
         viewModelScope.launch {
@@ -276,6 +347,11 @@ class CodexThreadListViewModel @Inject constructor(
             var seenConnected = false
             connected.state.collect { state ->
                 if (state is CodexClientConnectionState.Connected) {
+                    if (seenConnected) {
+                        archivesLoaded = false
+                        archiveJob?.cancel()
+                        calibrationJob?.cancel()
+                    }
                     if (seenConnected || refreshJob?.isActive != true) refresh()
                     seenConnected = true
                 }
@@ -283,8 +359,8 @@ class CodexThreadListViewModel @Inject constructor(
         }
         eventsJob = viewModelScope.launch {
             combine(connected.events, connected.pendingRequests) { events, requests ->
-                events to codexPendingRequestCounts(requests)
-            }.collect { (eventState, pendingCounts) ->
+                events.toCodexCatalogState() to codexPendingRequestCounts(requests)
+            }.flowOn(Dispatchers.Default).distinctUntilChanged().collect { (eventState, pendingCounts) ->
                 val previous = observedEventState
                 observedEventState = eventState
                 _uiState.update {
@@ -320,6 +396,11 @@ class CodexThreadListViewModel @Inject constructor(
         connectionStateJob?.cancel()
         connectionStateJob = null
         observedEventState = null
+        // Initial acquire may itself belong to the archive job.
+        if (connection != null) archiveJob?.cancel()
+        calibrationJob?.cancel()
+        archivesLoaded = false
+        stateDbSupported = true
         _uiState.update { it.copy(pendingRequestCounts = emptyMap()) }
         lease?.close()
         lease = null
@@ -332,6 +413,8 @@ class CodexThreadListViewModel @Inject constructor(
 
     override fun onCleared() {
         refreshJob?.cancel()
+        archiveJob?.cancel()
+        calibrationJob?.cancel()
         eventsJob?.cancel()
         lease?.close()
         lease = null
@@ -342,6 +425,7 @@ class CodexThreadListViewModel @Inject constructor(
 }
 
 internal suspend fun loadAllCodexThreads(
+    onPage: suspend (CodexThreadListPage) -> Unit = {},
     loadPage: suspend (cursor: String?) -> CodexThreadListPage,
 ): List<CodexThread> {
     val threadsById = linkedMapOf<String, CodexThread>()
@@ -349,6 +433,7 @@ internal suspend fun loadAllCodexThreads(
     var cursor: String? = null
     while (true) {
         val page = loadPage(cursor)
+        onPage(page)
         page.threads.forEach { thread -> threadsById[thread.id] = thread }
         val nextCursor = page.nextCursor?.takeIf(String::isNotBlank) ?: break
         check(seenCursors.add(nextCursor)) { "Codex thread pagination repeated a cursor; retry the refresh" }
@@ -397,4 +482,34 @@ internal fun CodexThreadListUiState.applyCodexEventState(
         archivedThreads = archived.values.toList(),
         error = error,
     )
+}
+
+/** Strip token-bearing history before StateFlow equality and topology planning. */
+internal fun CodexEventState.toCodexCatalogState(): CodexEventState = CodexEventState(
+    resetGeneration = resetGeneration,
+    archivedThreadIds = archivedThreadIds,
+    threads = threads.mapValues { (_, thread) ->
+        thread.copy(
+            turns = thread.turns.lastOrNull()?.let { last ->
+                listOf(dev.wuxie233.codecarry.data.codex.CodexTurn(id = last.id, status = last.status))
+            }.orEmpty(),
+            raw = JsonObject(emptyMap()),
+            extra = JsonObject(emptyMap()),
+        )
+    },
+)
+
+internal fun codexStateDbUnsupported(error: CodexRpcException): Boolean =
+    error.code == -32602L && (error.message.contains("useStateDbOnly", ignoreCase = true) ||
+        error.message.contains("use_state_db_only", ignoreCase = true))
+
+/** Weak connection keys avoid retaining accounts after their manager entry is released. */
+private object CodexCatalogCalibration {
+    private val lastAttempt = java.util.WeakHashMap<CodexServerConnection, Long>()
+    @Synchronized fun claim(connection: CodexServerConnection, now: Long): Boolean {
+        val previous = lastAttempt[connection]
+        if (previous != null && now - previous < 15L * 60 * 1_000_000_000) return false
+        lastAttempt[connection] = now
+        return true
+    }
 }
