@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="codex_fast">Fast</string>
+    <string name="codex_fast_pending">Fast · 下轮生效</string>
+    <string name="codex_fast_hint">速度更快，额度消耗更高。</string>
+    <string name="codex_fast_unavailable">当前模型或服务器不支持 Fast。</string>
+    <string name="codex_usage">额度</string>
+    <string name="codex_usage_compact">额度 %1$s</string>
+    <string name="codex_usage_title">账户额度</string>
+    <string name="codex_usage_scope">此服务器登录账户的额度，由各会话共享。</string>
+    <string name="codex_usage_stale">未更新</string>
+    <string name="codex_usage_refresh">刷新</string>
+    <string name="codex_usage_loading">更新中…</string>
+    <string name="codex_usage_unlimited">不限量</string>
+    <string name="codex_usage_unavailable">暂不可用</string>
+    <string name="codex_usage_unsupported">当前账户或服务器不支持额度查询。</string>
+    <string name="codex_usage_failed">额度更新失败，点击刷新重试。</string>
+    <string name="codex_usage_updated">更新于 %1$s</string>
+    <string name="codex_usage_remaining">剩余 %1$s</string>
+    <string name="codex_usage_credits">额外 Credits：%1$s</string>
+    <string name="codex_usage_no_credits">无</string>
+    <string name="codex_usage_no_windows">暂无额度周期明细。</string>
+    <string name="codex_usage_primary">主要额度</string>
+    <string name="codex_usage_secondary">次要额度</string>
+    <string name="codex_usage_weeks">%1$d 周额度</string>
+    <string name="codex_usage_days">%1$d 天额度</string>
+    <string name="codex_usage_hours">%1$d 小时额度</string>
+    <string name="codex_usage_minutes">%1$d 分钟额度</string>
+    <string name="codex_usage_resets">%1$s 重置</string>
+</resources>

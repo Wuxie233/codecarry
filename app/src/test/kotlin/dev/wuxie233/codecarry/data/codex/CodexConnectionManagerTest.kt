@@ -1133,6 +1133,10 @@ class CodexConnectionManagerTest {
             if (message["method"]?.jsonPrimitive?.content == "thread/resume") {
                 resumeAttempts += 1
             }
+            if (message["method"]?.jsonPrimitive?.content == "account/rateLimits/read") {
+                respond(message.getValue("id").jsonPrimitive, buildJsonObject { put("rateLimits", buildJsonObject {}) })
+                return
+            }
             sent.send(text)
         }
 

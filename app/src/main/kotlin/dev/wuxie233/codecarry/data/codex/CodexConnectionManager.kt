@@ -19,6 +19,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import java.io.Closeable
@@ -127,6 +129,48 @@ class CodexConnectionManager {
     private val lock = Any()
     private val entries = mutableMapOf<String, Entry>()
     private val connectionIds = AtomicLong()
+    private val usageStores = mutableMapOf<String, Pair<ConnectionKey, CodexAccountUsageStore>>()
+    private val _accountUsage = MutableStateFlow<Map<String, CodexAccountUsageState>>(emptyMap())
+    val accountUsage: StateFlow<Map<String, CodexAccountUsageState>> = _accountUsage.asStateFlow()
+
+    fun refreshUsage(serverId: String) {
+        synchronized(lock) {
+            val entry = entries[serverId] ?: return
+            if (entry.client.connectionState.value !is CodexClientConnectionState.Connected || entry.usageJob?.isActive == true) return
+            val generation = entry.client.currentConnectionGeneration()
+            val read = entry.usage.beginRead()
+            publishUsage(entry)
+            entry.usageJob = scope.launch {
+                try {
+                    val result = withTimeout(15_000) { entry.client.readAccountRateLimits() }
+                    synchronized(lock) {
+                        if (entries[serverId] === entry && generation == entry.client.currentConnectionGeneration()) {
+                            entry.usage.applyRead(read, result, System.currentTimeMillis())
+                            publishUsage(entry)
+                        }
+                    }
+                } catch (error: CancellationException) {
+                    if (error is kotlinx.coroutines.TimeoutCancellationException) synchronized(lock) {
+                        if (entries[serverId] === entry && generation == entry.client.currentConnectionGeneration()) {
+                            entry.usage.fail(read, error)
+                            publishUsage(entry)
+                        }
+                    } else throw error
+                } catch (error: Throwable) {
+                    synchronized(lock) {
+                        if (entries[serverId] === entry && generation == entry.client.currentConnectionGeneration()) {
+                            entry.usage.fail(read, error)
+                            publishUsage(entry)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun publishUsage(entry: Entry) {
+        _accountUsage.update { it + (entry.connection.serverId to entry.usage.state) }
+    }
     private val activeThreadReferences = mutableMapOf<CodexThreadKey, Int>()
     private val _connections = MutableStateFlow<Map<String, CodexManagedConnection>>(emptyMap())
     val connections: StateFlow<Map<String, CodexManagedConnection>> = _connections.asStateFlow()
@@ -372,6 +416,8 @@ class CodexConnectionManager {
         if (existing != null && existing.key == key) return existing
         existing?.close()
 
+        val usage = usageStores[server.id]?.takeIf { it.first == key }?.second ?: CodexAccountUsageStore()
+        usageStores[server.id] = key to usage
         val client = createClient(server)
         val connectionId = connectionIds.incrementAndGet()
         val pending = MutableStateFlow<List<CodexServerRequest>>(emptyList())
@@ -411,6 +457,22 @@ class CodexConnectionManager {
                     }
                     is CodexInboundEvent.Notification -> {
                         val notification = event.value
+                        synchronized(lock) {
+                            if (entries[server.id] !== entry) return@collect
+                            when (notification.method) {
+                                "account/rateLimits/updated" -> {
+                                    entry.usage.applyPush(notification.params, System.currentTimeMillis())
+                                    publishUsage(entry)
+                                }
+                                "account/updated" -> {
+                                    entry.usageJob?.cancel()
+                                    entry.usageJob = null
+                                    entry.usage.invalidate(clear = true)
+                                    publishUsage(entry)
+                                    refreshUsage(server.id)
+                                }
+                            }
+                        }
                         reducer.process(notification)
                         when (notification.method) {
                             "thread/deleted" -> notification.threadId?.let { threadId ->
@@ -449,15 +511,24 @@ class CodexConnectionManager {
             reducer = reducer,
             inboundJob = inboundJob,
             publish = ::publish,
+            usage = usage,
+            usageClosed = { synchronized(lock) { usage.invalidate(); _accountUsage.update { it + (server.id to usage.state) } } },
         )
         entries[server.id] = entry
         publish(entry)
         val stateJob = scope.launch(start = CoroutineStart.UNDISPATCHED) {
             client.connectionState.collect { clientState ->
+                if (synchronized(lock) { entries[server.id] !== entry }) return@collect
                 if (
                     clientState is CodexClientConnectionState.Disconnected ||
                     clientState is CodexClientConnectionState.Failed
                 ) {
+                    synchronized(lock) {
+                        entry.usageJob?.cancel()
+                        entry.usageJob = null
+                        entry.usage.invalidate()
+                        publishUsage(entry)
+                    }
                     entry.pending.value = emptyList()
                     entry.state.value = clientState
                     scheduleReconnect(entry)
@@ -471,6 +542,7 @@ class CodexConnectionManager {
                         clientState
                     }
                 }
+                if (clientState is CodexClientConnectionState.Connected) refreshUsage(server.id)
                 publish(entry)
             }
         }
@@ -763,6 +835,9 @@ class CodexConnectionManager {
         val reducer: CodexEventReducer,
         val inboundJob: Job,
         val publish: (Entry) -> Unit,
+        val usage: CodexAccountUsageStore,
+        val usageClosed: () -> Unit,
+        var usageJob: Job? = null,
         var references: Int = 0,
         var persistent: Boolean = false,
         var idleDisconnectJob: Job? = null,
@@ -780,6 +855,8 @@ class CodexConnectionManager {
         fun hasOwnersLocked(): Boolean = persistent || references > 0 || retainedThreadIds.isNotEmpty()
 
         fun close() {
+            usageJob?.cancel()
+            usageClosed()
             idleDisconnectJob?.cancel()
             reconnectJob?.cancel()
             threadUnsubscribeJobs.values.forEach(Job::cancel)

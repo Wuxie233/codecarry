@@ -116,6 +116,10 @@ fun CodexChatScreen(
     viewModel: CodexChatViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsState()
+    val accountUsage by viewModel.accountUsage.collectAsState()
+    val usage = accountUsage[viewModel.serverId]
+        ?: dev.wuxie233.codecarry.data.codex.CodexAccountUsageState()
+    var usageOpen by rememberSaveable { mutableStateOf(false) }
     val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
     val uriHandler = LocalUriHandler.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -156,6 +160,10 @@ fun CodexChatScreen(
         ) {
             viewModel.sendMessage(draft, attachments)
         }
+    }
+
+    if (usageOpen) {
+        CodexUsageSheet(usage, viewModel::refreshUsage, onDismiss = { usageOpen = false })
     }
 
     if (relatedOpen) {
@@ -208,6 +216,12 @@ fun CodexChatScreen(
                     else -> R.string.codex_chat_ready
                 }),
                 usageSummary = null,
+                additionalActions = {
+                    CodexUsageAction(usage, onClick = {
+                        usageOpen = true
+                        viewModel.refreshUsage()
+                    })
+                },
                 canStop = state.activeTurnId != null,
                 showSubagents = true,
                 runningSubagentCount = state.relatedThreads.count { it.id != state.thread?.id && it.status.type == "active" },
@@ -375,7 +389,9 @@ fun CodexChatScreen(
                                 onSearchFiles = viewModel::searchFiles,
                                 onModel = viewModel::selectModel,
                                 onEffort = viewModel::selectEffort,
+                                onFast = viewModel::toggleFast,
                             )
+                            CodexFastNotice(state, onDismiss = viewModel::dismissFastHint)
                         },
                     )
                 },
@@ -537,6 +553,7 @@ internal fun CodexComposerControlRow(
     onSearchFiles: (String) -> Unit,
     onModel: (dev.wuxie233.codecarry.data.codex.CodexModel) -> Unit,
     onEffort: (String) -> Unit,
+    onFast: () -> Unit = {},
 ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Row(
@@ -547,6 +564,12 @@ internal fun CodexComposerControlRow(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             CodexModelControls(state, onModel, onEffort)
+            CodexFastChip(
+                enabled = state.fastEnabled,
+                available = (state.fastAvailable || state.fastEnabled) && state.isConnected && !state.isLoading && !state.isSending,
+                pending = state.fastPending,
+                onClick = onFast,
+            )
         }
         CodexAttachmentPicker(
             enabled = attachmentsEnabled,

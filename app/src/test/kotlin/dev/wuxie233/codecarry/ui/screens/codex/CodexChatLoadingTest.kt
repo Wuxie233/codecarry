@@ -185,6 +185,71 @@ class CodexChatLoadingTest {
         assertEquals(setOf("parent", "child", "sibling"), fixture.vm.uiState.value.relatedThreads.map { it.id }.toSet())
     }
 
+    @Test
+    fun fastChoiceWaitsThroughSteerThenStartsWithAdvertisedTier() = scope.runTest {
+        val fixture = fixture()
+        fixture.resume()
+        runCurrent()
+        fixture.completeMetadata("""{"data":[{"id":"gpt-5","model":"gpt-5","displayName":"GPT", "defaultReasoningEffort":"high", "serviceTiers":[{"id":"fast","name":"Fast"}]}]}""")
+        fixture.vm.toggleFast()
+        assertTrue(fixture.vm.uiState.value.fastEnabled)
+        assertTrue(fixture.vm.uiState.value.fastPending)
+        assertEquals("high", fixture.vm.uiState.value.selectedEffort)
+        fixture.vm.sendMessage("steer")
+        runCurrent()
+        val steer = fixture.transport.next("turn/steer")
+        assertFalse(steer["params"]!!.jsonObject.containsKey("serviceTier"))
+        fixture.transport.reply(steer, "{}")
+        runCurrent()
+        assertTrue(fixture.vm.uiState.value.fastPending)
+        fixture.completeTurn()
+        runCurrent()
+        fixture.vm.sendMessage("next")
+        runCurrent()
+        val start = fixture.transport.next("turn/start")
+        assertEquals("fast", start["params"]!!.jsonObject["serviceTier"]!!.jsonPrimitive.content)
+        assertEquals("high", start["params"]!!.jsonObject["effort"]!!.jsonPrimitive.content)
+        fixture.transport.reply(start, """{"turn":{"id":"turn-2","status":"completed","items":[]}}""")
+        runCurrent()
+        assertFalse(fixture.vm.uiState.value.fastSelectionPending)
+        fixture.vm.toggleFast()
+        fixture.vm.sendMessage("normal")
+        runCurrent()
+        val normal = fixture.transport.next("turn/start")
+        assertTrue(normal["params"]!!.jsonObject.containsKey("serviceTier"))
+        assertEquals(kotlinx.serialization.json.JsonNull, normal["params"]!!.jsonObject["serviceTier"])
+    }
+
+    @Test
+    fun delayedMetadataCannotRestoreOldTierAfterFastWasSubmitted() = scope.runTest {
+        val fixture = fixture()
+        val models = """{"data":[{"id":"gpt-5","model":"gpt-5","displayName":"GPT","serviceTiers":[{"id":"fast","name":"Fast"}]}]}"""
+        fixture.resume()
+        runCurrent()
+        fixture.completeMetadata(models)
+        fixture.vm.connectAndLoad()
+        runCurrent()
+        fixture.resume()
+        runCurrent()
+        val delayedGoal = fixture.transport.next("thread/goal/get")
+        fixture.vm.toggleFast()
+        fixture.completeTurn()
+        runCurrent()
+        fixture.vm.sendMessage("fast next turn")
+        runCurrent()
+        val start = fixture.transport.next("turn/start")
+        fixture.transport.reply(start, """{"turn":{"id":"turn-fast","status":"completed","items":[]}}""")
+        runCurrent()
+        assertTrue(fixture.vm.uiState.value.fastEnabled)
+        assertFalse(fixture.vm.uiState.value.fastSelectionPending)
+        fixture.transport.reply(delayedGoal, "{\"goal\":null}")
+        runCurrent()
+        fixture.transport.replyNext("model/list", models)
+        runCurrent()
+        assertTrue(fixture.vm.uiState.value.fastEnabled)
+        assertFalse(fixture.vm.uiState.value.fastSelectionPending)
+    }
+
     private suspend fun TestScope.fixture(): Fixture {
         val http = HttpClient(MockEngine { error("OpenCode transport must not be used") }).also(httpClients::add)
         val store = object : DataStore<Preferences> {
@@ -231,10 +296,10 @@ class CodexChatLoadingTest {
             )
         }
 
-        suspend fun completeMetadata() {
+        suspend fun completeMetadata(models: String = "{\"data\":[]}") {
             transport.replyNext("thread/goal/get", "{\"goal\":null}")
             testScope.runCurrent()
-            transport.replyNext("model/list", "{\"data\":[]}")
+            transport.replyNext("model/list", models)
             testScope.runCurrent()
         }
     }
@@ -252,6 +317,10 @@ class CodexChatLoadingTest {
             methods += method
             if (method == "initialize") {
                 reply(request, """{"userAgent":"test","codexHome":"/tmp/codex","platformFamily":"unix","platformOs":"linux"}""")
+            } else if (method == "account/read") {
+                reply(request, "{\"account\":null}")
+            } else if (method == "account/rateLimits/read") {
+                reply(request, "{\"rateLimits\":{}}")
             } else if (request.containsKey("id")) {
                 requests.send(request)
             }

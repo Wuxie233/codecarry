@@ -325,3 +325,14 @@ If generated Hilt/Kotlin caches fail, rerun the affected verification after
   `savedPath` read through the daemon when inline bytes are absent. Reuse the
   timeline image retry and preview UI. A late in-progress resume snapshot must
   preserve completed image `raw`/`extra`, where its output bytes are stored.
+
+- Codex Fast uses the selected model's advertised `serviceTiers`; a pending
+  choice applies only to `turn/start`, never steering. Explicit JSON null
+  clears a service tier; omission inherits it. Persist only unsent choices
+  per server/thread, then restore the acknowledged tier from `thread/resume`.
+- Codex account quota lives in `CodexConnectionManager`, shared per server,
+  independently of thread token usage. Merge sparse rate-limit pushes without
+  clearing nullable metadata; in-flight reads must preserve newer pushes.
+  Account changes clear cached usage, socket changes fence old reads, and
+  disconnected values remain visibly stale. Window durations and resets come
+  from the server, and missing quota must never render as zero.

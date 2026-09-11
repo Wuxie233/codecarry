@@ -476,6 +476,9 @@ open class CodexAppServerClient internal constructor(
         ),
     ).let(CodexThreadSession::fromJson)
 
+    suspend fun readAccountRateLimits(): JsonObject =
+        request("account/rateLimits/read", JsonObject(emptyMap())).objectOrEmpty()
+
     suspend fun archiveThread(threadId: String) {
         request("thread/archive", paramsOf("threadId" to threadId))
     }

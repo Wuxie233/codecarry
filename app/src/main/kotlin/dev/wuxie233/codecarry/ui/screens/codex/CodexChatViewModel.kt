@@ -58,6 +58,10 @@ data class CodexChatUiState(
     val models: List<CodexModel> = emptyList(),
     val selectedModel: CodexModel? = null,
     val selectedEffort: String? = null,
+    val fastEnabled: Boolean = false,
+    val fastAvailable: Boolean = false,
+    val fastSelectionPending: Boolean = false,
+    val showFastHint: Boolean = false,
     val pendingRequests: List<CodexServerRequest> = emptyList(),
     val error: String? = null,
     val threadFailure: CodexFailure? = null,
@@ -75,7 +79,9 @@ data class CodexChatUiState(
     val attachmentsLoading: Boolean = false,
     val attachmentsError: String? = null,
     val filePreview: CodexFilePreviewState? = null,
-)
+) {
+    val fastPending: Boolean get() = fastSelectionPending && activeTurnId != null
+}
 
 data class CodexSendResult(val content: String, val accepted: Boolean, val attachmentIds: Set<String> = emptySet())
 
@@ -84,6 +90,7 @@ class CodexChatViewModel @Inject constructor(
     private val savedStateHandle: SavedStateHandle,
     private val connectionManager: CodexConnectionManager,
     private val serverRepository: ServerRepository,
+    private val fastPreferences: CodexFastPreferences = CodexFastPreferences(),
 ) : ViewModel() {
     val serverId: String = decodeCodexRouteArg(savedStateHandle["serverId"])
     val threadId: String = decodeCodexRouteArg(savedStateHandle["threadId"])
@@ -102,6 +109,8 @@ class CodexChatViewModel @Inject constructor(
         ),
     )
     val uiState: StateFlow<CodexChatUiState> = _uiState.asStateFlow()
+    val accountUsage = connectionManager.accountUsage
+    fun refreshUsage() = connectionManager.refreshUsage(serverId)
     private val _sendResults = MutableSharedFlow<CodexSendResult>(extraBufferCapacity = 1)
     val sendResults: SharedFlow<CodexSendResult> = _sendResults.asSharedFlow()
     private var client: CodexAppServerClient? = null
@@ -149,6 +158,8 @@ class CodexChatViewModel @Inject constructor(
                 val openedThread = acquired.connection.events.value.threads[threadId] ?: thread
                 _uiState.update { it.copy(
                     thread = openedThread,
+                    fastEnabled = fastPreferences.pending(serverId, threadId) ?: isCodexFastTier(resumed.serviceTier),
+                    fastSelectionPending = fastPreferences.pending(serverId, threadId) != null,
                     activeTurnId = openedThread.turns.lastOrNull { turn -> turn.status == "inProgress" }?.id,
                     isLoading = false,
                 ) }
@@ -180,6 +191,7 @@ class CodexChatViewModel @Inject constructor(
                         models = visibleModels,
                         selectedModel = selectedModel,
                         selectedEffort = resumed.reasoningEffort ?: selectedModel?.defaultReasoningEffort,
+                        fastAvailable = selectedModel.codexFastTier() != null,
                         activeTurnId = mergedThread.turns.lastOrNull { turn -> turn.status == "inProgress" }?.id,
                         isAwaitingAuthoritativeTurn = if (receivedAuthoritativeTurn) {
                             false
@@ -240,6 +252,7 @@ class CodexChatViewModel @Inject constructor(
     }
 
     fun setChatVisible(visible: Boolean) {
+        if (visible) refreshUsage()
         if (visible && activeThreadToken == null) {
             activeThreadToken = connectionManager.activateThread(
                 dev.wuxie233.codecarry.data.codex.CodexThreadKey(serverId, threadId),
@@ -291,7 +304,11 @@ class CodexChatViewModel @Inject constructor(
                     markSendAccepted(content, clientUserMessageId, awaitAuthoritativeTurn = false)
                     return@launch
                 }
-                val selected = _uiState.value.selectedModel
+                val sendingState = _uiState.value
+                val selected = sendingState.selectedModel
+                val fastOverride = codexFastTurnParams(
+                    selected, sendingState.fastEnabled, sendingState.fastSelectionPending,
+                )
                 beginAwaitingAuthoritativeTurn()
                 connectionManager.retainProvisionalTurn(serverId, threadId)
                 _uiState.update { it.copy(isAwaitingAuthoritativeTurn = true) }
@@ -299,9 +316,16 @@ class CodexChatViewModel @Inject constructor(
                     threadId = threadId,
                     input = input,
                     model = selected?.model,
-                    effort = _uiState.value.selectedEffort,
+                    effort = sendingState.selectedEffort,
                     clientUserMessageId = clientUserMessageId,
+                    extraParams = fastOverride,
                 )
+                if (fastOverride.containsKey("serviceTier") &&
+                    fastPreferences.pending(serverId, threadId) == sendingState.fastEnabled
+                ) {
+                    fastPreferences.clearPending(serverId, threadId)
+                    _uiState.update { it.copy(fastSelectionPending = false) }
+                }
                 if (confirmedTurn != null) {
                     val reducer = requireConnection().reducer
                     reducer.acceptTurnStart(threadId, confirmedTurn)
@@ -515,12 +539,32 @@ class CodexChatViewModel @Inject constructor(
     }
 
     fun selectModel(model: CodexModel) {
+        val disableFast = model.codexFastTier() == null && _uiState.value.fastEnabled
+        if (disableFast) fastPreferences.setPending(serverId, threadId, false)
         _uiState.update {
             it.copy(
                 selectedModel = model,
                 selectedEffort = model.defaultReasoningEffort,
+                fastAvailable = model.codexFastTier() != null,
+                fastEnabled = if (disableFast) false else it.fastEnabled,
+                fastSelectionPending = disableFast || it.fastSelectionPending,
             )
         }
+    }
+
+    fun toggleFast() {
+        val state = _uiState.value
+        if ((!state.fastAvailable && !state.fastEnabled) || state.isLoading || state.isSending) return
+        val enabled = !state.fastEnabled
+        fastPreferences.setPending(serverId, threadId, enabled)
+        val showHint = enabled && fastPreferences.consumeFirstEnable()
+        _uiState.update { it.copy(
+            fastEnabled = enabled, fastSelectionPending = true, showFastHint = showHint,
+        ) }
+    }
+
+    fun dismissFastHint() {
+        _uiState.update { it.copy(showFastHint = false) }
     }
 
     fun selectEffort(effort: String) {

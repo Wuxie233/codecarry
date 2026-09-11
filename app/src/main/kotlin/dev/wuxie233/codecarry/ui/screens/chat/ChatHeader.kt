@@ -99,6 +99,7 @@ internal fun ChatHeader(
     onOpenTerminal: () -> Unit,
     onOpenOverflow: () -> Unit,
     overflowMenu: @Composable (ChatHeaderDensity) -> Unit,
+    additionalActions: @Composable () -> Unit = {},
 ) {
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
         val policy = chatHeaderLayoutPolicy(maxWidth.value.toInt())
@@ -140,6 +141,7 @@ internal fun ChatHeader(
                 }
             },
             actions = {
+                additionalActions()
                 if (canStop) {
                     HeaderAction(onClick = onStop, policy = policy) {
                         Icon(

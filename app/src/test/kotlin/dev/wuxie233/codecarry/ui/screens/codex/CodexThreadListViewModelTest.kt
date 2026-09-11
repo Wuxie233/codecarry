@@ -189,6 +189,7 @@ class CodexThreadListViewModelTest {
             when (request["method"]?.jsonPrimitive?.content) {
                 "initialize" -> reply(request, """{"userAgent":"test","codexHome":"/tmp/codex","platformFamily":"unix","platformOs":"linux"}""")
                 "initialized" -> Unit
+                "account/rateLimits/read" -> reply(request, """{"rateLimits":{}}""")
                 else -> requests.send(request)
             }
         }

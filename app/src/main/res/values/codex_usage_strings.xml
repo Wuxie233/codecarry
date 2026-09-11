@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="codex_fast">Fast</string>
+    <string name="codex_fast_pending">Fast · next turn</string>
+    <string name="codex_fast_hint">Faster responses use more quota.</string>
+    <string name="codex_fast_unavailable">Fast is unavailable for this model or server.</string>
+    <string name="codex_usage">Quota</string>
+    <string name="codex_usage_compact">Quota %1$s</string>
+    <string name="codex_usage_title">Account quota</string>
+    <string name="codex_usage_scope">Shared by sessions using this server’s signed-in account.</string>
+    <string name="codex_usage_stale">Not updated</string>
+    <string name="codex_usage_refresh">Refresh</string>
+    <string name="codex_usage_loading">Updating…</string>
+    <string name="codex_usage_unlimited">Unlimited</string>
+    <string name="codex_usage_unavailable">Unavailable</string>
+    <string name="codex_usage_unsupported">Quota queries are not supported by this account or server.</string>
+    <string name="codex_usage_failed">Could not update quota. Tap Refresh to retry.</string>
+    <string name="codex_usage_updated">Updated %1$s</string>
+    <string name="codex_usage_remaining">%1$s remaining</string>
+    <string name="codex_usage_credits">Extra Credits: %1$s</string>
+    <string name="codex_usage_no_credits">None</string>
+    <string name="codex_usage_no_windows">Quota window details are unavailable.</string>
+    <string name="codex_usage_primary">Primary quota</string>
+    <string name="codex_usage_secondary">Secondary quota</string>
+    <string name="codex_usage_weeks">%1$d-week quota</string>
+    <string name="codex_usage_days">%1$d-day quota</string>
+    <string name="codex_usage_hours">%1$d-hour quota</string>
+    <string name="codex_usage_minutes">%1$d-minute quota</string>
+    <string name="codex_usage_resets">Resets %1$s</string>
+</resources>

@@ -65,6 +65,7 @@ data class CodexThreadSession(
     val model: String? = null,
     val modelProvider: String? = null,
     val reasoningEffort: String? = null,
+    val serviceTier: String? = null,
     val approvalPolicy: JsonElement? = null,
     val sandbox: JsonElement? = null,
     val extra: JsonObject = JsonObject(emptyMap()),
@@ -79,6 +80,7 @@ data class CodexThreadSession(
                 model = objectValue.string("model"),
                 modelProvider = objectValue.string("modelProvider"),
                 reasoningEffort = objectValue.string("reasoningEffort"),
+                serviceTier = objectValue.string("serviceTier"),
                 approvalPolicy = objectValue["approvalPolicy"].nonNull(),
                 sandbox = objectValue["sandbox"].nonNull(),
                 extra = objectValue.without(
@@ -87,6 +89,7 @@ data class CodexThreadSession(
                     "model",
                     "modelProvider",
                     "reasoningEffort",
+                    "serviceTier",
                     "approvalPolicy",
                     "sandbox",
                 ),
