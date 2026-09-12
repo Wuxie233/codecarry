@@ -5,8 +5,8 @@ import unittest
 from pathlib import Path
 from websockets.asyncio.client import connect
 from websockets.asyncio.server import serve, unix_serve
-from websockets.exceptions import InvalidStatus
-from codex_bridge import CodexBridge
+from websockets.exceptions import InvalidStatus, ConnectionClosed
+from codex_bridge import CodexBridge, MAX_DAEMON_MESSAGE
 
 
 class BridgeTests(unittest.IsolatedAsyncioTestCase):
@@ -45,6 +45,51 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(message,await asyncio.wait_for(ws.recv(),2))
                 self.assertEqual('turn/completed',json.loads(await ws.recv())['method'])
         self.assertEqual(2,len(self.received))
+
+    async def replace_daemon(self, handler):
+        self.daemon.close()
+        await self.daemon.wait_closed()
+        self.daemon = await unix_serve(handler, self.socket, compression=None)
+
+    async def test_long_history_above_old_limit_and_following_rpc(self):
+        # The old 16 MiB receive limit disconnected instead of delivering history.
+        payload = json.dumps({'id': 1, 'result': {'text': 'x' * (17 * 1024 * 1024)}})
+        async def daemon(ws):
+            await ws.recv()
+            await ws.send(payload)
+            await ws.send('{"method":"turn/completed","params":{}}')
+            await ws.send(await ws.recv())
+        await self.replace_daemon(daemon)
+        async with connect(self.url, compression=None, max_size=MAX_DAEMON_MESSAGE,
+                           additional_headers={'Authorization': 'Bearer ' + 'x'*40}) as ws:
+            await ws.send('{"id":1,"method":"thread/resume"}')
+            self.assertEqual(payload, await asyncio.wait_for(ws.recv(), 10))
+            self.assertEqual('turn/completed', json.loads(await ws.recv())['method'])
+            await ws.send('{"id":2,"method":"thread/list"}')
+            self.assertEqual('{"id":2,"method":"thread/list"}', await ws.recv())
+
+    async def test_oversize_daemon_response_reports_1009(self):
+        self.bridge.max_daemon_message = 1024
+        async def daemon(ws):
+            await ws.recv()
+            await ws.send('x' * 1025)
+            await ws.wait_closed()
+        await self.replace_daemon(daemon)
+        async with connect(self.url, additional_headers={'Authorization': 'Bearer ' + 'x'*40}) as ws:
+            await ws.send('{}')
+            with self.assertRaises(ConnectionClosed):
+                await asyncio.wait_for(ws.recv(), 5)
+            self.assertEqual(1009, ws.close_code)
+            self.assertEqual('Codex message exceeds bridge size limit', ws.close_reason)
+
+    async def test_abnormal_daemon_close_does_not_leak_reason(self):
+        async def daemon(ws):
+            await ws.close(1011, 'private upstream details')
+        await self.replace_daemon(daemon)
+        async with connect(self.url, additional_headers={'Authorization': 'Bearer ' + 'x'*40}) as ws:
+            await asyncio.wait_for(ws.wait_closed(), 5)
+            self.assertEqual(1011, ws.close_code)
+            self.assertEqual('Codex daemon connection closed', ws.close_reason)
 
     async def test_browser_origin_rejected(self):
         with self.assertRaises(InvalidStatus) as caught:

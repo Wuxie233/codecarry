@@ -8,6 +8,8 @@ import io.ktor.client.plugins.websocket.webSocketSession
 import io.ktor.client.request.bearerAuth
 import io.ktor.client.request.url
 import io.ktor.websocket.Frame
+import io.ktor.websocket.CloseReason
+import io.ktor.websocket.readReason
 import io.ktor.websocket.readText
 import io.ktor.websocket.send
 import kotlinx.coroutines.CancellationException
@@ -20,6 +22,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.ClosedReceiveChannelException
+import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -127,13 +130,7 @@ internal class KtorCodexRpcTransport(
     override suspend fun receive(): String? {
         val current = mutex.withLock { session }
             ?: throw CodexDisconnectedException("Codex app-server is not connected")
-        while (true) {
-            when (val frame = current.incoming.receiveCatching().getOrNull() ?: return null) {
-                is Frame.Text -> return frame.readText()
-                is Frame.Close -> return null
-                else -> Unit
-            }
-        }
+        return receiveCodexWebSocketText(current.incoming) { current.closeReason.await() }
     }
 
     override fun close() {
@@ -146,6 +143,36 @@ internal class KtorCodexRpcTransport(
             current.cancel()
         }
     }
+}
+
+internal suspend fun receiveCodexWebSocketText(
+    incoming: ReceiveChannel<Frame>,
+    closeReason: suspend () -> CloseReason?,
+): String? {
+    while (true) {
+        val received = incoming.receiveCatching()
+        received.exceptionOrNull()?.let { throw it }
+        when (val frame = received.getOrNull()) {
+            is Frame.Text -> return frame.readText()
+            is Frame.Close -> throw codexWebSocketClosed(frame.readReason())
+            null -> {
+                // OkHttp consumes Close frames and exposes the code separately.
+                val reason = closeReason() ?: return null
+                throw codexWebSocketClosed(reason)
+            }
+            else -> Unit
+        }
+    }
+}
+
+private fun codexWebSocketClosed(reason: CloseReason?): CodexDisconnectedException {
+    // A peer's arbitrary close text may contain private data. Keep only its code.
+    val detail = reason?.let {
+        if (it.code.toInt() == 1009) "WebSocket 1009: message too large" else "WebSocket ${it.code}"
+    }
+    return CodexDisconnectedException(
+        "Codex app-server connection closed" + (detail?.let { " ($it)" } ?: ""),
+    )
 }
 
 open class CodexAppServerClient internal constructor(
@@ -756,7 +783,13 @@ open class CodexAppServerClient internal constructor(
                 _connectionState.value = failure
                     ?.let(CodexClientConnectionState::Failed)
                     ?: CodexClientConnectionState.Disconnected
-                failPending(CodexDisconnectedException(cause = failure))
+                failPending(
+                    failure as? CodexDisconnectedException ?: CodexDisconnectedException(
+                        message = "Codex app-server connection closed" +
+                            (failure?.let { " (${it.javaClass.simpleName})" } ?: ""),
+                        cause = failure,
+                    ),
+                )
             }
         }
     }

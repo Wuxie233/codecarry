@@ -17,16 +17,22 @@ from websockets.asyncio.server import serve
 from websockets.exceptions import ConnectionClosed
 
 MAX_MESSAGE = 16 * 1024 * 1024
+# Full thread history is one RPC response, including tool output and image data.
+MAX_DAEMON_MESSAGE = 64 * 1024 * 1024
 LOG = logging.getLogger("codecarry.codex")
 
 
 class CodexBridge:
-    def __init__(self, socket_path, token, max_connections=32):
+    def __init__(self, socket_path, token, max_connections=32,
+                 max_daemon_message=MAX_DAEMON_MESSAGE):
         if not token or any(c.isspace() for c in token):
             raise ValueError("Token must be nonempty and contain no whitespace")
         self.socket_path = str(socket_path)
         self.authorization = "Bearer " + token
         self.max_connections = max_connections
+        if max_daemon_message <= 0:
+            raise ValueError("Daemon message limit must be positive")
+        self.max_daemon_message = max_daemon_message
         self.active = 0
 
     async def authorize(self, connection, request):
@@ -49,7 +55,7 @@ class CodexBridge:
             async with unix_connect(
                 self.socket_path, uri="ws://localhost", compression=None,
                 user_agent_header=None, open_timeout=10, close_timeout=5,
-                max_size=MAX_MESSAGE, max_queue=16,
+                max_size=self.max_daemon_message, max_queue=4,
                 ping_interval=20, ping_timeout=20,
             ) as daemon:
                 async def relay(source, target):
@@ -62,8 +68,15 @@ class CodexBridge:
                 done, _ = await asyncio.wait(pumps, return_when=asyncio.FIRST_COMPLETED)
                 for task in done:
                     task.result()
-        except ConnectionClosed:
-            pass
+        except ConnectionClosed as error:
+            # Forward a safe diagnostic, never daemon reason text or RPC contents.
+            codes = {close.code for close in (error.sent, error.rcvd) if close is not None}
+            if 1009 in codes:
+                LOG.warning("Codex message exceeded transport limit")
+                await client.close(1009, "Codex message exceeds bridge size limit")
+            elif codes - {1000, 1001} or not codes:
+                LOG.warning("Codex transport closed abnormally")
+                await client.close(1011, "Codex daemon connection closed")
         except (OSError, TimeoutError):
             LOG.warning("Codex daemon unavailable")
             await client.close(1011, "Codex daemon unavailable")

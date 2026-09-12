@@ -349,3 +349,8 @@ If generated Hilt/Kotlin caches fail, rerun the affected verification after
   Account changes clear cached usage, socket changes fence old reads, and
   disconnected values remain visibly stale. Window durations and resets come
   from the server, and missing quota must never render as zero.
+
+- Codex full thread history is a single WebSocket message. The bridge allows
+  64 MiB daemon responses and 16 MiB client requests; preserve explicit 1009
+  size-limit diagnostics and Android close codes. APK installation does not
+  update the bridge process; bridge changes require a separate deployment.

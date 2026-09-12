@@ -1,5 +1,8 @@
 package dev.wuxie233.codecarry.data.codex
 
+import io.ktor.websocket.CloseReason
+import io.ktor.websocket.Frame
+import java.io.IOException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
@@ -315,6 +318,83 @@ class CodexAppServerClientTest {
             } catch (error: CodexDisconnectedException) {
                 assertTrue(error.message.orEmpty().contains("connection closed"))
             }
+        }
+    }
+
+    @Test
+    fun `websocket channel failure retains its cause`() = runTest {
+        val incoming = Channel<Frame>()
+        val failure = IOException("private transport detail")
+        incoming.close(failure)
+
+        val actual = runCatching {
+            receiveCodexWebSocketText(incoming) { error("Failed channels must not await close reason") }
+        }.exceptionOrNull()
+
+        assertTrue(actual === failure)
+    }
+
+    @Test
+    fun `okhttp consumed close frame preserves code without peer text`() = runTest {
+        val incoming = Channel<Frame>()
+        incoming.close()
+
+        val error = runCatching {
+            receiveCodexWebSocketText(incoming) { CloseReason(1009, "private peer detail") }
+        }.exceptionOrNull()
+
+        assertTrue(error is CodexDisconnectedException)
+        assertEquals("Codex app-server connection closed (WebSocket 1009: message too large)", error?.message)
+    }
+
+    @Test
+    fun `explicit websocket close frame preserves code`() = runTest {
+        val incoming = Channel<Frame>(Channel.UNLIMITED)
+        incoming.send(Frame.Close(CloseReason(1011, "private peer detail")))
+
+        val error = runCatching {
+            receiveCodexWebSocketText(incoming) { error("Close frame already carries the reason") }
+        }.exceptionOrNull()
+
+        assertEquals("Codex app-server connection closed (WebSocket 1011)", error?.message)
+        incoming.close()
+    }
+
+    @Test
+    fun `websocket close diagnostic reaches pending rpc`() = runTest {
+        val transport = FakeTransport()
+        val client = newClient(transport, backgroundScope)
+        initialize(client, transport)
+        val failure = CodexDisconnectedException("Codex app-server connection closed (WebSocket 1009: message too large)")
+
+        supervisorScope {
+            val pending = async { client.request("thread/resume") }
+            transport.takeSentObject()
+            transport.incoming.close(failure)
+            val error = runCatching { pending.await() }.exceptionOrNull()
+            assertTrue(error is CodexDisconnectedException)
+            assertEquals(failure.message, error?.message)
+            assertTrue(client.connectionState.value is CodexClientConnectionState.Failed)
+        }
+    }
+
+    @Test
+    fun `transport failure type reaches pending rpc without private detail`() = runTest {
+        val transport = FakeTransport()
+        val client = newClient(transport, backgroundScope)
+        initialize(client, transport)
+        val failure = IOException("private transport detail")
+
+        supervisorScope {
+            val pending = async { client.request("thread/resume") }
+            transport.takeSentObject()
+            transport.incoming.close(failure)
+            val error = runCatching { pending.await() }.exceptionOrNull()
+            assertEquals("Codex app-server connection closed (IOException)", error?.message)
+            // Coroutine stack-trace recovery can copy exceptions and add cause wrappers.
+            assertTrue(generateSequence(error) { it.cause }.any {
+                it is IOException && it.message == failure.message
+            })
         }
     }
 
@@ -824,7 +904,11 @@ class CodexAppServerClientTest {
             sent.send(text)
         }
 
-        override suspend fun receive(): String? = incoming.receiveCatching().getOrNull()
+        override suspend fun receive(): String? {
+            val received = incoming.receiveCatching()
+            received.exceptionOrNull()?.let { throw it }
+            return received.getOrNull()
+        }
 
         override fun close() {
             connected = false

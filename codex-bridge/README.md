@@ -94,6 +94,21 @@ Apply environment changes during an idle maintenance window, after checking
 all loaded thread statuses, then reconnect and verify a real model reply.
 Keep the existing login and model provider when repairing network egress.
 
+## Long conversation limits
+
+Full history is returned as a single JSON-RPC message. The bridge accepts
+up to 64 MiB per daemon response (including tool output and inline images),
+while client requests remain limited to 16 MiB. The daemon receive queue is
+limited to four frames to bound buffering. Responses beyond the limit close
+with code 1009 and a safe size-limit diagnostic; abnormal daemon closure
+becomes 1011 instead of an apparently normal client disconnect. No history
+is truncated to fit the transport.
+
+Updating the Android APK alone does not update a deployed bridge. Deploy
+`codex_bridge.py` and restart the owning bridge service in an approved
+maintenance window; existing mobile sockets reconnect. The daemon and its
+running threads do not need a restart.
+
 ## Verification
 
 ```sh
