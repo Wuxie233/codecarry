@@ -389,6 +389,7 @@ fun CodexChatScreen(
                                 onModel = viewModel::selectModel,
                                 onEffort = viewModel::selectEffort,
                                 onFast = viewModel::toggleFast,
+                                onRetryModels = viewModel::retryModelsLoad,
                             )
                             CodexFastNotice(state, onDismiss = viewModel::dismissFastHint)
                         },
@@ -484,24 +485,17 @@ fun CodexChatScreen(
         title = { Text(stringResource(R.string.codex_chat_status)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                state.goal?.let { goal ->
-                    Text(goal.objective)
-                    Text(stringResource(when (goal.status) {
-                        "active" -> R.string.codex_chat_goal_active
-                        "complete", "completed" -> R.string.codex_chat_goal_complete
-                        "paused" -> R.string.codex_chat_goal_paused
-                        "blocked" -> R.string.codex_chat_goal_blocked
-                        else -> R.string.codex_chat_goal_unknown
-                    }))
-                } ?: Text(stringResource(R.string.codex_chat_no_goal))
-                state.goal?.let { goal ->
-                    Text(stringResource(R.string.codex_chat_goal_usage, goal.tokensUsed, goal.tokenBudget?.toString() ?: "—", goal.timeUsedSeconds))
+                CodexGoalStatus(state.goalState, onRetry = viewModel::retryGoalLoad)
+                when (val receipt = state.memoryModeReceipt) {
+                    null -> Text(stringResource(R.string.codex_memory_unknown_line))
+                    else -> Text(
+                        stringResource(
+                            R.string.codex_memory_receipt_line,
+                            stringResource(codexMemoryModeLabelRes(receipt.mode)),
+                        ),
+                    )
                 }
-                Text(stringResource(R.string.codex_chat_memory_value, when (state.memoryMode) {
-                    CodexMemoryMode.ENABLED -> stringResource(R.string.codex_enable)
-                    CodexMemoryMode.DISABLED -> stringResource(R.string.codex_disable)
-                    null -> "—"
-                }))
+                CodexThreadPolicyStatus(state = state)
                 state.tokenUsage?.let { usage ->
                     Text(stringResource(R.string.codex_chat_context_value, usage.last.totalTokens, usage.modelContextWindow?.toString() ?: "—"))
                     Text(stringResource(R.string.codex_chat_total_tokens, usage.total.totalTokens))
@@ -529,7 +523,7 @@ fun CodexChatScreen(
         onClear = { viewModel.clearGoal(); goalOpen = false },
     )
     if (memoryOpen) MemoryDialog(
-        selected = state.memoryMode,
+        selected = state.memoryModeReceipt?.mode,
         onDismiss = { memoryOpen = false },
         onSelect = { viewModel.setMemoryMode(it); memoryOpen = false },
     )
@@ -548,6 +542,134 @@ internal fun codexChatVisibilityForEvent(event: Lifecycle.Event): Boolean? = whe
     else -> null
 }
 
+internal fun codexMemoryModeLabelRes(mode: CodexMemoryMode): Int = when (mode) {
+    CodexMemoryMode.ENABLED -> R.string.codex_enable
+    CodexMemoryMode.DISABLED -> R.string.codex_disable
+}
+
+/** Goal metadata renders its own loading/empty/error lifecycle with retry; it never gates chat readiness. */
+@Composable
+private fun CodexGoalStatus(
+    goalState: CodexMetadataLoadState<dev.wuxie233.codecarry.data.codex.CodexGoal?>,
+    onRetry: () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        when (goalState) {
+            CodexMetadataLoadState.Loading -> Text(stringResource(R.string.loading))
+            is CodexMetadataLoadState.Loaded -> {
+                val goal = goalState.value
+                if (goal == null) {
+                    Text(stringResource(R.string.codex_chat_no_goal))
+                } else {
+                    Text(goal.objective)
+                    Text(stringResource(when (goal.status) {
+                        "active" -> R.string.codex_chat_goal_active
+                        "complete", "completed" -> R.string.codex_chat_goal_complete
+                        "paused" -> R.string.codex_chat_goal_paused
+                        "blocked" -> R.string.codex_chat_goal_blocked
+                        else -> R.string.codex_chat_goal_unknown
+                    }))
+                    Text(stringResource(R.string.codex_chat_goal_usage, goal.tokensUsed, goal.tokenBudget?.toString() ?: "—", goal.timeUsedSeconds))
+                }
+                if (goalState.stale && goal != null) {
+                    Text(
+                        stringResource(R.string.codex_metadata_stale),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            is CodexMetadataLoadState.Failed -> {
+                goalState.staleValue?.let { goal ->
+                    Text(goal.objective)
+                    Text(stringResource(R.string.codex_chat_goal_usage, goal.tokensUsed, goal.tokenBudget?.toString() ?: "—", goal.timeUsedSeconds))
+                    Text(
+                        stringResource(R.string.codex_metadata_stale),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Text(
+                    stringResource(R.string.codex_goal_load_failed, goalState.message),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+                TextButton(onClick = onRetry) { Text(stringResource(R.string.retry)) }
+            }
+        }
+    }
+}
+
+/** Read-only display of the authoritative approval policy and sandbox scope from thread/resume. */
+@Composable
+private fun CodexThreadPolicyStatus(state: CodexChatUiState) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(stringResource(R.string.codex_policy_title), style = MaterialTheme.typography.labelLarge)
+        if (!state.isConnected) {
+            Text(stringResource(R.string.codex_policy_unavailable), style = MaterialTheme.typography.bodySmall)
+            return@Column
+        }
+        val policy = state.threadPolicy
+        Text(
+            stringResource(
+                R.string.codex_policy_approvals,
+                policy?.approvalPolicy?.let { token ->
+                    codexApprovalPolicyLabelRes(token)?.let { res -> stringResource(res) } ?: token
+                } ?: stringResource(R.string.codex_policy_unknown),
+            ),
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Text(
+            stringResource(
+                R.string.codex_policy_sandbox,
+                policy?.sandboxMode?.let { token ->
+                    codexSandboxModeLabelRes(token)?.let { res -> stringResource(res) } ?: token
+                } ?: stringResource(R.string.codex_policy_unknown),
+            ),
+            style = MaterialTheme.typography.bodySmall,
+        )
+        policy?.sandboxNetworkEnabled?.let { enabled ->
+            Text(
+                stringResource(
+                    if (enabled) R.string.codex_policy_network_on else R.string.codex_policy_network_off,
+                ),
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        if (!policy?.sandboxWritableRoots.isNullOrEmpty()) {
+            Text(
+                stringResource(R.string.codex_policy_roots, policy?.sandboxWritableRoots?.joinToString(", ").orEmpty()),
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = FontFamily.Monospace,
+            )
+        }
+    }
+}
+
+// Tokens arrive verbatim from the app-server; unknown tokens render as-is instead of a wrong label.
+internal fun codexApprovalPolicyLabelRes(token: String): Int? = when (codexPolicyTokenKey(token)) {
+    "untrusted" -> R.string.codex_policy_approval_untrusted
+    "unlessTrusted" -> R.string.codex_policy_approval_unless_trusted
+    "onFailure" -> R.string.codex_policy_approval_on_failure
+    "onRequest" -> R.string.codex_policy_approval_on_request
+    "never" -> R.string.codex_policy_approval_never
+    else -> null
+}
+
+internal fun codexSandboxModeLabelRes(token: String): Int? = when (codexPolicyTokenKey(token)) {
+    "readOnly" -> R.string.codex_policy_sandbox_read_only
+    "workspaceWrite" -> R.string.codex_policy_sandbox_workspace_write
+    "dangerFullAccess" -> R.string.codex_policy_sandbox_full_access
+    "externalSandbox" -> R.string.codex_policy_sandbox_external
+    else -> null
+}
+
+/** camelCase, kebab-case, and snake_case tokens resolve to the same key. */
+internal fun codexPolicyTokenKey(token: String): String =
+    token.split('-', '_').mapIndexed { index, part ->
+        if (index == 0) part else part.replaceFirstChar { it.uppercase() }
+    }.joinToString("")
+
 @Composable
 internal fun CodexComposerControlRow(
     state: CodexChatUiState,
@@ -558,6 +680,7 @@ internal fun CodexComposerControlRow(
     onModel: (dev.wuxie233.codecarry.data.codex.CodexModel) -> Unit,
     onEffort: (String) -> Unit,
     onFast: () -> Unit = {},
+    onRetryModels: () -> Unit = {},
 ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Row(
@@ -567,7 +690,7 @@ internal fun CodexComposerControlRow(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            CodexModelControls(state, onModel, onEffort)
+            CodexModelControls(state, onModel, onEffort, onRetryModels)
             CodexFastChip(
                 enabled = state.fastEnabled,
                 available = (state.fastAvailable || state.fastEnabled) && state.isConnected && !state.isLoading && !state.isSending,
@@ -593,10 +716,46 @@ internal fun CodexModelControls(
     state: CodexChatUiState,
     onModel: (dev.wuxie233.codecarry.data.codex.CodexModel) -> Unit,
     onEffort: (String) -> Unit,
+    onRetryModels: () -> Unit = {},
 ) {
     var modelsOpen by remember { mutableStateOf(false) }
     var effortOpen by remember { mutableStateOf(false) }
+    // The model catalog owns an independent lifecycle: loading and failure states stay visible
+    // as compact chips and never block the rest of the composer.
+    when (state.modelsState) {
+        CodexMetadataLoadState.Loading -> if (state.models.isEmpty()) {
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .padding(horizontal = 3.dp, vertical = 3.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
+                Text(
+                    stringResource(R.string.codex_model),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    maxLines = 1,
+                )
+            }
+        } else Unit
+        is CodexMetadataLoadState.Failed -> if (state.models.isEmpty()) {
+            CodexComposerChip(
+                label = stringResource(R.string.codex_models_unavailable),
+                onClick = onRetryModels,
+            )
+        } else Unit
+        is CodexMetadataLoadState.Loaded -> Unit
+    }
     if (state.models.isEmpty()) return
+    if (state.modelsState is CodexMetadataLoadState.Failed) {
+        // Stale-but-valid catalog stays usable with a visible retry marker.
+        CodexComposerChip(
+            label = stringResource(R.string.codex_models_stale_retry),
+            onClick = onRetryModels,
+        )
+    }
     val modelLabel = state.selectedModel?.displayName?.ifBlank { state.selectedModel.model }
         ?: stringResource(R.string.codex_model)
     Box {
@@ -864,9 +1023,7 @@ private fun McpForm(
         .mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.toSet()
     val values = remember(schema) {
         mutableStateMapOf<String, JsonElement>().apply {
-            properties.forEach { (name, raw) ->
-                (raw as? JsonObject)?.get("default")?.let { defaultValue -> put(name, defaultValue) }
-            }
+            initialMcpFormValues(properties).forEach { (name, value) -> put(name, value) }
         }
     }
     properties.forEach { (name, raw) ->
@@ -895,8 +1052,7 @@ private fun McpForm(
                 }
             }
             type == "boolean" -> {
-                val checked = (values[name] as? JsonPrimitive)?.booleanOrNull
-                    ?: (field["default"] as? JsonPrimitive)?.booleanOrNull ?: false
+                val checked = displayedMcpBoolean(values[name], field)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(checked = checked, onCheckedChange = { values[name] = JsonPrimitive(it) })
                     Text(label)
@@ -945,16 +1101,39 @@ private fun McpForm(
         TextButton(enabled = LocalCodexRequestEnabled.current, onClick = onCancel) { Text(stringResource(R.string.cancel)) }
         OutlinedButton(enabled = LocalCodexRequestEnabled.current, onClick = onDecline) { Text(stringResource(R.string.codex_decline)) }
         Button(
-            onClick = {
-                onSubmit(buildJsonObject {
-                    properties.forEach { (name, raw) ->
-                        val defaultValue = (raw as? JsonObject)?.get("default")
-                        (values[name] ?: defaultValue)?.let { put(name, it) }
-                    }
-                })
-            },
+            onClick = { onSubmit(buildMcpFormSubmission(properties, values.toMap())) },
             enabled = LocalCodexRequestEnabled.current && (valid),
         ) { Text(stringResource(R.string.codex_submit)) }
+    }
+}
+
+/**
+ * Displayed and submitted values start identical. A boolean without a schema default
+ * initializes to an explicit false so a required unchecked boolean submits directly.
+ */
+internal fun initialMcpFormValues(properties: JsonObject): Map<String, JsonElement> = buildMap {
+    properties.forEach { (name, raw) ->
+        val field = raw as? JsonObject ?: return@forEach
+        when (field.string("type").orEmpty()) {
+            "boolean" -> put(
+                name,
+                (field["default"] as? JsonPrimitive)?.takeIf { it.booleanOrNull != null } ?: JsonPrimitive(false),
+            )
+            else -> field["default"]?.let { defaultValue -> put(name, defaultValue) }
+        }
+    }
+}
+
+/** The value the checkbox renders for a field; it must always equal what submission sends. */
+internal fun displayedMcpBoolean(value: JsonElement?, field: JsonObject): Boolean =
+    (value as? JsonPrimitive)?.booleanOrNull
+        ?: (field["default"] as? JsonPrimitive)?.booleanOrNull
+        ?: false
+
+internal fun buildMcpFormSubmission(properties: JsonObject, values: Map<String, JsonElement>): JsonObject = buildJsonObject {
+    properties.forEach { (name, raw) ->
+        val defaultValue = (raw as? JsonObject)?.get("default")
+        (values[name] ?: defaultValue)?.let { put(name, it) }
     }
 }
 

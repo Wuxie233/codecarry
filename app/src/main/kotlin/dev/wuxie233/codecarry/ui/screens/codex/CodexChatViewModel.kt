@@ -45,18 +45,58 @@ import java.net.URLDecoder
 import java.util.UUID
 import javax.inject.Inject
 
+/** Independent loading lifecycle for optional chat metadata; failures never gate history or sending. */
+sealed interface CodexMetadataLoadState<out T> {
+    data object Loading : CodexMetadataLoadState<Nothing>
+    data class Loaded<out T>(val value: T, val stale: Boolean = false) : CodexMetadataLoadState<T>
+    data class Failed<out T>(val message: String, val staleValue: T? = null) : CodexMetadataLoadState<T>
+}
+
+internal fun <T> CodexMetadataLoadState<T>.beginRefresh(): CodexMetadataLoadState<T> = when (this) {
+    CodexMetadataLoadState.Loading -> this
+    is CodexMetadataLoadState.Loaded -> copy(stale = true)
+    is CodexMetadataLoadState.Failed -> this
+}
+
+internal fun <T> CodexMetadataLoadState<T>.valueOrNull(): T? = when (this) {
+    CodexMetadataLoadState.Loading -> null
+    is CodexMetadataLoadState.Loaded -> value
+    is CodexMetadataLoadState.Failed -> staleValue
+}
+
+internal fun <T> CodexMetadataLoadState<T>.failedKeepingValue(message: String): CodexMetadataLoadState.Failed<T> =
+    CodexMetadataLoadState.Failed(message, valueOrNull())
+
+internal fun <T> CodexMetadataLoadState<T>.markStale(): CodexMetadataLoadState<T> = when (this) {
+    CodexMetadataLoadState.Loading -> this
+    is CodexMetadataLoadState.Loaded -> copy(stale = true)
+    is CodexMetadataLoadState.Failed -> this
+}
+
+/**
+ * The app-server only exposes `thread/memoryMode/set`; there is no read RPC.
+ * This receipt records what this client set on which connection generation so
+ * the UI can label it as a local receipt, never as the authoritative current
+ * mode, and so any reconnect invalidates it.
+ */
+data class CodexMemoryModeReceipt(
+    val mode: CodexMemoryMode,
+    val connectionGeneration: Long,
+)
+
 data class CodexChatUiState(
     val draft: String = "",
     val thread: CodexThread? = null,
     val relatedThreads: List<CodexThread> = emptyList(),
-    val goal: CodexGoal? = null,
+    val goalState: CodexMetadataLoadState<CodexGoal?> = CodexMetadataLoadState.Loading,
     val activeTurnId: String? = null,
     val isLoading: Boolean = true,
     val isSending: Boolean = false,
     val isAwaitingAuthoritativeTurn: Boolean = false,
     val isSendConfirmationPending: Boolean = false,
-    val memoryMode: CodexMemoryMode? = null,
-    val models: List<CodexModel> = emptyList(),
+    val memoryModeReceipt: CodexMemoryModeReceipt? = null,
+    val modelsState: CodexMetadataLoadState<List<CodexModel>> = CodexMetadataLoadState.Loading,
+    val threadPolicy: CodexThreadPolicy? = null,
     val selectedModel: CodexModel? = null,
     val selectedEffort: String? = null,
     val fastEnabled: Boolean = false,
@@ -83,6 +123,18 @@ data class CodexChatUiState(
 ) {
     val canRetryConnection: Boolean get() = !isConnected && !isLoading
     val fastPending: Boolean get() = fastSelectionPending && activeTurnId != null
+    val goal: CodexGoal?
+        get() = when (val state = goalState) {
+            CodexMetadataLoadState.Loading -> null
+            is CodexMetadataLoadState.Loaded -> state.value
+            is CodexMetadataLoadState.Failed -> state.staleValue
+        }
+    val models: List<CodexModel>
+        get() = when (val state = modelsState) {
+            CodexMetadataLoadState.Loading -> emptyList()
+            is CodexMetadataLoadState.Loaded -> state.value
+            is CodexMetadataLoadState.Failed -> state.staleValue.orEmpty()
+        }
 }
 
 data class CodexSendResult(val content: String, val accepted: Boolean, val attachmentIds: Set<String> = emptySet())
@@ -127,6 +179,11 @@ class CodexChatViewModel @Inject constructor(
     private var loadJob: Job? = null
     private var relatedThreadsJob: Job? = null
     private var loadError: String? = null
+    // Acknowledged session model/effort from the latest thread/resume; the models refresh reconciles against them.
+    private var lastResumedModel: String? = null
+    private var lastResumedEffort: String? = null
+    // Connection generation the displayed thread policy came from; a reconnect invalidates it.
+    private var threadPolicyGeneration: Long? = null
     private var selectionRevision = 0L
     private var selectionPending = false
     private var familyVisible = false
@@ -158,10 +215,13 @@ class CodexChatViewModel @Inject constructor(
                 val connected = acquired.connection
                 val selectionAtStart = selectionRevision
                 val resumed = connectionManager.resumeThread(connected, threadId)
+                lastResumedModel = resumed.model
+                lastResumedEffort = resumed.reasoningEffort
                 val generation = connected.client.currentConnectionGeneration()
                 fun current() = connectionManager.isCurrent(connected) &&
                     generation == connected.client.currentConnectionGeneration()
                 if (!current()) return@launch
+                threadPolicyGeneration = generation
                 val thread = connected.events.value.threads[threadId] ?: resumed.thread
                 val receivedAuthoritativeTurn = consumeAuthoritativeTurn(thread)
                 _uiState.update { state -> state.copy(
@@ -172,43 +232,17 @@ class CodexChatViewModel @Inject constructor(
                     isAwaitingAuthoritativeTurn = if (receivedAuthoritativeTurn) false else state.isAwaitingAuthoritativeTurn,
                     isConnected = connectionManager.isThreadReady(connected, threadId),
                     isLoading = false,
+                    // Receipts and policy are valid only for the connection generation that produced them.
+                    memoryModeReceipt = state.memoryModeReceipt?.takeIf { it.connectionGeneration == generation },
+                    threadPolicy = resumed.threadPolicy(),
+                    goalState = state.goalState.beginRefresh(),
+                    modelsState = state.modelsState.beginRefresh(),
                 ) }
                 confirmPendingSendFromThread(thread)
                 // Optional metadata loads independently; neither blocks history or control readiness.
                 coroutineScope {
-                    launch {
-                        val goalBaseline = connected.events.value.goals[threadId]
-                        val knownBaseline = threadId in connected.events.value.knownGoalThreadIds
-                        val goal = runCatching { connected.client.getGoal(threadId) }.getOrElse {
-                            if (it is CancellationException) throw it
-                            return@launch
-                        }
-                        if (current() && connected.events.value.goals[threadId] == goalBaseline &&
-                            (threadId in connected.events.value.knownGoalThreadIds) == knownBaseline) {
-                            _uiState.update { it.copy(goal = goal) }
-                        }
-                    }
-                    launch {
-                        val models = runCatching { connectionManager.listModels(connected) }.getOrElse {
-                            if (it is CancellationException) throw it
-                            return@launch
-                        }
-                        if (!current()) return@launch
-                        _uiState.update { state ->
-                            val untouched = selectionAtStart == selectionRevision && !selectionPending
-                            val modelName = if (untouched) resumed.model else state.selectedModel?.model
-                            val selected = models.firstOrNull { it.model == modelName || it.id == modelName }
-                                ?: state.selectedModel?.takeIf { !untouched && it.model == modelName }
-                                ?: modelName?.let { CodexModel(id = it, model = it, displayName = it) }
-                                ?: models.firstOrNull { it.isDefault } ?: models.firstOrNull()
-                            state.copy(
-                                models = if (selected != null && models.none { it.model == selected.model }) listOf(selected) + models else models,
-                                selectedModel = selected,
-                                selectedEffort = if (untouched) resumed.reasoningEffort ?: selected?.defaultReasoningEffort else state.selectedEffort,
-                                fastAvailable = selected.codexFastTier() != null,
-                            )
-                        }
-                    }
+                    launch { refreshGoalState(connected, generation) }
+                    launch { refreshModelsState(connected, generation, selectionAtStart) }
                 }
             } catch (error: CancellationException) {
                 throw error
@@ -218,6 +252,100 @@ class CodexChatViewModel @Inject constructor(
             }
         }
     }
+
+    /** Retry the optional goal read; failures surface in [CodexChatUiState.goalState] only. */
+    fun retryGoalLoad() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(goalState = it.goalState.beginRefresh()) }
+            val connected = acquireMetadataConnection { message ->
+                _uiState.update { it.copy(goalState = it.goalState.failedKeepingValue(message)) }
+            } ?: return@launch
+            refreshGoalState(connected, connected.client.currentConnectionGeneration())
+        }
+    }
+
+    /** Retry the optional model catalog; failures surface in [CodexChatUiState.modelsState] only. */
+    fun retryModelsLoad() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(modelsState = it.modelsState.beginRefresh()) }
+            val connected = acquireMetadataConnection { message ->
+                _uiState.update { it.copy(modelsState = it.modelsState.failedKeepingValue(message)) }
+            } ?: return@launch
+            refreshModelsState(connected, connected.client.currentConnectionGeneration(), selectionRevision)
+        }
+    }
+
+    private suspend fun acquireMetadataConnection(
+        onUnavailable: (String) -> Unit,
+    ): CodexServerConnection? = try {
+        requireConnection()
+    } catch (error: CancellationException) {
+        throw error
+    } catch (error: Throwable) {
+        onUnavailable(error.message ?: "Codex thread is reconnecting")
+        null
+    }
+
+    private suspend fun refreshGoalState(connected: CodexServerConnection, generation: Long) {
+        val goalBaseline = connected.events.value.goals[threadId]
+        val knownBaseline = threadId in connected.events.value.knownGoalThreadIds
+        try {
+            val goal = connected.client.getGoal(threadId)
+            // A live thread/goal/* event during the fetch owns the newer state.
+            if (!currentGeneration(connected, generation)) return
+            if (connected.events.value.goals[threadId] == goalBaseline &&
+                (threadId in connected.events.value.knownGoalThreadIds) == knownBaseline
+            ) {
+                _uiState.update { it.copy(goalState = CodexMetadataLoadState.Loaded(goal)) }
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            if (currentGeneration(connected, generation)) {
+                _uiState.update {
+                    it.copy(goalState = it.goalState.failedKeepingValue(error.message ?: "Codex goal is unavailable"))
+                }
+            }
+        }
+    }
+
+    private suspend fun refreshModelsState(connected: CodexServerConnection, generation: Long, selectionAtStart: Long) {
+        try {
+            val models = connectionManager.listModels(connected)
+            if (!currentGeneration(connected, generation)) return
+            _uiState.update { state ->
+                val untouched = selectionAtStart == selectionRevision && !selectionPending
+                val modelName = if (untouched) lastResumedModel else state.selectedModel?.model
+                val selected = models.firstOrNull { it.model == modelName || it.id == modelName }
+                    ?: state.selectedModel?.takeIf { !untouched && it.model == modelName }
+                    ?: modelName?.let { CodexModel(id = it, model = it, displayName = it) }
+                    ?: models.firstOrNull { it.isDefault } ?: models.firstOrNull()
+                state.copy(
+                    modelsState = CodexMetadataLoadState.Loaded(
+                        if (selected != null && models.none { it.model == selected.model }) listOf(selected) + models else models,
+                    ),
+                    selectedModel = selected,
+                    selectedEffort = if (untouched) {
+                        lastResumedEffort ?: selected?.defaultReasoningEffort
+                    } else {
+                        state.selectedEffort
+                    },
+                    fastAvailable = selected.codexFastTier() != null,
+                )
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            if (currentGeneration(connected, generation)) {
+                _uiState.update {
+                    it.copy(modelsState = it.modelsState.failedKeepingValue(error.message ?: "Codex models are unavailable"))
+                }
+            }
+        }
+    }
+
+    private fun currentGeneration(connected: CodexServerConnection, generation: Long): Boolean =
+        connectionManager.isCurrent(connected) && generation == connected.client.currentConnectionGeneration()
 
     /** Optional catalog hydration, invoked by the family panel; never gates thread/resume. */
     fun refreshRelatedThreads() {
@@ -401,12 +529,22 @@ class CodexChatViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isSending = true, error = null) }
             try {
-                val thread = requireClient().readThread(threadId, includeTurns = true)
-                requireConnection().reducer.upsertThread(thread)
-                val receivedAuthoritativeTurn = consumeAuthoritativeTurn(thread)
+                val connected = requireConnection()
+                val generation = connected.client.currentConnectionGeneration()
+                val snapshot = connected.client.readThread(threadId, includeTurns = true)
+                // A delayed snapshot from an earlier connection generation must not publish at all.
+                check(currentGeneration(connected, generation)) {
+                    "Codex message check belongs to an earlier connection"
+                }
+                // Publish the merged reducer state, never the raw snapshot: live items and
+                // terminal turns that streamed while the read was in flight always win.
+                connected.reducer.upsertThread(snapshot)
+                val merged = connected.events.value.threads[threadId] ?: snapshot
+                val receivedAuthoritativeTurn = consumeAuthoritativeTurn(merged)
                 _uiState.update { state ->
                     state.copy(
-                        thread = thread,
+                        thread = merged,
+                        activeTurnId = merged.turns.lastOrNull { it.status == "inProgress" }?.id,
                         isAwaitingAuthoritativeTurn = if (receivedAuthoritativeTurn) {
                             false
                         } else {
@@ -414,7 +552,7 @@ class CodexChatViewModel @Inject constructor(
                         },
                     )
                 }
-                if (thread.hasClientMessage(pending.id)) {
+                if (merged.hasClientMessage(pending.id)) {
                     markSendAccepted(
                         pending.content,
                         pending.id,
@@ -482,14 +620,23 @@ class CodexChatViewModel @Inject constructor(
         sendIdentity.markUncertain(content, clientUserMessageId)
         _uiState.update { it.copy(isSendConfirmationPending = true) }
         val accepted = runCatching {
-            val connected = requireClient()
-            connected.connect()
-            val thread = connected.readThread(threadId, includeTurns = true)
-            requireConnection().reducer.upsertThread(thread)
-            val receivedAuthoritativeTurn = consumeAuthoritativeTurn(thread)
+            val client = requireClient()
+            client.connect()
+            val connected = requireConnection()
+            val generation = connected.client.currentConnectionGeneration()
+            val snapshot = client.readThread(threadId, includeTurns = true)
+            // Fence on the connection generation the read started from, then publish the
+            // merged reducer state so newer streamed items and terminal turns survive.
+            check(currentGeneration(connected, generation)) {
+                "Codex send reconciliation belongs to an earlier connection"
+            }
+            connected.reducer.upsertThread(snapshot)
+            val merged = connected.events.value.threads[threadId] ?: snapshot
+            val receivedAuthoritativeTurn = consumeAuthoritativeTurn(merged)
             _uiState.update { state ->
                 state.copy(
-                    thread = thread,
+                    thread = merged,
+                    activeTurnId = merged.turns.lastOrNull { it.status == "inProgress" }?.id,
                     isAwaitingAuthoritativeTurn = if (receivedAuthoritativeTurn) {
                         false
                     } else {
@@ -497,7 +644,7 @@ class CodexChatViewModel @Inject constructor(
                     },
                 )
             }
-            thread.hasClientMessage(clientUserMessageId)
+            merged.hasClientMessage(clientUserMessageId)
         }.getOrDefault(false)
         if (accepted) {
             markSendAccepted(
@@ -536,7 +683,7 @@ class CodexChatViewModel @Inject constructor(
     fun setGoal(objective: String, status: String = "active", tokenBudget: Long? = null) {
         viewModelScope.launch {
             runCatching { requireClient().setGoal(threadId, objective.trim(), status, tokenBudget) }
-                .onSuccess { goal -> _uiState.update { it.copy(goal = goal) } }
+                .onSuccess { goal -> _uiState.update { it.copy(goalState = CodexMetadataLoadState.Loaded(goal)) } }
                 .onFailure { error ->
                     if (error is CancellationException) throw error
                     _uiState.update { it.copy(error = error.message) }
@@ -547,7 +694,7 @@ class CodexChatViewModel @Inject constructor(
     fun clearGoal() {
         viewModelScope.launch {
             runCatching { requireClient().clearGoal(threadId) }
-                .onSuccess { _uiState.update { it.copy(goal = null) } }
+                .onSuccess { _uiState.update { it.copy(goalState = CodexMetadataLoadState.Loaded(null)) } }
                 .onFailure { error ->
                     if (error is CancellationException) throw error
                     _uiState.update { it.copy(error = error.message) }
@@ -557,12 +704,25 @@ class CodexChatViewModel @Inject constructor(
 
     fun setMemoryMode(mode: CodexMemoryMode) {
         viewModelScope.launch {
-            runCatching { requireClient().setMemoryMode(threadId, mode) }
-                .onSuccess { _uiState.update { it.copy(memoryMode = mode) } }
-                .onFailure { error ->
-                    if (error is CancellationException) throw error
-                    _uiState.update { it.copy(error = error.message) }
+            runCatching {
+                val connected = requireConnection()
+                connected.client.setMemoryMode(threadId, mode)
+                connected
+            }.onSuccess { connected ->
+                // No read RPC exists: keep an explicit receipt bound to this connection generation.
+                _uiState.update {
+                    it.copy(
+                        memoryModeReceipt = CodexMemoryModeReceipt(
+                            mode = mode,
+                            connectionGeneration = connected.client.currentConnectionGeneration(),
+                        ),
+                        error = null,
+                    )
                 }
+            }.onFailure { error ->
+                if (error is CancellationException) throw error
+                _uiState.update { it.copy(error = error.message) }
+            }
         }
     }
 
@@ -816,10 +976,10 @@ class CodexChatViewModel @Inject constructor(
                         } else {
                             it.isAwaitingAuthoritativeTurn
                         },
-                        goal = if (threadId in eventState.knownGoalThreadIds) {
-                            eventState.goals[threadId]
+                        goalState = if (threadId in eventState.knownGoalThreadIds) {
+                            CodexMetadataLoadState.Loaded(eventState.goals[threadId])
                         } else {
-                            it.goal
+                            it.goalState
                         },
                         threadFailure = eventState.threadFailures[threadId],
                         turnFailures = eventState.failuresForThread(threadId),
@@ -891,6 +1051,12 @@ class CodexChatViewModel @Inject constructor(
                         isConnected = socketReady && connected != null && connectionManager.isThreadReady(connected, threadId),
                         pendingRequests = if (socketReady) managed?.pendingRequests.orEmpty()
                             .filter { request -> request.params.string("threadId") == threadId } else emptyList(),
+                        // A socket boundary invalidates connection-scoped receipts; keep valid
+                        // metadata values only as visibly stale data.
+                        memoryModeReceipt = state.memoryModeReceipt?.takeIf { socketReady && it.connectionGeneration == generation },
+                        threadPolicy = state.threadPolicy?.takeIf { socketReady && threadPolicyGeneration == generation },
+                        goalState = if (socketReady) state.goalState else state.goalState.markStale(),
+                        modelsState = if (socketReady) state.modelsState else state.modelsState.markStale(),
                     )
                 }
                 if (!socketReady && wasReady) {

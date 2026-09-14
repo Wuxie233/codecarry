@@ -99,6 +99,47 @@ data class CodexThreadSession(
     }
 }
 
+/**
+ * Read-only projection of the authoritative execution policy a thread/start or
+ * thread/resume receipt carries. Tokens stay verbatim for display; missing
+ * fields stay null so the UI can render an explicit unknown state instead of
+ * inventing a value. Never used to submit settings back to the server.
+ */
+data class CodexThreadPolicy(
+    val approvalPolicy: String? = null,
+    val sandboxMode: String? = null,
+    val sandboxNetworkEnabled: Boolean? = null,
+    val sandboxWritableRoots: List<String> = emptyList(),
+)
+
+/** Approval policies are plain string tokens; sandbox may be a tagged object or a legacy string. */
+fun CodexThreadSession.threadPolicy(): CodexThreadPolicy {
+    val sandboxObject = sandbox as? JsonObject
+    return CodexThreadPolicy(
+        approvalPolicy = approvalPolicy.policyToken(),
+        sandboxMode = sandbox.policyToken(),
+        sandboxNetworkEnabled = sandboxObject.networkAccessToken(),
+        sandboxWritableRoots = (sandboxObject?.get("writableRoots") as? JsonArray).orEmpty()
+            .mapNotNull { element -> (element as? JsonPrimitive)?.contentOrNull },
+    )
+}
+
+private fun JsonElement?.policyToken(): String? = when (this) {
+    is JsonPrimitive -> contentOrNull
+    is JsonObject -> (this["type"] as? JsonPrimitive)?.contentOrNull
+    else -> null
+}
+
+// Sandbox variants encode network access either as a boolean or as enabled/restricted.
+private fun JsonObject?.networkAccessToken(): Boolean? {
+    val value = (this?.get("networkAccess") as? JsonPrimitive) ?: return null
+    return value.booleanOrNull ?: when (value.contentOrNull) {
+        "enabled" -> true
+        "restricted" -> false
+        else -> null
+    }
+}
+
 data class CodexThread(
     val id: String,
     val sessionId: String? = null,
