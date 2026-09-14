@@ -86,7 +86,7 @@ class ChatViewModelOptimisticBusyTest {
         vm.sendMessage(listOf(PromptPart(type = "text", text = "hello")), emptyList())
         scheduler.runCurrent()
 
-        assertEquals(SessionStatus.Busy, reducer.sessionStatuses.value["ses_real"])
+        assertEquals(SessionStatus.Busy, reducer.serverSessionStatuses.value["srv"]?.get("ses_real"))
     }
 
     @Test

@@ -30,7 +30,7 @@ class EventReducerBadPartFilterTest {
             serverId = "server-1",
         )
 
-        assertTrue(reducer.parts.value[messageId].orEmpty().isEmpty())
+        assertTrue(reducer.serverParts.value["server-1"]?.get(messageId).orEmpty().isEmpty())
     }
 
     @Test
@@ -62,7 +62,7 @@ class EventReducerBadPartFilterTest {
             reducer.processEvent(SseEvent.MessagePartUpdated(part), serverId = "server-1")
         }
 
-        assertEquals(parts.map { it.id }, reducer.parts.value[messageId].orEmpty().map { it.id })
+        assertEquals(parts.map { it.id }, reducer.serverParts.value["server-1"]?.get(messageId).orEmpty().map { it.id })
     }
 
     @Test
@@ -80,6 +80,7 @@ class EventReducerBadPartFilterTest {
         val badToolNameTool = toolPart(id = "missing-tool", messageId = messageId, callId = "call-2", tool = "")
 
         reducer.setMessages(
+            serverId = "server-1",
             sessionId = "ses-1",
             messages = listOf(
                 MessageWithParts(
@@ -89,13 +90,14 @@ class EventReducerBadPartFilterTest {
             ),
         )
 
-        assertEquals(listOf(keptText.id, keptTool.id), reducer.parts.value[messageId].orEmpty().map { it.id })
+        assertEquals(listOf(keptText.id, keptTool.id), reducer.serverParts.value["server-1"]?.get(messageId).orEmpty().map { it.id })
     }
 
     @Test
     fun mergeMessagesKeepsLiveMessagesAndSameIdMessageAndParts() {
         val reducer = EventReducer()
         reducer.mergeMessages(
+            serverId = "server-1",
             sessionId = "ses-1",
             messages = listOf(message("rest-only", 1, "rest"), message("shared", 2, "stale")),
         )
@@ -109,13 +111,14 @@ class EventReducerBadPartFilterTest {
         )
 
         reducer.mergeMessages(
+            serverId = "server-1",
             sessionId = "ses-1",
             messages = listOf(message("rest-only", 1, "rest"), message("shared", 2, "stale-again")),
         )
 
-        assertEquals(listOf("rest-only", "shared", "live-only"), reducer.messages.value["ses-1"].orEmpty().map { it.id })
-        assertEquals(liveMessage, reducer.messages.value["ses-1"].orEmpty().first { it.id == "shared" })
-        assertEquals(listOf(livePart), reducer.parts.value["shared"])
+        assertEquals(listOf("rest-only", "shared", "live-only"), reducer.serverMessages.value["server-1"]?.get("ses-1").orEmpty().map { it.id })
+        assertEquals(liveMessage, reducer.serverMessages.value["server-1"]?.get("ses-1").orEmpty().first { it.id == "shared" })
+        assertEquals(listOf(livePart), reducer.serverParts.value["server-1"]?.get("shared"))
     }
 
     private fun message(id: String, created: Long, text: String) = MessageWithParts(

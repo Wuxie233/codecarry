@@ -534,7 +534,7 @@ class SessionListViewModel @Inject constructor(
     val uiState: StateFlow<SessionListUiState> = combine(
         listOf(
             eventReducer.serverSessionDetails,
-            eventReducer.sessionStatuses,
+            eventReducer.serverSessionStatuses,
             _isLoading,
             _error,
             _projects,
@@ -553,7 +553,8 @@ class SessionListViewModel @Inject constructor(
         )
     ) { values ->
         val sessionsByServer = values[0] as Map<String, Map<String, Session>>
-        val statuses = values[1] as Map<String, SessionStatus>
+        val statusesByServer = values[1] as Map<String, Map<String, SessionStatus>>
+        val statuses = statusesByServer[serverId].orEmpty()
         val loading = values[2] as Boolean
         val error = values[3] as String?
         val projects = values[4] as List<Project>
@@ -794,7 +795,7 @@ class SessionListViewModel @Inject constructor(
     private fun applyDshState(state: DshEventState) {
         val mapped = mapDshEventStateToSessions(state)
         eventReducer.replaceSessions(serverId, mapped.sessions)
-        mapped.statuses.forEach { (id, status) -> eventReducer.updateSessionStatus(id, status) }
+        mapped.statuses.forEach { (id, status) -> eventReducer.updateSessionStatus(serverId, id, status) }
         mapped.sessions.forEach { session ->
             eventReducer.setPermissions(serverId, session.id, state.pendingApprovalsFor(session.id).map(::mapDshApproval))
             eventReducer.setQuestions(serverId, session.id, state.pendingQuestionsFor(session.id).map(::mapDshQuestion))

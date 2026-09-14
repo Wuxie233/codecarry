@@ -1,6 +1,8 @@
 package dev.wuxie233.codecarry.data.repository
 
 import dev.wuxie233.codecarry.domain.model.Session
+import dev.wuxie233.codecarry.domain.model.Message
+import dev.wuxie233.codecarry.domain.model.MessageWithParts
 import dev.wuxie233.codecarry.domain.model.Part
 import dev.wuxie233.codecarry.domain.model.SessionStatus
 import dev.wuxie233.codecarry.domain.model.SseEvent
@@ -20,7 +22,7 @@ class EventReducerTest {
         processStatusEvent(reducer, session.id, SessionStatus.Busy, serverId = "server-1")
         reducer.processEvent(SseEvent.SessionCreated(session), serverId = "server-1")
 
-        assertEquals(SessionStatus.Busy, reducer.sessionStatuses.value[session.id])
+        assertEquals(SessionStatus.Busy, reducer.serverSessionStatuses.value["server-1"]?.get(session.id))
     }
 
     @Test
@@ -30,7 +32,7 @@ class EventReducerTest {
 
         reducer.processEvent(SseEvent.SessionCreated(session), serverId = "server-1")
 
-        assertEquals(SessionStatus.Idle, reducer.sessionStatuses.value[session.id])
+        assertEquals(SessionStatus.Idle, reducer.serverSessionStatuses.value["server-1"]?.get(session.id))
     }
 
     @Test
@@ -58,7 +60,7 @@ class EventReducerTest {
 
         clearForServer(reducer, "server-1")
 
-        assertNull(reducer.sessionStatuses.value[session.id])
+        assertNull(reducer.serverSessionStatuses.value["server-1"]?.get(session.id))
     }
 
     @Test
@@ -71,7 +73,7 @@ class EventReducerTest {
         clearForServer(reducer, "server-1")
         reducer.processEvent(SseEvent.SessionCreated(session), serverId = "server-1")
 
-        assertEquals(SessionStatus.Idle, reducer.sessionStatuses.value[session.id])
+        assertEquals(SessionStatus.Idle, reducer.serverSessionStatuses.value["server-1"]?.get(session.id))
     }
 
     @Test
@@ -83,7 +85,7 @@ class EventReducerTest {
 
         clearForServer(reducer, "server-1")
 
-        assertNull(reducer.sessionStatuses.value[session.id])
+        assertNull(reducer.serverSessionStatuses.value["server-1"]?.get(session.id))
     }
 
     @Test
@@ -120,7 +122,7 @@ class EventReducerTest {
             serverId = "server-1"
         )
 
-        val runningTool = reducer.parts.value[messageId]?.single() as? Part.Tool
+        val runningTool = reducer.serverParts.value["server-1"]?.get(messageId)?.single() as? Part.Tool
         val runningState = runningTool?.state as? ToolState.Running
 
         assertEquals("line 1\nline 2", runningState?.output)
@@ -259,10 +261,10 @@ class EventReducerTest {
             ),
         )
 
-        assertEquals(SessionStatus.Busy, reducer.sessionStatuses.value["ses-busy"])
+        assertEquals(SessionStatus.Busy, reducer.serverSessionStatuses.value["server-1"]?.get("ses-busy"))
         assertEquals(
             SessionStatus.Retry(attempt = 2, message = "rate limited", next = 1_700L),
-            reducer.sessionStatuses.value["ses-retry"],
+            reducer.serverSessionStatuses.value["server-1"]?.get("ses-retry"),
         )
     }
 
@@ -275,8 +277,8 @@ class EventReducerTest {
 
         reducer.setSessionStatuses("server-1", mapOf("ses-now-busy" to SessionStatus.Busy))
 
-        assertEquals(SessionStatus.Idle, reducer.sessionStatuses.value["ses-was-busy"])
-        assertEquals(SessionStatus.Busy, reducer.sessionStatuses.value["ses-now-busy"])
+        assertEquals(SessionStatus.Idle, reducer.serverSessionStatuses.value["server-1"]?.get("ses-was-busy"))
+        assertEquals(SessionStatus.Busy, reducer.serverSessionStatuses.value["server-1"]?.get("ses-now-busy"))
     }
 
     @Test
@@ -289,7 +291,7 @@ class EventReducerTest {
         // Bootstrapping server-1 with an empty snapshot must not touch server-2's busy session.
         reducer.setSessionStatuses("server-1", emptyMap())
 
-        assertEquals(SessionStatus.Busy, reducer.sessionStatuses.value["ses-s2"])
+        assertEquals(SessionStatus.Busy, reducer.serverSessionStatuses.value["server-2"]?.get("ses-s2"))
     }
 
     @Test
@@ -304,7 +306,7 @@ class EventReducerTest {
         clearForServer(reducer, "server-1")
 
         assertEquals(setOf(shared.id), reducer.serverSessions.value["server-2"])
-        assertEquals(SessionStatus.Busy, reducer.sessionStatuses.value[shared.id])
+        assertEquals(SessionStatus.Busy, reducer.serverSessionStatuses.value["server-2"]?.get(shared.id))
         assertTrue(reducer.sessions.value.any { it.id == shared.id })
         assertEquals(shared.id, reducer.activeSessionId.value)
     }
@@ -474,6 +476,139 @@ class EventReducerTest {
 
         assertNull(reducer.questionsByServer.value["server-1"])
     }
+
+    // ============ Server-scoped isolation (issue #41) ============
+
+    @Test
+    fun duplicateSessionStatusIdsOnTwoServersNeverOverwriteEachOther() {
+        val reducer = EventReducer()
+        val sessionId = "ses-shared"
+
+        processStatusEvent(reducer, sessionId, SessionStatus.Busy, serverId = "server-1")
+        processStatusEvent(reducer, sessionId, SessionStatus.Retry(attempt = 1, message = "x", next = 9L), serverId = "server-2")
+
+        assertEquals(SessionStatus.Busy, reducer.serverSessionStatuses.value["server-1"]?.get(sessionId))
+        assertEquals(
+            SessionStatus.Retry(attempt = 1, message = "x", next = 9L),
+            reducer.serverSessionStatuses.value["server-2"]?.get(sessionId),
+        )
+    }
+
+    @Test
+    fun duplicateMessageAndPartIdsOnTwoServersNeverOverwriteEachOther() {
+        val reducer = EventReducer()
+        val sessionId = "ses-shared"
+        val messageId = "msg-shared"
+        val partId = "part-shared"
+
+        reducer.processEvent(SseEvent.MessageUpdated(Message.Assistant(id = messageId, sessionId = sessionId)), "server-1")
+        reducer.processEvent(SseEvent.MessagePartUpdated(
+            Part.Text(id = partId, sessionId = sessionId, messageId = messageId, text = "from server-1"),
+        ), "server-1")
+        reducer.processEvent(SseEvent.MessageUpdated(Message.User(id = messageId, sessionId = sessionId)), "server-2")
+        reducer.processEvent(SseEvent.MessagePartUpdated(
+            Part.Text(id = partId, sessionId = sessionId, messageId = messageId, text = "from server-2"),
+        ), "server-2")
+
+        val serverOneMessage = reducer.serverMessages.value["server-1"]?.get(sessionId)?.singleOrNull()
+        val serverTwoMessage = reducer.serverMessages.value["server-2"]?.get(sessionId)?.singleOrNull()
+        assertTrue(serverOneMessage is Message.Assistant)
+        assertTrue(serverTwoMessage is Message.User)
+        assertEquals(
+            "from server-1",
+            (reducer.serverParts.value["server-1"]?.get(messageId)?.singleOrNull() as? Part.Text)?.text,
+        )
+        assertEquals(
+            "from server-2",
+            (reducer.serverParts.value["server-2"]?.get(messageId)?.singleOrNull() as? Part.Text)?.text,
+        )
+    }
+
+    @Test
+    fun setMessagesOnOneServerDoesNotOverwriteAnotherServersMessages() {
+        val reducer = EventReducer()
+        val sessionId = "ses-shared"
+
+        reducer.setMessages("server-1", sessionId, listOf(messageWithParts("msg-1", "one")))
+        reducer.setMessages("server-2", sessionId, listOf(messageWithParts("msg-1", "two")))
+
+        val serverOneText = (reducer.serverMessages.value["server-1"]?.get(sessionId)?.singleOrNull()
+            ?.let { reducer.serverParts.value["server-1"]?.get(it.id)?.singleOrNull() } as? Part.Text)?.text
+        val serverTwoText = (reducer.serverMessages.value["server-2"]?.get(sessionId)?.singleOrNull()
+            ?.let { reducer.serverParts.value["server-2"]?.get(it.id)?.singleOrNull() } as? Part.Text)?.text
+        assertEquals("one", serverOneText)
+        assertEquals("two", serverTwoText)
+    }
+
+    @Test
+    fun sessionDeletedOnOneServerKeepsOtherServersState() {
+        val reducer = EventReducer()
+        val session = testSession(id = "ses-shared")
+        val otherServerSession = testSession(id = "ses-shared")
+        reducer.setSessions("server-1", listOf(session))
+        reducer.setSessions("server-2", listOf(otherServerSession))
+        processStatusEvent(reducer, session.id, SessionStatus.Busy, serverId = "server-1")
+        processStatusEvent(reducer, session.id, SessionStatus.Busy, serverId = "server-2")
+        reducer.processEvent(
+            SseEvent.MessageUpdated(Message.Assistant(id = "msg-1", sessionId = session.id)),
+            "server-1",
+        )
+        reducer.processEvent(
+            SseEvent.MessageUpdated(Message.Assistant(id = "msg-1", sessionId = session.id)),
+            "server-2",
+        )
+
+        reducer.processEvent(SseEvent.SessionDeleted(session), "server-1")
+
+        assertNull(reducer.serverSessionStatuses.value["server-1"]?.get(session.id))
+        assertTrue(reducer.serverMessages.value["server-1"] == null || reducer.serverMessages.value["server-1"]?.get(session.id) == null)
+        assertEquals(SessionStatus.Busy, reducer.serverSessionStatuses.value["server-2"]?.get(session.id))
+        assertEquals(1, reducer.serverMessages.value["server-2"]?.get(session.id).orEmpty().size)
+        // The global aggregate keeps the session because server-2 still owns the same ID.
+        assertTrue(reducer.sessions.value.any { it.id == session.id })
+    }
+
+    @Test
+    fun clearForServerKeepsOtherServersStatusesMessagesAndParts() {
+        val reducer = EventReducer()
+        val session = testSession(id = "ses-shared")
+        reducer.setSessions("server-1", listOf(session))
+        reducer.setSessions("server-2", listOf(session))
+        processStatusEvent(reducer, session.id, SessionStatus.Busy, serverId = "server-1")
+        processStatusEvent(reducer, session.id, SessionStatus.Busy, serverId = "server-2")
+        reducer.setMessages("server-1", session.id, listOf(messageWithParts("msg-1", "one")))
+        reducer.setMessages("server-2", session.id, listOf(messageWithParts("msg-1", "two")))
+
+        clearForServer(reducer, "server-1")
+
+        assertNull(reducer.serverSessionStatuses.value["server-1"])
+        assertNull(reducer.serverMessages.value["server-1"])
+        assertNull(reducer.serverParts.value["server-1"])
+        assertEquals(SessionStatus.Busy, reducer.serverSessionStatuses.value["server-2"]?.get(session.id))
+        assertEquals(1, reducer.serverMessages.value["server-2"]?.get(session.id).orEmpty().size)
+        assertEquals(
+            "two",
+            (reducer.serverParts.value["server-2"]?.get("msg-1")?.singleOrNull() as? Part.Text)?.text,
+        )
+    }
+
+    @Test
+    fun sessionCreatedOnOneServerKeepsAnotherServersLiveStatus() {
+        val reducer = EventReducer()
+        val session = testSession(id = "ses-shared")
+
+        processStatusEvent(reducer, session.id, SessionStatus.Busy, serverId = "server-1")
+        reducer.processEvent(SseEvent.SessionCreated(session), serverId = "server-2")
+
+        assertEquals(SessionStatus.Busy, reducer.serverSessionStatuses.value["server-1"]?.get(session.id))
+        // server-2 has no prior status of its own, so creation initializes its own copy to Idle.
+        assertEquals(SessionStatus.Idle, reducer.serverSessionStatuses.value["server-2"]?.get(session.id))
+    }
+
+    private fun messageWithParts(id: String, text: String) = MessageWithParts(
+        info = Message.Assistant(id = id, sessionId = "ses-shared"),
+        parts = listOf(Part.Text(id = "part-$id", sessionId = "ses-shared", messageId = id, text = text)),
+    )
 
     private fun testSession(id: String, updated: Long = 1L, archived: Long? = null) = Session(
         id = id,

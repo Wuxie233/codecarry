@@ -1076,8 +1076,8 @@ class OpenCodeConnectionService : Service() {
         if (BuildConfig.DEBUG) Log.d(TAG, "[${server.displayName}] SSE event: ${event.javaClass.simpleName}")
 
         val previousStatus = when (event) {
-            is SseEvent.SessionStatus -> eventReducer.sessionStatuses.value[event.sessionId]
-            is SseEvent.SessionIdle -> eventReducer.sessionStatuses.value[event.sessionId]
+            is SseEvent.SessionStatus -> eventReducer.serverSessionStatuses.value[server.id]?.get(event.sessionId)
+            is SseEvent.SessionIdle -> eventReducer.serverSessionStatuses.value[server.id]?.get(event.sessionId)
             else -> null
         }
 
@@ -1102,7 +1102,7 @@ class OpenCodeConnectionService : Service() {
                     if (current?.transport !== sourceTransport || !current.isConnected) return@launch
                     if (eventReducer.activeSessionId.value == event.sessionId) return@launch
 
-                    val assistantMessageId = latestNotifiableAssistantMessageId(event.sessionId)
+                    val assistantMessageId = latestNotifiableAssistantMessageId(server.id, event.sessionId)
                     if (assistantMessageId == null) {
                         if (BuildConfig.DEBUG) {
                             Log.d(TAG, "[${server.displayName}] Skip response-ready: no assistant text output (${event.sessionId})")
@@ -1211,15 +1211,15 @@ class OpenCodeConnectionService : Service() {
         }
     }
 
-    private fun latestNotifiableAssistantMessageId(sessionId: String): String? {
-        val sessionMessages = eventReducer.messages.value[sessionId] ?: return null
+    private fun latestNotifiableAssistantMessageId(serverId: String, sessionId: String): String? {
+        val sessionMessages = eventReducer.serverMessages.value[serverId]?.get(sessionId) ?: return null
         val latestAssistant = sessionMessages
             .asReversed()
             .firstOrNull { it is Message.Assistant } as? Message.Assistant ?: return null
 
         if (!latestAssistant.error?.message.isNullOrBlank()) return latestAssistant.id
 
-        val parts = eventReducer.parts.value[latestAssistant.id] ?: return null
+        val parts = eventReducer.serverParts.value[serverId]?.get(latestAssistant.id) ?: return null
         val hasTextOutput = parts.any { part ->
             when (part) {
                 is Part.Text -> part.text.isNotBlank()

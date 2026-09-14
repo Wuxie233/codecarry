@@ -22,20 +22,26 @@ data class SessionStatusBaseline(
 
 /**
  * Event Reducer - processes SSE events and updates app state
- * 
+ *
  * This is the central state management for the app.
  * All SSE events flow through here and mutate the reactive state.
- * 
- * Supports multiple servers simultaneously. Most session state is keyed by sessionId,
- * while pending user actions retain server ownership because server-local session IDs
- * are not safe cross-server join keys.
- * 
+ *
+ * Supports multiple servers simultaneously. Session statuses, messages, and
+ * message parts are scoped by serverId (`serverSessionStatuses`,
+ * `serverMessages`, `serverParts`) because server-local session, message, and
+ * part IDs are not unique across servers: duplicate IDs on two servers must
+ * never overwrite each other, and per-server cleanup must not clear another
+ * server's state. Pending user actions retain server ownership for the same
+ * reason. The flat [sessions] list remains a cross-server aggregate; any
+ * derivation that joins by session ID must first restrict IDs through the
+ * server-scoped maps.
+ *
  * Similar to the event-reducer.ts in the WebUI.
  */
 @Singleton
 class EventReducer @Inject constructor() {
 
-    private val sessionStatusRevisions = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val sessionStatusRevisions = java.util.concurrent.ConcurrentHashMap<Pair<String, String>, Long>()
     private val nextSessionStatusRevision = java.util.concurrent.atomic.AtomicLong()
     private val sessionStatusLock = Any()
     
@@ -51,17 +57,20 @@ class EventReducer @Inject constructor() {
     private val _sessions = MutableStateFlow<List<Session>>(emptyList())
     val sessions: StateFlow<List<Session>> = _sessions.asStateFlow()
     
-    private val _sessionStatuses = MutableStateFlow<Map<String, SessionStatus>>(emptyMap())
-    val sessionStatuses: StateFlow<Map<String, SessionStatus>> = _sessionStatuses.asStateFlow()
+    private val _serverSessionStatuses = MutableStateFlow<Map<String, Map<String, SessionStatus>>>(emptyMap())
+    val serverSessionStatuses: StateFlow<Map<String, Map<String, SessionStatus>>> =
+        _serverSessionStatuses.asStateFlow()
 
     private val _activeSessionId = MutableStateFlow<String?>(null)
     val activeSessionId: StateFlow<String?> = _activeSessionId.asStateFlow()
     
-    private val _messages = MutableStateFlow<Map<String, List<Message>>>(emptyMap()) // sessionId -> messages
-    val messages: StateFlow<Map<String, List<Message>>> = _messages.asStateFlow()
+    // serverId -> sessionId -> messages
+    private val _serverMessages = MutableStateFlow<Map<String, Map<String, List<Message>>>>(emptyMap())
+    val serverMessages: StateFlow<Map<String, Map<String, List<Message>>>> = _serverMessages.asStateFlow()
     
-    private val _parts = MutableStateFlow<Map<String, List<Part>>>(emptyMap()) // messageId -> parts
-    val parts: StateFlow<Map<String, List<Part>>> = _parts.asStateFlow()
+    // serverId -> messageId -> parts
+    private val _serverParts = MutableStateFlow<Map<String, Map<String, List<Part>>>>(emptyMap())
+    val serverParts: StateFlow<Map<String, Map<String, List<Part>>>> = _serverParts.asStateFlow()
     
     private val _sessionDiffs = MutableStateFlow<Map<String, List<FileDiff>>>(emptyMap())
     val sessionDiffs: StateFlow<Map<String, List<FileDiff>>> = _sessionDiffs.asStateFlow()
@@ -104,12 +113,12 @@ class EventReducer @Inject constructor() {
             is SseEvent.SessionDiff -> handleSessionDiff(event)
             is SseEvent.SessionError -> handleSessionError(event)
             
-            is SseEvent.MessageUpdated -> handleMessageUpdated(event)
-            is SseEvent.MessageRemoved -> handleMessageRemoved(event)
+            is SseEvent.MessageUpdated -> handleMessageUpdated(event, serverId)
+            is SseEvent.MessageRemoved -> handleMessageRemoved(event, serverId)
             
-            is SseEvent.MessagePartUpdated -> handleMessagePartUpdated(event)
-            is SseEvent.MessagePartDelta -> handleMessagePartDelta(event)
-            is SseEvent.MessagePartRemoved -> handleMessagePartRemoved(event)
+            is SseEvent.MessagePartUpdated -> handleMessagePartUpdated(event, serverId)
+            is SseEvent.MessagePartDelta -> handleMessagePartDelta(event, serverId)
+            is SseEvent.MessagePartRemoved -> handleMessagePartRemoved(event, serverId)
             
             is SseEvent.PermissionAsked -> handlePermissionAsked(event, serverId)
             is SseEvent.PermissionReplied -> handlePermissionReplied(event, serverId)
@@ -156,9 +165,11 @@ class EventReducer @Inject constructor() {
             }
         }
         synchronized(sessionStatusLock) {
-            recordSessionStatusChange(event.info.id)
-            _sessionStatuses.update { current ->
-                if (event.info.id in current) current else current + (event.info.id to SessionStatus.Idle)
+            recordSessionStatusChange(serverId, event.info.id)
+            _serverSessionStatuses.update { current ->
+                val serverStatuses = current[serverId].orEmpty()
+                if (event.info.id in serverStatuses) current
+                else current + (serverId to (serverStatuses + (event.info.id to SessionStatus.Idle)))
             }
         }
     }
@@ -207,24 +218,53 @@ class EventReducer @Inject constructor() {
             val remaining = current[serverId].orEmpty() - sessionId
             if (remaining.isEmpty()) current - serverId else current + (serverId to remaining)
         }
+        // Server-scoped live state: removing this server's copy never touches
+        // another server's state for the same session ID.
+        removeServerSessionLiveState(serverId, sessionId)
         val ownedByAnotherServer = _serverSessions.value.any { (ownerId, ids) ->
             ownerId != serverId && sessionId in ids
         }
         if (ownedByAnotherServer) return
         _sessions.update { it.filter { session -> session.id != sessionId } }
-        synchronized(sessionStatusLock) {
-            recordSessionStatusChange(sessionId)
-            _sessionStatuses.update { it - sessionId }
-        }
-        _messages.update { it - sessionId }
         _sessionDiffs.update { it - sessionId }
+    }
+
+    /**
+     * Remove one server's own status, messages, and their parts for a session.
+     * Other servers keep their copies even when they track the same IDs.
+     */
+    private fun removeServerSessionLiveState(serverId: String, sessionId: String) {
+        synchronized(sessionStatusLock) {
+            recordSessionStatusChange(serverId, sessionId)
+            _serverSessionStatuses.update { current -> removeServerScopedEntry(current, serverId, sessionId) }
+        }
+        val messageIds = _serverMessages.value[serverId]?.get(sessionId).orEmpty().map { it.id }.toSet()
+        _serverMessages.update { current -> removeServerScopedEntry(current, serverId, sessionId) }
+        if (messageIds.isEmpty()) return
+        _serverParts.update { current ->
+            val remaining = current[serverId].orEmpty() - messageIds
+            if (remaining.isEmpty()) current - serverId else current + (serverId to remaining)
+        }
+    }
+
+    /** Remove [key] from the server's inner map, dropping the server bucket when it becomes empty. */
+    private fun <K, V> removeServerScopedEntry(
+        current: Map<String, Map<K, V>>,
+        serverId: String,
+        key: K,
+    ): Map<String, Map<K, V>> {
+        val serverMap = current[serverId] ?: return current
+        val updated = serverMap - key
+        return if (updated.isEmpty()) current - serverId else current + (serverId to updated)
     }
     
     private fun handleSessionStatus(event: SseEvent.SessionStatus, serverId: String) {
         trackSession(serverId, event.sessionId)
         synchronized(sessionStatusLock) {
-            recordSessionStatusChange(event.sessionId)
-            _sessionStatuses.update { it + (event.sessionId to event.status) }
+            recordSessionStatusChange(serverId, event.sessionId)
+            _serverSessionStatuses.update { current ->
+                current + (serverId to (current[serverId].orEmpty() + (event.sessionId to event.status)))
+            }
         }
         if (BuildConfig.DEBUG) Log.d(TAG, "Session ${event.sessionId} status: ${event.status}")
     }
@@ -232,8 +272,10 @@ class EventReducer @Inject constructor() {
     private fun handleSessionIdle(event: SseEvent.SessionIdle, serverId: String) {
         trackSession(serverId, event.sessionId)
         synchronized(sessionStatusLock) {
-            recordSessionStatusChange(event.sessionId)
-            _sessionStatuses.update { it + (event.sessionId to SessionStatus.Idle) }
+            recordSessionStatusChange(serverId, event.sessionId)
+            _serverSessionStatuses.update { current ->
+                current + (serverId to (current[serverId].orEmpty() + (event.sessionId to SessionStatus.Idle)))
+            }
         }
     }
     
@@ -247,21 +289,21 @@ class EventReducer @Inject constructor() {
     
     // ============ Message Events ============
     
-    private fun handleMessageUpdated(event: SseEvent.MessageUpdated) {
+    private fun handleMessageUpdated(event: SseEvent.MessageUpdated, serverId: String) {
         val sessionId = event.info.sessionId
-        _messages.update { current -> upsertMessage(current, sessionId, event.info) }
+        _serverMessages.update { current -> upsertMessage(current, serverId, sessionId, event.info) }
     }
     
-    private fun handleMessageRemoved(event: SseEvent.MessageRemoved) {
-        _messages.update { current ->
-            val sessionMessages = current[event.sessionId]?.filter { it.id != event.messageId }
+    private fun handleMessageRemoved(event: SseEvent.MessageRemoved, serverId: String) {
+        _serverMessages.update { current ->
+            val sessionMessages = current[serverId]?.get(event.sessionId)?.filter { it.id != event.messageId }
             if (sessionMessages != null) {
-                current + (event.sessionId to sessionMessages)
+                current + (serverId to (current[serverId].orEmpty() + (event.sessionId to sessionMessages)))
             } else {
                 current
             }
         }
-        _parts.update { it - event.messageId }
+        _serverParts.update { current -> removeServerScopedEntry(current, serverId, event.messageId) }
     }
     
     // ============ Part Events ============
@@ -270,23 +312,25 @@ class EventReducer @Inject constructor() {
         return this !is Part.Tool || (callId.isNotBlank() && tool.isNotBlank())
     }
 
-    private fun handleMessagePartUpdated(event: SseEvent.MessagePartUpdated) {
+    private fun handleMessagePartUpdated(event: SseEvent.MessagePartUpdated, serverId: String) {
         if (!event.part.isRenderablePart()) return
 
-        _parts.update { current -> upsertPart(current, event.part) }
+        _serverParts.update { current -> upsertPart(current, serverId, event.part) }
     }
     
-    private fun handleMessagePartDelta(event: SseEvent.MessagePartDelta) {
+    private fun handleMessagePartDelta(event: SseEvent.MessagePartDelta, serverId: String) {
         // Append text delta to existing part
-        _parts.update { current -> appendPartDelta(current, event.messageId, event.partId, event.delta) }
+        _serverParts.update { current -> appendPartDelta(current, serverId, event.messageId, event.partId, event.delta) }
     }
 
     private fun upsertMessage(
-        current: Map<String, List<Message>>,
+        current: Map<String, Map<String, List<Message>>>,
+        serverId: String,
         conversationId: String,
         message: Message,
-    ): Map<String, List<Message>> {
-        val conversationMessages = current[conversationId]?.toMutableList() ?: mutableListOf()
+    ): Map<String, Map<String, List<Message>>> {
+        val serverMessages = current[serverId].orEmpty()
+        val conversationMessages = serverMessages[conversationId]?.toMutableList() ?: mutableListOf()
         val existingIndex = conversationMessages.indexOfFirst { it.id == message.id }
 
         if (existingIndex >= 0) {
@@ -296,12 +340,17 @@ class EventReducer @Inject constructor() {
             conversationMessages.sortBy { it.time.created }
         }
 
-        return current + (conversationId to conversationMessages)
+        return current + (serverId to (serverMessages + (conversationId to conversationMessages)))
     }
 
-    private fun upsertPart(current: Map<String, List<Part>>, part: Part): Map<String, List<Part>> {
+    private fun upsertPart(
+        current: Map<String, Map<String, List<Part>>>,
+        serverId: String,
+        part: Part,
+    ): Map<String, Map<String, List<Part>>> {
         if (!part.isRenderablePart()) return current
-        val messageParts = current[part.messageId]?.toMutableList() ?: mutableListOf()
+        val serverParts = current[serverId].orEmpty()
+        val messageParts = serverParts[part.messageId]?.toMutableList() ?: mutableListOf()
         val existingIndex = messageParts.indexOfFirst { it.id == part.id }
 
         if (existingIndex >= 0) {
@@ -310,16 +359,18 @@ class EventReducer @Inject constructor() {
             messageParts.add(part)
         }
 
-        return current + (part.messageId to messageParts)
+        return current + (serverId to (serverParts + (part.messageId to messageParts)))
     }
 
     private fun appendPartDelta(
-        current: Map<String, List<Part>>,
+        current: Map<String, Map<String, List<Part>>>,
+        serverId: String,
         messageId: String,
         partId: String,
         delta: String,
-    ): Map<String, List<Part>> {
-        val messageParts = current[messageId]?.toMutableList() ?: return current
+    ): Map<String, Map<String, List<Part>>> {
+        val serverParts = current[serverId] ?: return current
+        val messageParts = serverParts[messageId]?.toMutableList() ?: return current
         val partIndex = messageParts.indexOfFirst { it.id == partId }
 
         if (partIndex < 0) return current
@@ -332,14 +383,14 @@ class EventReducer @Inject constructor() {
         }
 
         messageParts[partIndex] = updatedPart
-        return current + (messageId to messageParts)
+        return current + (serverId to (serverParts + (messageId to messageParts)))
     }
     
-    private fun handleMessagePartRemoved(event: SseEvent.MessagePartRemoved) {
-        _parts.update { current ->
-            val messageParts = current[event.messageId]?.filter { it.id != event.partId }
+    private fun handleMessagePartRemoved(event: SseEvent.MessagePartRemoved, serverId: String) {
+        _serverParts.update { current ->
+            val messageParts = current[serverId]?.get(event.messageId)?.filter { it.id != event.partId }
             if (messageParts != null) {
-                current + (event.messageId to messageParts)
+                current + (serverId to (current[serverId].orEmpty() + (event.messageId to messageParts)))
             } else {
                 current
             }
@@ -580,16 +631,18 @@ class EventReducer @Inject constructor() {
     }
 
     /**
-     * Manually update the session status.
+     * Manually update the session status for one server.
      * Useful for optimistic updates (e.g. aborting a session).
      */
-    fun updateSessionStatus(sessionId: String, status: SessionStatus) {
+    fun updateSessionStatus(serverId: String, sessionId: String, status: SessionStatus) {
         synchronized(sessionStatusLock) {
-            if (_sessionStatuses.value[sessionId] == status) return
-            recordSessionStatusChange(sessionId)
-            _sessionStatuses.update { it + (sessionId to status) }
+            if (_serverSessionStatuses.value[serverId]?.get(sessionId) == status) return
+            recordSessionStatusChange(serverId, sessionId)
+            _serverSessionStatuses.update { current ->
+                current + (serverId to (current[serverId].orEmpty() + (sessionId to status)))
+            }
         }
-        if (BuildConfig.DEBUG) Log.d(TAG, "Manually updated session $sessionId status to $status")
+        if (BuildConfig.DEBUG) Log.d(TAG, "Manually updated session $sessionId status to $status on $serverId")
     }
 
     /**
@@ -618,7 +671,7 @@ class EventReducer @Inject constructor() {
                 serverId = serverId,
                 sessionIds = serverSessionIds,
                 conflictingSessionIds = conflictingSessionIds,
-                revisions = serverSessionIds.associateWith { sessionStatusRevisions[it] },
+                revisions = serverSessionIds.associateWith { sessionStatusRevisions[serverId to it] },
             )
         }
     }
@@ -629,22 +682,23 @@ class EventReducer @Inject constructor() {
     ) {
         val targetSessionIds = baseline.sessionIds + statuses.keys
         synchronized(sessionStatusLock) {
-            _sessionStatuses.update { current ->
-                val next = current.toMutableMap()
+            _serverSessionStatuses.update { current ->
+                val serverStatuses = current[baseline.serverId].orEmpty().toMutableMap()
                 for (sessionId in targetSessionIds) {
                     if (sessionId in baseline.conflictingSessionIds) continue
                     val owners = _serverSessions.value.filterValues { sessionId in it }.keys
                     if (owners.any { it != baseline.serverId }) continue
-                    if (sessionStatusRevisions[sessionId] != baseline.revisions[sessionId]) continue
-                    next[sessionId] = statuses[sessionId] ?: SessionStatus.Idle
+                    if (sessionStatusRevisions[baseline.serverId to sessionId] != baseline.revisions[sessionId]) continue
+                    serverStatuses[sessionId] = statuses[sessionId] ?: SessionStatus.Idle
                 }
-                next
+                if (serverStatuses.isEmpty()) current - baseline.serverId
+                else current + (baseline.serverId to serverStatuses)
             }
         }
     }
 
-    private fun recordSessionStatusChange(sessionId: String) {
-        sessionStatusRevisions[sessionId] = nextSessionStatusRevision.incrementAndGet()
+    private fun recordSessionStatusChange(serverId: String, sessionId: String) {
+        sessionStatusRevisions[serverId to sessionId] = nextSessionStatusRevision.incrementAndGet()
     }
 
     fun setActiveSessionId(sessionId: String?) {
@@ -658,43 +712,46 @@ class EventReducer @Inject constructor() {
     }
     
     /**
-     * Load messages for a session
+     * Load messages for a session on one server.
      */
-    fun setMessages(sessionId: String, messages: List<MessageWithParts>) {
+    fun setMessages(serverId: String, sessionId: String, messages: List<MessageWithParts>) {
         val nextInfos = messages.map { msg -> msg.info }
-        _messages.update { current ->
-            val existing = current[sessionId]
-            if (existing == nextInfos) current else current + (sessionId to nextInfos)
+        _serverMessages.update { current ->
+            val serverMessages = current[serverId].orEmpty()
+            val existing = serverMessages[sessionId]
+            if (existing == nextInfos) current else current + (serverId to (serverMessages + (sessionId to nextInfos)))
         }
         val partsMap = messages.associate { msg ->
             msg.info.id to msg.parts.filter { it.isRenderablePart() }
         }
-        _parts.update { current ->
-            if (partsMap.all { (id, parts) -> current[id] == parts } &&
-                partsMap.keys.all { it in current } &&
-                current.keys.filter { id -> nextInfos.any { it.id == id } }.all { it in partsMap }
+        _serverParts.update { current ->
+            val serverParts = current[serverId].orEmpty()
+            if (partsMap.all { (id, parts) -> serverParts[id] == parts } &&
+                partsMap.keys.all { it in serverParts } &&
+                serverParts.keys.filter { id -> nextInfos.any { it.id == id } }.all { it in partsMap }
             ) {
                 current
             } else {
-                current + partsMap
+                current + (serverId to (serverParts + partsMap))
             }
         }
     }
 
     /** Merge a REST history snapshot without replacing state that may have arrived live. */
-    fun mergeMessages(sessionId: String, messages: List<MessageWithParts>) {
-        _messages.update { current ->
-            val liveById = current[sessionId].orEmpty().associateBy { it.id }
+    fun mergeMessages(serverId: String, sessionId: String, messages: List<MessageWithParts>) {
+        _serverMessages.update { current ->
+            val serverMessages = current[serverId].orEmpty()
+            val liveById = serverMessages[sessionId].orEmpty().associateBy { it.id }
             val merged = buildMap {
                 messages.forEach { put(it.info.id, it.info) }
                 putAll(liveById)
             }.values.sortedWith(compareBy<Message> { it.time.created }.thenBy { it.id })
-            current + (sessionId to merged)
+            current + (serverId to (serverMessages + (sessionId to merged)))
         }
-        _parts.update { current ->
-            val merged = current.toMutableMap()
+        _serverParts.update { current ->
+            val merged = current[serverId].orEmpty().toMutableMap()
             messages.forEach { message ->
-                val liveParts = current[message.info.id].orEmpty()
+                val liveParts = merged[message.info.id].orEmpty()
                 val liveById = liveParts.associateBy { it.id }
                 val snapshotPartIds = message.parts.asSequence().map { it.id }.toSet()
                 merged[message.info.id] = buildList {
@@ -706,7 +763,7 @@ class EventReducer @Inject constructor() {
                     }
                 }
             }
-            merged
+            current + (serverId to merged)
         }
     }
     
@@ -718,12 +775,12 @@ class EventReducer @Inject constructor() {
         _serverSessionDetails.value = emptyMap()
         _sessions.value = emptyList()
         synchronized(sessionStatusLock) {
-            _sessionStatuses.value = emptyMap()
+            _serverSessionStatuses.value = emptyMap()
             sessionStatusRevisions.clear()
         }
         _activeSessionId.value = null
-        _messages.value = emptyMap()
-        _parts.value = emptyMap()
+        _serverMessages.value = emptyMap()
+        _serverParts.value = emptyMap()
         _sessionDiffs.value = emptyMap()
         _permissionsByServer.value = emptyMap()
         _questionsByServer.value = emptyMap()
@@ -735,12 +792,24 @@ class EventReducer @Inject constructor() {
     /**
      * Clear state for a single server.
      * Removes sessions belonging to that server and all associated data.
+     * Other servers keep their own statuses, messages, and parts even when
+     * they track the same session/message IDs.
      */
     fun clearForServer(serverId: String) {
         val sessionIds = _serverSessions.value[serverId] ?: emptySet()
         _permissionsByServer.update { it - serverId }
         _questionsByServer.update { it - serverId }
         _serverSessionDetails.update { it - serverId }
+        _serverMessages.update { it - serverId }
+        _serverParts.update { it - serverId }
+        synchronized(sessionStatusLock) {
+            // Invalidate any status baseline captured before this clear: recording a revision
+            // change makes old baseline revisions stale, so a late snapshot cannot restore
+            // state for a server that is no longer connected.
+            val statusSessionIds = sessionIds + _serverSessionStatuses.value[serverId].orEmpty().keys
+            statusSessionIds.forEach { recordSessionStatusChange(serverId, it) }
+            _serverSessionStatuses.update { it - serverId }
+        }
         if (sessionIds.isEmpty()) {
             _serverSessions.update { it - serverId }
             return
@@ -753,22 +822,8 @@ class EventReducer @Inject constructor() {
         
         // Remove sessions
         _sessions.update { it.filter { s -> s.id !in orphanedSessionIds } }
-        synchronized(sessionStatusLock) {
-            orphanedSessionIds.forEach(::recordSessionStatusChange)
-            _sessionStatuses.update { it - orphanedSessionIds }
-        }
         _sessionDiffs.update { it - orphanedSessionIds }
         _todos.update { it - orphanedSessionIds }
-        
-        // Remove messages and their parts
-        val messageIds = _messages.value
-            .filterKeys { it in orphanedSessionIds }
-            .values
-            .flatten()
-            .map { it.id }
-            .toSet()
-        _messages.update { it - orphanedSessionIds }
-        _parts.update { it - messageIds }
 
         if (_activeSessionId.value in orphanedSessionIds) {
             _activeSessionId.value = null

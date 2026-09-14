@@ -82,7 +82,7 @@ class SessionStatusSnapshotTest {
         }
 
         assertEquals("status snapshot failed", failure?.message)
-        assertEquals(SessionStatus.Busy, reducer.sessionStatuses.value[child.id])
+        assertEquals(SessionStatus.Busy, reducer.serverSessionStatuses.value["server"]?.get(child.id))
     }
 
     @Test
@@ -96,7 +96,7 @@ class SessionStatusSnapshotTest {
         reducer.processEvent(SseEvent.SessionIdle(session.id), "server")
         reducer.reconcileSessionStatuses(mapOf(session.id to SessionStatus.Busy), baseline)
 
-        assertEquals(SessionStatus.Idle, reducer.sessionStatuses.value[session.id])
+        assertEquals(SessionStatus.Idle, reducer.serverSessionStatuses.value["server"]?.get(session.id))
     }
 
     @Test
@@ -111,7 +111,7 @@ class SessionStatusSnapshotTest {
         reducer.processEvent(SseEvent.SessionStatus(session.id, SessionStatus.Busy), "server")
         reducer.reconcileSessionStatuses(emptyMap(), baseline)
 
-        assertEquals(SessionStatus.Busy, reducer.sessionStatuses.value[session.id])
+        assertEquals(SessionStatus.Busy, reducer.serverSessionStatuses.value["server"]?.get(session.id))
     }
 
     @Test
@@ -125,8 +125,8 @@ class SessionStatusSnapshotTest {
 
         reducer.reconcileSessionStatuses(emptyMap(), baseline)
 
-        assertEquals(SessionStatus.Idle, reducer.sessionStatuses.value["a"])
-        assertEquals(SessionStatus.Busy, reducer.sessionStatuses.value["b"])
+        assertEquals(SessionStatus.Idle, reducer.serverSessionStatuses.value["server-a"]?.get("a"))
+        assertEquals(SessionStatus.Busy, reducer.serverSessionStatuses.value["server-b"]?.get("b"))
     }
 
     @Test
@@ -139,7 +139,7 @@ class SessionStatusSnapshotTest {
         reducer.processEvent(SseEvent.SessionDeleted(session), "server")
         reducer.reconcileSessionStatuses(mapOf(session.id to SessionStatus.Busy), baseline)
 
-        assertNull(reducer.sessionStatuses.value[session.id])
+        assertNull(reducer.serverSessionStatuses.value["server"]?.get(session.id))
     }
 
     @Test
@@ -153,7 +153,7 @@ class SessionStatusSnapshotTest {
         val baseline = reducer.captureSessionStatusBaseline("server")
         reducer.reconcileSessionStatuses(emptyMap(), baseline)
 
-        assertNull(reducer.sessionStatuses.value[session.id])
+        assertNull(reducer.serverSessionStatuses.value["server"]?.get(session.id))
         assertEquals(emptySet<String>(), reducer.serverSessions.value["server"].orEmpty())
     }
 
@@ -168,7 +168,7 @@ class SessionStatusSnapshotTest {
 
         reducer.reconcileSessionStatuses(emptyMap(), baseline)
 
-        assertEquals(SessionStatus.Busy, reducer.sessionStatuses.value[shared.id])
+        assertEquals(SessionStatus.Busy, reducer.serverSessionStatuses.value["server-b"]?.get(shared.id))
     }
 
     @Test
@@ -181,7 +181,7 @@ class SessionStatusSnapshotTest {
         reducer.clearForServer("server")
         reducer.reconcileSessionStatuses(mapOf(session.id to SessionStatus.Busy), baseline)
 
-        assertNull(reducer.sessionStatuses.value[session.id])
+        assertNull(reducer.serverSessionStatuses.value["server"]?.get(session.id))
     }
 
     private class StatusSnapshotTransport(

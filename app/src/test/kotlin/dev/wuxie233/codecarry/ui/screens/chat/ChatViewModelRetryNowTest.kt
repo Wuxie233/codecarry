@@ -100,10 +100,10 @@ class ChatViewModelRetryNowTest {
         val requestCount = AtomicInteger()
         val retryRequests = Collections.synchronizedList(mutableListOf<HttpRequestData>())
         val retryStatus = SessionStatus.Retry(attempt = 2, message = "rate limited", next = 42L)
-        val reducer = EventReducer().also { it.updateSessionStatus(SESSION_ID, retryStatus) }
+        val reducer = EventReducer().also { it.updateSessionStatus("srv", SESSION_ID, retryStatus) }
         val vm = newViewModel(
             eventReducer = reducer,
-            api = openCodeApi(retryStatus) { request ->
+            api = openCodeApi { request ->
                 retryRequests += request
                 requestCount.incrementAndGet()
                 requestStarted.complete(Unit)
@@ -122,14 +122,14 @@ class ChatViewModelRetryNowTest {
 
         assertEquals(1, requestCount.get())
         assertTrue(vm.uiState.value.isRetryingNow)
-        assertEquals(retryStatus, reducer.sessionStatuses.value[SESSION_ID])
+        assertEquals(retryStatus, reducer.serverSessionStatuses.value["srv"]?.get(SESSION_ID))
         assertEquals("%2Fworkspace%2Fproject%20name", retryRequests.single().headers["x-opencode-directory"])
 
         releaseResponse.complete(Unit)
         advanceUntilIdle()
 
         assertTrue(vm.uiState.value.isRetryingNow)
-        assertEquals(retryStatus, reducer.sessionStatuses.value[SESSION_ID])
+        assertEquals(retryStatus, reducer.serverSessionStatuses.value["srv"]?.get(SESSION_ID))
         assertEquals(null, vm.uiState.value.error)
 
         vm.retrySessionNow()
@@ -137,7 +137,7 @@ class ChatViewModelRetryNowTest {
 
         assertEquals(1, requestCount.get())
 
-        reducer.updateSessionStatus(SESSION_ID, SessionStatus.Idle)
+        reducer.updateSessionStatus("srv", SESSION_ID, SessionStatus.Idle)
         advanceUntilIdle()
 
         assertFalse(vm.uiState.value.isRetryingNow)
@@ -146,10 +146,10 @@ class ChatViewModelRetryNowTest {
     @Test
     fun `retry now false response emits one-shot failure without setting global error`() = runTest(dispatcher) {
         val retryStatus = SessionStatus.Retry(attempt = 1, message = "waiting", next = 42L)
-        val reducer = EventReducer().also { it.updateSessionStatus(SESSION_ID, retryStatus) }
+        val reducer = EventReducer().also { it.updateSessionStatus("srv", SESSION_ID, retryStatus) }
         val vm = newViewModel(
             eventReducer = reducer,
-            api = openCodeApi(retryStatus) { respondJson("false") },
+            api = openCodeApi { respondJson("false") },
         )
         collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
         vm.uiState.first { !it.isLoading && it.sessionStatus == retryStatus }
@@ -164,16 +164,16 @@ class ChatViewModelRetryNowTest {
         vm.uiState.first { !it.isRetryingNow }
         assertFalse(vm.uiState.value.isRetryingNow)
         assertEquals(null, vm.uiState.value.error)
-        assertEquals(retryStatus, reducer.sessionStatuses.value[SESSION_ID])
+        assertEquals(retryStatus, reducer.serverSessionStatuses.value["srv"]?.get(SESSION_ID))
     }
 
     @Test
     fun `retry now exception emits one-shot failure without setting global error`() = runTest(dispatcher) {
         val retryStatus = SessionStatus.Retry(attempt = 1, message = "waiting", next = 42L)
-        val reducer = EventReducer().also { it.updateSessionStatus(SESSION_ID, retryStatus) }
+        val reducer = EventReducer().also { it.updateSessionStatus("srv", SESSION_ID, retryStatus) }
         val vm = newViewModel(
             eventReducer = reducer,
-            api = openCodeApi(retryStatus) { respondJson("{}") },
+            api = openCodeApi { respondJson("{}") },
         )
         collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
         vm.uiState.first { !it.isLoading && it.sessionStatus == retryStatus }
@@ -188,7 +188,7 @@ class ChatViewModelRetryNowTest {
         vm.uiState.first { !it.isRetryingNow }
         assertFalse(vm.uiState.value.isRetryingNow)
         assertEquals(null, vm.uiState.value.error)
-        assertEquals(retryStatus, reducer.sessionStatuses.value[SESSION_ID])
+        assertEquals(retryStatus, reducer.serverSessionStatuses.value["srv"]?.get(SESSION_ID))
     }
 
     private fun newViewModel(eventReducer: EventReducer, api: OpenCodeApi): ChatViewModel = ChatViewModel(
@@ -216,7 +216,6 @@ class ChatViewModelRetryNowTest {
     ).also(viewModels::add)
 
     private fun openCodeApi(
-        retryStatus: SessionStatus.Retry,
         retryHandler: suspend MockRequestHandleScope.(HttpRequestData) -> HttpResponseData,
     ): OpenCodeApi {
         val engine = MockEngine { request ->
@@ -226,9 +225,10 @@ class ChatViewModelRetryNowTest {
                     """{"id":"$SESSION_ID","directory":"$DIRECTORY","time":{}}""",
                 )
                 request.method == HttpMethod.Get && request.url.encodedPath == "/session/$SESSION_ID/message" -> respondJson("[]")
-                request.method == HttpMethod.Get && request.url.encodedPath == "/session/status" -> respondJson(
-                    """{"$SESSION_ID":{"type":"retry","attempt":${retryStatus.attempt},"message":"${retryStatus.message}","next":${retryStatus.next}}}""",
-                )
+                // The reducer is seeded with the retry status directly; keep the REST
+                // snapshot empty so a late response can never re-write a stale status
+                // after the test manually advances the state.
+                request.url.encodedPath == "/session/status" -> respondJson("{}")
                 request.url.encodedPath == "/question" || request.url.encodedPath == "/permission" -> respondJson("[]")
                 request.url.encodedPath == "/config/providers" -> respondJson("{}")
                 request.url.encodedPath == "/agent" || request.url.encodedPath == "/command" -> respondJson("[]")

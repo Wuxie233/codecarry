@@ -383,9 +383,9 @@ class ChatViewModel @Inject constructor(
     val uiState: StateFlow<ChatUiState> = combine(
         listOf(
             eventReducer.serverSessionDetails,
-            eventReducer.messages,
-            eventReducer.parts,
-            eventReducer.sessionStatuses,
+            eventReducer.serverMessages,
+            eventReducer.serverParts,
+            eventReducer.serverSessionStatuses,
             eventReducer.permissionsByServer,
             eventReducer.questionsByServer,
             _isLoading,
@@ -414,9 +414,15 @@ class ChatViewModel @Inject constructor(
         val currentServerSessions = sessionsByServer[serverId].orEmpty()
         val allSessions = currentServerSessions.values.toList()
         val currentServerSessionIds = currentServerSessions.keys
-        val allMessages = args[1] as Map<String, List<Message>>
-        val allParts = args[2] as Map<String, List<Part>>
-        val statuses = args[3] as Map<String, SessionStatus>
+        @Suppress("UNCHECKED_CAST")
+        val messagesByServer = args[1] as Map<String, Map<String, List<Message>>>
+        @Suppress("UNCHECKED_CAST")
+        val partsByServer = args[2] as Map<String, Map<String, List<Part>>>
+        @Suppress("UNCHECKED_CAST")
+        val statusesByServer = args[3] as Map<String, Map<String, SessionStatus>>
+        val sessionMessages = messagesByServer[serverId]?.get(sessionId) ?: emptyList()
+        val partsByMessage = partsByServer[serverId].orEmpty()
+        val statuses = statusesByServer[serverId].orEmpty()
         val permissionsByServer = args[4] as Map<String, Map<String, List<SseEvent.PermissionAsked>>>
         val questionsByServer = args[5] as Map<String, Map<String, List<SseEvent.QuestionAsked>>>
         val permissions = permissionsByServer[serverId].orEmpty()
@@ -454,8 +460,6 @@ class ChatViewModel @Inject constructor(
             questions = questions,
             permissions = permissions,
         )
-        val sessionMessages = allMessages[sessionId] ?: emptyList()
-        val partsByMessage = allParts
         val revertState = session?.revert
 
         val chatMessages = run {
@@ -763,7 +767,7 @@ class ChatViewModel @Inject constructor(
         val mapped = mapDshEventStateToSessions(state)
         eventReducer.replaceSessions(serverId, mapped.sessions)
         mapped.statuses.forEach { (id, status) ->
-            eventReducer.updateSessionStatus(id, status)
+            eventReducer.updateSessionStatus(serverId, id, status)
         }
         val snapshot = state.sessions[sessionId]
         applyDshProjectedModel()
@@ -779,7 +783,7 @@ class ChatViewModel @Inject constructor(
         if (snapshot != null) {
             val folded = dshHistoryFolder.fold(sessionId, snapshot.events)
             val lastSeq = snapshot.events.maxOfOrNull { it.seq } ?: -1L
-            eventReducer.setMessages(sessionId, applyCachedDshAttachments(folded))
+            eventReducer.setMessages(serverId, sessionId, applyCachedDshAttachments(folded))
             sessionDirectory = snapshot.cwd?.takeIf { it.isNotBlank() } ?: sessionDirectory
             dshAppliedEventSeq = lastSeq
             resolveMissingDshAttachments(folded, lastSeq)
@@ -879,7 +883,7 @@ class ChatViewModel @Inject constructor(
             val current = dshReducer.state.value.sessions[sessionId] ?: return@launch
             val currentSeq = current.events.maxOfOrNull { it.seq } ?: -1L
             if (currentSeq < foldSeq) return@launch
-            eventReducer.setMessages(sessionId, applyCachedDshAttachments(dshHistoryFolder.fold(sessionId, current.events)))
+            eventReducer.setMessages(serverId, sessionId, applyCachedDshAttachments(dshHistoryFolder.fold(sessionId, current.events)))
             dshAppliedEventSeq = currentSeq
         }
     }
@@ -1160,7 +1164,7 @@ class ChatViewModel @Inject constructor(
                     limit = currentMessageLimit,
                     directory = sessionDirectory,
                 )
-                eventReducer.mergeMessages(sessionId, messages)
+                eventReducer.mergeMessages(serverId, sessionId, messages)
                 // If we got exactly the limit, there are likely more messages on the server
                 _hasOlderMessages.value = messages.size >= currentMessageLimit
                 if (BuildConfig.DEBUG) Log.d(TAG, "Loaded ${messages.size} messages for session $sessionId (limit=$currentMessageLimit, hasOlder=${_hasOlderMessages.value})")
@@ -1177,7 +1181,7 @@ class ChatViewModel @Inject constructor(
                             limit = currentMessageLimit,
                             directory = sessionDirectory,
                         )
-                        eventReducer.mergeMessages(sessionId, messages)
+                        eventReducer.mergeMessages(serverId, sessionId, messages)
                         _hasOlderMessages.value = messages.size >= currentMessageLimit
                         if (BuildConfig.DEBUG) Log.d(TAG, "Retry succeeded: loaded ${messages.size} messages (limit=$currentMessageLimit)")
                     } catch (retryEx: Exception) {
@@ -1216,7 +1220,7 @@ class ChatViewModel @Inject constructor(
                     limit = currentMessageLimit,
                     directory = sessionDirectory,
                 )
-                eventReducer.mergeMessages(sessionId, messages)
+                eventReducer.mergeMessages(serverId, sessionId, messages)
                 _hasOlderMessages.value = messages.size >= currentMessageLimit
                 if (BuildConfig.DEBUG) Log.d(TAG, "Loaded older: ${messages.size} messages (limit=$currentMessageLimit, hasOlder=${_hasOlderMessages.value})")
             } catch (e: Exception) {
@@ -1294,7 +1298,7 @@ class ChatViewModel @Inject constructor(
     private suspend fun loadSessionStatus() {
         try {
             val status = api.getSessionStatuses(conn, directory = sessionDirectory)[sessionId] ?: return
-            eventReducer.updateSessionStatus(sessionId, status)
+            eventReducer.updateSessionStatus(serverId, sessionId, status)
             if (BuildConfig.DEBUG) Log.d(TAG, "Loaded status $status for session $sessionId")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to load session status: ${e.javaClass.simpleName}: ${e.message}", e)
@@ -1572,7 +1576,7 @@ class ChatViewModel @Inject constructor(
             limit = currentMessageLimit,
             directory = sessionDirectory,
         )
-        eventReducer.mergeMessages(sessionId, messages)
+        eventReducer.mergeMessages(serverId, sessionId, messages)
     }
 
     /** Get the session directory for building file:// URLs */
@@ -1740,7 +1744,7 @@ class ChatViewModel @Inject constructor(
                         pendingOpenCodeSends.removeFirst()
                         _pendingSendCount.value = pendingOpenCodeSends.size
                         _pendingSendError.value = null
-                        eventReducer.updateSessionStatus(sessionId, SessionStatus.Busy)
+                        eventReducer.updateSessionStatus(serverId, sessionId, SessionStatus.Busy)
                     } catch (error: Exception) {
                         Log.e(TAG, "Failed to send DSH prompt", error)
                         _pendingSendError.value = error.message ?: "Failed to send queued message"
@@ -1791,7 +1795,7 @@ class ChatViewModel @Inject constructor(
                         _pendingSendCount.value = pendingOpenCodeSends.size
                         _pendingSendError.value = null
                         _error.value = null
-                        eventReducer.updateSessionStatus(sessionId, SessionStatus.Busy)
+                        eventReducer.updateSessionStatus(serverId, sessionId, SessionStatus.Busy)
                     } catch (error: Exception) {
                         Log.e(TAG, "Failed to send queued message", error)
                         _pendingSendError.value = error.message ?: "Failed to send queued message"
@@ -1853,7 +1857,7 @@ class ChatViewModel @Inject constructor(
                 outcome = outcome,
                 onIdle = {
                     if (BuildConfig.DEBUG) Log.d(TAG, "Aborted session $sessionId")
-                    eventReducer.updateSessionStatus(sessionId, SessionStatus.Idle)
+                    eventReducer.updateSessionStatus(serverId, sessionId, SessionStatus.Idle)
                 },
                 onError = { message ->
                     _error.value = message
@@ -1871,8 +1875,8 @@ class ChatViewModel @Inject constructor(
                     _retryNowFailureEvent.tryEmit(Unit)
                     return@launch
                 }
-                eventReducer.sessionStatuses.first { statuses ->
-                    statuses[sessionId] !is SessionStatus.Retry
+                eventReducer.serverSessionStatuses.first { statusesByServer ->
+                    statusesByServer[serverId]?.get(sessionId) !is SessionStatus.Retry
                 }
             } catch (error: CancellationException) {
                 throw error

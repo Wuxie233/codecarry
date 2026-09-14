@@ -273,8 +273,9 @@ class DiagnosticsViewModel @Inject constructor(
     }
 
     private fun LatestSession.toDiagnosticInput(): SessionDiagnosticInput {
-        val sessionMessages = eventReducer.messages.value[session.id].orEmpty()
-        val partsByMessageId = eventReducer.parts.value
+        val serverMessages = eventReducer.serverMessages.value[serverId].orEmpty()
+        val sessionMessages = serverMessages[session.id].orEmpty()
+        val partsByMessageId = eventReducer.serverParts.value[serverId].orEmpty()
         val messagesWithParts = sessionMessages.map { message ->
             MessageWithParts(
                 info = message,
@@ -285,7 +286,7 @@ class DiagnosticsViewModel @Inject constructor(
             session = session,
             serverId = serverId,
             serverName = serverName,
-            status = eventReducer.sessionStatuses.value[session.id],
+            status = eventReducer.serverSessionStatuses.value[serverId]?.get(session.id),
             messages = messagesWithParts,
             pendingPermissionCount = serverId?.let { eventReducer.permissionsByServer.value[it]?.get(session.id) }.orEmpty().size,
             pendingQuestionCount = serverId?.let { eventReducer.questionsByServer.value[it]?.get(session.id) }.orEmpty().size,

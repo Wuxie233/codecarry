@@ -268,7 +268,7 @@ class SessionListViewModelTest {
         collectUiState(vm)
         eventReducer.setSessions("srv-session-list", listOf(parent, child))
 
-        eventReducer.updateSessionStatus(child.id, SessionStatus.Busy)
+        eventReducer.updateSessionStatus("srv-session-list", child.id, SessionStatus.Busy)
         advanceUntilIdle()
 
         val active = vm.uiState.value.activeConversations.single()
@@ -289,6 +289,7 @@ class SessionListViewModelTest {
         eventReducer.setSessions("srv-session-list", listOf(parent, child))
 
         eventReducer.updateSessionStatus(
+            "srv-session-list",
             child.id,
             SessionStatus.Retry(attempt = 1, message = "retrying", next = 0L),
         )
@@ -309,11 +310,12 @@ class SessionListViewModelTest {
         collectUiState(vm)
         eventReducer.setSessions("srv-session-list", listOf(parent, child))
         eventReducer.updateSessionStatus(
+            "srv-session-list",
             parent.id,
             SessionStatus.Retry(attempt = 1, message = "retrying", next = 0L),
         )
 
-        eventReducer.updateSessionStatus(child.id, SessionStatus.Busy)
+        eventReducer.updateSessionStatus("srv-session-list", child.id, SessionStatus.Busy)
         advanceUntilIdle()
 
         assertEquals(ConversationStatus.BUSY, vm.uiState.value.activeConversations.single().status)
@@ -328,7 +330,7 @@ class SessionListViewModelTest {
         val vm = newSessionListViewModel(eventReducer = eventReducer)
         collectUiState(vm)
         eventReducer.setSessions("srv-session-list", listOf(parent, child))
-        eventReducer.updateSessionStatus(child.id, SessionStatus.Busy)
+        eventReducer.updateSessionStatus("srv-session-list", child.id, SessionStatus.Busy)
 
         eventReducer.setQuestions(
             "srv-session-list",
@@ -480,10 +482,10 @@ class SessionListViewModelTest {
         val vm = newSessionListViewModel(eventReducer = eventReducer)
         collectUiState(vm)
         eventReducer.setSessions("srv-session-list", listOf(parent, child))
-        eventReducer.updateSessionStatus(child.id, SessionStatus.Busy)
+        eventReducer.updateSessionStatus("srv-session-list", child.id, SessionStatus.Busy)
         advanceUntilIdle()
 
-        eventReducer.updateSessionStatus(child.id, SessionStatus.Idle)
+        eventReducer.updateSessionStatus("srv-session-list", child.id, SessionStatus.Idle)
         advanceUntilIdle()
 
         assertTrue(vm.uiState.value.activeConversations.isEmpty())
