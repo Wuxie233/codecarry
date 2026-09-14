@@ -25,6 +25,7 @@ import dev.wuxie233.codecarry.R
 import dev.wuxie233.codecarry.data.api.OpenCodeApi
 import dev.wuxie233.codecarry.data.api.ServerConnection
 import dev.wuxie233.codecarry.data.dsh.DshConnectionManager
+import dev.wuxie233.codecarry.data.dsh.DshUnreadTracker
 import dev.wuxie233.codecarry.data.api.SseClient
 import dev.wuxie233.codecarry.data.preferences.SessionListPreferencesRepository
 import dev.wuxie233.codecarry.data.preferences.hasUnreadReplyBeyondReadAnchor
@@ -253,11 +254,19 @@ class OpenCodeConnectionService : Service() {
     private var foregroundStatusRefreshJob: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
 
+    /**
+     * DSH producer for the shared unread read model (issue #31). Lives with the
+     * service scope; the connection manager singleton keeps DSH state across
+     * service restarts, and the tracker re-attaches to ready generations.
+     */
+    private var dshUnreadTracker: DshUnreadTracker? = null
+
     private lateinit var notificationManager: NotificationManager
     private var foregroundStarted: Boolean = false
     private val foregroundStatusRefreshObserver = ForegroundStatusRefreshObserver {
         reconcileConnectedOpenCodeStatuses()
         dshConnectionManager.refreshReadyCatalogs()
+        dshUnreadTracker?.recomputeNow()
         foregroundResumeDispatcher.dispatch()
     }
 
@@ -301,6 +310,11 @@ class OpenCodeConnectionService : Service() {
         serviceScope.launch { observeCodexConnections() }
         serviceScope.launch { observeCodexNotifications() }
         serviceScope.launch { observeActiveCodexThreads() }
+        dshUnreadTracker = DshUnreadTracker(
+            connectionManager = dshConnectionManager,
+            preferences = sessionListPreferencesRepository,
+            eventReducer = eventReducer,
+        ).also { it.start(serviceScope) }
         ProcessLifecycleOwner.get().lifecycle.addObserver(foregroundStatusRefreshObserver)
 
         serviceScope.launch {
@@ -362,6 +376,8 @@ class OpenCodeConnectionService : Service() {
         super.onDestroy()
         if (BuildConfig.DEBUG) Log.d(TAG, "Service destroyed")
         disconnectAllInternal(stopService = false)
+        dshUnreadTracker?.stop()
+        dshUnreadTracker = null
         serviceScope.cancel()
     }
 
