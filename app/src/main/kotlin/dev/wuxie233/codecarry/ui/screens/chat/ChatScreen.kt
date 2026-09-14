@@ -1189,6 +1189,29 @@ fun ChatScreen(
     viewModel: ChatViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
+
+    // Read-model visibility (issue #32): the active-chat signal follows screen and
+    // app lifecycle (ON_START/ON_STOP), not ViewModel lifetime. A backgrounded chat
+    // keeps its ViewModel but stops suppressing unread marks and notifications.
+    val chatLifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(chatLifecycleOwner, viewModel) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            when (event) {
+                androidx.lifecycle.Lifecycle.Event.ON_START -> viewModel.onChatScreenStarted()
+                androidx.lifecycle.Lifecycle.Event.ON_STOP -> viewModel.onChatScreenStopped()
+                else -> Unit
+            }
+        }
+        chatLifecycleOwner.lifecycle.addObserver(observer)
+        if (chatLifecycleOwner.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) {
+            viewModel.onChatScreenStarted()
+        }
+        onDispose {
+            chatLifecycleOwner.lifecycle.removeObserver(observer)
+            viewModel.onChatScreenStopped()
+        }
+    }
+
     val filePreview by viewModel.filePreview.collectAsState()
     val dshPresets by viewModel.dshPresets.collectAsState()
     val draftText by viewModel.draftText.collectAsState()
@@ -1750,6 +1773,13 @@ fun ChatScreen(
             isAtTail = isAtBottom,
             isUserScrollInProgress = listState.isScrollInProgress && !programmaticScrollInProgress,
         )
+    }
+
+    // Read model (issue #33): replies count as presented only while the timeline
+    // follows the tail; browsing older history keeps newer, not-yet-seen replies
+    // unread until the user returns to the tail (the jump-to-latest affordance).
+    LaunchedEffect(followTailState.isFollowing) {
+        viewModel.onFollowTailChanged(followTailState.isFollowing)
     }
 
 

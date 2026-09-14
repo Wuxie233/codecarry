@@ -51,6 +51,7 @@ import dev.wuxie233.codecarry.data.dsh.mapDshEventStateToSessions
 import dev.wuxie233.codecarry.data.dsh.mapDshQuestion
 import dev.wuxie233.codecarry.data.dsh.toSessionEvent
 import dev.wuxie233.codecarry.data.preferences.SessionListPreferencesRepository
+import dev.wuxie233.codecarry.data.preferences.readableAssistantOutputIds
 import dev.wuxie233.codecarry.data.repository.DraftRepository
 import dev.wuxie233.codecarry.data.repository.EventReducer
 import dev.wuxie233.codecarry.data.repository.SettingsRepository
@@ -255,6 +256,71 @@ class ChatViewModel @Inject constructor(
     }
 
     private val _isLoading = MutableStateFlow(true)
+
+    // ============ Read model state (issues #32/#33) ============
+
+    /** Whether this chat's screen is between ON_START and ON_STOP (screen+app lifecycle, not ViewModel lifetime). */
+    private val _screenVisible = MutableStateFlow(false)
+
+    /** Whether the timeline is following the message tail (reported by ChatScreen). */
+    private val _followingTail = MutableStateFlow(true)
+
+    /** Called by ChatScreen on Lifecycle.Event.ON_START (or first composition while started). */
+    fun onChatScreenStarted() {
+        if (sessionId.isBlank()) return
+        _screenVisible.value = true
+        eventReducer.setVisibleSession(serverId, sessionId)
+    }
+
+    /** Called by ChatScreen on Lifecycle.Event.ON_STOP and on dispose. */
+    fun onChatScreenStopped() {
+        if (sessionId.isBlank()) return
+        _screenVisible.value = false
+        eventReducer.clearVisibleSession(serverId, sessionId)
+    }
+
+    /** Called by ChatScreen whenever the follow-tail state changes. */
+    fun onFollowTailChanged(followingTail: Boolean) {
+        _followingTail.value = followingTail
+    }
+
+    /**
+     * Advances the persisted read anchor only when new replies are actually
+     * presented: screen visible, timeline following the tail, and some history
+     * rendered. Browsing older history keeps not-yet-seen newer replies unread
+     * (the tail flag is false), and a chat whose content never rendered cannot
+     * advance the anchor at all.
+     *
+     * Manual mark-read semantics: there is no dedicated "mark read" action. The
+     * gesture that presents pending replies — returning to the tail via the
+     * jump-to-latest affordance — is the manual mark-read. The anchor only ever
+     * moves to a message the user is currently looking at, and unread marks are
+     * a derived cache: content discovered later beyond the anchor re-marks the
+     * conversation unread (the service recomputes idempotently from snapshots).
+     */
+    private suspend fun advanceReadAnchorIfPresented(visible: Boolean, followingTail: Boolean, messages: List<ChatMessage>) {
+        if (sessionId.isBlank() || !visible || !followingTail || messages.isEmpty()) return
+
+        val latestReadable = latestReadableAssistantMessageId(messages) ?: return
+        val currentAnchor = sessionListPreferencesRepository.readAnchor(serverId, sessionId).first()
+        if (currentAnchor != latestReadable) {
+            sessionListPreferencesRepository.setReadAnchor(serverId, sessionId, latestReadable)
+            sessionListPreferencesRepository.markConversationRead(serverId, sessionId)
+        }
+        // The user is looking at the known tail: retire any stale response-ready
+        // notification for this session (per-session cancel; the server group
+        // summary is only removed when no sibling event notifications remain).
+        dismissResponseReadyNotification(appContext, serverId, sessionId)
+    }
+
+    /** Latest assistant message id carrying readable output (text or reasoning), or null when none exists. */
+    private fun latestReadableAssistantMessageId(messages: List<ChatMessage>): String? {
+        val partsById = HashMap<String, List<Part>>(messages.size)
+        messages.forEach { partsById[it.message.id] = it.parts }
+        return readableAssistantOutputIds(messages.map { it.message }) { id -> partsById[id].orEmpty() }
+            .lastOrNull()
+    }
+
     private val _dshPresets = MutableStateFlow(DshChatPresetState())
     val dshPresets: StateFlow<DshChatPresetState> = _dshPresets
     private var dshPresetLoadJob: Job? = null
@@ -609,8 +675,6 @@ class ChatViewModel @Inject constructor(
     )
 
     init {
-        eventReducer.setActiveSessionId(sessionId)
-
         // Route guard (issue #27): if sessionId is missing after URL decode,
         // surface an error state instead of triggering REST calls with an empty sessionId.
         if (sessionId.isBlank()) {
@@ -618,9 +682,18 @@ class ChatViewModel @Inject constructor(
             _isLoading.value = false
             _error.value = "Invalid session"
         } else {
+            // Read model (issues #32/#33): this chat's replies are only "presented"
+            // when the screen is visible AND following the tail AND some history is
+            // rendered. Only then may the persisted read anchor advance (and the
+            // unread mark clear). A backgrounded chat keeps its ViewModel alive but
+            // stops advancing the anchor, so later completions still mark unread and
+            // are not suppressed from response notifications.
             viewModelScope.launch {
-                sessionListPreferencesRepository.markMainSessionRead(sessionId)
-                dismissResponseReadyNotification(appContext, serverId, sessionId)
+                combine(_screenVisible, _followingTail, uiState) { visible, following, state ->
+                    Triple(visible, following, state)
+                }.collect { (visible, following, state) ->
+                    advanceReadAnchorIfPresented(visible, following, state.messages)
+                }
             }
 
             // Restore draft from disk
@@ -1549,7 +1622,9 @@ class ChatViewModel @Inject constructor(
         dshFollowJob?.cancel()
         dshFollowAddress = null
         dshKnownAddress = null
-        eventReducer.clearActiveSessionId(sessionId)
+        if (sessionId.isNotBlank()) {
+            eventReducer.clearVisibleSession(serverId, sessionId)
+        }
         closeTerminalSession()
         super.onCleared()
         saveDraft()

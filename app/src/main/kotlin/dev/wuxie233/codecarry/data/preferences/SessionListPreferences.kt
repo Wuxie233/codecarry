@@ -39,8 +39,19 @@ data class SessionListPreferences(
     val sort: SessionSort,
     val filter: SessionFilter,
     val scope: SessionScope,
-    val unreadMainSessionIds: Set<String>,
+    /**
+     * Unread main-session ids per server (`serverId -> sessionIds`). Duplicate
+     * session ids on two servers never share or clear each other's marks.
+     */
+    val unreadMainSessionsByServer: Map<String, Set<String>> = emptyMap(),
 ) {
+    @Deprecated(
+        message = "Unread marks are server-scoped; read unreadMainSessionsByServer instead.",
+        replaceWith = ReplaceWith("unreadMainSessionsByServer"),
+    )
+    val unreadMainSessionIds: Set<String>
+        get() = unreadMainSessionsByServer.values.flatten().toSet()
+
     companion object {
         val DEFAULT = SessionListPreferences(
             collapsedDirs = emptySet(),
@@ -49,7 +60,7 @@ data class SessionListPreferences(
             sort = SessionSort.RECENT_UPDATED,
             filter = SessionFilter.ALL,
             scope = SessionScope.INBOX,
-            unreadMainSessionIds = emptySet(),
+            unreadMainSessionsByServer = emptyMap(),
         )
     }
 }

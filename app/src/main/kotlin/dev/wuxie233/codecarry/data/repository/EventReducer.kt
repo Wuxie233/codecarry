@@ -63,6 +63,17 @@ class EventReducer @Inject constructor() {
 
     private val _activeSessionId = MutableStateFlow<String?>(null)
     val activeSessionId: StateFlow<String?> = _activeSessionId.asStateFlow()
+
+    /**
+     * Chat screens currently visible to the user, keyed by serverId. This follows
+     * screen/app lifecycle (ON_START/ON_STOP), not ViewModel lifetime, so a
+     * backgrounded chat with a live ViewModel does not suppress unread marks or
+     * response notifications. A duplicate sessionId on another server never
+     * matches here: visibility is checked per (serverId, sessionId) pair.
+     */
+    private val _visibleSessionsByServer = MutableStateFlow<Map<String, String>>(emptyMap())
+    val visibleSessionsByServer: StateFlow<Map<String, String>> = _visibleSessionsByServer.asStateFlow()
+
     
     // serverId -> sessionId -> messages
     private val _serverMessages = MutableStateFlow<Map<String, Map<String, List<Message>>>>(emptyMap())
@@ -710,6 +721,30 @@ class EventReducer @Inject constructor() {
             if (activeSessionId == sessionId) null else activeSessionId
         }
     }
+
+    /**
+     * Mark the chat screen for (serverId, sessionId) as visible to the user.
+     * Also mirrors the legacy global [activeSessionId] used by diagnostics.
+     */
+    fun setVisibleSession(serverId: String, sessionId: String) {
+        _visibleSessionsByServer.update { it + (serverId to sessionId) }
+        _activeSessionId.value = sessionId
+    }
+
+    /** Clear the visible mark for (serverId, sessionId) when its screen stops or is destroyed. */
+    fun clearVisibleSession(serverId: String, sessionId: String) {
+        _visibleSessionsByServer.update { current ->
+            if (current[serverId] == sessionId) current - serverId else current
+        }
+        if (_activeSessionId.value == sessionId) {
+            _activeSessionId.value = null
+        }
+    }
+
+    /** True when the chat screen for this exact (serverId, sessionId) pair is visible. */
+    fun isSessionVisible(serverId: String, sessionId: String): Boolean =
+        _visibleSessionsByServer.value[serverId] == sessionId
+
     
     /**
      * Load messages for a session on one server.
@@ -779,6 +814,7 @@ class EventReducer @Inject constructor() {
             sessionStatusRevisions.clear()
         }
         _activeSessionId.value = null
+        _visibleSessionsByServer.value = emptyMap()
         _serverMessages.value = emptyMap()
         _serverParts.value = emptyMap()
         _sessionDiffs.value = emptyMap()
@@ -810,16 +846,17 @@ class EventReducer @Inject constructor() {
             statusSessionIds.forEach { recordSessionStatusChange(serverId, it) }
             _serverSessionStatuses.update { it - serverId }
         }
+        _visibleSessionsByServer.update { it - serverId }
         if (sessionIds.isEmpty()) {
             _serverSessions.update { it - serverId }
             return
         }
-        
+
         // Remove the server's session tracking
         _serverSessions.update { it - serverId }
         val sessionIdsOwnedElsewhere = _serverSessions.value.values.flatten().toSet()
         val orphanedSessionIds = sessionIds - sessionIdsOwnedElsewhere
-        
+
         // Remove sessions
         _sessions.update { it.filter { s -> s.id !in orphanedSessionIds } }
         _sessionDiffs.update { it - orphanedSessionIds }

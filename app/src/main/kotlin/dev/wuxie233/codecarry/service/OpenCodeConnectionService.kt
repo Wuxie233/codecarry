@@ -23,19 +23,24 @@ import dev.wuxie233.codecarry.data.codex.requestKey
 import dev.wuxie233.codecarry.MainActivity
 import dev.wuxie233.codecarry.R
 import dev.wuxie233.codecarry.data.api.OpenCodeApi
+import dev.wuxie233.codecarry.data.api.ServerConnection
 import dev.wuxie233.codecarry.data.dsh.DshConnectionManager
 import dev.wuxie233.codecarry.data.api.SseClient
 import dev.wuxie233.codecarry.data.preferences.SessionListPreferencesRepository
+import dev.wuxie233.codecarry.data.preferences.hasUnreadReplyBeyondReadAnchor
+import dev.wuxie233.codecarry.data.preferences.readableAssistantOutputIds
 import dev.wuxie233.codecarry.data.repository.EventReducer
 import dev.wuxie233.codecarry.data.repository.LocalServerManager
 import dev.wuxie233.codecarry.data.repository.ServerRepository
 import dev.wuxie233.codecarry.data.repository.SettingsRepository
 import dev.wuxie233.codecarry.data.transport.OpenCodeTransport
 import dev.wuxie233.codecarry.domain.model.Message
+import dev.wuxie233.codecarry.domain.model.MessageWithParts
 import dev.wuxie233.codecarry.domain.model.Part
 import dev.wuxie233.codecarry.domain.model.ConnectionPhase
 import dev.wuxie233.codecarry.domain.model.ServerConfig
 import dev.wuxie233.codecarry.domain.model.ServerType
+import dev.wuxie233.codecarry.domain.model.Session
 import dev.wuxie233.codecarry.domain.model.SessionStatus
 import dev.wuxie233.codecarry.domain.model.SseEvent
 import dev.wuxie233.codecarry.domain.transport.AgentTransport
@@ -66,6 +71,10 @@ private const val RECONNECT_BASE_DELAY_MS = 1_000L   // 1 second
 private const val RECONNECT_MAX_DELAY_MS = 30_000L   // 30 seconds
 private const val RECONNECT_BACKOFF_FACTOR = 2.0
 
+// Unread read-model timing/limits
+private const val SSE_SETTLEMENT_DELAY_MS = 250L
+private const val UNREAD_RECOMPUTE_MESSAGE_LIMIT = 50
+
 /**
  * Per-server connection state held by the service.
  */
@@ -87,6 +96,36 @@ internal fun shouldReconcileForegroundStatus(serverType: ServerType, isConnected
     isConnected && serverType == ServerType.OPENCODE
 
 internal fun openCodeNotificationDedupKey(serverId: String, id: String): String = "$serverId\u0000$id"
+
+internal fun unreadFetchKey(serverId: String, sessionId: String): String = "$serverId\u0000$sessionId"
+
+/**
+ * Decide whether the unread recompute needs a fresh REST history fetch for one
+ * session before the cursor comparison is trustworthy.
+ *
+ * Fetch when the session changed after the newest message we already know
+ * (`sessionUpdated` beyond the newest known message timestamp), or when the
+ * snapshot showed this session settling from Busy/Retry to idle (completion may
+ * have happened while we were not watching), or when we have no known history
+ * at all. A previously fetched [lastFetchedSessionUpdated] at or beyond the
+ * current session timestamp means the history is already fresh — the memo keeps
+ * the recompute idempotent (same snapshot → no repeated fetches).
+ */
+internal fun shouldFetchUnreadHistory(
+    sessionUpdated: Long,
+    knownMessages: List<Message>,
+    transitionedToIdle: Boolean,
+    lastFetchedSessionUpdated: Long?,
+): Boolean {
+    if (knownMessages.isEmpty()) return true
+    if (lastFetchedSessionUpdated != null && sessionUpdated <= lastFetchedSessionUpdated && !transitionedToIdle) {
+        return false
+    }
+    val newestKnownMessageTime = knownMessages.maxOf { message ->
+        maxOf(message.time.created, message.time.completed ?: 0L)
+    }
+    return transitionedToIdle || sessionUpdated > newestKnownMessageTime
+}
 
 internal suspend fun <T> reconcileConnectedOpenCodeTargets(
     targets: Collection<T>,
@@ -241,6 +280,13 @@ class OpenCodeConnectionService : Service() {
     /** Dedup permission notifications fired from the connect-time bootstrap, keyed by server/request. */
     private val postedPermissionRequestIds = ConcurrentHashMap.newKeySet<String>()
     private val manuallyDisconnectedServerIds = ConcurrentHashMap.newKeySet<String>()
+
+    /**
+     * Session-update timestamp each conversation was last history-fetched at during
+     * unread recomputes, keyed by `serverId\u0000sessionId`. Keeps ON_START and
+     * reconnect recomputes from re-fetching unchanged sessions.
+     */
+    private val lastUnreadFetchUpdated = ConcurrentHashMap<String, Long>()
 
     inner class LocalBinder : Binder() {
         fun getService(): OpenCodeConnectionService = this@OpenCodeConnectionService
@@ -858,7 +904,11 @@ class OpenCodeConnectionService : Service() {
                                     // has been reduced. Revision guards preserve any subsequent deltas.
                                     connections[server.id]?.projectDirectories?.let { directories ->
                                         streamScope.launch {
+                                            // Capture pre-snapshot statuses so the unread recompute can
+                                            // detect sessions that settled while this connection was down.
+                                            val previousStatuses = eventReducer.serverSessionStatuses.value[server.id].orEmpty()
                                             bootstrapSessionStatuses(server, transport, directories)
+                                            recomputeServerUnread(server, previousStatuses)
                                         }
                                     } ?: Log.w(TAG, "[${server.displayName}] Skipping status snapshot without a complete project scope list")
                                     streamScope.launch {
@@ -965,8 +1015,12 @@ class OpenCodeConnectionService : Service() {
             val statuses = loadSessionStatusSnapshot(state.transport, projectDirectories)
             val current = connections[server.id]
             if (current?.transport !== state.transport || current.isConnected.not()) return
+            // Capture pre-snapshot statuses before applying, then recompute unread
+            // marks idempotently from the merged snapshots (issue #35).
+            val previousStatuses = eventReducer.serverSessionStatuses.value[server.id].orEmpty()
             eventReducer.reconcileSessionStatuses(statuses, baseline)
             mergeForegroundSessionList(state, projectDirectories)
+            recomputeServerUnread(server, previousStatuses)
             Log.i(TAG, "[${server.displayName}] Reconciled ${statuses.size} foreground session status(es)")
         } catch (error: CancellationException) {
             throw error
@@ -1015,7 +1069,7 @@ class OpenCodeConnectionService : Service() {
             eventReducer.reconcilePermissions(server.id, pending, preExistingIds)
             if (pending.isNotEmpty() && settingsRepository.notificationsEnabled.first()) {
                 for (perm in pending) {
-                    if (isChildSession(perm.sessionId)) continue
+                    if (isChildSession(server.id, perm.sessionId)) continue
                     if (!postedPermissionRequestIds.add(openCodeNotificationDedupKey(server.id, perm.id))) continue
                     showPermissionNotification(
                         server = server,
@@ -1066,32 +1120,26 @@ class OpenCodeConnectionService : Service() {
      * Check if a session is a child/sub-agent session (has parentID set).
      * Child sessions should not trigger user-facing notifications,
      * matching the behavior of the official opencode WebUI and TUI.
+     * Scoped to one server: another server may reuse the same session id.
      */
-    private fun isChildSession(sessionId: String): Boolean {
-        val session = eventReducer.sessions.value.find { it.id == sessionId }
-        return session?.parentId != null
+    private fun isChildSession(serverId: String, sessionId: String): Boolean {
+        return eventReducer.serverSessionDetails.value[serverId]?.get(sessionId)?.parentId != null
     }
 
     private fun processEvent(server: ServerConfig, event: SseEvent) {
         if (BuildConfig.DEBUG) Log.d(TAG, "[${server.displayName}] SSE event: ${event.javaClass.simpleName}")
-
-        val previousStatus = when (event) {
-            is SseEvent.SessionStatus -> eventReducer.serverSessionStatuses.value[server.id]?.get(event.sessionId)
-            is SseEvent.SessionIdle -> eventReducer.serverSessionStatuses.value[server.id]?.get(event.sessionId)
-            else -> null
-        }
 
         eventReducer.processEvent(event, server.id)
 
         when (event) {
             is SseEvent.SessionStatus -> {
                 if (event.status is dev.wuxie233.codecarry.domain.model.SessionStatus.Idle) {
-                    maybeMarkSessionUnread(event.sessionId, previousStatus)
+                    evaluateSessionUnread(server.id, event.sessionId, settle = true)
                 }
             }
             is SseEvent.SessionIdle -> {
-                maybeMarkSessionUnread(event.sessionId, previousStatus)
-                if (isChildSession(event.sessionId)) return
+                evaluateSessionUnread(server.id, event.sessionId, settle = true)
+                if (isChildSession(server.id, event.sessionId)) return
                 val sourceTransport = connections[server.id]?.transport ?: return
                 serviceScope.launch {
                     if (!settingsRepository.notificationsEnabled.first()) return@launch
@@ -1100,7 +1148,7 @@ class OpenCodeConnectionService : Service() {
                     delay(250)
                     val current = connections[server.id]
                     if (current?.transport !== sourceTransport || !current.isConnected) return@launch
-                    if (eventReducer.activeSessionId.value == event.sessionId) return@launch
+                    if (eventReducer.isSessionVisible(server.id, event.sessionId)) return@launch
 
                     val assistantMessageId = latestNotifiableAssistantMessageId(server.id, event.sessionId)
                     if (assistantMessageId == null) {
@@ -1125,7 +1173,7 @@ class OpenCodeConnectionService : Service() {
                 }
             }
             is SseEvent.PermissionAsked -> {
-                if (isChildSession(event.sessionId)) return
+                if (isChildSession(server.id, event.sessionId)) return
                 if (!postedPermissionRequestIds.add(openCodeNotificationDedupKey(server.id, event.id))) return
                 Log.i(TAG, "[${server.displayName}] Permission asked: ${event.permission} (id=${event.id})")
                 showPermissionNotification(
@@ -1136,13 +1184,13 @@ class OpenCodeConnectionService : Service() {
                 )
             }
             is SseEvent.QuestionAsked -> {
-                if (isChildSession(event.sessionId)) return
+                if (isChildSession(server.id, event.sessionId)) return
                 Log.i(TAG, "[${server.displayName}] Question asked for session ${event.sessionId}")
                 val questionText = event.questions.firstOrNull()?.question ?: getString(R.string.notification_has_question, getString(R.string.notification_new_session))
                 showQuestionNotification(server, event.sessionId, questionText)
             }
             is SseEvent.SessionError -> {
-                if (event.sessionId != null && isChildSession(event.sessionId)) return
+                if (event.sessionId != null && isChildSession(server.id, event.sessionId)) return
                 Log.i(TAG, "[${server.displayName}] Session error: ${event.error}")
                 showErrorNotification(server, event.sessionId, event.error)
             }
@@ -1150,16 +1198,121 @@ class OpenCodeConnectionService : Service() {
         }
     }
 
-    private fun maybeMarkSessionUnread(sessionId: String, previousStatus: dev.wuxie233.codecarry.domain.model.SessionStatus?) {
-        if (isChildSession(sessionId)) return
-        if (previousStatus !is dev.wuxie233.codecarry.domain.model.SessionStatus.Busy && previousStatus !is dev.wuxie233.codecarry.domain.model.SessionStatus.Retry) {
-            return
-        }
-        if (eventReducer.activeSessionId.value == sessionId) return
-
+    /**
+     * Cursor-based unread evaluation (issue #35): a session is unread when new
+     * readable assistant output exists beyond the persisted last-read anchor —
+     * never merely because a Busy/Retry session became Idle. Stop, failure, or
+     * tool-only activity produces no readable output and therefore no unread
+     * mark (it also clears a stale mark, which keeps the recompute idempotent:
+     * the same reducer snapshot always yields the same result).
+     *
+     * `settle = true` gives the reducer a brief moment to receive trailing
+     * message/part events after an idle event, mirroring the notification path.
+     */
+    private fun evaluateSessionUnread(serverId: String, sessionId: String, settle: Boolean) {
+        if (isChildSession(serverId, sessionId)) return
         serviceScope.launch {
-            sessionListPreferencesRepository.markMainSessionUnread(sessionId)
+            if (settle) delay(SSE_SETTLEMENT_DELAY_MS)
+            evaluateUnreadFromCursor(serverId, sessionId)
         }
+    }
+
+    /** Core cursor evaluation; skips child sessions and the currently visible chat. */
+    private suspend fun evaluateUnreadFromCursor(serverId: String, sessionId: String) {
+        if (isChildSession(serverId, sessionId)) return
+        // Screen+app lifecycle visibility (issue #32): a backgrounded chat keeps
+        // its ViewModel alive but must still mark unread and notify.
+        if (eventReducer.isSessionVisible(serverId, sessionId)) return
+        val messages = eventReducer.serverMessages.value[serverId]?.get(sessionId) ?: return
+        val anchor = sessionListPreferencesRepository.readAnchor(serverId, sessionId).first()
+        if (applyUnreadDecision(serverId, sessionId, anchor, messages)) {
+            Log.i(TAG, "Session $sessionId unread on server $serverId (reply beyond read anchor)")
+        }
+    }
+
+    /** Writes the derived unread state; returns true when the session is unread. */
+    private suspend fun applyUnreadDecision(
+        serverId: String,
+        sessionId: String,
+        anchor: String?,
+        messages: List<Message>,
+    ): Boolean {
+        val partsByServer = eventReducer.serverParts.value[serverId].orEmpty()
+        val readable = readableAssistantOutputIds(messages) { id -> partsByServer[id].orEmpty() }
+        val unread = hasUnreadReplyBeyondReadAnchor(anchor, readable)
+        if (unread) {
+            sessionListPreferencesRepository.markConversationUnread(serverId, sessionId)
+        } else {
+            sessionListPreferencesRepository.markConversationRead(serverId, sessionId)
+        }
+        return unread
+    }
+
+    /**
+     * Recompute unread marks for every root session of one server from the
+     * current snapshots (issue #35: reconnect/restart/foreground reconcile).
+     * Sessions whose known history may be stale — the session was updated after
+     * the newest message we know, it went Busy/Retry→Idle through this snapshot,
+     * or we only have an anchor and no history — get one bounded REST history
+     * fetch merged into the reducer before evaluating. Sessions never seen on
+     * this device (no anchor, no history) are skipped so old pre-install
+     * sessions are not mass-marked unread; live SSE completions still cover them.
+     */
+    private suspend fun recomputeServerUnread(server: ServerConfig, previousStatuses: Map<String, SessionStatus>) {
+        val details = eventReducer.serverSessionDetails.value[server.id].orEmpty()
+        val statuses = eventReducer.serverSessionStatuses.value[server.id].orEmpty()
+        for ((sessionId, session) in details) {
+            if (session.parentId != null) continue
+            if (eventReducer.isSessionVisible(server.id, sessionId)) continue
+            // Only evaluate settled sessions; a busy session will be evaluated
+            // again from live events when it goes idle.
+            val status = statuses[sessionId]
+            if (status is SessionStatus.Busy || status is SessionStatus.Retry) continue
+
+            val anchor = sessionListPreferencesRepository.readAnchor(server.id, sessionId).first()
+            val messages = eventReducer.serverMessages.value[server.id]?.get(sessionId)
+            if (anchor == null && messages.isNullOrEmpty()) continue
+
+            val transitionedToIdle = previousStatuses[sessionId] is SessionStatus.Busy ||
+                previousStatuses[sessionId] is SessionStatus.Retry
+            if (shouldFetchUnreadHistory(
+                    sessionUpdated = session.time.updated,
+                    knownMessages = messages.orEmpty(),
+                    transitionedToIdle = transitionedToIdle,
+                    lastFetchedSessionUpdated = lastUnreadFetchUpdated[unreadFetchKey(server.id, sessionId)],
+                )
+            ) {
+                val fetched = fetchSessionHistory(server, session)
+                if (fetched != null) {
+                    eventReducer.mergeMessages(server.id, sessionId, fetched)
+                    lastUnreadFetchUpdated[unreadFetchKey(server.id, sessionId)] = session.time.updated
+                    val merged = eventReducer.serverMessages.value[server.id]?.get(sessionId).orEmpty()
+                    applyUnreadDecision(server.id, sessionId, anchor, merged)
+                }
+                continue
+            }
+            if (messages != null) {
+                applyUnreadDecision(server.id, sessionId, anchor, messages)
+            }
+        }
+    }
+
+    private suspend fun fetchSessionHistory(
+        server: ServerConfig,
+        session: Session,
+    ): List<MessageWithParts>? = try {
+        val conn = ServerConnection.from(server.url, server.username, server.password)
+        api.listMessages(
+            conn = conn,
+            sessionId = session.id,
+            limit = UNREAD_RECOMPUTE_MESSAGE_LIMIT,
+            directory = session.directory.ifBlank { null },
+        )
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Log.w(TAG, "[${server.displayName}] Unread history fetch failed for ${session.id}: ${e.message}")
+        null
     }
 
     // ============ Helpers ============

@@ -530,6 +530,13 @@ class SessionListViewModel @Inject constructor(
         SessionListViewMode.PROJECTS,
     )
 
+    /** Server-scoped unread marks from the shared read model (legacy global ids migrate in on read). */
+    private val unreadSessionIdsFlow = preferencesRepo.unreadConversationIds(serverId).stateIn(
+        viewModelScope,
+        SharingStarted.Eagerly,
+        emptySet(),
+    )
+
     @Suppress("UNCHECKED_CAST")
     val uiState: StateFlow<SessionListUiState> = combine(
         listOf(
@@ -541,6 +548,7 @@ class SessionListViewModel @Inject constructor(
             _homeDir,
             _selectedIds,
             prefsFlow,
+            unreadSessionIdsFlow,
             _searchQuery,
             _filter,
             _scopeOverride,
@@ -561,18 +569,18 @@ class SessionListViewModel @Inject constructor(
         val homeDir = values[5] as String?
         val selectedIds = values[6] as Set<String>
         val prefs = values[7] as SessionListPreferences
-        val searchQuery = values[8] as String
-        val filter = values[9] as SessionFilter
-        val scope = (values[10] as SessionScope?) ?: prefs.scope
-        val questionsByServer = values[11] as Map<String, Map<String, List<SseEvent.QuestionAsked>>>
-        val permissionsByServer = values[12] as Map<String, Map<String, List<SseEvent.PermissionAsked>>>
+        val unreadMainSessionIds = values[8] as Set<String>
+        val searchQuery = values[9] as String
+        val filter = values[10] as SessionFilter
+        val scope = (values[11] as SessionScope?) ?: prefs.scope
+        val questionsByServer = values[12] as Map<String, Map<String, List<SseEvent.QuestionAsked>>>
+        val permissionsByServer = values[13] as Map<String, Map<String, List<SseEvent.PermissionAsked>>>
         val pendingQuestions = questionsByServer[serverId].orEmpty()
         val pendingPermissions = permissionsByServer[serverId].orEmpty()
-        val showHiddenProjects = values[13] as Boolean
-        val viewMode = values[14] as SessionListViewMode
-        val activityFilter = values[15] as SessionActivityFilter
-        val backendStates = values[16] as Map<String, BackendSessionState>
-        val unreadMainSessionIds = prefs.unreadMainSessionIds
+        val showHiddenProjects = values[14] as Boolean
+        val viewMode = values[15] as SessionListViewMode
+        val activityFilter = values[16] as SessionActivityFilter
+        val backendStates = values[17] as Map<String, BackendSessionState>
 
         val serverScopedSessions = sessionsByServer[serverId].orEmpty().values.toList()
         val rootPendingQuestions = aggregateSessionRequestsByRoot(serverScopedSessions, pendingQuestions)
