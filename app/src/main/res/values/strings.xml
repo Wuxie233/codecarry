@@ -718,19 +718,33 @@
     <string name="dsh_host_surfaces_models">Providers and models</string>
     <string name="dsh_host_surfaces_system_prompt">System prompt</string>
     <string name="dsh_host_surfaces_subagents">Subagents</string>
-    <string name="dsh_host_surfaces_parent_session">Parent session id</string>
     <string name="dsh_host_surfaces_load_subagents">Load subagents</string>
-    <string name="dsh_host_surfaces_session_id">Session id</string>
     <string name="dsh_host_surfaces_select_preset">Select preset</string>
+    <string name="dsh_host_surfaces_presets_applied">Applied preset: %1$s</string>
     <string name="dsh_host_surfaces_goals">Goals</string>
     <string name="dsh_host_surfaces_goal_objective">Objective</string>
     <string name="dsh_host_surfaces_create_goal">Create goal</string>
-    <string name="dsh_host_surfaces_settings_ns">Namespace</string>
     <string name="dsh_host_surfaces_settings_patch">JSON patch</string>
-    <string name="dsh_host_surfaces_settings_mutate">Mutate settings</string>
     <string name="dsh_host_surfaces_subagent_prompt">Prompt</string>
     <string name="dsh_host_surfaces_send_prompt">Send to subagent</string>
     <string name="dsh_host_surfaces_interrupt">Interrupt</string>
+    <string name="dsh_host_surfaces_session_context">Session context · %1$s</string>
+    <string name="dsh_host_surfaces_no_session_selected">No session selected — choose one above</string>
+    <string name="dsh_host_surfaces_no_sessions">No sessions on this server</string>
+    <string name="dsh_host_surfaces_current_target">Target: %1$s · %2$s</string>
+    <string name="dsh_host_surfaces_session_running">running</string>
+    <string name="dsh_host_surfaces_retry">Retry</string>
+    <string name="dsh_host_surfaces_not_loaded">Not loaded</string>
+    <string name="dsh_host_surfaces_skills_empty">No skills available for this session</string>
+    <string name="dsh_host_surfaces_settings_form_empty">No simple fields in this namespace; use the advanced JSON patch</string>
+    <string name="dsh_host_surfaces_settings_apply">Apply changes</string>
+    <string name="dsh_host_surfaces_settings_advanced_show">Advanced JSON patch</string>
+    <string name="dsh_host_surfaces_settings_advanced_hide">Hide advanced JSON patch</string>
+    <string name="dsh_host_surfaces_settings_apply_json">Apply JSON patch</string>
+    <string name="dsh_host_surfaces_error_no_namespace">Select a settings namespace first</string>
+    <string name="dsh_host_surfaces_error_invalid_number">Numeric fields need a valid number</string>
+    <string name="dsh_host_surfaces_error_empty_patch">No changes to apply</string>
+    <string name="dsh_host_surfaces_error_invalid_json">Patch must be a JSON array of {op, path, value} objects</string>
 
     <!-- Common -->
     <string name="loading">Loading…</string>

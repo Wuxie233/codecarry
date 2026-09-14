@@ -43,6 +43,15 @@ class DshHostSurfaceController(
 ) {
     fun catalog(): DshHostSurfaceCatalog = catalog
 
+    /**
+     * Server session roster for the session-scoped host surfaces
+     * (`skills/list`, `agentPresets/select`, goals, and subagents).
+     */
+    suspend fun sessionList(): DshSessionListValue {
+        requireMethod("session/list")
+        return client.sessionList(connection)
+    }
+
     suspend fun createWorkspace(path: String): DshWorkspaceCreateValue {
         requireMethod("workspace/create")
         return client.workspaceCreate(connection, path)

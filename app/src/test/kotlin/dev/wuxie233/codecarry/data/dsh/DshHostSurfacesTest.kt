@@ -76,6 +76,7 @@ class DshHostSurfacesTest {
         }
 
         assertTrue(controller.createWorkspace("/tmp/project").created)
+        assertEquals("s1", controller.sessionList().items.single().sessionId)
         assertEquals("/tmp", controller.listDirectory().path)
         assertEquals("/tmp/new", controller.createDirectory("/tmp", "new").path)
         assertEquals("main", controller.gitDescribe().currentBranch)
@@ -106,6 +107,7 @@ class DshHostSurfacesTest {
         assertTrue(
             captured.containsAll(
                 listOf(
+                    "session/list",
                     "workspace/create", "directoryPicker/list", "directoryPicker/createDirectory",
                     "git/describe", "agentPresets/list", "agentPresets/select",
                     "goals/create", "automation/list", "settings/describe", "settings/mutate",
@@ -169,6 +171,7 @@ class DshHostSurfacesTest {
 
     private fun ok(rpcId: String, method: String): String {
         val value = when (method) {
+            "session/list" -> """{"items":[{"sessionId":"s1","updatedAt":1,"running":false,"blank":false}]}"""
             "workspace/create" -> """{"workspace":{"workspaceId":"w1","path":"/tmp/project","folders":[],"title":"project","sessionIds":[],"createdAt":"t","updatedAt":"t"},"created":true}"""
             "directoryPicker/list" -> """{"path":"/tmp","home":"/root","crumbs":[],"entries":[],"truncated":false}"""
             "directoryPicker/createDirectory" -> """{"path":"/tmp/new"}"""
