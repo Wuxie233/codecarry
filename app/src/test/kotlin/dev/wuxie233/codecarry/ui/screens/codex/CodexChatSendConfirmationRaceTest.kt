@@ -202,7 +202,12 @@ class CodexChatSendConfirmationRaceTest {
                 }
             },
         )
-        val vm = CodexChatViewModel(savedState, manager, repository).also(viewModels::add)
+        val vm = CodexChatViewModel(
+            savedState,
+            manager,
+            repository,
+            dev.wuxie233.codecarry.data.preferences.SessionListPreferencesRepository(store),
+        ).also(viewModels::add)
         val sendResults = mutableListOf<CodexSendResult>()
         backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.sendResults.toList(sendResults) }
         runCurrent()

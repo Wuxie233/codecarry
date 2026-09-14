@@ -169,6 +169,7 @@ class CodexThreadListViewModelTest {
         val vm = CodexThreadListViewModel(
             SavedStateHandle(mapOf("serverId" to server.id)), repository, manager,
             CodexProjectPreferencesRepository(store),
+            dev.wuxie233.codecarry.data.preferences.SessionListPreferencesRepository(store),
         )
         ViewModelStore().also { it.put("list", vm); owners += it }
         runCurrent()

@@ -37,6 +37,7 @@ internal fun CodexTimelineViewport(
     contentKey: Any?,
     modifier: Modifier = Modifier,
     listState: LazyListState = rememberLazyListState(),
+    onFollowTailChanged: (Boolean) -> Unit = {},
     content: LazyListScope.() -> Unit,
 ) {
     var followState by remember(listState) { mutableStateOf(ChatFollowTailState()) }
@@ -78,6 +79,12 @@ internal fun CodexTimelineViewport(
             )
             if (!isDragged && !scrolling) userScrollInProgress = false
         }
+    }
+
+    // Read model (issue #30): replies count as presented only while the timeline
+    // follows the tail; browsing older history keeps not-yet-seen replies unread.
+    LaunchedEffect(listState) {
+        snapshotFlow { followState.isFollowing }.collect { following -> onFollowTailChanged(following) }
     }
 
     LaunchedEffect(contentKey, listState) {

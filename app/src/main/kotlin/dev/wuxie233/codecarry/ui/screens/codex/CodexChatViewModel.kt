@@ -18,6 +18,9 @@ import dev.wuxie233.codecarry.data.codex.CodexThread
 import dev.wuxie233.codecarry.data.codex.CodexServerConnection
 import dev.wuxie233.codecarry.data.codex.CodexPermissionGrant
 import dev.wuxie233.codecarry.data.codex.CodexPermissionGrantScope
+import dev.wuxie233.codecarry.data.codex.readableAgentMessageIds
+import dev.wuxie233.codecarry.data.preferences.SessionListPreferencesRepository
+import dev.wuxie233.codecarry.data.preferences.hasUnreadReplyBeyondReadAnchor
 import dev.wuxie233.codecarry.data.repository.ServerRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -29,6 +32,10 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -144,6 +151,7 @@ class CodexChatViewModel @Inject constructor(
     private val savedStateHandle: SavedStateHandle,
     private val connectionManager: CodexConnectionManager,
     private val serverRepository: ServerRepository,
+    private val sessionListPreferencesRepository: SessionListPreferencesRepository,
     private val fastPreferences: CodexFastPreferences = CodexFastPreferences(),
 ) : ViewModel() {
     val serverId: String = decodeCodexRouteArg(savedStateHandle["serverId"])
@@ -196,9 +204,69 @@ class CodexChatViewModel @Inject constructor(
         initialAccepted = restoredPendingSendAccepted,
     )
 
+    // ============ Shared read model (issue #30) ============
+
+    /** Whether this chat's screen is between ON_START and ON_STOP (screen lifecycle, not ViewModel lifetime). */
+    private val _screenVisible = MutableStateFlow(false)
+
+    /** Whether the timeline is following the message tail (reported by the viewport). */
+    private val _followingTail = MutableStateFlow(true)
+
+    /** Called by the timeline viewport whenever the follow-tail state changes. */
+    fun onFollowTailChanged(followingTail: Boolean) {
+        _followingTail.value = followingTail
+    }
+
     init {
         connectAndLoad()
         observePendingRequests()
+        observeReadModel()
+    }
+
+    /**
+     * Replies count as read only when actually presented: screen visible, timeline
+     * following the tail, and history loaded. Browsing older history keeps newer
+     * not-yet-seen replies unread, and a chat that fails to load never clears marks.
+     */
+    private fun observeReadModel() {
+        viewModelScope.launch {
+            combine(
+                _screenVisible,
+                _followingTail,
+                uiState.map { state -> state.thread?.readableAgentMessageIds() },
+            ) { visible, followingTail, readableIds -> Triple(visible, followingTail, readableIds) }
+                .distinctUntilChanged()
+                .collect { (visible, followingTail, readableIds) ->
+                    advanceReadAnchorIfPresented(visible, followingTail, readableIds)
+                }
+        }
+    }
+
+    private suspend fun advanceReadAnchorIfPresented(
+        visible: Boolean,
+        followingTail: Boolean,
+        readableIds: List<String>?,
+    ) {
+        if (!visible || !followingTail || readableIds.isNullOrEmpty()) return
+        val latestReadable = readableIds.last()
+        val currentAnchor = sessionListPreferencesRepository.readAnchor(serverId, threadId).first()
+        if (currentAnchor == latestReadable) return
+        sessionListPreferencesRepository.setReadAnchor(serverId, threadId, latestReadable)
+        sessionListPreferencesRepository.markConversationRead(serverId, threadId)
+    }
+
+    /**
+     * Leaving a chat while newer readable replies sit beyond the read anchor keeps
+     * them visibly unread: the user never presented the tail, so the anchor did not
+     * advance and the persisted mark must not be missing.
+     */
+    private suspend fun markUnreadIfTailNotPresented() {
+        val readableIds = _uiState.value.thread?.readableAgentMessageIds() ?: return
+        if (_followingTail.value) return
+        val anchor = sessionListPreferencesRepository.readAnchor(serverId, threadId).first()
+        if (hasUnreadReplyBeyondReadAnchor(anchor, readableIds)) {
+            sessionListPreferencesRepository.markConversationUnread(serverId, threadId)
+        }
     }
 
     fun connectAndLoad() {
@@ -399,6 +467,7 @@ class CodexChatViewModel @Inject constructor(
     }
 
     fun setChatVisible(visible: Boolean) {
+        _screenVisible.value = visible
         if (visible) refreshUsage()
         if (visible && activeThreadToken == null) {
             activeThreadToken = connectionManager.activateThread(
@@ -407,6 +476,7 @@ class CodexChatViewModel @Inject constructor(
         } else if (!visible) {
             activeThreadToken?.close()
             activeThreadToken = null
+            viewModelScope.launch { markUnreadIfTailNotPresented() }
         }
     }
 

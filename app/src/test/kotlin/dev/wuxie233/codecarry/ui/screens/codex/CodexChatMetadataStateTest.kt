@@ -200,6 +200,7 @@ class CodexChatMetadataStateTest {
             SavedStateHandle(mapOf("serverId" to server.id, "threadId" to "child")),
             manager,
             repository,
+            dev.wuxie233.codecarry.data.preferences.SessionListPreferencesRepository(store),
         ).also(viewModels::add)
         runCurrent()
         return Fixture(vm, transport, this)

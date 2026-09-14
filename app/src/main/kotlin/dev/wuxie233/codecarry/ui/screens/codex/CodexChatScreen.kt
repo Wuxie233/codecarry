@@ -410,6 +410,7 @@ fun CodexChatScreen(
                 else -> CodexTimelineViewport(
                     contentKey = listOf(timeline, state.plans, state.diffs, state.activeTurnId, state.error, state.threadFailure, state.turnFailures),
                     modifier = Modifier.fillMaxSize(),
+                    onFollowTailChanged = viewModel::onFollowTailChanged,
                 ) {
                     state.error?.let { error ->
                         item("operation-error") {

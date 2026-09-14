@@ -164,6 +164,7 @@ internal fun CodexThreadRow(
     onRestore: () -> Unit,
     onDelete: () -> Unit,
     isSubagent: Boolean = false,
+    unread: Boolean = false,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     val colors = MaterialTheme.colorScheme
@@ -172,6 +173,8 @@ internal fun CodexThreadRow(
         thread.status.type == "systemError" -> colors.error
         else -> colors.tertiary
     }
+    // Shared read model marker (issue #30); matches the native session unread accent.
+    val unreadColor = Color(0xFF2196F3)
     val swipeState = rememberSwipeToDismissBoxState(
         confirmValueChange = { direction ->
             when (direction) {
@@ -206,6 +209,15 @@ internal fun CodexThreadRow(
             border = if (isAmoled) BorderStroke(1.dp, colors.outlineVariant.copy(alpha = 0.65f)) else null,
         ) {
             Row(Modifier.fillMaxWidth().padding(horizontal = if (isSubagent) 12.dp else 16.dp, vertical = if (isSubagent) 6.dp else 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (unread) {
+                    Box(
+                        Modifier
+                            .padding(end = 8.dp)
+                            .size(8.dp)
+                            .testTag("codex_thread_unread:${thread.id}")
+                            .background(unreadColor, androidx.compose.foundation.shape.CircleShape),
+                    )
+                }
                 Column(Modifier.weight(1f)) {
                     Text(
                         thread.displayTitle
@@ -525,6 +537,7 @@ internal fun CodexThreadListContent(
                                                 isSubagent = depth > 0 || node.orphan,
                                                 archived = archived,
                                                 pendingCount = state.pendingRequestCounts.getOrDefault(thread.id, 0),
+                                                unread = thread.id in state.unreadThreadIds,
                                                 onOpen = { onOpenThread(thread.id) },
                                                 onRename = { actions.rename(thread) },
                                                 onFork = { actions.forkThread(thread.id) },
@@ -580,7 +593,8 @@ internal fun CodexThreadListContent(
                                         tildeDirectory = project.directory.ifBlank { noWorkspace },
                                         sessionCount = project.threads.size,
                                         activeCount = project.roots.sumOf { it.runningCount },
-                                        unreadCount = 0, additions = 0, deletions = 0,
+                                        unreadCount = project.threads.count { it.id in state.unreadThreadIds },
+                                        additions = 0, deletions = 0,
                                         isPinned = project.pinned, isCollapsed = project.collapsed, isHidden = project.hidden,
                                         onToggleCollapsed = { actions.toggleProjectCollapsed(project.directory) },
                                         onTogglePinned = { actions.toggleProjectPinned(project.directory) },

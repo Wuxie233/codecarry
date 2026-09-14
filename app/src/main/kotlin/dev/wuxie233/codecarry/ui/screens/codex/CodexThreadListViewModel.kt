@@ -37,6 +37,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import javax.inject.Inject
 
+import dev.wuxie233.codecarry.data.preferences.SessionListPreferencesRepository
 import dev.wuxie233.codecarry.data.preferences.SessionListViewMode
 import dev.wuxie233.codecarry.data.codex.CodexDirectoryListing
 
@@ -52,6 +53,8 @@ data class CodexThreadListUiState(
     val searchQuery: String = "",
     val filter: CodexThreadFilter = CodexThreadFilter.ALL,
     val pendingRequestCounts: Map<String, Int> = emptyMap(),
+    /** Persisted unread thread ids for this server (shared read model, issue #30). */
+    val unreadThreadIds: Set<String> = emptySet(),
     val isLoading: Boolean = true,
     val isLoadingArchived: Boolean = false,
     val error: String? = null,
@@ -102,6 +105,7 @@ class CodexThreadListViewModel @Inject constructor(
     private val serverRepository: ServerRepository,
     private val connectionManager: CodexConnectionManager,
     private val projectPreferencesRepository: CodexProjectPreferencesRepository,
+    private val sessionListPreferencesRepository: SessionListPreferencesRepository,
 ) : ViewModel() {
     val serverId: String = decodeCodexRouteArg(savedStateHandle["serverId"])
     private val _uiState = MutableStateFlow(CodexThreadListUiState())
@@ -132,6 +136,13 @@ class CodexThreadListViewModel @Inject constructor(
         viewModelScope.launch {
             projectPreferencesRepository.observe(serverId).collect { preferences ->
                 _uiState.update { it.copy(projectPreferences = preferences) }
+            }
+        }
+        // Shared read model (issue #30): persisted unread marks survive restarts and
+        // are independent of system notifications; the list only projects them.
+        viewModelScope.launch {
+            sessionListPreferencesRepository.unreadConversationIds(serverId).collect { unread ->
+                _uiState.update { it.copy(unreadThreadIds = unread) }
             }
         }
         refresh()

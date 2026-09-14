@@ -140,6 +140,29 @@ private fun JsonObject?.networkAccessToken(): Boolean? {
     }
 }
 
+/**
+ * Readable agent output for the shared read model: a completed turn produced user
+ * visible prose only when it carries an agent message with non-blank text. Stop,
+ * failure, or tool-only activity must not fabricate unread output.
+ */
+fun CodexTurn.hasReadableAgentOutput(): Boolean =
+    items.any { it.type == "agentMessage" && !it.text.isNullOrBlank() }
+
+/**
+ * Timeline-ordered ids of agent messages with readable output. These are the
+ * anchor candidates for the persisted last-read cursor; items without a stable
+ * server id cannot anchor the read model and are skipped.
+ */
+fun CodexThread.readableAgentMessageIds(): List<String> = turns.flatMap { turn ->
+    turn.items.mapNotNull { item ->
+        if (item.type == "agentMessage" && !item.text.isNullOrBlank() && !item.id.isNullOrBlank()) {
+            item.id
+        } else {
+            null
+        }
+    }
+}
+
 data class CodexThread(
     val id: String,
     val sessionId: String? = null,

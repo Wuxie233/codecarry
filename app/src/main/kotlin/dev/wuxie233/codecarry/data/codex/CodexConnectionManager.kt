@@ -1,6 +1,7 @@
 package dev.wuxie233.codecarry.data.codex
 
 import dev.wuxie233.codecarry.domain.model.ServerConfig
+import dev.wuxie233.codecarry.data.preferences.SessionListPreferencesRepository
 import dev.wuxie233.codecarry.data.repository.SettingsRepository
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
@@ -115,6 +116,16 @@ data class ScopedCodexNotification(
     val notification: CodexNotification,
 )
 
+/**
+ * Persistent-unread sink for the shared read model (issue #30). The connection
+ * manager produces marks when a turn completes with readable output on a thread
+ * the user is not currently viewing; the DataStore-backed implementation survives
+ * restarts and is independent of system notifications.
+ */
+fun interface CodexThreadUnreadSink {
+    suspend fun markThreadUnread(serverId: String, threadId: String)
+}
+
 class CodexConnectionLease internal constructor(
     val connection: CodexServerConnection,
     private val releaseAction: () -> Unit,
@@ -136,6 +147,7 @@ class CodexConnectionManager {
     private val idleDisconnectMillis: Long
     private val reconnectInitialMillis: Long
     private val reconnectMaxMillis: suspend () -> Long
+    private val unreadSink: CodexThreadUnreadSink?
     private val lock = Any()
     private val entries = mutableMapOf<String, Entry>()
     private val connectionIds = AtomicLong()
@@ -193,6 +205,7 @@ class CodexConnectionManager {
     constructor(
         factory: CodexAppServerClientFactory,
         settingsRepository: SettingsRepository,
+        sessionListPreferencesRepository: SessionListPreferencesRepository,
     ) : this(
         createClient = factory::create,
         scope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
@@ -206,6 +219,9 @@ class CodexConnectionManager {
                 else -> DEFAULT_RECONNECT_MAX_MILLIS
             }
         },
+        unreadSink = CodexThreadUnreadSink { serverId, threadId ->
+            sessionListPreferencesRepository.markConversationUnread(serverId, threadId)
+        },
     )
 
     internal constructor(
@@ -214,6 +230,7 @@ class CodexConnectionManager {
         idleDisconnectMillis: Long = DEFAULT_IDLE_DISCONNECT_MILLIS,
         reconnectInitialMillis: Long = DEFAULT_RECONNECT_INITIAL_MILLIS,
         reconnectMaxMillis: Long = DEFAULT_RECONNECT_MAX_MILLIS,
+        unreadSink: CodexThreadUnreadSink? = null,
     ) : this(
         createClient = createClient,
         scope = scope,
@@ -221,6 +238,7 @@ class CodexConnectionManager {
         idleDisconnectMillis = idleDisconnectMillis,
         reconnectInitialMillis = reconnectInitialMillis,
         reconnectMaxMillis = { reconnectMaxMillis },
+        unreadSink = unreadSink,
     )
 
     private constructor(
@@ -230,6 +248,7 @@ class CodexConnectionManager {
         idleDisconnectMillis: Long,
         reconnectInitialMillis: Long,
         reconnectMaxMillis: suspend () -> Long,
+        unreadSink: CodexThreadUnreadSink? = null,
     ) {
         this.createClient = createClient
         this.scope = scope
@@ -237,6 +256,7 @@ class CodexConnectionManager {
         this.idleDisconnectMillis = idleDisconnectMillis
         this.reconnectInitialMillis = reconnectInitialMillis
         this.reconnectMaxMillis = reconnectMaxMillis
+        this.unreadSink = unreadSink
     }
 
     suspend fun connect(server: ServerConfig): CodexServerConnection {
@@ -610,6 +630,25 @@ class CodexConnectionManager {
                             }
                         }
                         reducer.process(notification)
+                        // Shared read model (issue #30): a turn that completed with
+                        // readable agent output marks its thread unread unless the
+                        // user is viewing that thread right now — the visible chat
+                        // advances the read anchor itself when it presents the reply.
+                        if (notification.method == "turn/completed") {
+                            notification.threadId?.let { completedThreadId ->
+                                val completedTurnId = notification.turn?.id ?: notification.turnId
+                                val mergedTurn = completedTurnId?.let { id ->
+                                    reducer.state.value.threads[completedThreadId]
+                                        ?.turns?.firstOrNull { turn -> turn.id == id }
+                                }
+                                if (mergedTurn?.hasReadableAgentOutput() == true &&
+                                    CodexThreadKey(server.id, completedThreadId) !in _activeThreads.value
+                                ) {
+                                    val serverId = server.id
+                                    scope.launch { unreadSink?.markThreadUnread(serverId, completedThreadId) }
+                                }
+                            }
+                        }
                         when (notification.method) {
                             "thread/deleted" -> notification.threadId?.let { threadId ->
                                 synchronized(lock) {
