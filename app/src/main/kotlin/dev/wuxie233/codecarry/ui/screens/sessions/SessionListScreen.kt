@@ -258,7 +258,10 @@ fun SessionListScreen(
                         TextButton(onClick = { viewModel.selectAll() }) {
                             Text(stringResource(R.string.sessions_select_all))
                         }
-                        IconButton(onClick = { showDeleteSelectedDialog = true }) {
+                        IconButton(
+                            onClick = { showDeleteSelectedDialog = true },
+                            enabled = uiState.serverOperationsAvailable && uiState.pendingOperation == null,
+                        ) {
                             Icon(
                                 Icons.Default.Delete,
                                 contentDescription = stringResource(R.string.sessions_delete_selected),
@@ -396,10 +399,20 @@ fun SessionListScreen(
                 else -> {
                     val activityListState = rememberLazyListState()
                     val projectListState = rememberLazyListState()
+                    // Server mutations need a usable connection and no other operation in flight.
+                    val operationsEnabled = uiState.serverOperationsAvailable && uiState.pendingOperation == null
                     Column(
                         modifier = Modifier.fillMaxSize(),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
+                        uiState.operationError?.let { operationError ->
+                            SessionListOperationErrorBanner(
+                                message = operationError.message,
+                                retryEnabled = operationsEnabled,
+                                onRetry = viewModel::retryOperationError,
+                                onDismiss = viewModel::dismissOperationError,
+                            )
+                        }
                         if (!uiState.isSelectionMode) {
                             SessionWorkspaceOverview(
                                 recentWork = if (uiState.recentWork.isNotEmpty()) {
@@ -552,7 +565,7 @@ fun SessionListScreen(
                                         clipboard.setText(AnnotatedString(group.directory))
                                         Toast.makeText(context, context.getString(R.string.sessions_project_path_copied), Toast.LENGTH_SHORT).show()
                                     },
-                                    onArchiveAll = if (uiState.supportsSessionArchive) {
+                                    onArchiveAll = if (uiState.supportsSessionArchive && operationsEnabled) {
                                         { viewModel.archiveProjectSessions(group.directory) }
                                     } else null,
                                     mcpServerCount = activeProjectMcpServerCount,
@@ -648,6 +661,7 @@ fun SessionListScreen(
                                             supportsRestore = uiState.supportsSessionRestore,
                                             supportsDelete = uiState.supportsSessionDelete,
                                             supportsRehome = uiState.supportsRehome,
+                                            operationsEnabled = operationsEnabled,
                                         )
                              }
                          }
@@ -759,6 +773,7 @@ fun SessionListScreen(
                                 viewModel.deleteSelected()
                                 showDeleteSelectedDialog = false
                             },
+                            enabled = uiState.serverOperationsAvailable && uiState.pendingOperation == null,
                             colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
                         ) {
                             Text(stringResource(R.string.delete))
@@ -806,7 +821,8 @@ fun SessionListScreen(
                                 viewModel.renameSession(renameSessionId, renameText)
                                 showRenameDialog = false
                             },
-                            enabled = renameText.isNotBlank()
+                            enabled = renameText.isNotBlank() &&
+                                uiState.serverOperationsAvailable && uiState.pendingOperation == null
                         ) {
                             Text(stringResource(R.string.session_rename_button))
                         }
@@ -860,6 +876,7 @@ fun SessionListScreen(
                                 viewModel.deleteSession(deleteSessionId)
                                 showDeleteDialog = false
                             },
+                            enabled = uiState.serverOperationsAvailable && uiState.pendingOperation == null,
                             colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
                         ) {
                             Text(stringResource(R.string.delete))
@@ -871,6 +888,62 @@ fun SessionListScreen(
     }
 }
 
+
+/**
+ * Actionable failure shown while the session list still has content (issue #43).
+ * Distinct from the per-item archive/restore undo snackbar and from the
+ * contentless full-screen error state.
+ */
+@Composable
+private fun SessionListOperationErrorBanner(
+    message: String,
+    retryEnabled: Boolean,
+    onRetry: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Surface(
+        shape = MaterialTheme.shapes.small,
+        color = MaterialTheme.colorScheme.errorContainer,
+        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+        tonalElevation = 0.dp,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp),
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = Icons.Default.Warning,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+            )
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = 8.dp, vertical = 10.dp),
+            )
+            TextButton(
+                onClick = onRetry,
+                enabled = retryEnabled,
+            ) {
+                Text(stringResource(R.string.retry))
+            }
+            IconButton(onClick = onDismiss) {
+                Icon(
+                    Icons.Default.Close,
+                    contentDescription = stringResource(R.string.close),
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+        }
+    }
+}
 
 @Composable
 private fun SessionRowWithSubagents(
@@ -894,6 +967,7 @@ private fun SessionRowWithSubagents(
     supportsRestore: Boolean = true,
     supportsDelete: Boolean = true,
     supportsRehome: Boolean = false,
+    operationsEnabled: Boolean = true,
 ) {
     val hasRunning = subagents.running.isNotEmpty()
     val hasHistorical = subagents.historical.isNotEmpty()
@@ -923,6 +997,7 @@ private fun SessionRowWithSubagents(
             supportsRestore = supportsRestore,
             supportsDelete = supportsDelete,
             supportsRehome = supportsRehome,
+            operationsEnabled = operationsEnabled,
         )
 
         if (hasRunning) {
@@ -1790,6 +1865,7 @@ private fun SessionRow(
     supportsRestore: Boolean = true,
     supportsDelete: Boolean = true,
     supportsRehome: Boolean = false,
+    operationsEnabled: Boolean = true,
 ) {
     val isAmoled = isAmoledTheme()
     val dateFormat = remember { SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()) }
@@ -1802,7 +1878,7 @@ private fun SessionRow(
 
     val dismissState = rememberSwipeToDismissBoxState(
         confirmValueChange = { dismissValue ->
-            if (!supportsManagement) return@rememberSwipeToDismissBoxState false
+            if (!supportsManagement || !operationsEnabled) return@rememberSwipeToDismissBoxState false
             when (dismissValue) {
                 SwipeToDismissBoxValue.StartToEnd -> {
                     if (supportsRename) onRename()
@@ -2016,6 +2092,7 @@ private fun SessionRow(
                                 when (action) {
                                     SessionRowMenuAction.RENAME -> DropdownMenuItem(
                                         text = { Text(stringResource(R.string.session_rename)) },
+                                        enabled = operationsEnabled,
                                         onClick = {
                                             menuExpanded = false
                                             onRename()
@@ -2023,6 +2100,7 @@ private fun SessionRow(
                                     )
                                     SessionRowMenuAction.REHOME -> DropdownMenuItem(
                                         text = { Text(stringResource(R.string.sessions_rehome_action)) },
+                                        enabled = operationsEnabled,
                                         onClick = {
                                             menuExpanded = false
                                             onRehome()
@@ -2030,6 +2108,7 @@ private fun SessionRow(
                                     )
                                     SessionRowMenuAction.ARCHIVE -> DropdownMenuItem(
                                         text = { Text(stringResource(R.string.sessions_project_archive_all)) },
+                                        enabled = operationsEnabled,
                                         onClick = {
                                             menuExpanded = false
                                             onArchive()
@@ -2037,6 +2116,7 @@ private fun SessionRow(
                                     )
                                     SessionRowMenuAction.RESTORE -> DropdownMenuItem(
                                         text = { Text(stringResource(R.string.chat_restore)) },
+                                        enabled = operationsEnabled,
                                         onClick = {
                                             menuExpanded = false
                                             onRestore()
@@ -2044,6 +2124,7 @@ private fun SessionRow(
                                     )
                                     SessionRowMenuAction.DELETE -> DropdownMenuItem(
                                         text = { Text(stringResource(R.string.delete)) },
+                                        enabled = operationsEnabled,
                                         onClick = {
                                             menuExpanded = false
                                             onDelete()

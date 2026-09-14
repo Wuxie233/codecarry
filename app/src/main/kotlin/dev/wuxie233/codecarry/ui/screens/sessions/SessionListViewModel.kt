@@ -120,6 +120,12 @@ data class SessionListUiState(
 
     val hiddenProjectCount: Int = 0,
     val showHiddenProjects: Boolean = false,
+    /** Whether server-side mutations may run right now (connection capability). */
+    val serverOperationsAvailable: Boolean = true,
+    /** The server operation currently in flight, if any (guards double-tap re-entry). */
+    val pendingOperation: SessionListOperation? = null,
+    /** Actionable failure surfaced while list content is still shown. */
+    val operationError: SessionListOperationError? = null,
     val supportsSessionManagement: Boolean = true,
     val supportsSessionRename: Boolean = true,
     val supportsSessionArchive: Boolean = true,
@@ -420,6 +426,31 @@ data class DshCreationPresetState(
     val error: String? = null,
 )
 
+/**
+ * A server-side session-list operation that can fail and be retried.
+ * Carries its parameters so a surfaced failure can re-run the exact request.
+ */
+sealed interface SessionListOperation {
+    data class Rename(val sessionId: String, val newTitle: String) : SessionListOperation
+    data class ArchiveProject(val directory: String) : SessionListOperation
+    data class Archive(val sessionId: String) : SessionListOperation
+    data class Restore(val sessionId: String) : SessionListOperation
+    data class Delete(val sessionId: String) : SessionListOperation
+    data class DeleteSelected(val sessionIds: Set<String>) : SessionListOperation
+    data class Rehome(val sessionId: String, val path: String) : SessionListOperation
+    data object Refresh : SessionListOperation
+}
+
+/**
+ * A mutation or refresh failure that must stay visible while the list still
+ * shows content. Distinct from the empty-state [SessionListUiState.error] and
+ * from the per-item archive/restore undo snackbar.
+ */
+data class SessionListOperationError(
+    val operation: SessionListOperation,
+    val message: String,
+)
+
 @HiltViewModel
 class SessionListViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
@@ -458,6 +489,9 @@ class SessionListViewModel @Inject constructor(
     private val _scopeOverride = MutableStateFlow<SessionScope?>(null)
     private val _showHiddenProjects = MutableStateFlow(false)
     private val _activityFilter = MutableStateFlow(SessionActivityFilter.ALL)
+    private val _serverConnected = MutableStateFlow<Boolean?>(null)
+    private val _pendingOperation = MutableStateFlow<SessionListOperation?>(null)
+    private val _operationError = MutableStateFlow<SessionListOperationError?>(null)
     private val _navigateToSession = MutableSharedFlow<Session>(extraBufferCapacity = 1)
     val navigateToSession: SharedFlow<Session> = _navigateToSession.asSharedFlow()
     private val _undoState = Channel<UndoAction>(Channel.BUFFERED)
@@ -558,6 +592,9 @@ class SessionListViewModel @Inject constructor(
             viewModeFlow,
             _activityFilter,
             _backendStates,
+            _serverConnected,
+            _pendingOperation,
+            _operationError,
         )
     ) { values ->
         val sessionsByServer = values[0] as Map<String, Map<String, Session>>
@@ -581,6 +618,11 @@ class SessionListViewModel @Inject constructor(
         val viewMode = values[15] as SessionListViewMode
         val activityFilter = values[16] as SessionActivityFilter
         val backendStates = values[17] as Map<String, BackendSessionState>
+        val serverConnected = values[18] as Boolean?
+        val pendingOperation = values[19] as SessionListOperation?
+        val operationError = values[20] as SessionListOperationError?
+        // Unknown (null) connection state keeps operations enabled until a load proves otherwise.
+        val serverOperationsAvailable = serverConnected ?: true
 
         val serverScopedSessions = sessionsByServer[serverId].orEmpty().values.toList()
         val rootPendingQuestions = aggregateSessionRequestsByRoot(serverScopedSessions, pendingQuestions)
@@ -749,6 +791,9 @@ class SessionListViewModel @Inject constructor(
             projects = projects,
             hiddenProjectCount = hiddenProjectCount,
             showHiddenProjects = showHiddenProjects,
+            serverOperationsAvailable = serverOperationsAvailable,
+            pendingOperation = pendingOperation,
+            operationError = operationError,
             supportsSessionManagement = supportsSessionRename || supportsSessionArchive || supportsSessionRestore || supportsSessionDelete,
             supportsSessionRename = supportsSessionRename,
             supportsSessionArchive = supportsSessionArchive,
@@ -779,6 +824,7 @@ class SessionListViewModel @Inject constructor(
             viewModelScope.launch {
                 dshConnectionManager.states.observeServerConnection(serverId).collect { connectionState ->
                     val ready = connectionState?.status == DshGenerationStatus.Ready
+                    _serverConnected.value = ready
                     val picker = _dshCreationPreset.value
                     val stale = picker.catalogGeneration != null && picker.catalogGeneration != connectionState?.generation
                     _dshCreationPreset.value = picker.copy(connectionReady = ready)
@@ -828,6 +874,8 @@ class SessionListViewModel @Inject constructor(
                     val sessions = dshApi.sessionList(dshConn)
                     dshReducer.applySessionList(sessions.items)
                     applyDshState(dshReducer.state.value)
+                    _serverConnected.value = true
+                    clearRefreshOperationError()
                     return@launch
                 }
                 val projects = api.listProjects(conn)
@@ -856,9 +904,14 @@ class SessionListViewModel @Inject constructor(
                     eventReducer.setSessions(serverId, all)
                     if (BuildConfig.DEBUG) Log.d(TAG, "Loaded ${all.size} project-scoped sessions (${all.count { it.parentId != null }} children, ${all.count { it.parentId == null }} roots)")
                 }
+                _serverConnected.value = true
+                clearRefreshOperationError()
             } catch (e: Exception) {
                 logErrorCompat(TAG, "Failed to load sessions", e)
-                _error.value = e.message ?: "Failed to load sessions"
+                _serverConnected.value = false
+                // With content still on screen a refresh failure must stay visible and
+                // actionable (issue #43); without content the empty-state error covers it.
+                reportOperationFailure(SessionListOperation.Refresh, "Failed to load sessions", e)
             } finally {
                 _isLoading.value = false
             }
@@ -996,18 +1049,75 @@ class SessionListViewModel @Inject constructor(
 
     fun deleteSession(sessionId: String) {
         if (isDsh) return
+        deleteSessions(setOf(sessionId))
+    }
+
+    fun deleteSelected() {
+        if (isDsh) return
+        deleteSessions(_selectedIds.value)
+    }
+
+    private fun deleteSessions(targetIds: Set<String>) {
+        if (isDsh || targetIds.isEmpty()) return
+        val operation = SessionListOperation.DeleteSelected(targetIds)
+        if (!beginOperation(operation)) return
         viewModelScope.launch {
             try {
-                val success = api.deleteSession(conn, sessionId)
-                if (success) {
-                    if (BuildConfig.DEBUG) Log.d(TAG, "Deleted session $sessionId")
+                val results = coroutineScope {
+                    targetIds.map { id ->
+                        async {
+                            id to api.deleteSession(conn, id)
+                        }
+                    }.awaitAll()
+                }
+                val failed = results.filterNot { it.second }
+                if (failed.isNotEmpty()) {
+                    reportOperationFailure(operation, "Failed to delete ${failed.size} session(s)")
+                }
+                if (failed.size != targetIds.size) {
+                    clearSelection()
                     loadSessions()
-                } else {
-                    _error.value = "Failed to delete session"
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to delete session", e)
-                _error.value = e.message ?: "Failed to delete session"
+                Log.e(TAG, "Failed to delete selected sessions", e)
+                reportOperationFailure(operation, "Failed to delete selected sessions", e)
+            } finally {
+                endOperation()
+            }
+        }
+    }
+
+    fun rehomeSession(sessionId: String, path: String) {
+        if (!isDsh) return
+        val operation = SessionListOperation.Rehome(sessionId, path)
+        if (!beginOperation(operation)) return
+        viewModelScope.launch {
+            try {
+                dshApi.sessionRehome(dshConn, sessionId, path)
+                loadSessions()
+            } catch (e: Exception) {
+                logErrorCompat(TAG, "Failed to rehome session $sessionId", e)
+                reportOperationFailure(operation, "Failed to move session", e)
+            } finally {
+                endOperation()
+            }
+        }
+    }
+
+    fun renameSession(sessionId: String, newTitle: String) {
+        val operation = SessionListOperation.Rename(sessionId, newTitle)
+        if (!beginOperation(operation)) return
+        viewModelScope.launch {
+            try {
+                if (isDsh) dshApi.sessionRename(dshConn, sessionId, newTitle)
+                else api.updateSession(conn, sessionId, newTitle)
+                if (BuildConfig.DEBUG) Log.d(TAG, "Renamed session $sessionId to '$newTitle'")
+                loadSessions()
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to rename session", e)
+                reportOperationFailure(operation, "Failed to rename session", e)
+            } finally {
+                endOperation()
             }
         }
     }
@@ -1114,15 +1224,17 @@ class SessionListViewModel @Inject constructor(
     }
 
     fun archiveProjectSessions(dir: String) {
+        val operation = SessionListOperation.ArchiveProject(dir)
+        if (!beginOperation(operation)) return
         viewModelScope.launch {
-            val targetIds = archiveableRootSessionIds(
-                sessions = serverScopedSessions(),
-                directory = dir,
-                normalizeDirectory = ::normalizeDirectory,
-            )
-            if (targetIds.isEmpty()) return@launch
-
             try {
+                val targetIds = archiveableRootSessionIds(
+                    sessions = serverScopedSessions(),
+                    directory = dir,
+                    normalizeDirectory = ::normalizeDirectory,
+                )
+                if (targetIds.isEmpty()) return@launch
+
                 coroutineScope {
                     targetIds.map { sessionId ->
                         async {
@@ -1134,12 +1246,16 @@ class SessionListViewModel @Inject constructor(
                 loadSessions()
             } catch (e: Exception) {
                 logErrorCompat(TAG, "Failed to archive sessions for directory $dir", e)
-                _error.value = e.message ?: "Failed to archive sessions"
+                reportOperationFailure(operation, "Failed to archive sessions", e)
+            } finally {
+                endOperation()
             }
         }
     }
 
     fun archiveSession(sessionId: String) {
+        val operation = SessionListOperation.Archive(sessionId)
+        if (!beginOperation(operation)) return
         viewModelScope.launch {
             val title = serverScopedSessions().firstOrNull { it.id == sessionId }?.title.orEmpty()
             try {
@@ -1149,13 +1265,19 @@ class SessionListViewModel @Inject constructor(
                 _undoState.send(UndoAction.Archive(sessionId = sessionId, title = title))
             } catch (e: Exception) {
                 logErrorCompat(TAG, "Failed to archive session $sessionId", e)
+                // Single archive/restore keep the undo-style snackbar feedback (issue #43);
+                // do not duplicate them into the operation banner.
                 _error.value = e.message ?: "Failed to archive session"
                 _undoState.send(UndoAction.Failure(messageResId = R.string.sessions_archive_failed))
+            } finally {
+                endOperation()
             }
         }
     }
 
     fun restoreSession(sessionId: String) {
+        val operation = SessionListOperation.Restore(sessionId)
+        if (!beginOperation(operation)) return
         viewModelScope.launch {
             val title = serverScopedSessions().firstOrNull { it.id == sessionId }?.title.orEmpty()
             try {
@@ -1167,66 +1289,73 @@ class SessionListViewModel @Inject constructor(
                 logErrorCompat(TAG, "Failed to restore session $sessionId", e)
                 _error.value = e.message ?: "Failed to restore session"
                 _undoState.send(UndoAction.Failure(messageResId = R.string.sessions_restore_failed))
+            } finally {
+                endOperation()
             }
+        }
+    }
+
+    // ============ Server operation state (issues #43, #44) ============
+
+    /**
+     * Mark [operation] as in flight. Returns false (and leaves everything
+     * untouched) when another operation is already pending, which prevents
+     * double-tap re-entry. A stale error of the same operation kind is
+     * cleared because this attempt supersedes it; other failures stay
+     * visible so a later load cannot swallow them.
+     */
+    private fun beginOperation(operation: SessionListOperation): Boolean {
+        if (_pendingOperation.value != null) return false
+        _operationError.value = _operationError.value?.takeIf { it.operation::class != operation::class }
+        _pendingOperation.value = operation
+        return true
+    }
+
+    private fun endOperation() {
+        _pendingOperation.value = null
+    }
+
+    /**
+     * Surface a failed operation while list content is still shown. Also
+     * mirrors into the empty-state error so a contentless list explains
+     * itself; with content only the actionable banner renders.
+     */
+    private fun reportOperationFailure(operation: SessionListOperation, fallback: String, error: Exception? = null) {
+        val message = error?.message?.takeIf { it.isNotBlank() } ?: fallback
+        _operationError.value = SessionListOperationError(operation, message)
+        _error.value = message
+    }
+
+    fun dismissOperationError() {
+        _operationError.value = null
+    }
+
+    /** A successful refresh resolves a surfaced refresh failure; other failures persist. */
+    private fun clearRefreshOperationError() {
+        if (_operationError.value?.operation == SessionListOperation.Refresh) {
+            _operationError.value = null
+        }
+    }
+
+    /** Re-run the operation whose failure is currently surfaced. */
+    fun retryOperationError() {
+        when (val operation = _operationError.value?.operation ?: return) {
+            is SessionListOperation.Rename -> renameSession(operation.sessionId, operation.newTitle)
+            is SessionListOperation.ArchiveProject -> archiveProjectSessions(operation.directory)
+            is SessionListOperation.Archive -> archiveSession(operation.sessionId)
+            is SessionListOperation.Restore -> restoreSession(operation.sessionId)
+            is SessionListOperation.Delete -> deleteSession(operation.sessionId)
+            is SessionListOperation.DeleteSelected -> deleteSessions(operation.sessionIds)
+            is SessionListOperation.Rehome -> rehomeSession(operation.sessionId, operation.path)
+            SessionListOperation.Refresh -> loadSessions()
         }
     }
 
     private fun serverScopedSessions(): List<Session> {
-        val sessionIds = eventReducer.serverSessions.value[serverId] ?: emptySet()
-        return eventReducer.sessions.value.filter { it.id in sessionIds }
-    }
-
-    fun deleteSelected() {
-        if (isDsh) return
-        viewModelScope.launch {
-            val ids = _selectedIds.value
-            if (ids.isEmpty()) return@launch
-            try {
-                val results = coroutineScope {
-                    ids.map { id ->
-                        async {
-                            id to api.deleteSession(conn, id)
-                        }
-                    }.awaitAll()
-                }
-                val failed = results.filterNot { it.second }
-                if (failed.isNotEmpty()) {
-                    _error.value = "Failed to delete ${failed.size} session(s)"
-                }
-                clearSelection()
-                loadSessions()
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to delete selected sessions", e)
-                _error.value = e.message ?: "Failed to delete selected sessions"
-            }
-        }
-    }
-
-    fun rehomeSession(sessionId: String, path: String) {
-        if (!isDsh) return
-        viewModelScope.launch {
-            try {
-                dshApi.sessionRehome(dshConn, sessionId, path)
-                loadSessions()
-            } catch (e: Exception) {
-                logErrorCompat(TAG, "Failed to rehome session $sessionId", e)
-                _error.value = e.message ?: "Failed to move session"
-            }
-        }
-    }
-
-    fun renameSession(sessionId: String, newTitle: String) {
-        viewModelScope.launch {
-            try {
-                if (isDsh) dshApi.sessionRename(dshConn, sessionId, newTitle)
-                else api.updateSession(conn, sessionId, newTitle)
-                if (BuildConfig.DEBUG) Log.d(TAG, "Renamed session $sessionId to '$newTitle'")
-                loadSessions()
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to rename session", e)
-                _error.value = e.message ?: "Failed to rename session"
-            }
-        }
+        // Authoritative per-server metadata (issue #42): the global sessions
+        // aggregate keeps only one entry per ID, so another server sharing the
+        // ID could otherwise supply the wrong directory/parent/archive flags.
+        return eventReducer.serverSessionDetails.value[serverId].orEmpty().values.toList()
     }
 
     // ============ Directory browsing for Open Project ============
