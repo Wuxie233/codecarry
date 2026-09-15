@@ -9,6 +9,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.serialization.json.Json
@@ -34,6 +35,23 @@ class CodexAppServerClientTest {
     @After
     fun tearDown() {
         clients.forEach(CodexAppServerClient::close)
+    }
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test
+    fun `unresponsive unsubscribe expires before history deadline and invalidates connection`() = runTest {
+        val transport = FakeTransport()
+        val client = newClient(transport, backgroundScope)
+        initialize(client, transport)
+        val generation = client.currentConnectionGeneration()
+        val unsubscribe = async { runCatching { client.unsubscribeThread("thread-1") } }
+        assertEquals("thread/unsubscribe", transport.takeSentObject()["method"]?.jsonPrimitive?.content)
+        advanceTimeBy(10_001)
+        runCurrent()
+        assertTrue("Background unsubscribe must not hold chat entry for 120 seconds", unsubscribe.isCompleted)
+        assertTrue(unsubscribe.await().exceptionOrNull() is CodexDisconnectedException)
+        assertTrue(client.currentConnectionGeneration() > generation)
+        assertTrue(client.connectionState.value is CodexClientConnectionState.Failed)
     }
 
     @Test

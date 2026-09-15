@@ -84,6 +84,32 @@ class CodexChatReadModelTest {
     }
 
     @Test
+    fun `presented tail clears unread even when anchor already matches`() = scope.runTest {
+        val fixture = fixture()
+        fixture.resume(turns = REPLY_TURN)
+        runCurrent()
+        fixture.completeMetadata()
+        fixture.repo.setReadAnchor(fixture.server.id, "child", "message-2")
+        fixture.repo.markConversationUnread(fixture.server.id, "child")
+        fixture.vm.setChatVisible(true)
+        runCurrent()
+        assertFalse(fixture.repo.unreadConversationIds(fixture.server.id).first().contains("child"))
+    }
+
+    @Test
+    fun `late unread mark is cleared while unchanged tail stays visible`() = scope.runTest {
+        val fixture = fixture()
+        fixture.resume(turns = REPLY_TURN)
+        runCurrent()
+        fixture.completeMetadata()
+        fixture.vm.setChatVisible(true)
+        runCurrent()
+        fixture.repo.markConversationUnread(fixture.server.id, "child")
+        runCurrent()
+        assertFalse(fixture.repo.unreadConversationIds(fixture.server.id).first().contains("child"))
+    }
+
+    @Test
     fun `invisible chat never clears the unread mark`() = scope.runTest {
         val fixture = fixture()
         fixture.resume(turns = REPLY_TURN)

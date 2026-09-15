@@ -354,3 +354,16 @@ If generated Hilt/Kotlin caches fail, rerun the affected verification after
   64 MiB daemon responses and 16 MiB client requests; preserve explicit 1009
   size-limit diagnostics and Android close codes. APK installation does not
   update the bridge process; bridge changes require a separate deployment.
+
+- DSH catalog/control metadata is not a history snapshot. Preserve visible chat
+  messages across reconnect until `historyOpened`; a known chat follows as soon
+  as Ready, independently of catalog refresh. Register the mux collector before
+  sending `session/follow` open so fast opening snapshots cannot be dropped.
+- Codex archive/unarchive receipts and lifecycle notifications invalidate cached
+  subscription readiness; `thread/closed` also requires recovery for an owned,
+  unarchived thread. Publish readiness changes even when the socket stays open.
+  Unsubscribe has a 10-second cleanup deadline; on timeout invalidate that socket
+  generation before resuming, since a late unsubscribe has an uncertain effect.
+- A displayed read anchor may already match the latest reply while a late unread
+  mark remains. Clearing the mark must not require advancing the anchor. Observe
+  persisted unread changes, and avoid clearing from an outdated UI projection.

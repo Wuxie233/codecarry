@@ -1108,6 +1108,87 @@ class CodexConnectionManagerTest {
     }
 
     @Test
+    fun `archive and unarchive invalidate the old thread subscription`() = runTest {
+        lateinit var transport: FakeTransport
+        val manager = CodexConnectionManager(
+            createClient = { FakeTransport().also { transport = it }.newClient(backgroundScope) },
+            scope = backgroundScope,
+        )
+        val acquiring = async { manager.acquire(server, "thread-1") }
+        runCurrent()
+        initialize(transport)
+        val lease = acquiring.await()
+        transport.takeSentObject()
+        val loading = async { manager.resumeThread(lease.connection, "thread-1") }
+        runCurrent()
+        val resume = transport.takeSentObject()
+        transport.respond(resume.getValue("id").jsonPrimitive, threadSession("thread-1"))
+        loading.await()
+        assertTrue(manager.isThreadReady(lease.connection, "thread-1"))
+        transport.incoming.send("""{"method":"thread/archived","params":{"threadId":"thread-1"}}""")
+        runCurrent()
+        assertFalse(manager.isThreadReady(lease.connection, "thread-1"))
+        transport.incoming.send("""{"method":"thread/unarchived","params":{"threadId":"thread-1"}}""")
+        runCurrent()
+        val reloading = async { manager.resumeThread(lease.connection, "thread-1") }
+        runCurrent()
+        val nextResume = transport.tryTakeSentObject()
+        assertEquals("thread/resume", nextResume?.get("method")?.jsonPrimitive?.content)
+        transport.respond(nextResume!!.getValue("id").jsonPrimitive, threadSession("thread-1"))
+        reloading.await()
+        assertEquals(2, transport.resumeAttempts)
+        assertTrue("Ready changes must reach connection observers", "thread-1" in manager.connections.value.getValue(server.id).readyThreadIds)
+        transport.incoming.send("""{"method":"thread/closed","params":{"threadId":"thread-1"}}""")
+        runCurrent()
+        assertFalse(manager.isThreadReady(lease.connection, "thread-1"))
+        val recovering = async { manager.resumeThread(lease.connection, "thread-1") }
+        runCurrent()
+        val afterClosed = transport.takeSentObject()
+        assertEquals("thread/resume", afterClosed["method"]?.jsonPrimitive?.content)
+        transport.respond(afterClosed.getValue("id").jsonPrimitive, threadSession("thread-1"))
+        recovering.await()
+        assertTrue(manager.isThreadReady(lease.connection, "thread-1"))
+        assertEquals(3, transport.resumeAttempts)
+        manager.closeForTest()
+    }
+
+    @Test
+    fun `archive receipt invalidates readiness without a notification`() = runTest {
+        lateinit var transport: FakeTransport
+        val manager = CodexConnectionManager(
+            createClient = { FakeTransport().also { transport = it }.newClient(backgroundScope) },
+            scope = backgroundScope,
+        )
+        val acquiring = async { manager.acquire(server, "thread-1") }
+        runCurrent()
+        initialize(transport)
+        val lease = acquiring.await()
+        transport.takeSentObject()
+        val loading = async { manager.resumeThread(lease.connection, "thread-1") }
+        runCurrent()
+        val resume = transport.takeSentObject()
+        transport.respond(resume.getValue("id").jsonPrimitive, threadSession("thread-1"))
+        loading.await()
+        val archiving = async { manager.archiveThread(lease.connection, "thread-1") }
+        runCurrent()
+        val archive = transport.takeSentObject()
+        assertEquals("thread/archive", archive["method"]?.jsonPrimitive?.content)
+        transport.respond(archive.getValue("id").jsonPrimitive, JsonObject(emptyMap()))
+        archiving.await()
+        assertFalse(manager.isThreadReady(lease.connection, "thread-1"))
+        assertTrue("thread-1" in lease.connection.reducer.state.value.archivedThreadIds)
+        val restoring = async { manager.unarchiveThread(lease.connection, "thread-1") }
+        runCurrent()
+        val unarchive = transport.takeSentObject()
+        assertEquals("thread/unarchive", unarchive["method"]?.jsonPrimitive?.content)
+        transport.respond(unarchive.getValue("id").jsonPrimitive, threadSession("thread-1"))
+        restoring.await()
+        assertFalse("thread-1" in lease.connection.reducer.state.value.archivedThreadIds)
+        assertFalse(manager.isThreadReady(lease.connection, "thread-1"))
+        manager.closeForTest()
+    }
+
+    @Test
     fun `recent subscription expiration invalidates readiness and reacquire waits for unsubscribe`() = runTest {
         lateinit var transport: FakeTransport
         val manager = CodexConnectionManager(

@@ -213,7 +213,7 @@ class CodexThreadListViewModel @Inject constructor(
         buildCodexThreadTopology(_uiState.value.activeThreads)
             .filter { !it.orphan && it.thread.cwd.orEmpty() == directory }
             .flatMap { it.members }.forEach {
-            connected.client.archiveThread(it.id)
+            connectionManager.archiveThread(connected, it.id)
         }
     }
 
@@ -339,9 +339,9 @@ class CodexThreadListViewModel @Inject constructor(
         it.client.setThreadName(threadId, name.trim())
     }
 
-    fun archiveThread(threadId: String) = mutate { it.client.archiveThread(threadId) }
+    fun archiveThread(threadId: String) = mutate { connectionManager.archiveThread(it, threadId) }
 
-    fun unarchiveThread(threadId: String) = mutate { it.client.unarchiveThread(threadId) }
+    fun unarchiveThread(threadId: String) = mutate { connectionManager.unarchiveThread(it, threadId) }
 
     fun deleteThread(threadId: String) = mutate { it.client.deleteThread(threadId) }
 

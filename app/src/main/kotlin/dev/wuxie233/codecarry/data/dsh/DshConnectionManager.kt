@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.onSubscription
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -151,22 +152,25 @@ class DshConnectionManager(
         val channel = muxChannels[serverId]
             ?: throw DshTransportException("DSH mux channel for $serverId is missing")
         val streamId = mintStreamId()
-        client.sendStreamOpen(
-            downlink,
-            DshRpc.SESSION_FOLLOW_ENDPOINT,
-            streamId,
-            buildJsonObject {
-                put(
-                    "request",
+        try {
+            // Register before sending open: a fast Host can return the snapshot
+            // while send is still suspended, and SharedFlow does not replay it.
+            channel.onSubscription {
+                client.sendStreamOpen(
+                    downlink,
+                    DshRpc.SESSION_FOLLOW_ENDPOINT,
+                    streamId,
                     buildJsonObject {
-                        put("address", address.toJson())
-                        maxMessages?.let { put("maxMessages", it) }
+                        put(
+                            "request",
+                            buildJsonObject {
+                                put("address", address.toJson())
+                                maxMessages?.let { put("maxMessages", it) }
+                            },
+                        )
                     },
                 )
-            },
-        )
-        try {
-            channel.collect { message ->
+            }.collect { message ->
                 when (message) {
                     is DshMuxWireMessage.Item -> if (message.streamId == streamId) {
                         parseFollowFrame(message.value)?.let { emit(it) }

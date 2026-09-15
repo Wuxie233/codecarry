@@ -525,7 +525,22 @@ open class CodexAppServerClient internal constructor(
     }
 
     suspend fun unsubscribeThread(threadId: String): String {
-        val result = request("thread/unsubscribe", paramsOf("threadId" to threadId)).objectOrEmpty()
+        val generation = currentConnectionGeneration()
+        val result = kotlinx.coroutines.withTimeoutOrNull(10_000) {
+            request("thread/unsubscribe", paramsOf("threadId" to threadId)).objectOrEmpty()
+        }
+        if (result == null) {
+            val error = CodexDisconnectedException("Codex thread unsubscribe timed out; reconnecting")
+            // Its late server-side effect must never race a fresh subscription on this socket.
+            // Serialize with connect and fence the generation so an old timeout cannot close a new socket.
+            connectMutex.withLock {
+                if (currentConnectionGeneration() == generation) {
+                    failConnection(error)
+                    _connectionState.value = CodexClientConnectionState.Failed(error)
+                }
+            }
+            throw error
+        }
         return (result["status"] as? JsonPrimitive)?.contentOrNull.orEmpty()
     }
 

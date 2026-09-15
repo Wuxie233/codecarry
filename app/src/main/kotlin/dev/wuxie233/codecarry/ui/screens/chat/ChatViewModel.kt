@@ -64,6 +64,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
@@ -303,10 +305,13 @@ class ChatViewModel @Inject constructor(
 
         val latestReadable = latestReadableAssistantMessageId(messages) ?: return
         val currentAnchor = sessionListPreferencesRepository.readAnchor(serverId, sessionId).first()
+        val currentMessages = eventReducer.serverMessages.value[serverId]?.get(sessionId).orEmpty()
+        val currentParts = eventReducer.serverParts.value[serverId].orEmpty()
+        if (readableAssistantOutputIds(currentMessages) { currentParts[it].orEmpty() }.lastOrNull() != latestReadable) return
         if (currentAnchor != latestReadable) {
             sessionListPreferencesRepository.setReadAnchor(serverId, sessionId, latestReadable)
-            sessionListPreferencesRepository.markConversationRead(serverId, sessionId)
         }
+        sessionListPreferencesRepository.markConversationRead(serverId, sessionId)
         // The user is looking at the known tail: retire any stale response-ready
         // notification for this session (per-session cancel; the server group
         // summary is only removed when no sibling event notifications remain).
@@ -689,7 +694,13 @@ class ChatViewModel @Inject constructor(
             // stops advancing the anchor, so later completions still mark unread and
             // are not suppressed from response notifications.
             viewModelScope.launch {
-                combine(_screenVisible, _followingTail, uiState) { visible, following, state ->
+                combine(
+                    _screenVisible,
+                    _followingTail,
+                    uiState,
+                    sessionListPreferencesRepository.unreadConversationIds(serverId)
+                        .map { sessionId in it }.distinctUntilChanged(),
+                ) { visible, following, state, _ ->
                     Triple(visible, following, state)
                 }.collect { (visible, following, state) ->
                     advanceReadAnchorIfPresented(visible, following, state.messages)
@@ -747,10 +758,13 @@ class ChatViewModel @Inject constructor(
                     dshReducer.state.value.sessions[sessionId], ready, sending = false,
                 )) }
                 if (ready) {
+                    // A known conversation can recover without waiting for the catalog RPC.
+                    startDshFollow()
                     refreshDshPresets()
                     dshSessionLoadJob?.cancel()
                     dshSessionLoadJob = launch { loadDshSession() }
                 } else {
+                    dshFollowJob?.cancel()
                     dshSessionLoadJob?.cancel()
                     dshPresetLoadJob?.cancel()
                     _dshPresets.update { it.copy(loading = false, presets = emptyList()) }
@@ -803,6 +817,9 @@ class ChatViewModel @Inject constructor(
                     address = address,
                     maxMessages = currentMessageLimit,
                 ).collect { frame ->
+                    if (dshConnectionManager.states.value[serverId]?.generation != generation.generation) {
+                        return@collect
+                    }
                     when (frame) {
                         is DshFollowFrame.Snapshot -> {
                             dshReducer.applyFollowSnapshot(sessionId, frame)
@@ -853,7 +870,9 @@ class ChatViewModel @Inject constructor(
         if (address != null && dshFollowAddress != address) {
             startDshFollow()
         }
-        if (snapshot != null) {
+        // Reconnect first supplies catalog/control metadata with no history. Keep
+        // the displayed messages until this generation opens the history stream.
+        if (snapshot?.historyOpened == true) {
             val folded = dshHistoryFolder.fold(sessionId, snapshot.events)
             val lastSeq = snapshot.events.maxOfOrNull { it.seq } ?: -1L
             eventReducer.setMessages(serverId, sessionId, applyCachedDshAttachments(folded))

@@ -233,11 +233,15 @@ class CodexChatViewModel @Inject constructor(
             combine(
                 _screenVisible,
                 _followingTail,
-                uiState.map { state -> state.thread?.readableAgentMessageIds() },
-            ) { visible, followingTail, readableIds -> Triple(visible, followingTail, readableIds) }
+                combine(
+                    uiState.map { state -> state.thread?.takeIf { state.isConnected && !state.isLoading }?.readableAgentMessageIds() },
+                    sessionListPreferencesRepository.unreadConversationIds(serverId)
+                        .map { threadId in it }.distinctUntilChanged(),
+                ) { ids, unread -> ids to unread },
+            ) { visible, followingTail, readState -> Triple(visible, followingTail, readState) }
                 .distinctUntilChanged()
-                .collect { (visible, followingTail, readableIds) ->
-                    advanceReadAnchorIfPresented(visible, followingTail, readableIds)
+                .collect { (visible, followingTail, readState) ->
+                    advanceReadAnchorIfPresented(visible, followingTail, readState.first)
                 }
         }
     }
@@ -250,8 +254,13 @@ class CodexChatViewModel @Inject constructor(
         if (!visible || !followingTail || readableIds.isNullOrEmpty()) return
         val latestReadable = readableIds.last()
         val currentAnchor = sessionListPreferencesRepository.readAnchor(serverId, threadId).first()
-        if (currentAnchor == latestReadable) return
-        sessionListPreferencesRepository.setReadAnchor(serverId, threadId, latestReadable)
+        // A newly completed reply can reach the reducer before its UI projection.
+        if (connection?.events?.value?.threads?.get(threadId)?.readableAgentMessageIds()?.lastOrNull() != latestReadable) return
+        if (currentAnchor != latestReadable) {
+            sessionListPreferencesRepository.setReadAnchor(serverId, threadId, latestReadable)
+        }
+        // A completion receipt can mark an already-presented item unread later.
+        // Clearing that mark must not depend on advancing the stable item ID.
         sessionListPreferencesRepository.markConversationRead(serverId, threadId)
     }
 

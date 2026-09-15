@@ -469,6 +469,72 @@ class ChatViewModelDshFollowTest {
         assertNull(vm.dshPresets.value.error)
     }
 
+    @Test
+    fun `reconnect catalog metadata cannot clear visible chat before follow snapshot`() = runTest(dispatcher) {
+        val mux = FakeDownlink()
+        val harness = dshHarness(mux, CopyOnWriteArrayList())
+        val vm = newViewModel(harness.client, harness.manager)
+        collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
+        harness.manager.connect(SERVER_ID, DshConnection.from("http://127.0.0.1:3080", token = "launch-token"))
+        runCurrent()
+        pushBaselines(mux)
+        harness.manager.reducer(SERVER_ID).state.first { it.sessions.containsKey(SESSION_ID) }
+        runCurrent()
+        val followId = json.parseToJsonElement(mux.sent.last { it.contains("\"session/follow\"") })
+            .jsonObject.getValue("streamId").jsonPrimitive.content
+        mux.incoming.trySend(item(followId,
+            """{"type":"snapshot","header":null,"cursor":1,"records":[{"type":"event","event":{"type":"user/message","seq":1,"time":1,"data":{"id":"u1","content":[{"type":"text","text":"keep visible"}],"source":{"kind":"user"}},"surfaceOp":"append"}}],"hasMore":false}"""))
+        vm.uiState.first { it.messages.isNotEmpty() }
+        val reducer = harness.manager.reducer(SERVER_ID)
+        val metadata = dev.wuxie233.codecarry.data.dsh.DshSessionSummary(
+            sessionId = SESSION_ID, updatedAt = 2, running = false, blank = false,
+        )
+        reducer.resetGeneration(reducer.state.value.generation + 1)
+        runCurrent()
+        reducer.applySessionList(listOf(metadata))
+        runCurrent()
+        assertEquals("keep visible", (vm.uiState.value.messages.single().parts.single() as Part.Text).text)
+        reducer.applyFollowSnapshot(SESSION_ID, dev.wuxie233.codecarry.data.dsh.DshFollowFrame.Snapshot(
+            header = null, cursor = -1, records = emptyList(), hasMore = false,
+        ))
+        runCurrent()
+        assertTrue("An authoritative empty history may clear cached content", vm.uiState.value.messages.isEmpty())
+    }
+
+    @Test
+    fun `ready reconnect follows known chat even when session catalog fails`() = runTest(dispatcher) {
+        val firstMux = FakeDownlink()
+        val secondMux = FakeDownlink()
+        var opens = 0
+        var failList = false
+        val listFailed = CompletableDeferred<Unit>()
+        val harness = dshHarness(firstMux, CopyOnWriteArrayList(),
+            beforeSessionList = {
+                if (failList) { listFailed.complete(Unit); error("catalog unavailable") }
+            },
+            openMux = { if (opens++ == 0) firstMux else secondMux },
+        )
+        val vm = newViewModel(harness.client, harness.manager)
+        collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
+        harness.manager.connect(SERVER_ID, DshConnection.from("http://127.0.0.1:3080", token = "launch-token"))
+        runCurrent()
+        pushBaselines(firstMux)
+        harness.manager.reducer(SERVER_ID).state.first { it.sessions.containsKey(SESSION_ID) }
+        runCurrent()
+        assertTrue(firstMux.sent.any { it.contains("\"session/follow\"") })
+        failList = true
+        harness.manager.reconnect(SERVER_ID)
+        harness.manager.states.first { it[SERVER_ID]?.muxOpen == true && opens == 2 }
+        val ids = secondMux.sent.map { json.parseToJsonElement(it).jsonObject.getValue("streamId").jsonPrimitive.content }
+        secondMux.incoming.trySend(item(ids[0], """{"type":"ready","clientId":"client-2","host":{"home":"/root"}}"""))
+        secondMux.incoming.trySend(item(ids[1], """{"type":"baseline","value":{"queues":{},"jobs":{},"projections":{}}}"""))
+        secondMux.incoming.trySend(item(ids[2], """{"type":"baseline","value":{"items":[],"archivedSessionIds":[],"hiddenWorkspaceIds":[]}}"""))
+        listFailed.await()
+        runCurrent()
+        assertTrue("Known conversation history must not depend on catalog recovery",
+            secondMux.sent.any { it.contains("\"session/follow\"") })
+    }
+
     private data class DshHarness(
         val client: DshApiClient,
         val manager: DshConnectionManager,
@@ -479,6 +545,7 @@ class ChatViewModelDshFollowTest {
         unary: MutableList<String>,
         beforeSessionList: suspend () -> Unit = {},
         beforePresetList: suspend () -> Unit = {},
+        openMux: () -> DshDownlink = { mux },
         listItem: String = """{"sessionId":"$SESSION_ID","updatedAt":2,"running":false,"blank":false,"cwd":"/root/CODE/Minecraft"}""",
     ): DshHarness {
         var nextStream = 0
@@ -544,7 +611,7 @@ class ChatViewModelDshFollowTest {
             json,
             mintRpcId = { "fixed" },
             downlinkFactory = object : DshDownlinkFactory {
-                override suspend fun openMux(connection: DshConnection): DshDownlink = mux
+                override suspend fun openMux(connection: DshConnection): DshDownlink = openMux()
             },
         )
         val manager = DshConnectionManager(

@@ -156,6 +156,23 @@ class ChatViewModelReadModelTest {
     }
 
     @Test
+    fun `matching anchor and late unread marks heal while tail is visible`() = runTest(dispatcher) {
+        val reducer = EventReducer()
+        seedAssistantReply(reducer, "msg_1", "first reply", created = 1L)
+        createRepo()
+        repo.setReadAnchor(SERVER_ID, SESSION_ID, "msg_1")
+        repo.markConversationUnread(SERVER_ID, SESSION_ID)
+        val vm = newViewModel(reducer)
+        collectUiState(vm)
+        vm.onChatScreenStarted()
+        advanceUntilIdle()
+        assertUnreadClears(SESSION_ID)
+        repo.markConversationUnread(SERVER_ID, SESSION_ID)
+        advanceUntilIdle()
+        assertUnreadClears(SESSION_ID)
+    }
+
+    @Test
     fun `backgrounded chat with alive ViewModel does not advance the anchor`() = runTest(dispatcher) {
         val reducer = EventReducer()
         seedAssistantReply(reducer, "msg_1", "first reply", created = 1L)

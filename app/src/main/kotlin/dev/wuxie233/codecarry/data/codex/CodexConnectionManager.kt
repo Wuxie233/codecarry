@@ -103,6 +103,7 @@ data class CodexManagedConnection(
     val client: CodexAppServerClient,
     val state: CodexClientConnectionState,
     val pendingRequests: List<CodexServerRequest>,
+    val readyThreadIds: Set<String> = emptySet(),
 )
 
 data class CodexThreadKey(
@@ -371,6 +372,7 @@ class CodexConnectionManager {
                     )
                     entry.threadSessions[threadId] = ResumedThread(generation, version, metadata, payloadBytes)
                     reconcileRetainedThread(entry, threadId)
+                    publish(entry)
                     resumed.copy(thread = entry.reducer.state.value.threads[threadId] ?: resumed.thread)
                 }
             }.also { deferred ->
@@ -388,6 +390,51 @@ class CodexConnectionManager {
             }
         }
         return task.await().getOrThrow()
+    }
+
+    suspend fun archiveThread(connection: CodexServerConnection, threadId: String) {
+        mutateThreadArchive(connection, threadId, archived = true)
+    }
+
+    suspend fun unarchiveThread(connection: CodexServerConnection, threadId: String) {
+        mutateThreadArchive(connection, threadId, archived = false)
+    }
+
+    private suspend fun mutateThreadArchive(connection: CodexServerConnection, threadId: String, archived: Boolean) {
+        val entry = synchronized(lock) {
+            entries[connection.serverId]?.takeIf { it.connection === connection }
+                ?: error("Codex server connection is no longer current")
+        }
+        val generation = entry.client.currentConnectionGeneration()
+        val version = synchronized(lock) { entry.threadLifecycleVersions.getOrDefault(threadId, 0L) }
+        val baseline = entry.reducer.state.value.threads[threadId]
+        val restored = if (archived) {
+            entry.client.archiveThread(threadId)
+            null
+        } else entry.client.unarchiveThread(threadId)
+        synchronized(lock) {
+            check(entries[connection.serverId] === entry && entry.client.currentConnectionGeneration() == generation) {
+                "Codex archive receipt belongs to an earlier connection"
+            }
+            // A lifecycle notification already applied this change, or a newer change superseded it.
+            if (entry.threadLifecycleVersions.getOrDefault(threadId, 0L) != version) return
+            restored?.let { entry.reducer.upsertThreadSnapshot(it, baseline) }
+            entry.reducer.process(CodexNotification(
+                if (archived) "thread/archived" else "thread/unarchived",
+                JsonObject(mapOf("threadId" to JsonPrimitive(threadId))),
+            ))
+            invalidateThreadSubscriptionLocked(entry, threadId)
+            publish(entry)
+            if (!archived && threadId in entry.requiredThreadIdsLocked()) scheduleReconnect(entry)
+        }
+    }
+
+    private fun invalidateThreadSubscriptionLocked(entry: Entry, threadId: String) {
+        entry.threadLifecycleVersions[threadId] = entry.threadLifecycleVersions.getOrDefault(threadId, 0L) + 1L
+        entry.threadSessions.remove(threadId)
+        entry.threadResumeJobs.remove(threadId)?.cancel()
+        entry.threadResumeIdentities.remove(threadId)
+        entry.recentThreadJobs.remove(threadId)?.cancel()
     }
 
     fun updateThreadSession(
@@ -650,6 +697,17 @@ class CodexConnectionManager {
                             }
                         }
                         when (notification.method) {
+                            "thread/archived", "thread/unarchived", "thread/closed" -> notification.threadId?.let { threadId ->
+                                synchronized(lock) {
+                                    invalidateThreadSubscriptionLocked(entry, threadId)
+                                    publish(entry)
+                                    // A local unsubscribe has no remaining owner, so its closed event
+                                    // must not resurrect the subscription. Archived threads stay closed.
+                                    if (notification.method != "thread/archived" && threadId in entry.requiredThreadIdsLocked()) {
+                                        scheduleReconnect(entry)
+                                    }
+                                }
+                            }
                             "thread/deleted" -> notification.threadId?.let { threadId ->
                                 synchronized(lock) {
                                     entry.threadSessions.remove(threadId)
@@ -739,6 +797,9 @@ class CodexConnectionManager {
                     client = entry.client,
                     state = entry.state.value,
                     pendingRequests = entry.pending.value,
+                    readyThreadIds = synchronized(lock) {
+                        entry.threadSessions.keys.filterTo(mutableSetOf()) { isThreadReady(entry.connection, it) }
+                    },
                 )
             )
         }
@@ -1060,7 +1121,8 @@ class CodexConnectionManager {
         val threadUnsubscribeJobs: MutableMap<String, Job> = mutableMapOf(),
         val threadLifecycleVersions: MutableMap<String, Long> = mutableMapOf(),
     ) {
-        fun requiredThreadIdsLocked(): Set<String> = openThreadReferences.keys + retainedThreadIds + recentThreadJobs.keys
+        fun requiredThreadIdsLocked(): Set<String> =
+            (openThreadReferences.keys + retainedThreadIds + recentThreadJobs.keys) - reducer.state.value.archivedThreadIds
 
         fun hasOwnersLocked(): Boolean = persistent || references > 0 || retainedThreadIds.isNotEmpty()
 

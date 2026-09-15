@@ -157,6 +157,39 @@ class DshConnectionManagerTest {
     }
 
     @Test
+    fun `immediate follow snapshot is retained while stream open send is suspended`() = runTest {
+        val wire = FakeDownlink()
+        val mux = object : DshDownlink by wire {
+            override suspend fun send(text: String) {
+                wire.send(text)
+                val frame = json.parseToJsonElement(text).jsonObject
+                if (frame["endpoint"]?.jsonPrimitive?.content == "session/follow") {
+                    val id = frame.getValue("streamId").jsonPrimitive.content
+                    wire.incoming.send(item(id,
+                        """{"type":"snapshot","header":null,"cursor":0,"records":[],"hasMore":false}"""))
+                    kotlinx.coroutines.delay(1)
+                }
+            }
+        }
+        var next = 0
+        val manager = DshConnectionManager(
+            client = clientFor(object : DshDownlinkFactory {
+                override suspend fun openMux(connection: DshConnection): DshDownlink = mux
+            }, running = false),
+            scope = backgroundScope,
+            mintStreamId = { "stream-${next++}" },
+        )
+        manager.connect("dsh-1", connection)
+        manager.states.first { it["dsh-1"]?.muxOpen == true }
+        val snapshots = mutableListOf<DshFollowFrame>()
+        backgroundScope.launch { manager.openSessionFollow("dsh-1", DshSessionAddress.Session("s1")).collect { snapshots += it } }
+        runCurrent()
+        advanceTimeBy(2)
+        runCurrent()
+        assertEquals("The opening history snapshot must reach the subscriber", 1, snapshots.size)
+    }
+
+    @Test
     fun `session follow demuxes by stream id into follow frames`() = runTest {
         val mux = FakeDownlink()
         var next = 0
