@@ -137,6 +137,10 @@ fun CodexChatScreen(
         }
     }
     val draft = state.draft
+    val slashSkillQuery = codexSlashSkillQuery(draft)
+    LaunchedEffect(slashSkillQuery != null, state.isConnected, state.thread?.cwd) {
+        if (slashSkillQuery != null && state.isConnected) viewModel.loadSkills()
+    }
     val attachments = state.composerAttachments
     var relatedOpen by remember { mutableStateOf(false) }
     var statusOpen by remember { mutableStateOf(false) }
@@ -367,6 +371,17 @@ fun CodexChatScreen(
                         enabled = !state.isSending && !state.isSendConfirmationPending,
                         onRemove = viewModel::removeAttachment,
                     )
+                    if (slashSkillQuery != null) {
+                        CodexSlashSkillList(
+                            query = slashSkillQuery,
+                            skills = state.skills,
+                            loading = state.skillsLoading,
+                            error = state.skillsError,
+                            enabled = state.isConnected && !state.isSending && !state.isSendConfirmationPending,
+                            onRetry = viewModel::loadSkills,
+                            onSelect = viewModel::selectSlashSkill,
+                        )
+                    }
                     CodexComposerSurface(
                         value = draft,
                         onValueChange = viewModel::updateDraft,
@@ -703,6 +718,8 @@ internal fun CodexComposerControlRow(
             enabled = attachmentsEnabled,
             skills = state.skills,
             files = state.files,
+            skillsLoading = state.skillsLoading,
+            skillsError = state.skillsError,
             loading = state.attachmentsLoading,
             error = state.attachmentsError,
             onLoadSkills = onLoadSkills,

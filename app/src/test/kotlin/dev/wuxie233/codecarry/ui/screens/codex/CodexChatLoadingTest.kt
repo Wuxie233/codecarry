@@ -63,6 +63,35 @@ class CodexChatLoadingTest {
     }
 
     @Test
+    fun `slash skill selection attaches without sending and preserves draft at capacity`() = scope.runTest {
+        val fixture = fixture()
+        fixture.resume()
+        runCurrent()
+        fixture.completeMetadata()
+        val skill = dev.wuxie233.codecarry.data.codex.CodexSkill("review", "Review code", null, "/skills/review/SKILL.md", true)
+        fixture.vm.updateDraft("/rev")
+        fixture.vm.selectSlashSkill(skill)
+        assertEquals("", fixture.vm.uiState.value.draft)
+        assertEquals(1, fixture.vm.uiState.value.composerAttachments.size)
+        assertEquals(dev.wuxie233.codecarry.data.codex.CodexUserInput.Skill(skill.name, skill.path), fixture.vm.uiState.value.composerAttachments.single().input)
+        fixture.vm.updateDraft("/review")
+        fixture.vm.selectSlashSkill(skill)
+        assertEquals(1, fixture.vm.uiState.value.composerAttachments.size)
+        repeat(7) { i ->
+            fixture.vm.updateDraft("/skill$i")
+            fixture.vm.selectSlashSkill(skill.copy(name = "skill$i", path = "/skills/$i"))
+        }
+        fixture.vm.updateDraft("/extra")
+        fixture.vm.selectSlashSkill(skill.copy(name = "extra", path = "/skills/extra"))
+        assertEquals("/extra", fixture.vm.uiState.value.draft)
+        assertTrue(fixture.vm.uiState.value.attachmentLimitReached)
+        assertEquals(8, fixture.vm.uiState.value.composerAttachments.size)
+        runCurrent()
+        assertFalse(fixture.transport.methods.contains("turn/start"))
+        assertFalse(fixture.transport.methods.contains("turn/steer"))
+    }
+
+    @Test
     fun `resume history is visible without a disk backed read`() = scope.runTest {
         val fixture = fixture()
         fixture.resume()

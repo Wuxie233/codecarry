@@ -123,6 +123,8 @@ data class CodexChatUiState(
     val attachmentLimitReached: Boolean = false,
     val composerAttachments: List<CodexComposerAttachment> = emptyList(),
     val skills: List<CodexSkill> = emptyList(),
+    val skillsLoading: Boolean = false,
+    val skillsError: String? = null,
     val files: List<CodexFileMatch> = emptyList(),
     val attachmentsLoading: Boolean = false,
     val attachmentsError: String? = null,
@@ -180,6 +182,8 @@ class CodexChatViewModel @Inject constructor(
     private var connection: CodexServerConnection? = null
     private var lease: CodexConnectionLease? = null
     private var searchJob: Job? = null
+    private var skillsJob: Job? = null
+    private var skillsRequestId = 0L
     private var pendingAttachmentIds: Set<String> = emptySet()
     private var eventsJob: Job? = null
     private var requestsJob: Job? = null
@@ -1001,17 +1005,37 @@ class CodexChatViewModel @Inject constructor(
         }
     }
 
+    fun selectSlashSkill(skill: CodexSkill) {
+        if (codexSlashSkillQuery(_uiState.value.draft) == null || !skill.enabled ||
+            _uiState.value.isSending || _uiState.value.isSendConfirmationPending) return
+        val attachment = CodexComposerAttachment("skill:${skill.path}", skill.name, CodexUserInput.Skill(skill.name, skill.path))
+        addAttachment(attachment)
+        if (!_uiState.value.attachmentLimitReached) updateDraft("")
+    }
+
     fun loadSkills() {
-        viewModelScope.launch {
-            _uiState.update { it.copy(attachmentsLoading = true, attachmentsError = null) }
+        val requestId = ++skillsRequestId
+        skillsJob?.cancel()
+        skillsJob = viewModelScope.launch {
+            _uiState.update { it.copy(skillsLoading = true, skillsError = null) }
+            var client: CodexAppServerClient? = null
+            var generation: Long? = null
             try {
                 val cwd = requireNotNull(_uiState.value.thread?.cwd)
-                val result = requireClient().listSkillsResult(cwd)
-                _uiState.update { it.copy(skills = result.skills, attachmentsError = result.warnings.takeIf { warnings -> warnings.isNotEmpty() }?.joinToString("\n")) }
+                val activeClient = requireClient()
+                client = activeClient
+                generation = activeClient.currentConnectionGeneration()
+                val result = activeClient.listSkillsResult(cwd)
+                if (requestId != skillsRequestId || connection?.client !== activeClient || activeClient.currentConnectionGeneration() != generation) return@launch
+                _uiState.update { it.copy(skills = result.skills, skillsError = result.warnings.takeIf { warnings -> warnings.isNotEmpty() }?.joinToString("\n")) }
             } catch (error: CancellationException) { throw error
             } catch (error: Throwable) {
-                _uiState.update { it.copy(attachmentsError = error.message) }
-            } finally { _uiState.update { it.copy(attachmentsLoading = false) } }
+                if (requestId == skillsRequestId && (client == null || (connection?.client === client && client.currentConnectionGeneration() == generation))) {
+                    _uiState.update { it.copy(skillsError = error.message) }
+                }
+            } finally {
+                if (requestId == skillsRequestId) _uiState.update { it.copy(skillsLoading = false) }
+            }
         }
     }
 

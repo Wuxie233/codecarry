@@ -104,6 +104,8 @@ internal suspend fun loadCodexImage(context: Context, uri: Uri, label: String): 
 fun CodexAttachmentPicker(
     enabled: Boolean,
     skills: List<CodexSkill>,
+    skillsLoading: Boolean,
+    skillsError: String?,
     files: List<CodexFileMatch>,
     loading: Boolean,
     error: String?,
@@ -177,6 +179,8 @@ fun CodexAttachmentPicker(
         confirmButton = { TextButton(onClick = { imageError = null }) { Text(stringResource(android.R.string.ok)) } },
     )
     if (sheet != null) ModalBottomSheet(onDismissRequest = { sheet = null }) {
+        val loading = if (sheet == "skills") skillsLoading else loading
+        val error = if (sheet == "skills") skillsError else error
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).navigationBarsPadding()) {
             Text(stringResource(if (sheet == "skills") R.string.codex_attachment_skills else R.string.codex_attachment_files),
                 style = MaterialTheme.typography.titleLarge)
