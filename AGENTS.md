@@ -367,3 +367,17 @@ If generated Hilt/Kotlin caches fail, rerun the affected verification after
 - A displayed read anchor may already match the latest reply while a late unread
   mark remains. Clearing the mark must not require advancing the anchor. Observe
   persisted unread changes, and avoid clearing from an outdated UI projection.
+
+## Agent skills
+
+### Issue tracker
+Track issues and specs in GitHub Issues for Wuxie233/codecarry.
+Before issue operations, read `docs/agents/issue-tracker.md`.
+
+### Triage labels
+Use the five canonical triage roles.
+Before applying triage labels, read `docs/agents/triage-labels.md`.
+
+### Domain docs
+Use a single-context layout.
+Before domain exploration, read `docs/agents/domain.md`.
