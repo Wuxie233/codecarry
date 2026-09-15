@@ -2,19 +2,9 @@ package dev.wuxie233.codecarry.ui.screens.codex
 
 import dev.wuxie233.codecarry.data.codex.CodexSkill
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Test
 
 class CodexSlashSkillListTest {
-    @Test
-    fun `slash query leaves prose and workspace paths alone`() {
-        assertEquals("", codexSlashSkillQuery("/"))
-        assertEquals("review", codexSlashSkillQuery("/review"))
-        listOf("", "review", " /review", "please /review", "/review this", "/review\n", "/workspace/src").forEach {
-            assertNull(codexSlashSkillQuery(it))
-        }
-    }
-
     @Test
     fun `filter matches all descriptions while omitting disabled and duplicate skills`() {
         val skill = CodexSkill("Review", "Inspect changes", "检查代码", "/skills/review", true)

@@ -1,5 +1,7 @@
 package dev.wuxie233.codecarry.ui.screens.codex
 
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -92,7 +94,7 @@ data class CodexMemoryModeReceipt(
 )
 
 data class CodexChatUiState(
-    val draft: String = "",
+    val composerValue: TextFieldValue = TextFieldValue(),
     val thread: CodexThread? = null,
     val relatedThreads: List<CodexThread> = emptyList(),
     val goalState: CodexMetadataLoadState<CodexGoal?> = CodexMetadataLoadState.Loading,
@@ -130,6 +132,7 @@ data class CodexChatUiState(
     val attachmentsError: String? = null,
     val filePreview: CodexFilePreviewState? = null,
 ) {
+    val draft: String get() = composerValue.text
     val canRetryConnection: Boolean get() = !isConnected && !isLoading
     val fastPending: Boolean get() = fastSelectionPending && activeTurnId != null
     val goal: CodexGoal?
@@ -167,7 +170,9 @@ class CodexChatViewModel @Inject constructor(
     )
     private val _uiState = MutableStateFlow(
         CodexChatUiState(
-            draft = savedStateHandle.get<String>("codexDraft").orEmpty(),
+            composerValue = savedStateHandle.get<String>("codexDraft").orEmpty().let {
+                TextFieldValue(it, TextRange(it.length))
+            },
             thread = connectionManager.get(serverId)?.events?.value?.threads?.get(threadId),
             isSendConfirmationPending = restoredPendingSendContent != null && restoredPendingSendId != null,
             isAwaitingAuthoritativeTurn = authoritativeTurnTracker.isAwaiting,
@@ -493,9 +498,13 @@ class CodexChatViewModel @Inject constructor(
         }
     }
 
-    fun updateDraft(text: String) {
-        savedStateHandle["codexDraft"] = text
-        _uiState.update { it.copy(draft = text) }
+    fun updateDraft(text: String) = updateComposerValue(
+        TextFieldValue(text, TextRange(text.length)),
+    )
+
+    fun updateComposerValue(value: TextFieldValue) {
+        savedStateHandle["codexDraft"] = value.text
+        _uiState.update { it.copy(composerValue = value) }
     }
 
     fun sendMessage(text: String, attachments: List<CodexComposerAttachment> = emptyList()) {
@@ -1005,12 +1014,17 @@ class CodexChatViewModel @Inject constructor(
         }
     }
 
-    fun selectSlashSkill(skill: CodexSkill) {
-        if (codexSlashSkillQuery(_uiState.value.draft) == null || !skill.enabled ||
-            _uiState.value.isSending || _uiState.value.isSendConfirmationPending) return
+    fun selectSlashSkill(
+        skill: CodexSkill,
+        expectedValue: TextFieldValue = _uiState.value.composerValue,
+    ) {
+        val state = _uiState.value
+        if (state.composerValue != expectedValue || !skill.enabled ||
+            state.isSending || state.isSendConfirmationPending) return
+        val target = codexSkillCompletionTarget(expectedValue) ?: return
         val attachment = CodexComposerAttachment("skill:${skill.path}", skill.name, CodexUserInput.Skill(skill.name, skill.path))
         addAttachment(attachment)
-        if (!_uiState.value.attachmentLimitReached) updateDraft("")
+        if (!_uiState.value.attachmentLimitReached) updateComposerValue(target.consume(expectedValue))
     }
 
     fun loadSkills() {

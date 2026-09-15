@@ -18,16 +18,33 @@ import androidx.compose.ui.unit.dp
 import dev.wuxie233.codecarry.R
 import dev.wuxie233.codecarry.data.codex.CodexSkill
 
-/** Only a leading slash token is a picker query; ordinary prose and paths stay intact. */
-internal fun codexSlashSkillQuery(draft: String): String? =
-    draft.takeIf { it.startsWith("/") && it.drop(1).none { char -> char.isWhitespace() || char == '/' } }
-        ?.drop(1)
-
 internal fun matchingCodexSkills(skills: List<CodexSkill>, query: String): List<CodexSkill> =
-    skills.filter { it.enabled && (it.name.contains(query, ignoreCase = true) ||
-        it.description.contains(query, ignoreCase = true) ||
-        it.shortDescription?.contains(query, ignoreCase = true) == true) }
-        .distinctBy { it.path }
+    skills.asSequence()
+        .filter { it.enabled }
+        .mapNotNull { skill ->
+            val rank = when {
+                query.isEmpty() || skill.name.equals(query, ignoreCase = true) -> 0
+                skill.name.startsWith(query, ignoreCase = true) -> 1
+                skill.name.contains(query, ignoreCase = true) -> 2
+                else -> {
+                    var matched = 0
+                    for (char in skill.name) {
+                        if (matched < query.length && char.equals(query[matched], ignoreCase = true)) matched++
+                    }
+                    when {
+                        matched == query.length -> 3
+                        skill.description.contains(query, ignoreCase = true) ||
+                            skill.shortDescription?.contains(query, ignoreCase = true) == true -> 4
+                        else -> return@mapNotNull null
+                    }
+                }
+            }
+            skill to rank
+        }
+        .distinctBy { it.first.path }
+        .sortedBy { it.second }
+        .map { it.first }
+        .toList()
 
 @Composable
 internal fun CodexSlashSkillList(

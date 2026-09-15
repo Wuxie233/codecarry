@@ -92,6 +92,47 @@ class CodexChatLoadingTest {
     }
 
     @Test
+    fun `skill selection in an existing draft preserves preceding text without sending`() = scope.runTest {
+        val fixture = fixture()
+        fixture.resume()
+        runCurrent()
+        fixture.completeMetadata()
+        val skill = dev.wuxie233.codecarry.data.codex.CodexSkill("review", "Review code", null, "/skills/review", true)
+        fixture.vm.updateDraft("Please review this\n/rev")
+        fixture.vm.selectSlashSkill(skill)
+        assertEquals("Please review this\n", fixture.vm.uiState.value.draft)
+        assertEquals(1, fixture.vm.uiState.value.composerAttachments.size)
+        runCurrent()
+        assertFalse(fixture.transport.methods.contains("turn/start"))
+        assertFalse(fixture.transport.methods.contains("turn/steer"))
+    }
+
+    @Test
+    fun `skill selection preserves suffix and ignores a stale cursor or selected text`() = scope.runTest {
+        val fixture = fixture()
+        fixture.resume()
+        runCurrent()
+        fixture.completeMetadata()
+        val skill = dev.wuxie233.codecarry.data.codex.CodexSkill("review", "Review code", null, "/skills/review", true)
+        val input = androidx.compose.ui.text.input.TextFieldValue(
+            "Before /review after", androidx.compose.ui.text.TextRange(11),
+        )
+        fixture.vm.updateComposerValue(input)
+        fixture.vm.updateComposerValue(input.copy(selection = androidx.compose.ui.text.TextRange(0)))
+        fixture.vm.selectSlashSkill(skill, input)
+        assertEquals("Before /review after", fixture.vm.uiState.value.draft)
+        assertTrue(fixture.vm.uiState.value.composerAttachments.isEmpty())
+        fixture.vm.updateComposerValue(input.copy(selection = androidx.compose.ui.text.TextRange(7, 14)))
+        fixture.vm.selectSlashSkill(skill)
+        assertTrue(fixture.vm.uiState.value.composerAttachments.isEmpty())
+        fixture.vm.updateComposerValue(input)
+        fixture.vm.selectSlashSkill(skill, input)
+        assertEquals("Before  after", fixture.vm.uiState.value.draft)
+        assertEquals(androidx.compose.ui.text.TextRange(7), fixture.vm.uiState.value.composerValue.selection)
+        assertEquals(1, fixture.vm.uiState.value.composerAttachments.size)
+    }
+
+    @Test
     fun `resume history is visible without a disk backed read`() = scope.runTest {
         val fixture = fixture()
         fixture.resume()

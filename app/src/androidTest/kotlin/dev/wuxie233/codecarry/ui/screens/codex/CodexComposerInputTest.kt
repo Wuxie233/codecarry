@@ -1,6 +1,7 @@
 package dev.wuxie233.codecarry.ui.screens.codex
 
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.Key
@@ -24,7 +25,7 @@ class CodexComposerInputTest {
     @get:Rule val rule = createComposeRule()
 
     @Test fun enterKeepsDraftAndInsertsNewline() {
-        val draft = mutableStateOf("")
+        val draft = mutableStateOf(TextFieldValue())
         rule.setContent {
             MaterialTheme {
                 CodexComposerTextField(draft.value, { draft.value = it }, "Message", Modifier.testTag("composer"))

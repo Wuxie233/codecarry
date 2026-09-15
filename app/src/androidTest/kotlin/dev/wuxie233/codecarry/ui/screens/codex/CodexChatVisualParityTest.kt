@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material3.*
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asAndroidBitmap
@@ -26,7 +27,7 @@ class CodexChatVisualParityTest {
     @get:Rule val rule = createComposeRule()
 
     @Test fun nativeChatShellKeepsLongModelEffortAndExplicitSendVisible() {
-        val draft = mutableStateOf("Continue with the implementation")
+        val draft = mutableStateOf(TextFieldValue("Continue with the implementation"))
         var sent = 0
         val model = CodexModel("model", "model", "Codex Development Extended Model",
             supportedReasoningEfforts = listOf(CodexReasoningEffortOption("high")))
@@ -45,7 +46,7 @@ class CodexChatVisualParityTest {
                             controls = {
                                 Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                                     IconButton(onClick = {}) { Icon(Icons.Default.AttachFile, "Attach", Modifier.size(20.dp)) }
-                                    CodexModelControls(CodexChatUiState(models = listOf(model), selectedModel = model,
+                                    CodexModelControls(CodexChatUiState(modelsState = CodexMetadataLoadState.Loaded(listOf(model)), selectedModel = model,
                                         selectedEffort = "high"), {}, {})
                                 }
                             },

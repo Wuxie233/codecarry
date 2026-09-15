@@ -12,6 +12,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -23,8 +24,8 @@ import androidx.compose.ui.unit.dp
 /** Enter belongs to the draft; submission is owned by the separate send button. */
 @Composable
 internal fun CodexComposerTextField(
-    value: String,
-    onValueChange: (String) -> Unit,
+    value: TextFieldValue,
+    onValueChange: (TextFieldValue) -> Unit,
     placeholder: String,
     modifier: Modifier = Modifier,
 ) {
@@ -45,7 +46,7 @@ internal fun CodexComposerTextField(
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
         decorationBox = { innerTextField ->
             Box(Modifier.fillMaxWidth()) {
-                if (value.isEmpty()) {
+                if (value.text.isEmpty()) {
                     Text(
                         placeholder,
                         style = MaterialTheme.typography.bodyLarge,

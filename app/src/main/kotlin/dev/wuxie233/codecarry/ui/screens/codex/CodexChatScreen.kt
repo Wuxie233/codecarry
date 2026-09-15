@@ -137,7 +137,8 @@ fun CodexChatScreen(
         }
     }
     val draft = state.draft
-    val slashSkillQuery = codexSlashSkillQuery(draft)
+    val composerValue = state.composerValue
+    val slashSkillQuery = codexSkillCompletionTarget(composerValue)?.query
     LaunchedEffect(slashSkillQuery != null, state.isConnected, state.thread?.cwd) {
         if (slashSkillQuery != null && state.isConnected) viewModel.loadSkills()
     }
@@ -379,12 +380,12 @@ fun CodexChatScreen(
                             error = state.skillsError,
                             enabled = state.isConnected && !state.isSending && !state.isSendConfirmationPending,
                             onRetry = viewModel::loadSkills,
-                            onSelect = viewModel::selectSlashSkill,
+                            onSelect = { viewModel.selectSlashSkill(it, composerValue) },
                         )
                     }
                     CodexComposerSurface(
-                        value = draft,
-                        onValueChange = viewModel::updateDraft,
+                        value = composerValue,
+                        onValueChange = viewModel::updateComposerValue,
                         placeholder = stringResource(if (state.activeTurnId != null) R.string.codex_chat_steer_hint else R.string.codex_message_hint),
                         canSend = (draft.isNotBlank() || attachments.isNotEmpty()) &&
                             !state.isLoading && state.isConnected && state.thread != null &&
