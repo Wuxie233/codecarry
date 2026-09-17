@@ -950,7 +950,7 @@ class CodexConnectionManager {
             entry.recovering = true
             entry.reconnectJob = scope.launch {
                 var delayMillis = reconnectInitialMillis
-                val restoredThreads = mutableMapOf<String, Long>()
+                val restoredThreads = mutableMapOf<String, ThreadRecovery>()
                 try {
                     while (shouldMaintainConnection(entry)) {
                         if (delayMillis > 0) delay(delayMillis)
@@ -996,14 +996,14 @@ class CodexConnectionManager {
         }
     }
 
-    private fun finishRecovery(entry: Entry, restoredThreads: Map<String, Long>): Boolean {
+    private fun finishRecovery(entry: Entry, restoredThreads: Map<String, ThreadRecovery>): Boolean {
         val connectedState = entry.client.connectionState.value as? CodexClientConnectionState.Connected
             ?: return false
         val finished = synchronized(lock) {
             if (entries[entry.connection.serverId] !== entry) return@synchronized false
             val fullyRestored = entry.requiredThreadIdsLocked().all { threadId ->
-                restoredThreads[threadId] == entry.threadLifecycleVersions.getOrDefault(threadId, 0L) &&
-                    isThreadReady(entry.connection, threadId)
+                restoredThreads[threadId]?.finished(entry.threadLifecycleVersions.getOrDefault(threadId, 0L),
+                    isThreadReady(entry.connection, threadId)) == true
             }
             if (!fullyRestored) {
                 return@synchronized false
@@ -1018,7 +1018,7 @@ class CodexConnectionManager {
 
     private suspend fun restoreOpenThreads(
         entry: Entry,
-        restoredThreads: MutableMap<String, Long>,
+        restoredThreads: MutableMap<String, ThreadRecovery>,
     ): Boolean {
         val openThreads = synchronized(lock) {
             entry.requiredThreadIdsLocked().sortedBy { id ->
@@ -1038,15 +1038,20 @@ class CodexConnectionManager {
                             else entry.threadLifecycleVersions.getOrDefault(threadId, 0L)
                         } ?: return@withPermit
                         if (synchronized(lock) {
-                            restoredThreads[threadId] == lifecycleVersion && isThreadReady(entry.connection, threadId)
+                            restoredThreads[threadId]?.finished(lifecycleVersion, isThreadReady(entry.connection, threadId)) == true
                         }) return@withPermit
                         try {
                             resumeThread(entry.connection, threadId)
                             synchronized(lock) {
-                                if (isThreadReady(entry.connection, threadId)) restoredThreads[threadId] = lifecycleVersion
+                                if (isThreadReady(entry.connection, threadId)) restoredThreads[threadId] = ThreadRecovery(lifecycleVersion)
                             }
                         } catch (error: CancellationException) {
                             currentCoroutineContext().ensureActive()
+                        } catch (_: CodexEphemeralThreadException) {
+                            synchronized(lock) {
+                                // Complete this recovery attempt without claiming subscription readiness.
+                                restoredThreads[threadId] = ThreadRecovery(lifecycleVersion, unavailable = true)
+                            }
                         } catch (_: Throwable) {
                             // Other subscriptions become usable independently; only this thread retries.
                         }
@@ -1062,7 +1067,7 @@ class CodexConnectionManager {
         }
         restoredThreads.keys.retainAll(latestOpenThreads.keys)
         return latestOpenThreads.all { (threadId, lifecycleVersion) ->
-            restoredThreads[threadId] == lifecycleVersion && isThreadReady(entry.connection, threadId)
+            restoredThreads[threadId]?.finished(lifecycleVersion, isThreadReady(entry.connection, threadId)) == true
         }
     }
 
@@ -1079,6 +1084,10 @@ class CodexConnectionManager {
 
     private suspend fun nextReconnectDelay(current: Long): Long =
         (current.coerceAtLeast(1) * 2).coerceAtMost(reconnectMaxMillis())
+
+    private data class ThreadRecovery(val lifecycleVersion: Long, val unavailable: Boolean = false) {
+        fun finished(version: Long, ready: Boolean): Boolean = lifecycleVersion == version && (ready || unavailable)
+    }
 
     private data class ResumedThread(
         val generation: Long,

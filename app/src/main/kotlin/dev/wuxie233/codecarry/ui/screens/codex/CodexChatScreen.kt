@@ -419,7 +419,7 @@ fun CodexChatScreen(
                 state.isLoading && state.thread?.turns.isNullOrEmpty() -> LoadingStateCard(Modifier.padding(16.dp), stringResource(R.string.codex_opening_thread))
                 state.thread == null && state.error != null -> ErrorStateCard(
                     title = stringResource(R.string.codex_open_thread_failed),
-                    message = state.error.orEmpty(),
+                    message = if (state.ephemeralHistoryUnavailable) stringResource(R.string.codex_ephemeral_history_unavailable) else state.error.orEmpty(),
                     onRetry = viewModel::connectAndLoad,
                     modifier = Modifier.padding(16.dp),
                 )
@@ -431,7 +431,7 @@ fun CodexChatScreen(
                     state.error?.let { error ->
                         item("operation-error") {
                             dev.wuxie233.codecarry.ui.components.ChatErrorNotice(
-                                message = error, detail = null,
+                                message = if (state.ephemeralHistoryUnavailable) stringResource(R.string.codex_ephemeral_history_unavailable) else error, detail = null,
                                 title = stringResource(R.string.chat_failure_operation),
                                 detailsLabel = stringResource(R.string.chat_failure_details),
                             )

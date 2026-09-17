@@ -831,6 +831,75 @@ class CodexAppServerClientTest {
         }
     }
 
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test
+    fun `metadata probe timeout preserves resume error but caller cancellation propagates`() = runTest {
+        for (cancel in listOf(false, true)) {
+            val transport = FakeTransport()
+            val client = newClient(transport, backgroundScope)
+            initialize(client, transport)
+            val opening = async { runCatching { client.resumeThread("temporary") } }
+            val resume = transport.takeSentObject()
+            val message = "no rollout found for thread id temporary"
+            transport.respondError(resume.getValue("id").jsonPrimitive, -32600, message)
+            assertEquals("thread/read", transport.takeSentObject()["method"]?.jsonPrimitive?.content)
+            if (cancel) {
+                opening.cancel()
+                runCurrent()
+                assertTrue(opening.isCancelled)
+            } else {
+                advanceTimeBy(5_001)
+                runCurrent()
+                assertTrue(opening.await().exceptionOrNull() is CodexRpcException)
+                assertEquals(message, opening.await().exceptionOrNull()?.message)
+            }
+        }
+    }
+
+    @Test
+    fun `missing rollout remains retryable when metadata is ordinary or unavailable`() = runTest {
+        for (metadataAvailable in listOf(true, false)) {
+            val transport = FakeTransport()
+            val client = newClient(transport, backgroundScope)
+            initialize(client, transport)
+            val opening = async { runCatching { client.resumeThread("ordinary") } }
+            val resume = transport.takeSentObject()
+            val message = "no rollout found for thread id ordinary"
+            transport.respondError(resume.getValue("id").jsonPrimitive, -32600, message)
+            val read = transport.takeSentObject()
+            if (metadataAvailable) {
+                transport.respond(read.getValue("id").jsonPrimitive, buildJsonObject {
+                    put("thread", buildJsonObject { put("id", "ordinary"); put("ephemeral", false) })
+                })
+            } else {
+                transport.respondError(read.getValue("id").jsonPrimitive, -32600, message)
+            }
+            val failure = opening.await().exceptionOrNull()
+            assertTrue(failure is CodexRpcException)
+            assertEquals(message, failure?.message)
+        }
+    }
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test
+    fun `missing rollout probes metadata and identifies an ephemeral thread`() = runTest {
+        val transport = FakeTransport()
+        val client = newClient(transport, backgroundScope)
+        initialize(client, transport)
+        val opening = async { runCatching { client.resumeThread("temporary") } }
+        val resume = transport.takeSentObject()
+        transport.respondError(resume.getValue("id").jsonPrimitive, -32600, "no rollout found for thread id temporary")
+        runCurrent()
+        assertFalse(opening.isCompleted)
+        val read = transport.takeSentObject()
+        assertEquals("thread/read", read["method"]?.jsonPrimitive?.content)
+        assertEquals(false, read["params"]?.jsonObject?.get("includeTurns")?.jsonPrimitive?.content?.toBoolean())
+        transport.respond(read.getValue("id").jsonPrimitive, buildJsonObject {
+            put("thread", buildJsonObject { put("id", "temporary"); put("ephemeral", true) })
+        })
+        assertTrue(opening.await().exceptionOrNull() is CodexEphemeralThreadException)
+    }
+
     @Test
     fun `resume rejoins a running child with history without a persisted rollout read`() = runTest {
         val transport = FakeTransport()

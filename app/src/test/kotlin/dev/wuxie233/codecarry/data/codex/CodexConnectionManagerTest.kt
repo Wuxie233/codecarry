@@ -337,6 +337,67 @@ class CodexConnectionManagerTest {
     }
 
     @Test
+    fun `ephemeral resume failure ends recovery without granting thread readiness`() = runTest {
+        lateinit var transport: FakeTransport
+        val manager = CodexConnectionManager(
+            createClient = {
+                FakeTransport().also { transport = it }.newClient(backgroundScope)
+            },
+            scope = backgroundScope,
+            idleDisconnectMillis = 10_000,
+            reconnectInitialMillis = 1,
+            reconnectMaxMillis = 4,
+        )
+        val leaseDeferred = async { manager.acquire(server, threadId = "thread-1") }
+        runCurrent()
+        initialize(transport)
+        val lease = leaseDeferred.await()
+        transport.takeSentObject()
+
+        transport.disconnect()
+        runCurrent()
+        advanceTimeBy(1)
+        runCurrent()
+        initialize(transport)
+        assertEquals("initialized", transport.takeSentObject()["method"]?.jsonPrimitive?.content)
+
+        val firstResume = transport.takeSentObject()
+        assertEquals("thread/resume", firstResume["method"]?.jsonPrimitive?.content)
+        transport.respondError(
+            firstResume.getValue("id").jsonPrimitive,
+            code = -32600,
+            message = "no rollout found for thread id thread-1",
+        )
+        runCurrent()
+        assertTrue(lease.connection.state.value is CodexClientConnectionState.Connected)
+        assertTrue(
+            manager.connections.value.getValue(server.id).state is
+                CodexClientConnectionState.Connected,
+        )
+
+        val metadataRead = transport.takeSentObject()
+        assertEquals("thread/read", metadataRead["method"]?.jsonPrimitive?.content)
+        transport.respond(metadataRead.getValue("id").jsonPrimitive, buildJsonObject {
+            put("thread", buildJsonObject { put("id", "thread-1"); put("ephemeral", true) })
+        })
+        runCurrent()
+        advanceTimeBy(100)
+        runCurrent()
+        assertFalse(manager.isThreadReady(lease.connection, "thread-1"))
+        assertEquals(2, transport.connectAttempts)
+        val probe = async { lease.connection.client.readThread("other", includeTurns = false) }
+        runCurrent()
+        val next = transport.takeSentObject()
+        assertEquals("thread/read", next["method"]?.jsonPrimitive?.content)
+        assertEquals("other", next["params"]?.jsonObject?.get("threadId")?.jsonPrimitive?.content)
+        transport.respond(next.getValue("id").jsonPrimitive, buildJsonObject {
+            put("thread", buildJsonObject { put("id", "other") })
+        })
+        probe.await()
+        lease.close()
+    }
+
+    @Test
     fun `current time request is answered internally and never becomes pending`() = runTest {
         lateinit var transport: FakeTransport
         val manager = CodexConnectionManager(

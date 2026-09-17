@@ -42,4 +42,5 @@
     <string name="codex_chat_goal_paused">已暂停</string>
     <string name="codex_chat_goal_blocked">受阻</string>
     <string name="codex_chat_goal_unknown">状态未提供</string>
+    <string name="codex_ephemeral_history_unavailable">这是未保存历史记录的临时会话，当前服务端无法在这里重新打开。请回到原客户端继续，或新建会话。已加载的消息会保留显示。</string>
 </resources>

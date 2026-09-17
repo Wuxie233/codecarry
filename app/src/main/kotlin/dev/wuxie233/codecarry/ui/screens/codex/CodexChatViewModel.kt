@@ -114,6 +114,7 @@ data class CodexChatUiState(
     val showFastHint: Boolean = false,
     val pendingRequests: List<CodexServerRequest> = emptyList(),
     val error: String? = null,
+    val ephemeralHistoryError: String? = null,
     val threadFailure: CodexFailure? = null,
     val turnFailures: Map<String, CodexFailure> = emptyMap(),
     val isConnected: Boolean = false,
@@ -133,6 +134,7 @@ data class CodexChatUiState(
     val filePreview: CodexFilePreviewState? = null,
 ) {
     val draft: String get() = composerValue.text
+    val ephemeralHistoryUnavailable: Boolean get() = error != null && error == ephemeralHistoryError
     val canRetryConnection: Boolean get() = !isConnected && !isLoading
     val fastPending: Boolean get() = fastSelectionPending && activeTurnId != null
     val goal: CodexGoal?
@@ -291,7 +293,7 @@ class CodexChatViewModel @Inject constructor(
         loadJob?.cancel()
         loadJob = viewModelScope.launch {
             loadError = null
-            _uiState.update { it.copy(isLoading = true, isConnected = false, error = null) }
+            _uiState.update { it.copy(isLoading = true, isConnected = false, error = null, ephemeralHistoryError = null) }
             try {
                 val server = serverRepository.getServer(serverId) ?: error("Codex server is no longer configured")
                 val acquired = acquireCurrentConnection(server)
@@ -334,7 +336,8 @@ class CodexChatViewModel @Inject constructor(
                 throw error
             } catch (error: Throwable) {
                 loadError = error.message ?: "Failed to open Codex thread"
-                _uiState.update { it.copy(isLoading = false, isConnected = false, error = loadError) }
+                _uiState.update { it.copy(isLoading = false, isConnected = false, error = loadError,
+                    ephemeralHistoryError = loadError.takeIf { error is CodexEphemeralThreadException }) }
             }
         }
     }

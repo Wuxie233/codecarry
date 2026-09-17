@@ -122,3 +122,19 @@ the current connection because no durable rollout exists before the first
 turn. Thread lists explicitly include all model providers.
 
 Protocol reference: <https://developers.openai.com/codex/app-server/>.
+
+### Ephemeral threads without rollouts
+
+A loaded thread can have `ephemeral: true` and no saved rollout. Current
+app-server implementations may reject `thread/resume` for that thread with
+`no rollout found for thread id`, even while `thread/read` with
+`includeTurns: false` succeeds. `excludeTurns: true` does not bypass the resume
+history requirement; reading metadata does not establish a chat subscription.
+
+CodeCarry confirms the ephemeral flag with a bounded metadata read before
+ending automatic recovery attempts for that recovery cycle. It keeps cached
+messages visible and explains the unsupported recovery, without enabling thread
+controls. Ordinary missing-rollout failures remain retryable because a newly
+started thread may not have flushed its history yet. Continue an ephemeral
+conversation in its original client; CodeCarry does not manufacture a replacement
+conversation or reconstruct missing history.

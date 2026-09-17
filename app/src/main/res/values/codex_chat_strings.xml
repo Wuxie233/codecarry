@@ -42,4 +42,5 @@
     <string name="codex_chat_goal_paused">Paused</string>
     <string name="codex_chat_goal_blocked">Blocked</string>
     <string name="codex_chat_goal_unknown">Status unavailable</string>
+    <string name="codex_ephemeral_history_unavailable">This temporary conversation has no saved history. The current server cannot reopen it here. Continue in the original client, or start a new conversation. Any messages already loaded remain visible.</string>
 </resources>

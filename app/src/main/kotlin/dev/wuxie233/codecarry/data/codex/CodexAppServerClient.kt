@@ -32,6 +32,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
@@ -64,6 +66,10 @@ class CodexRpcException(
     override val message: String,
     val data: JsonElement? = null,
 ) : RuntimeException(message)
+
+/** The daemon rejected resume and metadata confirms that no durable history exists. */
+class CodexEphemeralThreadException(val threadId: String, cause: CodexRpcException) :
+    RuntimeException("Ephemeral Codex thread cannot be resumed: $threadId", cause)
 
 class CodexDisconnectedException(
     message: String = "Codex app-server connection closed",
@@ -471,17 +477,34 @@ open class CodexAppServerClient internal constructor(
         permissions: String? = null,
         excludeTurns: Boolean = false,
         extraParams: JsonObject = JsonObject(emptyMap()),
-    ): CodexThreadSession = freshThreads[threadId] ?: request(
-        "thread/resume",
-        paramsOf(
-            "threadId" to threadId,
-            "cwd" to cwd,
-            "model" to model,
-            "permissions" to permissions,
-            "excludeTurns" to excludeTurns.takeIf { it },
-            extras = extraParams,
-        ),
-    ).let { payload -> withContext(decodingDispatcher) { CodexThreadSession.fromJson(payload) } }
+    ): CodexThreadSession = freshThreads[threadId] ?: try {
+        request(
+            "thread/resume",
+            paramsOf(
+                "threadId" to threadId,
+                "cwd" to cwd,
+                "model" to model,
+                "permissions" to permissions,
+                "excludeTurns" to excludeTurns.takeIf { it },
+                extras = extraParams,
+            ),
+        ).let { payload -> withContext(decodingDispatcher) { CodexThreadSession.fromJson(payload) } }
+    } catch (error: CodexRpcException) {
+        // Missing rollout alone is not permanent: a new ordinary thread may not have
+        // flushed yet. Only classify after a metadata-only read confirms ephemeral.
+        if (error.code == -32600L && error.message == "no rollout found for thread id $threadId") {
+            val thread = try {
+                withTimeout(5_000) { readThread(threadId, includeTurns = false) }
+            } catch (_: CancellationException) {
+                currentCoroutineContext().ensureActive()
+                null // Probe timeout must preserve the original resume failure.
+            } catch (_: Exception) {
+                null
+            }
+            if (thread?.ephemeral == true) throw CodexEphemeralThreadException(threadId, error)
+        }
+        throw error
+    }
 
     suspend fun forkThread(
         threadId: String,

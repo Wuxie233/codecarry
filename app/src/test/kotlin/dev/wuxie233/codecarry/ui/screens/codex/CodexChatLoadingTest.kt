@@ -351,6 +351,37 @@ class CodexChatLoadingTest {
         fixture.completeMetadata()
     }
 
+    @Test
+    fun ephemeralResumeKeepsCachedHistoryAndExplainsUnsupportedRecovery() = scope.runTest {
+        val fixture = fixture()
+        val cached = dev.wuxie233.codecarry.data.codex.CodexThread(
+            id = "child", turns = listOf(dev.wuxie233.codecarry.data.codex.CodexTurn(id = "cached")),
+        )
+        fixture.connection.reducer.upsertThread(cached)
+        runCurrent()
+        val request = fixture.transport.next("thread/resume")
+        fixture.transport.incoming.send(buildJsonObject {
+            put("id", request.getValue("id"))
+            put("error", buildJsonObject { put("code", -32600); put("message", "no rollout found for thread id child") })
+        }.toString())
+        runCurrent()
+        fixture.transport.replyNext("thread/read", """{"thread":{"id":"child","ephemeral":true}}""")
+        runCurrent()
+        assertEquals(cached, fixture.vm.uiState.value.thread)
+        assertTrue(fixture.vm.uiState.value.ephemeralHistoryUnavailable)
+        assertFalse(fixture.vm.uiState.value.copy(error = "Other operation failed").ephemeralHistoryUnavailable)
+        assertFalse(fixture.vm.uiState.value.copy(error = null).ephemeralHistoryUnavailable)
+        assertFalse(fixture.vm.uiState.value.isConnected)
+        assertFalse(fixture.vm.uiState.value.isLoading)
+        fixture.vm.connectAndLoad()
+        runCurrent()
+        fixture.resume()
+        runCurrent()
+        assertFalse(fixture.vm.uiState.value.ephemeralHistoryUnavailable)
+        assertTrue(fixture.vm.uiState.value.isConnected)
+        fixture.completeMetadata()
+    }
+
     private suspend fun TestScope.fixture(): Fixture {
         val http = HttpClient(MockEngine { error("OpenCode transport must not be used") }).also(httpClients::add)
         val store = object : DataStore<Preferences> {
