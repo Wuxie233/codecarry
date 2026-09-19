@@ -321,6 +321,9 @@ data class CodexThreadItem(
     val collabAgentCall: CodexCollabAgentCall? = null,
     val reasoningSummary: List<String> = emptyList(),
     val reasoningContent: List<String> = emptyList(),
+    val phase: String? = null,
+    val delivery: String? = null,
+    val questions: List<CodexAsyncQuestionDefinition> = emptyList(),
     val extra: JsonObject = JsonObject(emptyMap()),
     val raw: JsonObject = JsonObject(emptyMap()),
 ) {
@@ -328,7 +331,7 @@ data class CodexThreadItem(
         fun fromJson(value: JsonObject): CodexThreadItem {
             val type = value.string("type") ?: "unknown"
             val text = value.string("text") ?: when (type) {
-                "userMessage" -> (value["content"] as? JsonArray)
+                "userMessage", "steeringUserMessage" -> (value[if (type == "userMessage") "content" else "input"] as? JsonArray)
                     .orEmpty()
                     .mapNotNull { it.objectOrNull()?.string("text") }
                     .joinToString("\n")
@@ -353,6 +356,14 @@ data class CodexThreadItem(
                 collabAgentCall = if (type == "collabAgentToolCall") CodexCollabAgentCall.fromJson(value) else null,
                 reasoningSummary = value.stringList("summary"),
                 reasoningContent = value.stringList("content"),
+                phase = value.string("phase"),
+                delivery = value.string("delivery"),
+                questions = value.controlObjects("questions").map { question ->
+                    CodexAsyncQuestionDefinition(
+                        title = question.string("title").orEmpty(),
+                        options = question.stringList("options"),
+                    )
+                },
                 extra = value.without(
                     "id",
                     "clientId",

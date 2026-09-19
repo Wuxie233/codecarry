@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="codex_async_question_title">Answer</string>
+    <string name="codex_async_answered">Answered: %1$s</string>
+    <string name="codex_async_question_expired">This turn has ended. This question can no longer be answered.</string>
+    <string name="codex_async_answer_sending">Sending…</string>
+    <string name="codex_async_answer_unavailable">This question is no longer available. Refresh the conversation and try again.</string>
+</resources>

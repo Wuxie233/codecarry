@@ -368,6 +368,18 @@ If generated Hilt/Kotlin caches fail, rerun the affected verification after
   mark remains. Clearing the mark must not require advancing the anchor. Observe
   persisted unread changes, and avoid clearing from an outdated UI projection.
 
+- Codex asynchronous questions are `agentMessage` items with `delivery=async`,
+  including items whose `phase=final_answer`. Exclude them from the final-answer
+  presentation. Reply using the original active turn's `turn/steer` and the
+  `send_user_message_question_reply` wrapper; never fall back to starting a turn.
+- Codex history merges keep live-only items near shared ordering anchors and
+  preserve fields changed since the read baseline. A cached subscription is not
+  a history refresh: explicit reconnect and returning to chat request fresh history.
+- Codex follow-tail observes measured layout changes as well as message changes.
+  Late Markdown/image measurement must preserve tail following, while physical
+  history dragging and explicit process disclosure navigation keep ownership
+  of the viewport.
+
 ## Agent skills
 
 ### Issue tracker

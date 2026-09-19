@@ -334,7 +334,11 @@ class CodexConnectionManager {
         }
 
     /** Full-history subscription shared by screen entry and reconnect; waiter cancellation never cancels it. */
-    suspend fun resumeThread(connection: CodexServerConnection, threadId: String): CodexThreadSession {
+    suspend fun resumeThread(
+        connection: CodexServerConnection,
+        threadId: String,
+        forceRefresh: Boolean = false,
+    ): CodexThreadSession {
         val entry = synchronized(lock) {
             entries[connection.serverId]?.takeIf { it.connection === connection }
                 ?: error("Codex server connection is no longer current")
@@ -346,7 +350,7 @@ class CodexConnectionManager {
             val generation = entry.client.currentConnectionGeneration()
             val version = entry.threadLifecycleVersions.getOrDefault(threadId, 0L)
             entry.threadSessions[threadId]?.takeIf {
-                it.generation == generation && it.lifecycleVersion == version
+                !forceRefresh && it.generation == generation && it.lifecycleVersion == version
             }?.let { cached ->
                 return cached.session.copy(thread = entry.reducer.state.value.threads[threadId] ?: cached.session.thread)
             }

@@ -382,6 +382,80 @@ class CodexChatLoadingTest {
         fixture.completeMetadata()
     }
 
+    @Test
+    fun `async answer steers original turn once and never starts another turn`() = scope.runTest {
+        val fixture = fixture()
+        fixture.resume()
+        runCurrent()
+        fixture.completeMetadata()
+        fixture.transport.incoming.send("""{"method":"item/completed","params":{
+            "threadId":"child","turnId":"turn-1","item":{"id":"question-1","type":"agentMessage",
+            "phase":"final_answer","delivery":"async","text":"Which?",
+            "questions":[{"title":"Which?","options":["A","B"]}]}}}""")
+        runCurrent()
+        val question = fixture.vm.uiState.value.asyncQuestions.single()
+        fixture.vm.answerAsyncQuestions(question.turnId, question.sourceItemId, mapOf(question.id to "A"))
+        fixture.vm.answerAsyncQuestions(question.turnId, question.sourceItemId, mapOf(question.id to "A"))
+        runCurrent()
+        val request = fixture.transport.next("turn/steer")
+        val params = request.getValue("params").jsonObject
+        assertEquals("turn-1", params.getValue("expectedTurnId").jsonPrimitive.content)
+        assertTrue(params.getValue("input").toString().contains("send_user_message_question_reply"))
+        fixture.transport.reply(request, """{"turnId":"turn-1"}""")
+        runCurrent()
+        assertEquals("A", fixture.vm.uiState.value.asyncQuestions.single().answer)
+        assertFalse(fixture.vm.uiState.value.asyncQuestions.single().canAnswer)
+        fixture.vm.answerAsyncQuestions(question.turnId, question.sourceItemId, mapOf(question.id to "B"))
+        runCurrent()
+        assertEquals(1, fixture.transport.methods.count { it == "turn/steer" })
+        assertFalse(fixture.transport.methods.contains("turn/start"))
+    }
+
+    @Test
+    fun `expired async answer cannot submit or start a new turn`() = scope.runTest {
+        val fixture = fixture()
+        fixture.resume()
+        runCurrent()
+        fixture.completeMetadata()
+        fixture.transport.incoming.send("""{"method":"item/completed","params":{
+            "threadId":"child","turnId":"turn-1","item":{"id":"question-1","type":"agentMessage",
+            "phase":"final_answer","delivery":"async","text":"Which?"}}}""")
+        runCurrent()
+        val question = fixture.vm.uiState.value.asyncQuestions.single()
+        fixture.completeTurn()
+        runCurrent()
+        fixture.vm.answerAsyncQuestions(question.turnId, question.sourceItemId, mapOf(question.id to "A"))
+        runCurrent()
+        assertFalse(fixture.transport.methods.contains("turn/steer"))
+        assertFalse(fixture.transport.methods.contains("turn/start"))
+    }
+
+    @Test
+    fun `manual reconnect refreshes history and late snapshot cannot undo live final`() = scope.runTest {
+        val fixture = fixture()
+        fixture.resume()
+        runCurrent()
+        fixture.completeMetadata()
+        fixture.vm.reconnect()
+        runCurrent()
+        val refresh = fixture.transport.next("thread/resume")
+        fixture.transport.incoming.send("""{"method":"item/completed","params":{
+            "threadId":"child","turnId":"turn-1","item":{"id":"final","type":"agentMessage",
+            "phase":"final_answer","text":"Complete final answer"}}}""")
+        fixture.completeTurn()
+        runCurrent()
+        assertEquals("Complete final answer", fixture.vm.uiState.value.thread?.turns?.single()?.items?.last()?.text)
+        fixture.transport.reply(refresh, """{"thread":{"id":"child","turns":[{"id":"turn-1",
+            "status":"inProgress","items":[{"id":"message-1","type":"agentMessage","text":"hello"}]}]}}""")
+        runCurrent()
+        fixture.transport.replyNext("thread/goal/get", "{\"goal\":null}")
+        runCurrent()
+        assertEquals(1, fixture.transport.methods.count { it == "model/list" })
+        val turn = fixture.vm.uiState.value.thread?.turns?.single()
+        assertEquals("completed", turn?.status)
+        assertEquals("Complete final answer", turn?.items?.last()?.text)
+    }
+
     private suspend fun TestScope.fixture(): Fixture {
         val http = HttpClient(MockEngine { error("OpenCode transport must not be used") }).also(httpClients::add)
         val store = object : DataStore<Preferences> {

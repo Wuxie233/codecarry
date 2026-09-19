@@ -120,6 +120,9 @@ data class CodexChatUiState(
     val isConnected: Boolean = false,
     val replyingRequestIds: Set<String> = emptySet(),
     val requestErrors: Map<String, String> = emptyMap(),
+    val asyncAnswers: Map<String, String> = emptyMap(),
+    val submittingAsyncQuestionIds: Set<String> = emptySet(),
+    val asyncQuestionErrors: Map<String, String> = emptyMap(),
     val plans: Map<String, CodexTurnPlan> = emptyMap(),
     val diffs: Map<String, String> = emptyMap(),
     val tokenUsage: CodexThreadTokenUsage? = null,
@@ -134,6 +137,11 @@ data class CodexChatUiState(
     val filePreview: CodexFilePreviewState? = null,
 ) {
     val draft: String get() = composerValue.text
+    val asyncQuestions: List<CodexAsyncQuestion>
+        get() = thread?.let(::codexAsyncQuestions).orEmpty().map { question ->
+            val accepted = question.answer ?: asyncAnswers[question.id]
+            question.copy(answer = accepted, canAnswer = question.canAnswer && accepted == null)
+        }
     val ephemeralHistoryUnavailable: Boolean get() = error != null && error == ephemeralHistoryError
     val canRetryConnection: Boolean get() = !isConnected && !isLoading
     val fastPending: Boolean get() = fastSelectionPending && activeTurnId != null
@@ -206,6 +214,8 @@ class CodexChatViewModel @Inject constructor(
     private var selectionRevision = 0L
     private var selectionPending = false
     private var familyVisible = false
+    private var hasBeenVisible = false
+    private val asyncReplyIdentities = mutableMapOf<String, Pair<String, String>>()
     private val familyProjection = CodexChatFamilyProjection()
     private val connectionMutex = Mutex()
     private val sendIdentity = CodexSendIdentityTracker(
@@ -289,7 +299,11 @@ class CodexChatViewModel @Inject constructor(
         }
     }
 
-    fun connectAndLoad() {
+    fun connectAndLoad() = connectAndLoad(forceRefresh = false)
+
+    fun reconnect() = connectAndLoad(forceRefresh = true)
+
+    private fun connectAndLoad(forceRefresh: Boolean) {
         loadJob?.cancel()
         loadJob = viewModelScope.launch {
             loadError = null
@@ -302,7 +316,7 @@ class CodexChatViewModel @Inject constructor(
                 }
                 val connected = acquired.connection
                 val selectionAtStart = selectionRevision
-                val resumed = connectionManager.resumeThread(connected, threadId)
+                val resumed = connectionManager.resumeThread(connected, threadId, forceRefresh = forceRefresh)
                 lastResumedModel = resumed.model
                 lastResumedEffort = resumed.reasoningEffort
                 val generation = connected.client.currentConnectionGeneration()
@@ -488,7 +502,10 @@ class CodexChatViewModel @Inject constructor(
     }
 
     fun setChatVisible(visible: Boolean) {
+        val returning = visible && !_screenVisible.value && hasBeenVisible
         _screenVisible.value = visible
+        if (visible) hasBeenVisible = true
+        if (returning && loadJob?.isActive != true) reconnect()
         if (visible) refreshUsage()
         if (visible && activeThreadToken == null) {
             activeThreadToken = connectionManager.activateThread(
@@ -626,6 +643,7 @@ class CodexChatViewModel @Inject constructor(
             try {
                 val connected = requireConnection()
                 val generation = connected.client.currentConnectionGeneration()
+                val baseline = connected.events.value.threads[threadId]
                 val snapshot = connected.client.readThread(threadId, includeTurns = true)
                 // A delayed snapshot from an earlier connection generation must not publish at all.
                 check(currentGeneration(connected, generation)) {
@@ -633,7 +651,7 @@ class CodexChatViewModel @Inject constructor(
                 }
                 // Publish the merged reducer state, never the raw snapshot: live items and
                 // terminal turns that streamed while the read was in flight always win.
-                connected.reducer.upsertThread(snapshot)
+                connected.reducer.upsertThreadSnapshot(snapshot, baseline)
                 val merged = connected.events.value.threads[threadId] ?: snapshot
                 val receivedAuthoritativeTurn = consumeAuthoritativeTurn(merged)
                 _uiState.update { state ->
@@ -719,13 +737,14 @@ class CodexChatViewModel @Inject constructor(
             client.connect()
             val connected = requireConnection()
             val generation = connected.client.currentConnectionGeneration()
+            val baseline = connected.events.value.threads[threadId]
             val snapshot = client.readThread(threadId, includeTurns = true)
             // Fence on the connection generation the read started from, then publish the
             // merged reducer state so newer streamed items and terminal turns survive.
             check(currentGeneration(connected, generation)) {
                 "Codex send reconciliation belongs to an earlier connection"
             }
-            connected.reducer.upsertThread(snapshot)
+            connected.reducer.upsertThreadSnapshot(snapshot, baseline)
             val merged = connected.events.value.threads[threadId] ?: snapshot
             val receivedAuthoritativeTurn = consumeAuthoritativeTurn(merged)
             _uiState.update { state ->
@@ -906,6 +925,40 @@ class CodexChatViewModel @Inject constructor(
         }
     }
 
+    /** Async questions are user messages to their original running turn, never RPC results. */
+    fun answerAsyncQuestions(turnId: String, sourceItemId: String, answers: Map<String, String>) {
+        if (sourceItemId in _uiState.value.submittingAsyncQuestionIds) return
+        val pending = _uiState.value.asyncQuestions.filter {
+            it.turnId == turnId && it.sourceItemId == sourceItemId && it.canAnswer
+        }
+        if (answers.isEmpty() || answers.keys.any { id -> pending.none { it.id == id } }) return
+        _uiState.update { it.copy(
+            submittingAsyncQuestionIds = it.submittingAsyncQuestionIds + sourceItemId,
+            asyncQuestionErrors = it.asyncQuestionErrors - sourceItemId,
+        ) }
+        viewModelScope.launch {
+            try {
+                val connected = requireConnection()
+                val currentThread = connected.events.value.threads[threadId]
+                    ?: error("Codex thread is unavailable")
+                val text = codexAsyncQuestionReplyText(currentThread, turnId, answers)
+                    ?: error("This question is no longer active")
+                // Keep the same message identity for a retry after an uncertain receipt.
+                val identity = asyncReplyIdentities[sourceItemId]?.takeIf { it.first == text }
+                    ?: (text to UUID.randomUUID().toString()).also { asyncReplyIdentities[sourceItemId] = it }
+                connected.client.steerTurn(threadId, turnId, text, identity.second)
+                _uiState.update { it.copy(asyncAnswers = it.asyncAnswers + answers) }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                _uiState.update { it.copy(asyncQuestionErrors = it.asyncQuestionErrors +
+                    (sourceItemId to (error.message ?: "Unable to answer this question"))) }
+            } finally {
+                _uiState.update { it.copy(submittingAsyncQuestionIds = it.submittingAsyncQuestionIds - sourceItemId) }
+            }
+        }
+    }
+
     fun answerElicitation(request: CodexServerRequest, action: String, content: JsonElement? = null) {
         replyToRequest(request) {
             runCatching {
@@ -1076,12 +1129,17 @@ class CodexChatViewModel @Inject constructor(
         eventsJob?.cancel()
         eventsJob = viewModelScope.launch {
             var previous: CodexEventState? = null
-            connected.events.collect { eventState ->
+            connected.events.collect { observedState ->
+                if (connection !== connected || !connectionManager.isCurrent(connected)) return@collect
                 val prior = previous
+                if (!familyVisible && prior != null && sameCodexChatProjection(prior, observedState, threadId)) return@collect
+                confirmPendingSendFromThread(observedState.threads[threadId] ?: _uiState.value.thread)
+                // Confirmation can suspend while emitting its send receipt. Publish the latest
+                // reducer projection, never the older event captured before that suspension.
+                if (connection !== connected || !connectionManager.isCurrent(connected)) return@collect
+                val eventState = connected.events.value
                 previous = eventState
-                if (!familyVisible && prior != null && sameCodexChatProjection(prior, eventState, threadId)) return@collect
                 val thread = eventState.threads[threadId] ?: _uiState.value.thread
-                confirmPendingSendFromThread(thread)
                 val receivedAuthoritativeTurn = consumeAuthoritativeTurn(thread)
                 _uiState.update {
                     it.copy(

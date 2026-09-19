@@ -40,6 +40,7 @@ import dev.wuxie233.codecarry.R
 import dev.wuxie233.codecarry.data.codex.CodexFileChange
 import dev.wuxie233.codecarry.data.codex.CodexThreadItem
 import dev.wuxie233.codecarry.data.codex.CodexTurnPlan
+import dev.wuxie233.codecarry.data.codex.codexAsyncReplyDisplayText
 import dev.wuxie233.codecarry.ui.screens.chat.ChatMarkdownLinkEnvironment
 import dev.wuxie233.codecarry.ui.screens.chat.MessageMarkdownContent
 import dev.wuxie233.codecarry.ui.screens.chat.ProcessDisclosureRow
@@ -52,13 +53,15 @@ import kotlinx.serialization.json.contentOrNull
 internal fun CodexTimelineItem(
     item: CodexThreadItem,
     onOpenThread: (String) -> Unit,
+    turnStatus: String? = null,
     loadRemoteImage: suspend (String) -> ByteArray = { error("Remote image reader unavailable") },
     workspaceCwd: String? = null,
     onOpenWorkspaceFile: (String) -> Unit = {},
 ) {
     val amoled = isAmoledTheme()
+    val displayStatus = codexItemPresentationStatus(item, turnStatus)
     when (item.type) {
-        "userMessage" -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+        "userMessage", "steeringUserMessage" -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
             Surface(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(topStart = 18.dp, topEnd = 4.dp, bottomStart = 18.dp, bottomEnd = 18.dp),
@@ -67,9 +70,10 @@ internal fun CodexTimelineItem(
                 tonalElevation = if (amoled) 0.dp else 1.dp,
             ) {
                 Column(Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
-                    if (!item.text.isNullOrBlank()) ChatMarkdownLinkEnvironment(workspaceCwd, onOpenWorkspaceFile) {
+                    val userText = codexAsyncReplyDisplayText(item) ?: item.text
+                    if (!userText.isNullOrBlank()) ChatMarkdownLinkEnvironment(workspaceCwd, onOpenWorkspaceFile) {
                         MessageMarkdownContent(
-                            markdown = item.text,
+                            markdown = userText,
                             textColor = if (amoled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onPrimaryContainer,
                             isUser = true,
                         )
@@ -78,34 +82,44 @@ internal fun CodexTimelineItem(
                 }
             }
         }
-        "agentMessage" -> CodexTimelineMarkdown(item.text.orEmpty(), workspaceCwd, onOpenWorkspaceFile)
+        "agentMessage" -> Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (!item.text.isNullOrBlank()) CodexTimelineMarkdown(item.text, workspaceCwd, onOpenWorkspaceFile)
+            item.questions.forEach { question ->
+                if (question.title != item.text) CodexTimelineMarkdown(question.title, workspaceCwd, onOpenWorkspaceFile)
+                if (question.options.isNotEmpty()) Text(
+                    question.options.joinToString(" · "),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
         "imageGeneration" -> Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(stringResource(R.string.codex_image_generation), style = MaterialTheme.typography.labelMedium)
-            item.status?.let { Text(codexTimelineStatus(it), style = MaterialTheme.typography.bodySmall) }
+            displayStatus?.let { Text(codexTimelineStatus(it), style = MaterialTheme.typography.bodySmall) }
             CodexTimelineImages(item, loadRemoteImage)
-            if (item.timelineImages().isEmpty() && item.status == "completed") {
+            if (item.timelineImages().isEmpty() && displayStatus == "completed") {
                 Text(stringResource(R.string.codex_image_unavailable))
             }
         }
         "reasoning" -> CodexDisclosure(
             key = item.id ?: item.type,
-            title = stringResource(R.string.codex_thinking),
+            title = stringResource(if (turnStatus != null && !codexTurnIsRunning(turnStatus)) R.string.codex_turn_reasoning else R.string.codex_thinking),
             icon = Icons.Default.Psychology,
-            status = item.status,
+            status = displayStatus,
         ) {
             val summary = item.reasoningSummary.joinToString("\n\n").ifBlank { item.text.orEmpty() }
             if (summary.isNotBlank()) CodexTimelineMarkdown(summary, workspaceCwd, onOpenWorkspaceFile)
             val content = item.reasoningContent.joinToString("\n\n")
             if (content.isNotBlank() && content != summary) CodexTimelineMarkdown(content, workspaceCwd, onOpenWorkspaceFile)
         }
-        "plan" -> CodexDisclosure(item.id ?: item.type, stringResource(R.string.codex_timeline_plan), item.status) {
+        "plan" -> CodexDisclosure(item.id ?: item.type, stringResource(R.string.codex_timeline_plan), displayStatus) {
             CodexTimelineMarkdown(item.text.orEmpty(), workspaceCwd, onOpenWorkspaceFile)
         }
-        "fileChange" -> CodexDisclosure(item.id ?: item.type, stringResource(R.string.codex_tool_file_changes), item.status) {
+        "fileChange" -> CodexDisclosure(item.id ?: item.type, stringResource(R.string.codex_tool_file_changes), displayStatus) {
             if (item.fileChanges.isEmpty()) Text(stringResource(R.string.codex_timeline_details_unavailable))
             item.fileChanges.forEach { change -> CodexFileChangeRow(change) }
         }
-        "subAgentActivity" -> CodexSubAgentActivityRow(item, onOpenThread)
+        "subAgentActivity" -> CodexSubAgentActivityRow(if (item.status == displayStatus) item else item.copy(status = displayStatus), onOpenThread)
         "contextCompaction" -> Text(
             stringResource(R.string.codex_context_compacted),
             modifier = Modifier.padding(8.dp),
@@ -118,9 +132,10 @@ internal fun CodexTimelineItem(
                 "mcpToolCall" -> stringResource(R.string.codex_tool_mcp)
                 "webSearch" -> stringResource(R.string.codex_tool_web_search)
                 "collabAgentToolCall" -> stringResource(R.string.codex_tool_collaboration)
+                "dynamicToolCall" -> item.presentationField("tool") ?: item.presentationField("toolName") ?: stringResource(R.string.codex_tool_mcp)
                 else -> item.type.replaceFirstChar { it.uppercase() }
             }
-            CodexDisclosure(item.id ?: item.type, title, item.status) {
+            CodexDisclosure(item.id ?: item.type, title, displayStatus) {
                 val collaboration = item.collabAgentCall
                 if (collaboration != null) {
                     collaboration.prompt?.takeIf { it.isNotBlank() }?.let { CodexTimelineMarkdown(it, workspaceCwd, onOpenWorkspaceFile) }
@@ -296,6 +311,7 @@ private fun codexTimelineStatus(status: String): String = when (status) {
     "inProgress", "in_progress", "running" -> stringResource(R.string.codex_timeline_running)
     "pending" -> stringResource(R.string.codex_timeline_pending)
     "failed", "errored" -> stringResource(R.string.codex_timeline_failed)
+    "interrupted", "cancelled", "canceled" -> stringResource(R.string.codex_turn_stopped)
     "add", "added" -> stringResource(R.string.codex_timeline_added)
     "delete", "deleted" -> stringResource(R.string.codex_timeline_deleted)
     "update", "modified" -> stringResource(R.string.codex_timeline_modified)

@@ -38,11 +38,13 @@ internal fun CodexTimelineViewport(
     modifier: Modifier = Modifier,
     listState: LazyListState = rememberLazyListState(),
     onFollowTailChanged: (Boolean) -> Unit = {},
+    manualNavigationKey: Any? = null,
     content: LazyListScope.() -> Unit,
 ) {
     var followState by remember(listState) { mutableStateOf(ChatFollowTailState()) }
     val dragged by listState.interactionSource.collectIsDraggedAsState()
     var userScrollInProgress by remember(listState) { mutableStateOf(false) }
+    var lastManualNavigationKey by remember(listState) { mutableStateOf(manualNavigationKey) }
     val scope = rememberCoroutineScope()
     val atTail by remember(listState) {
         derivedStateOf {
@@ -66,6 +68,15 @@ internal fun CodexTimelineViewport(
         if (last != null) {
             val overflow = last.offset + last.size + layout.afterContentPadding - layout.viewportEndOffset
             if (overflow > 0) listState.scrollBy(overflow.toFloat())
+        }
+    }
+
+    // A deliberate disclosure click is navigation too: keep its reading anchor
+    // instead of pushing the newly expanded activity above the viewport.
+    LaunchedEffect(manualNavigationKey, listState) {
+        if (lastManualNavigationKey != manualNavigationKey) {
+            lastManualNavigationKey = manualNavigationKey
+            followState = ChatFollowTailPolicy.onManualNavigation(followState)
         }
     }
 
@@ -102,6 +113,31 @@ internal fun CodexTimelineViewport(
         if (transition.scrollToTail) scrollToTail()
     }
 
+    // Markdown/WebView/image measurement can finish after the model's content key has
+    // stopped changing. Keep the measured tail aligned too; otherwise a correct final
+    // reply can briefly appear and then move below the viewport on the later layout.
+    LaunchedEffect(listState) {
+        snapshotFlow {
+            val layout = listState.layoutInfo
+            val last = layout.visibleItemsInfo.lastOrNull()
+            CodexTailMeasurement(
+                itemCount = layout.totalItemsCount,
+                viewportEnd = layout.viewportEndOffset,
+                lastIndex = last?.index,
+                lastOffset = last?.offset,
+                lastSize = last?.size,
+                scrolling = listState.isScrollInProgress,
+                dragging = dragged,
+            )
+        }.collect { measured ->
+            if (measured.itemCount > 0 && !measured.scrolling && !measured.dragging &&
+                !userScrollInProgress && followState.isFollowing && !atTail
+            ) {
+                scrollToTail()
+            }
+        }
+    }
+
     Box(modifier) {
         LazyColumn(
             state = listState,
@@ -125,3 +161,13 @@ internal fun CodexTimelineViewport(
         }
     }
 }
+
+private data class CodexTailMeasurement(
+    val itemCount: Int,
+    val viewportEnd: Int,
+    val lastIndex: Int?,
+    val lastOffset: Int?,
+    val lastSize: Int?,
+    val scrolling: Boolean,
+    val dragging: Boolean,
+)

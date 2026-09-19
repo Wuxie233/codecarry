@@ -1169,6 +1169,43 @@ class CodexConnectionManagerTest {
     }
 
     @Test
+    fun `explicit resume refresh bypasses cached history and shares the in-flight recovery`() = runTest {
+        lateinit var transport: FakeTransport
+        val manager = CodexConnectionManager(
+            createClient = { FakeTransport().also { transport = it }.newClient(backgroundScope) },
+            scope = backgroundScope,
+        )
+        val acquiring = async { manager.acquire(server, "thread-1") }
+        runCurrent()
+        initialize(transport)
+        val lease = acquiring.await()
+        transport.takeSentObject()
+        val initial = async { manager.resumeThread(lease.connection, "thread-1") }
+        runCurrent()
+        val firstRequest = transport.takeSentObject()
+        transport.respond(firstRequest.getValue("id").jsonPrimitive, threadSession("thread-1"))
+        runCurrent()
+        initial.await()
+        val refresh = async { manager.resumeThread(lease.connection, "thread-1", forceRefresh = true) }
+        val secondWaiter = async { manager.resumeThread(lease.connection, "thread-1", forceRefresh = true) }
+        runCurrent()
+        val secondRequest = transport.takeSentObject()
+        assertEquals("thread/resume", secondRequest["method"]?.jsonPrimitive?.content)
+        assertNull(transport.tryTakeSentObject())
+        transport.respond(secondRequest.getValue("id").jsonPrimitive, json.parseToJsonElement("""
+            {"thread":{"id":"thread-1","turns":[{"id":"finished","status":"completed","items":[
+                {"id":"answer","type":"agentMessage","text":"Final restored answer","phase":"final_answer"}
+            ]}]},"model":"gpt-5","modelProvider":"openai","cwd":"/workspace"}
+        """))
+        runCurrent()
+        assertEquals("Final restored answer", refresh.await().thread.turns.single().items.single().text)
+        assertEquals(refresh.await().thread, secondWaiter.await().thread)
+        assertEquals(2, transport.resumeAttempts)
+        lease.close()
+        manager.closeForTest()
+    }
+
+    @Test
     fun `archive and unarchive invalidate the old thread subscription`() = runTest {
         lateinit var transport: FakeTransport
         val manager = CodexConnectionManager(

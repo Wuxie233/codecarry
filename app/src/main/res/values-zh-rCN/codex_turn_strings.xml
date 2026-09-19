@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="codex_turn_working">正在工作</string>
+    <string name="codex_turn_completed">已完成</string>
+    <string name="codex_turn_stopped">已停止</string>
+    <string name="codex_turn_failed">失败</string>
+    <string name="codex_turn_activity">过程</string>
+    <string name="codex_turn_reasoning">思考过程</string>
+    <string name="codex_turn_status_duration">%1$s · %2$s</string>
+    <string name="codex_turn_duration_seconds">%1$d 秒</string>
+    <string name="codex_turn_duration_minutes">%1$d 分 %2$d 秒</string>
+    <string name="codex_turn_duration_hours">%1$d 时 %2$d 分 %3$d 秒</string>
+</resources>

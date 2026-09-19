@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="codex_turn_working">Working</string>
+    <string name="codex_turn_completed">Worked</string>
+    <string name="codex_turn_stopped">Stopped</string>
+    <string name="codex_turn_failed">Failed</string>
+    <string name="codex_turn_activity">Activity</string>
+    <string name="codex_turn_reasoning">Thought process</string>
+    <string name="codex_turn_status_duration">%1$s · %2$s</string>
+    <string name="codex_turn_duration_seconds">%1$ds</string>
+    <string name="codex_turn_duration_minutes">%1$dm %2$ds</string>
+    <string name="codex_turn_duration_hours">%1$dh %2$dm %3$ds</string>
+</resources>

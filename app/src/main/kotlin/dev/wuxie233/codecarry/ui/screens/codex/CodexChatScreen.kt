@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -82,6 +83,8 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import dev.wuxie233.codecarry.ui.screens.chat.ChatResponseDockItem
+import dev.wuxie233.codecarry.ui.screens.chat.ChatResponseDockKind
 import androidx.hilt.navigation.compose.hiltViewModel
 import dev.wuxie233.codecarry.R
 import androidx.lifecycle.Lifecycle
@@ -151,6 +154,10 @@ fun CodexChatScreen(
     var memoryOpen by remember { mutableStateOf(false) }
     // Turns already carry stable immutable identities; flattening duplicates every historical item per delta.
     val timeline = state.thread?.turns.orEmpty()
+    val turnPresentationCache = remember(state.thread?.id) { CodexTurnPresentationCache() }
+    val presentedTurns = remember(timeline) { turnPresentationCache.project(timeline) }
+    var expandedTurns by rememberSaveable(state.thread?.id) { mutableStateOf(emptyMap<String, Boolean>()) }
+    var activityNavigationKey by remember(state.thread?.id) { mutableStateOf(0) }
 
     fun submitDraft() {
         if (
@@ -279,15 +286,23 @@ fun CodexChatScreen(
                             DropdownMenuItem(
                                 text = { Text(stringResource(R.string.codex_reconnect)) },
                                 leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null) },
-                                onClick = { menuExpanded = false; viewModel.connectAndLoad() },
+                                onClick = { menuExpanded = false; viewModel.reconnect() },
                             )
                         }
                 },
             )
         },
         bottomBar = {
-            val dockItems = remember(state.pendingRequests) {
-                buildCodexResponseDockItems(state.pendingRequests)
+            val interactiveRequests = remember(state.pendingRequests) {
+                state.pendingRequests.filterNot { it.method == "item/tool/call" }
+            }
+            val asyncGroups = remember(state.thread, state.asyncAnswers) {
+                state.asyncQuestions.filter { it.canAnswer }.groupBy { it.sourceItemId }
+            }
+            val dockItems = remember(interactiveRequests, asyncGroups) {
+                buildCodexResponseDockItems(interactiveRequests) + asyncGroups.keys.map {
+                    ChatResponseDockItem(ChatResponseDockKind.Question, "async:$it")
+                }
             }
             ChatResponseDock(
                 items = dockItems,
@@ -298,13 +313,28 @@ fun CodexChatScreen(
                     .imePadding()
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                 responseContent = { item ->
-                    val request = item.codexRequest(state.pendingRequests)
+                    val sourceItemId = item.ownershipId?.removePrefix("async:")
+                        ?.takeIf { item.ownershipId?.startsWith("async:") == true }
+                    val questions = asyncGroups[sourceItemId]
+                    if (!questions.isNullOrEmpty()) {
+                        CodexAsyncQuestionCard(
+                            questions = questions,
+                            enabled = state.isConnected,
+                            submitting = sourceItemId in state.submittingAsyncQuestionIds,
+                            error = state.asyncQuestionErrors[sourceItemId],
+                            onAnswer = { answers -> viewModel.answerAsyncQuestions(
+                                questions.first().turnId, questions.first().sourceItemId, answers,
+                            ) },
+                            modifier = Modifier.padding(bottom = 8.dp),
+                        )
+                    }
+                    val request = item.codexRequest(interactiveRequests)
                     if (request != null) {
                         val requestKey = request.id.requestKey()
                         Column(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
                             if (item == dockItems.first()) {
                                 Text(
-                                    stringResource(R.string.codex_chat_pending_count, state.pendingRequests.size),
+                                    stringResource(R.string.codex_chat_pending_count, dockItems.size),
                                     style = MaterialTheme.typography.labelMedium,
                                 )
                             }
@@ -424,9 +454,10 @@ fun CodexChatScreen(
                     modifier = Modifier.padding(16.dp),
                 )
                 else -> CodexTimelineViewport(
-                    contentKey = listOf(timeline, state.plans, state.diffs, state.activeTurnId, state.error, state.threadFailure, state.turnFailures),
+                    contentKey = listOf(presentedTurns, expandedTurns, state.plans, state.diffs, state.activeTurnId, state.error, state.threadFailure, state.turnFailures),
                     modifier = Modifier.fillMaxSize(),
                     onFollowTailChanged = viewModel::onFollowTailChanged,
+                    manualNavigationKey = activityNavigationKey,
                 ) {
                     state.error?.let { error ->
                         item("operation-error") {
@@ -445,15 +476,42 @@ fun CodexChatScreen(
                     state.threadFailure?.let { failure ->
                         item("thread-error") { CodexFailureNotice(failure) }
                     }
-                    state.thread?.turns.orEmpty().forEach { turn ->
-                        items(turn.items, key = { item -> "${turn.id}:${item.id ?: item.type}" }) { item ->
+                    presentedTurns.forEach { presentation ->
+                        val turn = presentation.turn
+                        val expanded = expandedTurns[turn.id] ?: presentation.defaultExpanded
+                        itemsIndexed(presentation.userItems, key = { index, item -> "${turn.id}:${item.id ?: "user:$index"}" }) { _, item ->
                             CodexTimelineItem(
                                 item = item,
+                                turnStatus = turn.status,
                                 onOpenThread = onOpenThread,
                                 loadRemoteImage = viewModel::loadRemoteImage,
                                 workspaceCwd = state.thread?.cwd,
                                 onOpenWorkspaceFile = viewModel::openWorkspaceFile,
                             )
+                        }
+                        item("activity-header:${turn.id}") {
+                            CodexTurnActivityHeader(
+                                turn = turn,
+                                hasActivity = presentation.activityItems.isNotEmpty(),
+                                expanded = expanded,
+                                onToggle = {
+                                    activityNavigationKey++
+                                    expandedTurns = expandedTurns + (turn.id to !expanded)
+                                },
+                            )
+                        }
+                        val visibleActivity = if (expanded) presentation.activityItems else emptyList()
+                        listOf("activity" to visibleActivity, "answer" to presentation.answerItems).forEach { (group, items) ->
+                            itemsIndexed(items, key = { index, item -> "${turn.id}:${item.id ?: "$group:$index"}" }) { _, item ->
+                                CodexTimelineItem(
+                                    item = item,
+                                    turnStatus = turn.status,
+                                    onOpenThread = onOpenThread,
+                                    loadRemoteImage = viewModel::loadRemoteImage,
+                                    workspaceCwd = state.thread?.cwd,
+                                    onOpenWorkspaceFile = viewModel::openWorkspaceFile,
+                                )
+                            }
                         }
                         state.turnFailures[turn.id]?.let { failure ->
                             item("turn-error:${turn.id}") { CodexFailureNotice(failure) }
@@ -483,7 +541,7 @@ fun CodexChatScreen(
                             }
                         }
                     }
-                    if (state.activeTurnId != null && state.thread?.turns?.lastOrNull { it.id == state.activeTurnId }?.items.orEmpty().none { it.type == "agentMessage" && it.text.isNullOrEmpty() }) {
+                    if (state.activeTurnId != null && timeline.none { it.id == state.activeTurnId }) {
                         item("working") {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)

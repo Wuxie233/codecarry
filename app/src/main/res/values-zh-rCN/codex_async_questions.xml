@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="codex_async_question_title">回答问题</string>
+    <string name="codex_async_answered">已回答：%1$s</string>
+    <string name="codex_async_question_expired">这一轮已结束，无法再回答此问题。</string>
+    <string name="codex_async_answer_sending">正在发送…</string>
+    <string name="codex_async_answer_unavailable">此问题已无法回答，请刷新对话后重试。</string>
+</resources>

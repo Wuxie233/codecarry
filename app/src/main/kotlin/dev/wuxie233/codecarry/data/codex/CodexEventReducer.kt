@@ -392,45 +392,106 @@ private fun CodexThread.mergeMetadata(incoming: CodexThread, baseline: CodexThre
         }
     ) status else incoming.status,
     turns = turns.mergeOrderedSnapshot(incoming.turns, CodexTurn::id) { live, snapshot ->
-        live.mergeSnapshot(snapshot)
+        live.mergeSnapshot(snapshot, baseline?.turns?.firstOrNull { it.id == live.id })
     },
 )
 
-private fun CodexTurn.mergeSnapshot(incoming: CodexTurn): CodexTurn = incoming.copy(
+private fun CodexTurn.mergeSnapshot(incoming: CodexTurn, baseline: CodexTurn?): CodexTurn = incoming.copy(
     status = if (status in terminalTurnStatuses && incoming.status !in terminalTurnStatuses) status else incoming.status,
     error = if (status in terminalTurnStatuses && incoming.status !in terminalTurnStatuses) error else incoming.error,
+    startedAt = startedAt ?: incoming.startedAt,
     completedAt = completedAt ?: incoming.completedAt,
     durationMs = durationMs ?: incoming.durationMs,
     items = items.mergeOrderedSnapshot(incoming.items, CodexThreadItem::id) { live, snapshot ->
-        live.mergeSnapshot(snapshot)
+        live.mergeSnapshot(snapshot, baseline?.items?.firstOrNull { it.id != null && it.id == live.id })
     },
 )
 
-/** Full history supplies ordering; live-only entries arrived after that snapshot. */
+/** Keep snapshot order, but retain stream-only items next to their known neighbours.
+ * A persisted history can omit dynamic tools; those tools did not arrive after the final answer.
+ * Anonymous items match only equal occurrences, never every null id as one shared identity. */
 private fun <T, K> List<T>.mergeOrderedSnapshot(
     incoming: List<T>,
     key: (T) -> K,
     merge: (T, T) -> T,
 ): List<T> {
-    val remaining = associateByTo(linkedMapOf(), key)
-    return incoming.map { snapshot ->
-        remaining.remove(key(snapshot))?.let { live -> merge(live, snapshot) } ?: snapshot
-    } + remaining.values
+    if (incoming.isEmpty()) return this
+    if (isEmpty()) return incoming
+    val liveByKey = indices.filter { key(this[it]) != null && key(this[it]) != "" }
+        .groupBy { key(this[it]) }.mapValues { (_, indices) -> ArrayDeque(indices) }
+    val anonymous = indices.filter { key(this[it]) == null || key(this[it]) == "" }.toMutableList()
+    val matched = IntArray(size) { -1 }
+    val snapshots = incoming.mapIndexed { snapshotIndex, snapshot ->
+        val identity = key(snapshot)
+        val liveIndex = if (identity != null && identity != "") {
+            liveByKey[identity]?.removeFirstOrNull()
+        } else {
+            anonymous.firstOrNull { this[it] == snapshot }?.also { anonymous.remove(it) }
+        }
+        if (liveIndex == null) snapshot else {
+            matched[liveIndex] = snapshotIndex
+            merge(this[liveIndex], snapshot)
+        }
+    }
+    val before = mutableMapOf<Int, MutableList<T>>()
+    val after = mutableMapOf<Int, MutableList<T>>()
+    var nextAnchor = -1
+    val nextAnchors = IntArray(size)
+    for (index in indices.reversed()) {
+        if (matched[index] >= 0) nextAnchor = matched[index]
+        nextAnchors[index] = nextAnchor
+    }
+    var previousAnchor = -1
+    val unanchored = mutableListOf<T>()
+    forEachIndexed { index, live ->
+        when {
+            matched[index] >= 0 -> previousAnchor = matched[index]
+            nextAnchors[index] >= 0 -> before.getOrPut(nextAnchors[index]) { mutableListOf() }.add(live)
+            previousAnchor >= 0 -> after.getOrPut(previousAnchor) { mutableListOf() }.add(live)
+            else -> unanchored.add(live)
+        }
+    }
+    return buildList {
+        snapshots.forEachIndexed { index, snapshot ->
+            addAll(before[index].orEmpty())
+            add(snapshot)
+            addAll(after[index].orEmpty())
+        }
+        addAll(unanchored)
+    }
 }
 
 private val terminalTurnStatuses = setOf("completed", "failed", "interrupted")
 
-private fun CodexThreadItem.mergeSnapshot(incoming: CodexThreadItem): CodexThreadItem = incoming.copy(
-    raw = if (type == "imageGeneration" && advancesCompletionOf(incoming)) raw else incoming.raw,
-    extra = if (type == "imageGeneration" && advancesCompletionOf(incoming)) extra else incoming.extra,
+private fun CodexThreadItem.mergeSnapshot(incoming: CodexThreadItem, baseline: CodexThreadItem?): CodexThreadItem = incoming.copy(
+    raw = mergeSnapshotFields(raw, incoming.raw, baseline?.raw, advancesCompletionOf(incoming)),
+    extra = mergeSnapshotFields(extra, incoming.extra, baseline?.extra, advancesCompletionOf(incoming)),
     status = if (advancesCompletionOf(incoming)) status else incoming.status,
+    phase = if (phase != baseline?.phase) phase else incoming.phase ?: phase,
+    delivery = if (delivery != baseline?.delivery) delivery else incoming.delivery ?: delivery,
+    questions = if (questions != baseline?.questions.orEmpty()) questions
+        else if (incoming.questions.isEmpty() && "questions" !in incoming.raw) questions else incoming.questions,
     fileChanges = if (incoming.advancesCompletionOf(this)) incoming.fileChanges else fileChanges.ifEmpty { incoming.fileChanges },
     collabAgentCall = if (incoming.advancesCompletionOf(this)) incoming.collabAgentCall else collabAgentCall ?: incoming.collabAgentCall,
-    text = existingStreamValue(text, incoming.text),
-    output = existingStreamValue(output, incoming.output),
+    text = if (text != baseline?.text) text else existingStreamValue(text, incoming.text),
+    output = if (output != baseline?.output) output else existingStreamValue(output, incoming.output),
     reasoningSummary = reasoningSummary.mergeStreamParts(incoming.reasoningSummary),
     reasoningContent = reasoningContent.mergeStreamParts(incoming.reasoningContent),
 )
+
+/** Sparse snapshots cannot erase phase, delivery, questions or generated image bytes.
+ * Fields changed while the request was in flight remain owned by the live stream. */
+private fun mergeSnapshotFields(
+    live: JsonObject,
+    incoming: JsonObject,
+    baseline: JsonObject?,
+    preserveLive: Boolean,
+): JsonObject = JsonObject((live + incoming).mapValues { (key, snapshotValue) ->
+    val liveValue = live[key]
+    if (liveValue != null && (preserveLive || liveValue != baseline?.get(key))) {
+        liveValue
+    } else snapshotValue
+})
 
 private fun CodexThreadItem.advancesCompletionOf(existing: CodexThreadItem): Boolean {
     val terminal = setOf("completed", "failed", "declined", "interrupted")
@@ -444,21 +505,30 @@ private fun CodexThread.upsertTurn(turn: CodexTurn, authoritative: Boolean): Cod
 }
 
 private fun CodexTurn.mergeStarted(incoming: CodexTurn): CodexTurn = incoming.copy(
+    startedAt = startedAt ?: incoming.startedAt,
+    completedAt = completedAt ?: incoming.completedAt,
+    durationMs = durationMs ?: incoming.durationMs,
     status = if (status in terminalTurnStatuses && incoming.status !in terminalTurnStatuses) status else incoming.status,
     error = if (status in terminalTurnStatuses && incoming.status !in terminalTurnStatuses) error else incoming.error,
     items = incoming.items.fold(items) { current, item ->
-        val existing = current.firstOrNull { candidate -> candidate.id == item.id }
+        val existing = current.firstOrNull { candidate -> item.id != null && candidate.id == item.id }
         current.upsertBy(CodexThreadItem::id, existing?.mergeStarted(item) ?: item)
     },
 )
 
 private fun CodexTurn.upsertItem(item: CodexThreadItem, authoritative: Boolean): CodexTurn {
-    val existing = items.firstOrNull { candidate -> candidate.id == item.id }
+    val existing = items.firstOrNull { candidate -> item.id != null && candidate.id == item.id }
     val resolved = if (authoritative || existing == null) item else existing.mergeStarted(item)
     return copy(items = items.upsertBy(CodexThreadItem::id, resolved))
 }
 
 private fun CodexThreadItem.mergeStarted(incoming: CodexThreadItem): CodexThreadItem = incoming.copy(
+    phase = if (phase == "final_answer") phase else incoming.phase ?: phase,
+    delivery = delivery ?: incoming.delivery,
+    questions = questions.ifEmpty { incoming.questions },
+    raw = mergeSnapshotFields(raw, incoming.raw, raw, advancesCompletionOf(incoming)),
+    extra = mergeSnapshotFields(extra, incoming.extra, extra, advancesCompletionOf(incoming)),
+    status = if (advancesCompletionOf(incoming)) status else incoming.status,
     fileChanges = fileChanges.ifEmpty { incoming.fileChanges },
     collabAgentCall = collabAgentCall ?: incoming.collabAgentCall,
     text = incoming.text?.takeIf(String::isNotEmpty) ?: text,
@@ -468,7 +538,9 @@ private fun CodexThreadItem.mergeStarted(incoming: CodexThreadItem): CodexThread
 )
 
 private fun <T, K> List<T>.upsertBy(key: (T) -> K, value: T): List<T> {
-    val index = indexOfFirst { candidate -> key(candidate) == key(value) }
+    val identity = key(value)
+    val index = if (identity == null || identity == "") indexOf(value)
+        else indexOfFirst { candidate -> key(candidate) == identity }
     return if (index < 0) this + value else toMutableList().apply { this[index] = value }
 }
 
