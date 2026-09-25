@@ -1,0 +1,8 @@
+<resources>
+    <string name="codex_rewrite_confirmation">This removes the selected turn and all later conversation before sending again. Changes already made to files are not undone.</string>
+    <string name="codex_rewrite_confirm">Continue</string>
+    <string name="codex_rewrite_uncertain">The rollback result is not confirmed. Check its status before sending again.</string>
+    <string name="codex_rewrite_check">Check rollback status</string>
+    <string name="codex_rewrite_attachments_missing">Some attachments could not be restored. Add them again, or confirm that you want to continue without them.</string>
+    <string name="codex_rewrite_attachments_reviewed">Attachments reviewed, continue</string>
+</resources>

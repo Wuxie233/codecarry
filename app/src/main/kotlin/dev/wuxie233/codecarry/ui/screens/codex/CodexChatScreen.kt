@@ -22,6 +22,9 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.selection.toggleable
@@ -93,7 +96,6 @@ import dev.wuxie233.codecarry.data.codex.CodexApprovalKind
 import dev.wuxie233.codecarry.data.codex.CodexMemoryMode
 import dev.wuxie233.codecarry.data.codex.CodexServerRequest
 import dev.wuxie233.codecarry.data.codex.CodexToolUserInputQuestion
-import dev.wuxie233.codecarry.ui.screens.chat.ChatHeader
 import dev.wuxie233.codecarry.ui.screens.chat.ChatResponseDock
 import dev.wuxie233.codecarry.ui.screens.chat.chatComposerPrimaryWidth
 import dev.wuxie233.codecarry.ui.screens.chat.isAmoledTheme
@@ -152,10 +154,16 @@ fun CodexChatScreen(
     var renameOpen by remember { mutableStateOf(false) }
     var goalOpen by remember { mutableStateOf(false) }
     var memoryOpen by remember { mutableStateOf(false) }
+    var editConfirmOpen by remember { mutableStateOf(false) }
+    var retryConfirmOpen by remember { mutableStateOf(false) }
+    var confirmedEditItemId by remember { mutableStateOf<String?>(null) }
+    var confirmedRetryTurnId by remember { mutableStateOf<String?>(null) }
     // Turns already carry stable immutable identities; flattening duplicates every historical item per delta.
     val timeline = state.thread?.turns.orEmpty()
     val turnPresentationCache = remember(state.thread?.id) { CodexTurnPresentationCache() }
     val presentedTurns = remember(timeline) { turnPresentationCache.project(timeline) }
+    val dockQuestionSources = state.asyncQuestions.filter { it.canAnswer }
+        .map { it.turnId to it.sourceItemId }.toSet()
     var expandedTurns by rememberSaveable(state.thread?.id) { mutableStateOf(emptyMap<String, Boolean>()) }
     var activityNavigationKey by remember(state.thread?.id) { mutableStateOf(0) }
 
@@ -165,11 +173,16 @@ fun CodexChatScreen(
             !state.isLoading &&
             state.isConnected &&
             state.thread != null &&
-            !state.isSending &&
+            !state.isSending && !state.isRewritingHistory && !state.isHistoryRewriteUncertain &&
+            !state.isHistoryAttachmentRecoveryRequired &&
             !state.isAwaitingAuthoritativeTurn &&
             !state.isSendConfirmationPending
         ) {
-            viewModel.sendMessage(draft, attachments)
+            if (state.editingMessage != null) {
+                confirmedEditItemId = state.editingMessage?.itemId
+                editConfirmOpen = true
+            }
+            else viewModel.sendMessage(draft, attachments)
         }
     }
 
@@ -213,38 +226,27 @@ fun CodexChatScreen(
 
     Scaffold(
         topBar = {
-            ChatHeader(
+            CodexChatHeader(
                 title = state.thread?.displayTitle?.take(72)
                     ?: stringResource(R.string.codex_title),
                 context = state.thread?.cwd.orEmpty(),
-                backendLabel = stringResource(R.string.codex_title),
-                statusLabel = stringResource(when {
+                status = stringResource(when {
                     state.isLoading -> R.string.codex_opening_thread
                     !state.isConnected -> R.string.codex_chat_disconnected
                     state.isSendConfirmationPending -> R.string.codex_send_confirmation_pending
                     state.isAwaitingAuthoritativeTurn -> R.string.codex_chat_waiting_turn
-                    state.activeTurnId != null -> R.string.codex_working
+                    state.activeTurnId != null || state.isRewritingHistory -> R.string.codex_working
                     else -> R.string.codex_chat_ready
                 }),
-                usageSummary = null,
-                additionalActions = {
-                    CodexUsageAction(usage, onClick = {
-                        usageOpen = true
-                        viewModel.refreshUsage()
-                    })
-                },
-                canStop = state.activeTurnId != null,
-                showSubagents = true,
-                runningSubagentCount = state.relatedThreads.count { it.id != state.thread?.id && it.status.type == "active" },
-                showTerminal = false,
-                showOverflow = true,
                 onNavigateBack = onNavigateBack,
-                onStop = viewModel::interruptTurn,
-                onToggleSubagents = { relatedOpen = true; viewModel.refreshRelatedThreads() },
-                onOpenTerminal = {},
+                onOpenStatus = { statusOpen = true },
                 onOpenOverflow = { menuExpanded = true },
                 overflowMenu = {
                         DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.codex_usage_title)) },
+                                onClick = { menuExpanded = false; usageOpen = true; viewModel.refreshUsage() },
+                            )
                             DropdownMenuItem(
                                 text = { Text(stringResource(R.string.chat_subagents_title)) },
                                 onClick = { menuExpanded = false; relatedOpen = true; viewModel.refreshRelatedThreads() },
@@ -304,13 +306,13 @@ fun CodexChatScreen(
                     ChatResponseDockItem(ChatResponseDockKind.Question, "async:$it")
                 }
             }
-            ChatResponseDock(
+            Box(Modifier.fillMaxWidth().navigationBarsPadding().imePadding(), contentAlignment = Alignment.TopCenter) {
+            CodexResponseDock(
                 items = dockItems,
                 modifier = Modifier
+                    .widthIn(max = 960.dp)
                     .chatComposerPrimaryWidth()
                     .fillMaxWidth()
-                    .navigationBarsPadding()
-                    .imePadding()
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                 responseContent = { item ->
                     val sourceItemId = item.ownershipId?.removePrefix("async:")
@@ -370,6 +372,28 @@ fun CodexChatScreen(
                     }
                 },
                 composerContent = {
+                    if (state.isHistoryAttachmentRecoveryRequired) {
+                        CodexAttachmentRecoveryNotice(
+                            enabled = !state.isRewritingHistory && !state.isHistoryRewriteUncertain,
+                            onReviewed = viewModel::confirmHistoryAttachmentsReviewed,
+                        )
+                    }
+                    if (state.isHistoryRewriteUncertain) {
+                        Text(stringResource(R.string.codex_rewrite_uncertain),
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        TextButton(onClick = viewModel::recheckHistoryRewrite, enabled = state.isConnected && !state.isRewritingHistory) {
+                            Text(stringResource(R.string.codex_rewrite_check))
+                        }
+                    }
+                    if (state.editingMessage != null) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Text(stringResource(R.string.codex_message_edit), Modifier.weight(1f),
+                                style = MaterialTheme.typography.labelLarge)
+                            TextButton(onClick = viewModel::cancelEditing, enabled = !state.isRewritingHistory) {
+                                Text(stringResource(R.string.cancel))
+                            }
+                        }
+                    }
                     if (state.isSendConfirmationPending) {
                         Column(
                             modifier = Modifier.padding(bottom = 8.dp),
@@ -399,7 +423,7 @@ fun CodexChatScreen(
                     }
                     CodexAttachmentChips(
                         attachments,
-                        enabled = !state.isSending && !state.isSendConfirmationPending,
+                        enabled = !state.isSending && !state.isSendConfirmationPending && !state.isRewritingHistory,
                         onRemove = viewModel::removeAttachment,
                     )
                     if (slashSkillQuery != null) {
@@ -408,7 +432,7 @@ fun CodexChatScreen(
                             skills = state.skills,
                             loading = state.skillsLoading,
                             error = state.skillsError,
-                            enabled = state.isConnected && !state.isSending && !state.isSendConfirmationPending,
+                            enabled = state.isConnected && !state.isSending && !state.isSendConfirmationPending && !state.isRewritingHistory,
                             onRetry = viewModel::loadSkills,
                             onSelect = { viewModel.selectSlashSkill(it, composerValue) },
                         )
@@ -419,14 +443,20 @@ fun CodexChatScreen(
                         placeholder = stringResource(if (state.activeTurnId != null) R.string.codex_chat_steer_hint else R.string.codex_message_hint),
                         canSend = (draft.isNotBlank() || attachments.isNotEmpty()) &&
                             !state.isLoading && state.isConnected && state.thread != null &&
-                            !state.isSending && !state.isAwaitingAuthoritativeTurn && !state.isSendConfirmationPending,
-                        isSending = state.isSending || state.isAwaitingAuthoritativeTurn,
+                            !state.isSending && !state.isAwaitingAuthoritativeTurn && !state.isSendConfirmationPending &&
+                            !state.isRewritingHistory && !state.isHistoryRewriteUncertain &&
+                            !state.isHistoryAttachmentRecoveryRequired,
+                        isSending = state.isSending || state.isAwaitingAuthoritativeTurn || state.isRewritingHistory,
+                        enabled = !state.isRewritingHistory,
+                        canStop = state.activeTurnId != null && state.isConnected,
+                        stopLabel = stringResource(R.string.codex_stop_turn),
+                        onStop = viewModel::interruptTurn,
                         sendLabel = stringResource(if (state.activeTurnId != null) R.string.codex_chat_steer else R.string.chat_send),
                         onSend = ::submitDraft,
                         controls = {
                             CodexComposerControlRow(
                                 state = state,
-                                attachmentsEnabled = !state.isSending &&
+                                attachmentsEnabled = !state.isSending && !state.isRewritingHistory &&
                                     !state.isSendConfirmationPending &&
                                     attachments.size < 8,
                                 onAddAttachment = viewModel::addAttachment,
@@ -437,11 +467,12 @@ fun CodexChatScreen(
                                 onFast = viewModel::toggleFast,
                                 onRetryModels = viewModel::retryModelsLoad,
                             )
-                            CodexFastNotice(state, onDismiss = viewModel::dismissFastHint)
                         },
                     )
+                    CodexFastNotice(state, onDismiss = viewModel::dismissFastHint)
                 },
             )
+            }
         },
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
@@ -479,6 +510,7 @@ fun CodexChatScreen(
                     presentedTurns.forEach { presentation ->
                         val turn = presentation.turn
                         val expanded = expandedTurns[turn.id] ?: presentation.defaultExpanded
+                        val activityItems = presentation.activityItems.filterNot { (turn.id to it.id) in dockQuestionSources }
                         itemsIndexed(presentation.userItems, key = { index, item -> "${turn.id}:${item.id ?: "user:$index"}" }) { _, item ->
                             CodexTimelineItem(
                                 item = item,
@@ -487,12 +519,18 @@ fun CodexChatScreen(
                                 loadRemoteImage = viewModel::loadRemoteImage,
                                 workspaceCwd = state.thread?.cwd,
                                 onOpenWorkspaceFile = viewModel::openWorkspaceFile,
+                                onEdit = item.id?.takeIf { id -> state.canRewriteHistory &&
+                                    state.thread?.let { planCodexMessageEdit(it, id) } != null }
+                                    ?.let { id -> { viewModel.beginEditMessage(id) } },
+                                onRetry = if (state.canRetryLastResponse && turn.id == timeline.lastOrNull()?.id &&
+                                    presentation.answerItems.none { it.type == "agentMessage" } && item == presentation.userItems.firstOrNull())
+                                    ({ confirmedRetryTurnId = turn.id; retryConfirmOpen = true }) else null,
                             )
                         }
                         item("activity-header:${turn.id}") {
                             CodexTurnActivityHeader(
                                 turn = turn,
-                                hasActivity = presentation.activityItems.isNotEmpty(),
+                                hasActivity = activityItems.isNotEmpty(),
                                 expanded = expanded,
                                 onToggle = {
                                     activityNavigationKey++
@@ -500,7 +538,8 @@ fun CodexChatScreen(
                                 },
                             )
                         }
-                        val visibleActivity = if (expanded) presentation.activityItems else emptyList()
+                        // A pending question has one interactive home. Keep answered/expired items in history.
+                        val visibleActivity = if (expanded) activityItems else emptyList()
                         listOf("activity" to visibleActivity, "answer" to presentation.answerItems).forEach { (group, items) ->
                             itemsIndexed(items, key = { index, item -> "${turn.id}:${item.id ?: "$group:$index"}" }) { _, item ->
                                 CodexTimelineItem(
@@ -510,6 +549,10 @@ fun CodexChatScreen(
                                     loadRemoteImage = viewModel::loadRemoteImage,
                                     workspaceCwd = state.thread?.cwd,
                                     onOpenWorkspaceFile = viewModel::openWorkspaceFile,
+                                    onRetry = if (state.canRetryLastResponse && turn.id == timeline.lastOrNull()?.id &&
+                                        item == presentation.answerItems.lastOrNull { it.type == "agentMessage" })
+                                        ({ confirmedRetryTurnId = turn.id; retryConfirmOpen = true }) else null,
+                                    onQuote = viewModel::quoteMessage,
                                 )
                             }
                         }
@@ -555,11 +598,31 @@ fun CodexChatScreen(
         }
     }
 
+    if (editConfirmOpen || retryConfirmOpen) AlertDialog(
+        onDismissRequest = { editConfirmOpen = false; retryConfirmOpen = false },
+        title = { Text(stringResource(if (editConfirmOpen) R.string.codex_message_edit else R.string.codex_message_retry)) },
+        text = { Text(stringResource(R.string.codex_rewrite_confirmation)) },
+        confirmButton = {
+            TextButton(onClick = {
+                val editing = editConfirmOpen
+                editConfirmOpen = false
+                retryConfirmOpen = false
+                if (editing) viewModel.sendMessage(draft, attachments) else viewModel.retryLastResponse()
+            }, enabled = if (editConfirmOpen) state.canRewriteHistory && state.editingMessage?.itemId == confirmedEditItemId
+                else state.canRetryLastResponse && timeline.lastOrNull()?.id == confirmedRetryTurnId
+            ) { Text(stringResource(R.string.codex_rewrite_confirm)) }
+        },
+        dismissButton = { TextButton(onClick = { editConfirmOpen = false; retryConfirmOpen = false }) {
+            Text(stringResource(R.string.cancel))
+        } },
+    )
+
     if (statusOpen) AlertDialog(
         onDismissRequest = { statusOpen = false },
         title = { Text(stringResource(R.string.codex_chat_status)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                state.thread?.cwd?.takeIf(String::isNotBlank)?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                 CodexGoalStatus(state.goalState, onRetry = viewModel::retryGoalLoad)
                 when (val receipt = state.memoryModeReceipt) {
                     null -> Text(stringResource(R.string.codex_memory_unknown_line))
@@ -758,21 +821,6 @@ internal fun CodexComposerControlRow(
     onRetryModels: () -> Unit = {},
 ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Row(
-            modifier = Modifier
-                .weight(1f)
-                .horizontalScroll(rememberScrollState()),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            CodexModelControls(state, onModel, onEffort, onRetryModels)
-            CodexFastChip(
-                enabled = state.fastEnabled,
-                available = (state.fastAvailable || state.fastEnabled) && state.isConnected && !state.isLoading && !state.isSending,
-                pending = state.fastPending,
-                onClick = onFast,
-            )
-        }
         CodexAttachmentPicker(
             enabled = attachmentsEnabled,
             skills = state.skills,
@@ -785,6 +833,22 @@ internal fun CodexComposerControlRow(
             onSearchFiles = onSearchFiles,
             onAdd = onAddAttachment,
         )
+        Row(
+            modifier = Modifier
+                .weight(1f)
+                .horizontalScroll(rememberScrollState()),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            CodexModelControls(state, onModel, onEffort, onRetryModels)
+            CodexFastChip(
+                enabled = state.fastEnabled,
+                available = (state.fastAvailable || state.fastEnabled) && state.isConnected && !state.isLoading && !state.isSending && !state.isRewritingHistory,
+                pending = state.fastPending,
+                onClick = onFast,
+            )
+        }
+
     }
 }
 
@@ -839,6 +903,7 @@ internal fun CodexModelControls(
         CodexComposerChip(
             label = modelLabel,
             onClick = { modelsOpen = true },
+            enabled = !state.isRewritingHistory,
         )
         DropdownMenu(expanded = modelsOpen, onDismissRequest = { modelsOpen = false }) {
             state.models.filterNot { it.hidden }.forEach { model ->
@@ -866,6 +931,7 @@ internal fun CodexModelControls(
                 label = state.selectedEffort?.replaceFirstChar { it.uppercase() }
                     ?: stringResource(R.string.codex_reasoning),
                 onClick = { effortOpen = true },
+                enabled = !state.isRewritingHistory,
                 emphasized = state.selectedEffort != null,
             )
             DropdownMenu(expanded = effortOpen, onDismissRequest = { effortOpen = false }) {
@@ -895,25 +961,26 @@ private fun CodexComposerChip(
     label: String,
     onClick: () -> Unit,
     emphasized: Boolean = false,
+    enabled: Boolean = true,
 ) {
-    val color = if (emphasized) {
-        MaterialTheme.colorScheme.tertiary
-    } else {
-        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-    }
+    val color = if (emphasized) MaterialTheme.colorScheme.onSurface
+        else MaterialTheme.colorScheme.onSurfaceVariant
     Row(
         modifier = Modifier
-            .clip(RoundedCornerShape(6.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 3.dp, vertical = 3.dp),
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(enabled = enabled, onClick = onClick)
+            .heightIn(min = 48.dp)
+            .padding(horizontal = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(3.dp),
     ) {
         Text(
             text = label,
-            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.widthIn(max = 132.dp),
+            style = MaterialTheme.typography.labelMedium,
             color = color,
             maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
         Icon(
             Icons.Default.UnfoldMore,

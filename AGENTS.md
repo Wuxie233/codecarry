@@ -1,4 +1,4 @@
-# OC Remote Agent Notes
+# CodeCarry Agent Notes
 
 The current product identity is CodeCarry. It is an independently maintained
 fork based on OC Remote; the Android namespace/applicationId is
@@ -217,8 +217,9 @@ fork based on OC Remote; the Android namespace/applicationId is
   including trailing spaces, when starting a thread.
 - Codex composer Enter inserts a newline. Keep submission on the explicit send
   button rather than wiring the text field IME action to submit.
-- Codex and native chat share `ChatHeader`, `ChatResponseDock`, and
-  `ProcessDisclosureRow` presentation. Codex `item/tool/requestUserInput`
+- Codex owns its compact `CodexChatHeader`, height-bounded `CodexResponseDock`,
+  and composer shell; it shares `ProcessDisclosureRow` with native chat.
+  Codex `item/tool/requestUserInput`
   uses the DSH question-card grammar (instant single-select, explicit submit
   for batch/custom, secret masking) and the native response dock; answers stay
   the Codex `{ answers: { id: { answers: [...] } } }` wire. Preserve native
@@ -393,3 +394,15 @@ Before applying triage labels, read `docs/agents/triage-labels.md`.
 ### Domain docs
 Use a single-context layout.
 Before domain exploration, read `docs/agents/domain.md`.
+
+- Codex message edits use `thread/revert` with `beforeTurnId` on completed
+  whole turns before resubmission. Its response contains metadata with empty
+  turns; hydrate and validate retained history before sending. Fall back to
+  legacy `thread/rollback` only on an explicit unsupported-method rejection. Never simulate editing by appending the changed text to the
+  old history. Preserve raw attachments and the pre-edit composer draft;
+  rollback does not revert filesystem changes. Lost rollback receipts require
+  read-only reconciliation, never automatic replay.
+- Legacy Codex async snapshots may use `item-N` while live events use `call_*`.
+  Reconcile only unambiguous same-turn identities and retain confirmed aliases
+  across subsequent item updates. Equal question text alone does not establish
+  identity, and separate calls must remain separate questions.

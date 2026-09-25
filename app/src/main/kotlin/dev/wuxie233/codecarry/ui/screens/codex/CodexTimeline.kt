@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -57,30 +58,35 @@ internal fun CodexTimelineItem(
     loadRemoteImage: suspend (String) -> ByteArray = { error("Remote image reader unavailable") },
     workspaceCwd: String? = null,
     onOpenWorkspaceFile: (String) -> Unit = {},
+    onEdit: (() -> Unit)? = null,
+    onRetry: (() -> Unit)? = null,
+    onQuote: ((String) -> Unit)? = null,
 ) {
     val amoled = isAmoledTheme()
     val displayStatus = codexItemPresentationStatus(item, turnStatus)
     when (item.type) {
-        "userMessage", "steeringUserMessage" -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+        "userMessage", "steeringUserMessage" -> Column(
+            Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End,
+        ) {
+            val userText = codexAsyncReplyDisplayText(item) ?: item.text
             Surface(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(topStart = 18.dp, topEnd = 4.dp, bottomStart = 18.dp, bottomEnd = 18.dp),
-                color = if (amoled) Color.Black else MaterialTheme.colorScheme.primaryContainer,
-                border = if (amoled) BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)) else null,
-                tonalElevation = if (amoled) 0.dp else 1.dp,
+                modifier = Modifier.widthIn(max = 640.dp).padding(start = 28.dp),
+                shape = RoundedCornerShape(22.dp),
+                color = if (amoled) Color.Black else MaterialTheme.colorScheme.surfaceContainerHigh,
+                border = if (amoled) BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant) else null,
             ) {
-                Column(Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
-                    val userText = codexAsyncReplyDisplayText(item) ?: item.text
+                Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
                     if (!userText.isNullOrBlank()) ChatMarkdownLinkEnvironment(workspaceCwd, onOpenWorkspaceFile) {
                         MessageMarkdownContent(
                             markdown = userText,
-                            textColor = if (amoled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onPrimaryContainer,
+                            textColor = MaterialTheme.colorScheme.onSurface,
                             isUser = true,
                         )
                     }
                     CodexTimelineImages(item, loadRemoteImage)
                 }
             }
+            CodexMessageActions(userText.orEmpty(), onEdit = onEdit, onRetry = onRetry)
         }
         "agentMessage" -> Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             if (!item.text.isNullOrBlank()) CodexTimelineMarkdown(item.text, workspaceCwd, onOpenWorkspaceFile)
@@ -91,6 +97,9 @@ internal fun CodexTimelineItem(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+            if (item.delivery != "async" && (onQuote != null || onRetry != null || item.phase == "final_answer" || item.phase == null)) {
+                CodexMessageActions(item.text.orEmpty(), onRetry = onRetry, onQuote = onQuote)
             }
         }
         "imageGeneration" -> Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {

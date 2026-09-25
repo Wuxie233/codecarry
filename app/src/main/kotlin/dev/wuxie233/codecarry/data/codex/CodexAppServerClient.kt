@@ -575,6 +575,49 @@ open class CodexAppServerClient internal constructor(
         request("thread/compact/start", paramsOf("threadId" to threadId))
     }
 
+    /** Removes conversation turns only. The daemon does not undo workspace changes. */
+    suspend fun revertThread(threadId: String, beforeTurnId: String, numTurns: Int): CodexThread {
+        require(numTurns > 0) { "Rollback requires at least one turn" }
+        require(beforeTurnId.isNotBlank()) { "Revert requires a target turn" }
+        val response = try {
+            request("thread/revert", paramsOf("threadId" to threadId, "beforeTurnId" to beforeTurnId))
+        } catch (error: CodexRpcException) {
+            val unsupported = error.code == -32601L || (error.code == -32600L &&
+                error.message.contains("unknown variant") && error.message.contains("thread/revert"))
+            if (!unsupported) throw error
+            // Only an explicit unsupported-method receipt permits the older protocol.
+            return rollbackThreadLegacy(threadId, numTurns)
+        }
+        try {
+            val metadata = response.objectOrEmpty()["thread"] as? JsonObject
+                ?: error("Codex revert returned no thread")
+            check((metadata["id"] as? JsonPrimitive)?.contentOrNull == threadId) { "Codex revert returned another thread" }
+            // thread/revert returns empty turns even when older history was retained.
+            // A fresh includeTurns read hydrates the actual history before publication.
+            freshThreads.remove(threadId)
+            return readThread(threadId, includeTurns = true).also { hydrated ->
+                check(hydrated.id == threadId && hydrated.raw["turns"] is JsonArray) {
+                    "Codex revert history read returned an incomplete thread"
+                }
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            // The write already succeeded. A failed read must not look like a rejected write.
+            throw IllegalStateException("Codex reverted history but could not confirm it; check history before sending", error)
+        }
+    }
+
+    private suspend fun rollbackThreadLegacy(threadId: String, numTurns: Int): CodexThread {
+        val result = request("thread/rollback", paramsOf("threadId" to threadId, "numTurns" to numTurns))
+            .objectOrEmpty()
+        return withContext(decodingDispatcher) {
+            val snapshot = result["thread"] as? JsonObject ?: error("Codex rollback returned no thread")
+            check(snapshot["turns"] is JsonArray) { "Codex rollback returned no history" }
+            CodexThread.fromJson(snapshot).also { check(it.id == threadId) { "Codex rollback returned another thread" } }
+        }
+    }
+
     suspend fun startTurn(
         threadId: String,
         input: List<CodexUserInput>,

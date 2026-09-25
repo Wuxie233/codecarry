@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="codex_message_edit">编辑消息</string>
+    <string name="codex_message_retry">重新生成回复</string>
+</resources>

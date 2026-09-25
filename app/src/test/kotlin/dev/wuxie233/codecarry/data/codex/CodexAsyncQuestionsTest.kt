@@ -126,6 +126,69 @@ class CodexAsyncQuestionsTest {
         assertEquals("Second", codexAsyncQuestions(items).first().answer)
     }
 
+    @Test
+    fun `live and resume aliases show one question and retain accepted legacy answer`() {
+        val legacy = question().copy(id = "item-5")
+        val canonical = question().copy(id = "call_question")
+        val initial = thread(legacy)
+        val id = codexAsyncQuestions(initial).first().id
+        val answer = reply(codexAsyncQuestionReplyText(initial, "turn-1", mapOf(id to "First"))!!)
+        val reducer = CodexEventReducer(listOf(initial))
+        reducer.upsertThreadSnapshot(thread(canonical, answer), initial)
+        val merged = reducer.state.value.threads.getValue("thread-1")
+        assertEquals(listOf("call_question", "reply"), merged.turns.single().items.map { it.id })
+        val questions = codexAsyncQuestions(merged)
+        assertEquals(2, questions.size)
+        assertEquals("First", questions.first().answer)
+        assertFalse(questions.first().canAnswer)
+        assertTrue(questions.last().canAnswer)
+        // A second refresh must preserve the learned alias after the synthetic item is gone.
+        reducer.upsertThreadSnapshot(thread(canonical, answer), merged)
+        assertEquals("First", codexAsyncQuestions(reducer.state.value.threads.getValue("thread-1")).first().answer)
+        reducer.process(CodexNotification.fromJson(Json.parseToJsonElement(
+            """{"method":"item/completed","params":{"threadId":"thread-1","turnId":"turn-1","item":{"type":"agentMessage","id":"call_question","delivery":"async","questions":[{"title":"Which option?","options":["First","Second"]},{"title":"Details?","options":[]}]}}}""",
+        ).jsonObject))
+        assertEquals("First", codexAsyncQuestions(reducer.state.value.threads.getValue("thread-1")).first().answer)
+    }
+
+    @Test
+    fun `identical independent calls and ambiguous legacy payloads remain separate`() {
+        val call = question().copy(id = "call_first")
+        val otherCall = question().copy(id = "call_second")
+        val legacy = question().copy(id = "item-5")
+        val otherLegacy = question().copy(id = "item-6")
+        for (items in listOf(listOf(call, otherCall), listOf(legacy, otherLegacy),
+            listOf(call, otherCall, legacy), listOf(call, legacy, otherLegacy))) {
+            assertEquals(items.size * 2, codexAsyncQuestions(thread(*items.toTypedArray())).size)
+        }
+        val differentOptions = legacy.copy(questions = legacy.questions.map { it.copy(options = listOf("Different")) })
+        assertEquals(4, codexAsyncQuestions(thread(call, differentOptions)).size)
+    }
+
+    @Test
+    fun `aliases never match across turns`() {
+        val first = thread(question().copy(id = "item-5"))
+        val second = first.copy(turns = first.turns + CodexTurn("turn-2", status = "inProgress",
+            items = listOf(question().copy(id = "call_question"))))
+        assertEquals(4, codexAsyncQuestions(second).size)
+    }
+
+    @Test
+    fun `historical synthetic wrapper requires exact message slot and unique question title`() {
+        val canonical = question().copy(id = "call_question")
+        val legacy = canonical.copy(id = "item-2")
+        val oldThread = thread(legacy)
+        val answer = reply(codexAsyncQuestionReplyText(oldThread, "turn-1",
+            mapOf(codexAsyncQuestions(oldThread).first().id to "First"))!!)
+        val prompt = CodexThreadItem(id = "prompt", type = "userMessage", text = "Start")
+        val tool = CodexThreadItem(id = "tool", type = "commandExecution")
+        val history = thread(prompt, tool, canonical, answer)
+        assertEquals("First", codexAsyncQuestions(history).first().answer)
+        assertNull(codexAsyncQuestions(thread(canonical, answer)).first().answer)
+        val ambiguous = thread(prompt, canonical, canonical.copy(id = "call_second"), answer)
+        assertTrue(codexAsyncQuestions(ambiguous).all { it.answer == null })
+    }
+
     private fun question() = CodexThreadItem.fromJson(Json.parseToJsonElement(
         """{"type":"agentMessage","id":"call-question","text":"Two questions","phase":"final_answer","delivery":"async","questions":[{"title":"Which option?","options":["First","Second"]},{"title":"Details?","options":[]}]}""",
     ).jsonObject)

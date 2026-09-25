@@ -1,0 +1,8 @@
+<resources>
+    <string name="codex_rewrite_confirmation">将移除此消息所在轮次及之后的对话，再重新发送。已经发生的文件变更不会撤销。</string>
+    <string name="codex_rewrite_confirm">继续</string>
+    <string name="codex_rewrite_uncertain">尚未确认对话回退结果，请先检查，再决定是否发送。</string>
+    <string name="codex_rewrite_check">检查回退结果</string>
+    <string name="codex_rewrite_attachments_missing">部分附件未能恢复，请重新添加后继续，或确认不再附带。</string>
+    <string name="codex_rewrite_attachments_reviewed">已检查附件，继续</string>
+</resources>

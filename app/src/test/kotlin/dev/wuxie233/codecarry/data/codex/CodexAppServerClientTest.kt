@@ -37,6 +37,89 @@ class CodexAppServerClientTest {
         clients.forEach(CodexAppServerClient::close)
     }
 
+    @Test
+    fun `revert targets a turn and hydrates retained history instead of publishing empty metadata`() = runTest {
+        val transport = FakeTransport()
+        val client = newClient(transport, backgroundScope)
+        initialize(client, transport)
+        val reverting = async { client.revertThread("thread-1", "turn-remove", 2) }
+        val revert = transport.takeSentObject()
+        assertEquals("thread/revert", revert["method"]?.jsonPrimitive?.content)
+        assertEquals("turn-remove", revert["params"]?.jsonObject?.get("beforeTurnId")?.jsonPrimitive?.content)
+        assertFalse(revert["params"]?.jsonObject?.containsKey("numTurns") == true)
+        transport.respond(revert.getValue("id").jsonPrimitive, json.parseToJsonElement(
+            """{"thread":{"id":"thread-1","turns":[]},"turnsBackwardsCursor":"cursor"}""",
+        ))
+        val read = transport.takeSentObject()
+        assertEquals("thread/read", read["method"]?.jsonPrimitive?.content)
+        assertEquals("true", read["params"]?.jsonObject?.get("includeTurns")?.jsonPrimitive?.content)
+        transport.respond(read.getValue("id").jsonPrimitive, json.parseToJsonElement(
+            """{"thread":{"id":"thread-1","turns":[{"id":"keep","status":"completed","items":[]}]}}""",
+        ))
+        assertEquals(listOf("keep"), reverting.await().turns.map { it.id })
+    }
+
+    @Test
+    fun `legacy rollback is used only after explicit unsupported revert receipt`() = runTest {
+        val transport = FakeTransport()
+        val client = newClient(transport, backgroundScope)
+        initialize(client, transport)
+        val reverting = async { client.revertThread("thread-1", "turn-remove", 2) }
+        val revert = transport.takeSentObject()
+        transport.incoming.send(buildJsonObject {
+            put("id", revert.getValue("id"))
+            put("error", buildJsonObject {
+                put("code", -32600)
+                put("message", "unknown variant `thread/revert`")
+            })
+        }.toString())
+        val rollback = transport.takeSentObject()
+        assertEquals("thread/rollback", rollback["method"]?.jsonPrimitive?.content)
+        assertEquals("2", rollback["params"]?.jsonObject?.get("numTurns")?.jsonPrimitive?.content)
+        transport.respond(rollback.getValue("id").jsonPrimitive, json.parseToJsonElement(
+            """{"thread":{"id":"thread-1","turns":[{"id":"keep","status":"completed","items":[]}]}}""",
+        ))
+        assertEquals(listOf("keep"), reverting.await().turns.map { it.id })
+    }
+
+    @Test
+    fun `malformed history read after revert cannot confirm an empty retained history`() = runTest {
+        for (malformed in listOf("""{}""", """{"thread":{"id":"thread-1"}}""", """{"thread":{"id":"other","turns":[]}}""")) {
+            val transport = FakeTransport()
+            val client = newClient(transport, backgroundScope)
+            initialize(client, transport)
+            val reverting = async { runCatching { client.revertThread("thread-1", "turn-remove", 1) } }
+            val revert = transport.takeSentObject()
+            transport.respond(revert.getValue("id").jsonPrimitive, json.parseToJsonElement(
+                """{"thread":{"id":"thread-1","turns":[]}}""",
+            ))
+            val read = transport.takeSentObject()
+            transport.respond(read.getValue("id").jsonPrimitive, json.parseToJsonElement(malformed))
+            assertTrue(reverting.await().exceptionOrNull() is IllegalStateException)
+        }
+    }
+
+    @Test
+    fun `failed hydration after accepted revert remains uncertain rather than a rejected write`() = runTest {
+        val transport = FakeTransport()
+        val client = newClient(transport, backgroundScope)
+        initialize(client, transport)
+        val reverting = async { runCatching { client.revertThread("thread-1", "turn-remove", 1) } }
+        val revert = transport.takeSentObject()
+        transport.respond(revert.getValue("id").jsonPrimitive, json.parseToJsonElement(
+            """{"thread":{"id":"thread-1","turns":[]}}""",
+        ))
+        val read = transport.takeSentObject()
+        transport.incoming.send(buildJsonObject {
+            put("id", read.getValue("id"))
+            put("error", buildJsonObject { put("code", -32600); put("message", "history unavailable") })
+        }.toString())
+        val failure = reverting.await().exceptionOrNull()
+        assertTrue(failure is IllegalStateException)
+        assertFalse(failure is CodexRpcException)
+        assertTrue(failure?.cause is CodexRpcException)
+    }
+
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     @Test
     fun `unresponsive unsubscribe expires before history deadline and invalidates connection`() = runTest {

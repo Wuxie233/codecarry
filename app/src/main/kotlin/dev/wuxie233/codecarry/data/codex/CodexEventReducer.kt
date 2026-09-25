@@ -140,6 +140,22 @@ class CodexEventReducer(
         }
     }
 
+    /** A rollback receipt is authoritative; removed turns must not leave controls behind. */
+    fun applyThreadRollback(thread: CodexThread) {
+        _state.update { current ->
+            val retained = thread.turns.mapTo(mutableSetOf(), CodexTurn::id)
+            current.copy(
+                threads = current.threads + (thread.id to thread),
+                threadFailures = current.threadFailures - thread.id,
+                turnFailures = current.turnFailures + (thread.id to current.turnFailures[thread.id].orEmpty().filterKeys { it in retained }),
+                turnPlans = current.turnPlans + (thread.id to current.turnPlans[thread.id].orEmpty().filterKeys { it in retained }),
+                turnDiffs = current.turnDiffs + (thread.id to current.turnDiffs[thread.id].orEmpty().filterKeys { it in retained }),
+                turnTokenUsage = current.turnTokenUsage + (thread.id to current.turnTokenUsage[thread.id].orEmpty().filterKeys { it in retained }),
+                tokenUsage = current.tokenUsage - thread.id,
+            )
+        }
+    }
+
     fun removeThread(threadId: String) {
         _state.update { current ->
             current.copy(
@@ -381,7 +397,8 @@ private fun CodexEventState.retireSettledThreadRetry(
 
 private fun CodexThread.mergeMetadata(incoming: CodexThread, baseline: CodexThread?): CodexThread = incoming.copy(
     name = if (name != baseline?.name) name else incoming.name,
-    status = if (status != (baseline?.status ?: CodexThreadStatus()) || turns.any { live ->
+    status = if (baseline?.turns.orEmpty().any { old -> turns.none { it.id == old.id } } ||
+        status != (baseline?.status ?: CodexThreadStatus()) || turns.any { live ->
         live.status == "inProgress" && baseline?.turns.orEmpty().none { it.id == live.id } &&
             incoming.turns.none { it.id == live.id }
     }) status else if (incoming.status.type == "active" && incoming.turns.isNotEmpty() &&
@@ -391,7 +408,10 @@ private fun CodexThread.mergeMetadata(incoming: CodexThread, baseline: CodexThre
             }
         }
     ) status else incoming.status,
-    turns = turns.mergeOrderedSnapshot(incoming.turns, CodexTurn::id) { live, snapshot ->
+    turns = turns.mergeOrderedSnapshot(incoming.turns.filter { snapshot ->
+        // A resume begun before rollback must not resurrect its removed turns.
+        baseline?.turns.orEmpty().none { it.id == snapshot.id } || turns.any { it.id == snapshot.id }
+    }, CodexTurn::id) { live, snapshot ->
         live.mergeSnapshot(snapshot, baseline?.turns?.firstOrNull { it.id == live.id })
     },
 )
@@ -402,9 +422,9 @@ private fun CodexTurn.mergeSnapshot(incoming: CodexTurn, baseline: CodexTurn?): 
     startedAt = startedAt ?: incoming.startedAt,
     completedAt = completedAt ?: incoming.completedAt,
     durationMs = durationMs ?: incoming.durationMs,
-    items = items.mergeOrderedSnapshot(incoming.items, CodexThreadItem::id) { live, snapshot ->
+    items = reconcileCodexAsyncQuestionItems(items.mergeOrderedSnapshot(incoming.items, CodexThreadItem::id) { live, snapshot ->
         live.mergeSnapshot(snapshot, baseline?.items?.firstOrNull { it.id != null && it.id == live.id })
-    },
+    }),
 )
 
 /** Keep snapshot order, but retain stream-only items next to their known neighbours.
@@ -518,8 +538,8 @@ private fun CodexTurn.mergeStarted(incoming: CodexTurn): CodexTurn = incoming.co
 
 private fun CodexTurn.upsertItem(item: CodexThreadItem, authoritative: Boolean): CodexTurn {
     val existing = items.firstOrNull { candidate -> item.id != null && candidate.id == item.id }
-    val resolved = if (authoritative || existing == null) item else existing.mergeStarted(item)
-    return copy(items = items.upsertBy(CodexThreadItem::id, resolved))
+    val resolved = if (authoritative || existing == null) item.preserveAsyncQuestionAliases(existing) else existing.mergeStarted(item)
+    return copy(items = reconcileCodexAsyncQuestionItems(items.upsertBy(CodexThreadItem::id, resolved)))
 }
 
 private fun CodexThreadItem.mergeStarted(incoming: CodexThreadItem): CodexThreadItem = incoming.copy(

@@ -21,6 +21,41 @@ data class CodexAsyncQuestion(
 
 private data class AsyncReply(val questionItemId: String, val question: String, val answer: String)
 
+private const val ASYNC_ALIASES = "codecarryAsyncAliases"
+private val legacyAsyncId = Regex("item-[0-9]+")
+
+/** Old snapshots used message slots while live events use call IDs. Only unambiguous,
+ * complete question payloads within this turn can establish this compatibility alias. */
+internal fun reconcileCodexAsyncQuestionItems(items: List<CodexThreadItem>): List<CodexThreadItem> {
+    val questions = items.filter { it.type == "agentMessage" && it.delivery == "async" && it.questions.isNotEmpty() }
+    val aliases = mutableMapOf<String, CodexThreadItem>()
+    questions.filter { it.id?.startsWith("call_") == true }.forEach { canonical ->
+        val samePayload = questions.filter { it.questions == canonical.questions }
+        val stable = samePayload.filter { it.id?.startsWith("call_") == true }
+        val legacy = samePayload.filter { it.id?.matches(legacyAsyncId) == true }
+        if (stable.size == 1 && legacy.size == 1) aliases[legacy.single().id!!] = canonical
+    }
+    return items.mapNotNull { item ->
+        if (item.id in aliases) return@mapNotNull null
+        val oldIds = aliases.filterValues { it.id == item.id }.keys
+        if (oldIds.isEmpty()) item else item.copy(raw = JsonObject(item.raw +
+            (ASYNC_ALIASES to JsonArray((item.asyncAliases() + oldIds).distinct().map(::JsonPrimitive)))))
+    }
+}
+
+internal fun CodexThreadItem.preserveAsyncQuestionAliases(previous: CodexThreadItem?): CodexThreadItem {
+    val aliases = (previous?.asyncAliases().orEmpty() + asyncAliases()).distinct()
+    return if (aliases.isEmpty()) this else copy(raw = JsonObject(raw +
+        (ASYNC_ALIASES to JsonArray(aliases.map(::JsonPrimitive)))))
+}
+
+private fun CodexThreadItem.asyncAliases(): List<String> =
+    (raw[ASYNC_ALIASES] as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.takeIf { it.isString }?.content }
+
+private fun asyncQuestionId(itemId: String, index: Int): String = JsonArray(
+    listOf(JsonPrimitive("request_user_input_async"), JsonPrimitive(itemId), JsonPrimitive(index)),
+).toString()
+
 private const val REPLY_START = "<send_user_message_question_reply>"
 private const val REPLY_END = "</send_user_message_question_reply>"
 
@@ -29,10 +64,36 @@ private fun JsonObject.string(key: String): String? =
 
 /** Async agent messages are questions even when their phase is final_answer. */
 fun codexAsyncQuestions(thread: CodexThread?): List<CodexAsyncQuestion> = thread?.turns.orEmpty().flatMap { turn ->
-    val answers = linkedMapOf<String, Pair<Int, String>>()
-    val replyItems = turn.items.mapIndexedNotNull { index, item ->
+    val items = reconcileCodexAsyncQuestionItems(turn.items)
+    val replyItems = items.mapIndexedNotNull { index, item ->
         asyncReplies(item)?.let { Triple(index, item, it) }
     }
+    val answerAliases = mutableMapOf<String, String>()
+    var messageSlot = 0
+    items.forEach { item ->
+        if (item.type == "userMessage" || item.type == "agentMessage") messageSlot++
+        val itemId = item.id ?: return@forEach
+        if (item.type != "agentMessage" || item.delivery != "async") return@forEach
+        item.questions.forEachIndexed { index, question ->
+            val canonical = asyncQuestionId(itemId, index)
+            item.asyncAliases().forEach { answerAliases[asyncQuestionId(it, index)] = canonical }
+            // Historical wrappers can outlive the synthetic item itself. Require both the
+            // old message slot and a unique matching title/index; never match text alone.
+            val legacyId = "item-$messageSlot"
+            val uniqueTitle = items.count { candidate ->
+                candidate.type == "agentMessage" && candidate.delivery == "async" &&
+                    candidate.questions.getOrNull(index)?.title == question.title
+            } == 1
+            if (itemId.startsWith("call_") && uniqueTitle && items.none { it.id == legacyId }) {
+                val oldQuestionId = asyncQuestionId(legacyId, index)
+                val matchingReply = replyItems.any { (_, _, replies) -> replies.any {
+                    it.questionItemId == oldQuestionId && it.question == question.title
+                } }
+                if (matchingReply) answerAliases[oldQuestionId] = canonical
+            }
+        }
+    }
+    val answers = linkedMapOf<String, Pair<Int, String>>()
     replyItems.forEach { (index, item, replies) ->
         if (item.type == "steeringUserMessage" && item.status != "accepted") return@forEach
         // A materialized user message is the same answer as its earlier steering receipt.
@@ -48,18 +109,17 @@ fun codexAsyncQuestions(thread: CodexThread?): List<CodexAsyncQuestion> = thread
             }?.first ?: index
         } else index
         replies.forEach { reply ->
-            if (answerIndex > (answers[reply.questionItemId]?.first ?: -1)) {
-                answers[reply.questionItemId] = answerIndex to reply.answer
+            val questionId = answerAliases[reply.questionItemId] ?: reply.questionItemId
+            if (answerIndex > (answers[questionId]?.first ?: -1)) {
+                answers[questionId] = answerIndex to reply.answer
             }
         }
     }
-    turn.items.filter { it.type == "agentMessage" && it.delivery == "async" }.flatMap itemLoop@ { item ->
+    items.filter { it.type == "agentMessage" && it.delivery == "async" }.flatMap itemLoop@ { item ->
         val itemId = item.id ?: return@itemLoop emptyList()
         val definitions = item.questions.ifEmpty { listOf(CodexAsyncQuestionDefinition(item.text.orEmpty())) }
         definitions.mapIndexed { index, question ->
-            val id = if (item.questions.isEmpty()) itemId else JsonArray(
-                listOf(JsonPrimitive("request_user_input_async"), JsonPrimitive(itemId), JsonPrimitive(index)),
-            ).toString()
+            val id = if (item.questions.isEmpty()) itemId else asyncQuestionId(itemId, index)
             CodexAsyncQuestion(
                 id = id,
                 sourceItemId = itemId,

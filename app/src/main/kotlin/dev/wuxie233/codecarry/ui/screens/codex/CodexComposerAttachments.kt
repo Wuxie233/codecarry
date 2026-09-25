@@ -235,14 +235,15 @@ fun CodexAttachmentChips(
     FlowRow(modifier, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         attachments.forEach { attachment ->
             key(attachment.id) {
+                val label = attachment.label.ifBlank { stringResource(R.string.codex_attachment_image) }
                 InputChip(selected = false, enabled = enabled, onClick = {
                     if (attachment.previewBytes != null) previewId = attachment.id
                     else onRemove(attachment.id)
                 },
                     modifier = Modifier.testTag("codex_attachment:${attachment.id}"),
-                    label = { Text(attachment.label) },
+                    label = { Text(label) },
                     avatar = { attachment.previewBytes?.let { bytes ->
-                        AsyncImage(bytes, contentDescription = attachment.label, modifier = Modifier.size(32.dp))
+                        AsyncImage(bytes, contentDescription = label, modifier = Modifier.size(32.dp))
                     } },
                     trailingIcon = {
                         IconButton(
@@ -263,7 +264,7 @@ fun CodexAttachmentChips(
     if (preview != null && bitmap != null) {
         ImagePreviewDialog(
             bitmap = bitmap,
-            contentDescription = preview.label,
+            contentDescription = preview.label.ifBlank { stringResource(R.string.codex_attachment_image) },
             onDismiss = { previewId = null },
         )
     }

@@ -9,6 +9,21 @@ import org.junit.Test
 
 class CodexEventReducerTest {
     @Test
+    fun `rollback clears removed turn controls and rejects pre rollback resume snapshot`() {
+        val baseline = CodexThread(id = "thread", turns = listOf(
+            CodexTurn(id = "keep", status = "completed"), CodexTurn(id = "remove", status = "completed")))
+        val reducer = CodexEventReducer(listOf(baseline))
+        reducer.process(notification("""
+            {"method":"turn/diff/updated","params":{"threadId":"thread","turnId":"remove","diff":"old diff"}}
+        """))
+        assertEquals("old diff", reducer.state.value.turnDiffs["thread"]?.get("remove"))
+        reducer.applyThreadRollback(baseline.copy(turns = baseline.turns.take(1)))
+        assertTrue(reducer.state.value.turnDiffs["thread"].isNullOrEmpty())
+        reducer.upsertThreadSnapshot(baseline, baseline)
+        assertEquals(listOf("keep"), reducer.state.value.threads.getValue("thread").turns.map { it.id })
+    }
+
+    @Test
     fun `new turn remains active when baseline was also active`() {
         val original = CodexThread(id = "thread", status = CodexThreadStatus("active"),
             turns = listOf(CodexTurn(id = "first", status = "inProgress")))

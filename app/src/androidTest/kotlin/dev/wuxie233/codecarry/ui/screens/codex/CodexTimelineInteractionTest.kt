@@ -20,6 +20,45 @@ class CodexTimelineInteractionTest {
     @get:Rule val rule = createComposeRule()
     private fun label(id: Int) = InstrumentationRegistry.getInstrumentation().targetContext.getString(id)
 
+    @Test fun messageActionsCopyMarkdownAndQuoteWithoutSubmitting() {
+        val markdown = "A **useful** answer"
+        var quoted: String? = null
+        var retries = 0
+        rule.setContent {
+            MaterialTheme {
+                CodexTimelineItem(CodexThreadItem("answer", type = "agentMessage", text = markdown,
+                    phase = "final_answer"), {}, onQuote = { quoted = it }, onRetry = { retries++ })
+            }
+        }
+        rule.onNodeWithContentDescription(label(R.string.message_action_copy_markdown)).performClick()
+        rule.runOnIdle {
+            val context = InstrumentationRegistry.getInstrumentation().targetContext
+            val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
+            assertEquals(markdown, clipboard.primaryClip?.getItemAt(0)?.text?.toString())
+        }
+        rule.onNodeWithContentDescription(label(R.string.message_action_quote)).performClick()
+        rule.runOnIdle {
+            assertEquals(markdown, quoted)
+            assertEquals(0, retries)
+        }
+        rule.onNodeWithContentDescription(label(R.string.codex_message_retry)).performClick()
+        rule.runOnIdle { assertEquals(1, retries) }
+    }
+
+    @Test fun editIsAnExplicitMessageAction() {
+        var edits = 0
+        rule.setContent {
+            MaterialTheme {
+                CodexTimelineItem(CodexThreadItem("user", type = "userMessage", text = "Original prompt"), {},
+                    onEdit = { edits++ })
+            }
+        }
+        rule.onNodeWithText("Original prompt").assertIsDisplayed()
+        rule.runOnIdle { assertEquals(0, edits) }
+        rule.onNodeWithContentDescription(label(R.string.codex_message_edit)).performClick()
+        rule.runOnIdle { assertEquals(1, edits) }
+    }
+
     @Test fun reasoningIsCollapsedUntilRequestedAndCanCollapseAgain() {
         rule.setContent {
             MaterialTheme {

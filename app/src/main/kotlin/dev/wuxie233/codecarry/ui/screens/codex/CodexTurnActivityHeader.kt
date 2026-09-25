@@ -4,6 +4,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
@@ -64,6 +65,7 @@ internal fun CodexTurnActivityHeader(
     }
     Row(
         modifier = Modifier.fillMaxWidth()
+            .heightIn(min = 48.dp)
             .then(if (hasActivity) Modifier.clickable(role = Role.Button, onClick = onToggle) else Modifier)
             .padding(horizontal = 4.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,

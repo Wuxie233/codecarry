@@ -178,7 +178,147 @@ class CodexChatSendConfirmationRaceTest {
         assertTrue(fixture.sendResults.isEmpty())
     }
 
-    private suspend fun TestScope.fixture(restoredPending: Boolean): Fixture {
+    private val editableThread = """{"id":"child","turns":[{"id":"turn-1","status":"completed","items":[
+        {"id":"user-1","type":"userMessage","content":[{"type":"text","text":"original"},
+        {"type":"localImage","path":"/daemon/photo.png"}]},
+        {"id":"answer-1","type":"agentMessage","text":"answer"}]}]}"""
+
+    @Test
+    fun `cancel editing restores unsent text and attachments without mutating history`() = scope.runTest {
+        val fixture = fixture(restoredPending = false)
+        fixture.resume(editableThread)
+        runCurrent()
+        fixture.completeMetadata()
+        fixture.vm.updateDraft("my unsent draft")
+        fixture.vm.addAttachment(CodexComposerAttachment("draft-file", "note", CodexUserInput.Text("note")))
+        fixture.vm.beginEditMessage("user-1")
+        assertEquals("original", fixture.vm.uiState.value.draft)
+        assertEquals("/daemon/photo.png", fixture.vm.uiState.value.composerAttachments.single().input.toJson()["path"]?.jsonPrimitive?.content)
+        fixture.vm.cancelEditing()
+        assertEquals("my unsent draft", fixture.vm.uiState.value.draft)
+        assertEquals(listOf("draft-file"), fixture.vm.uiState.value.composerAttachments.map { it.id })
+        assertFalse(fixture.transport.methods.contains("thread/revert"))
+    }
+
+    @Test
+    fun `regenerate rolls back before starting and preserves the unsent draft`() = scope.runTest {
+        val fixture = fixture(restoredPending = false)
+        fixture.resume(editableThread)
+        runCurrent()
+        fixture.completeMetadata()
+        fixture.vm.updateDraft("my unsent draft")
+        fixture.vm.addAttachment(CodexComposerAttachment("draft-file", "note", CodexUserInput.Text("note")))
+        fixture.vm.retryLastResponse()
+        runCurrent()
+        fixture.transport.replyNext("thread/read", "{\"thread\":$editableThread}")
+        runCurrent()
+        val rollback = fixture.transport.next("thread/revert")
+        assertEquals("turn-1", rollback["params"]?.jsonObject?.get("beforeTurnId")?.jsonPrimitive?.content)
+        assertFalse(fixture.transport.methods.contains("turn/start"))
+        fixture.transport.reply(rollback, """{"thread":{"id":"child","turns":[]}}""")
+        runCurrent()
+        fixture.transport.replyNext("thread/read", """{"thread":{"id":"child","turns":[]}}""")
+        runCurrent()
+        val start = fixture.transport.next("turn/start")
+        val input = start["params"]?.jsonObject?.get("input").toString()
+        assertTrue(input.contains("original"))
+        assertTrue(input.contains("/daemon/photo.png"))
+        assertFalse(input.contains("my unsent draft"))
+        fixture.transport.reply(start, """{"turn":{"id":"replacement","status":"inProgress","items":[]}}""")
+        runCurrent()
+        assertEquals("my unsent draft", fixture.vm.uiState.value.draft)
+        assertEquals(listOf("draft-file"), fixture.vm.uiState.value.composerAttachments.map { it.id })
+        assertEquals(listOf("replacement"), fixture.vm.uiState.value.thread?.turns?.map { it.id })
+    }
+
+    @Test
+    fun `editing preserves both parked draft and text typed while receipt is pending`() = scope.runTest {
+        val fixture = fixture(restoredPending = false)
+        fixture.resume(editableThread)
+        runCurrent()
+        fixture.completeMetadata()
+        fixture.vm.updateDraft("parked draft")
+        fixture.vm.beginEditMessage("user-1")
+        fixture.vm.updateDraft("edited question")
+        fixture.vm.sendMessage(fixture.vm.uiState.value.draft, fixture.vm.uiState.value.composerAttachments)
+        runCurrent()
+        fixture.transport.replyNext("thread/read", "{\"thread\":$editableThread}")
+        runCurrent()
+        fixture.transport.replyNext("thread/revert", """{"thread":{"id":"child","turns":[]}}""")
+        runCurrent()
+        fixture.transport.replyNext("thread/read", """{"thread":{"id":"child","turns":[]}}""")
+        runCurrent()
+        val start = fixture.transport.next("turn/start")
+        fixture.vm.updateDraft("new thought")
+        fixture.transport.reply(start, """{"turn":{"id":"replacement","status":"inProgress","items":[]}}""")
+        runCurrent()
+        assertEquals("parked draft\n\nnew thought", fixture.vm.uiState.value.draft)
+    }
+
+    @Test
+    fun `restored unknown rollback checks original history without replay and can cancel`() = scope.runTest {
+        val fixture = fixture(restoredPending = false, savedHistory = mapOf(
+            "codexRollbackRetainedTurnIds" to arrayListOf<String>(),
+            "codexRollbackOriginalTurnIds" to arrayListOf("turn-1"),
+            "codexRollbackItemId" to "user-1",
+            "codexDraft" to "edited question",
+        ))
+        fixture.resume(editableThread)
+        runCurrent()
+        fixture.completeMetadata()
+        assertTrue(fixture.vm.uiState.value.isHistoryRewriteUncertain)
+        fixture.vm.sendMessage("edited question")
+        assertFalse(fixture.transport.methods.contains("turn/start"))
+        fixture.vm.recheckHistoryRewrite()
+        runCurrent()
+        fixture.transport.replyNext("thread/read", "{\"thread\":$editableThread}")
+        runCurrent()
+        assertFalse(fixture.vm.uiState.value.isHistoryRewriteUncertain)
+        assertEquals("user-1", fixture.vm.uiState.value.editingMessage?.itemId)
+        assertEquals("/daemon/photo.png", fixture.vm.uiState.value.composerAttachments.single().input.toJson()["path"]?.jsonPrimitive?.content)
+        assertFalse(fixture.transport.methods.contains("thread/revert"))
+        fixture.vm.cancelEditing()
+        assertEquals(null, fixture.vm.uiState.value.editingMessage)
+        assertEquals("edited question", fixture.vm.uiState.value.draft)
+    }
+
+    @Test
+    fun `restored rollback with missing binary attachments needs review before manual send`() = scope.runTest {
+        val daemonImage = CodexComposerAttachment("daemon", "photo", CodexUserInput.LocalImage("/daemon/photo.png"))
+        val fixture = fixture(restoredPending = false, savedHistory = mapOf(
+            "codexRollbackRetainedTurnIds" to arrayListOf<String>(),
+            "codexRollbackOriginalTurnIds" to arrayListOf("turn-1"),
+            "codexRollbackItemId" to "user-1",
+            "codexDraft" to "edited question",
+            "codexRewriteAttachments" to arrayListOf(requireNotNull(persistableCodexAttachment(daemonImage))),
+            "codexRewriteAttachmentsLost" to true,
+            "codexRewritePreviousDraft" to "parked draft",
+        ))
+        fixture.resume("""{"id":"child","turns":[]}""")
+        runCurrent()
+        fixture.completeMetadata()
+        fixture.vm.recheckHistoryRewrite()
+        runCurrent()
+        fixture.transport.replyNext("thread/read", """{"thread":{"id":"child","turns":[]}}""")
+        runCurrent()
+        assertFalse(fixture.vm.uiState.value.isHistoryRewriteUncertain)
+        assertTrue(fixture.vm.uiState.value.isHistoryAttachmentRecoveryRequired)
+        fixture.vm.sendMessage("edited question", fixture.vm.uiState.value.composerAttachments)
+        runCurrent()
+        assertFalse(fixture.transport.methods.contains("turn/start"))
+        assertFalse(fixture.transport.methods.contains("thread/revert"))
+        fixture.vm.confirmHistoryAttachmentsReviewed()
+        assertFalse(fixture.transport.methods.contains("turn/start"))
+        fixture.vm.sendMessage("edited question", fixture.vm.uiState.value.composerAttachments)
+        runCurrent()
+        val start = fixture.transport.next("turn/start")
+        assertTrue(start["params"].toString().contains("/daemon/photo.png"))
+        fixture.transport.reply(start, """{"turn":{"id":"replacement","status":"inProgress","items":[]}}""")
+        runCurrent()
+        assertEquals("parked draft", fixture.vm.uiState.value.draft)
+    }
+
+    private suspend fun TestScope.fixture(restoredPending: Boolean, savedHistory: Map<String, Any> = emptyMap()): Fixture {
         val http = HttpClient(MockEngine { error("OpenCode transport must not be used") }).also(httpClients::add)
         val store = object : DataStore<Preferences> {
             override val data = MutableStateFlow(emptyPreferences())
@@ -196,6 +336,7 @@ class CodexChatSendConfirmationRaceTest {
             buildMap<String, Any> {
                 put("serverId", server.id)
                 put("threadId", "child")
+                putAll(savedHistory)
                 if (restoredPending) {
                     put("codexPendingSendContent", "ship it")
                     put("codexPendingSendId", "client-message-1")
@@ -220,14 +361,12 @@ class CodexChatSendConfirmationRaceTest {
         val testScope: TestScope,
         val sendResults: List<CodexSendResult>,
     ) {
-        suspend fun resume() {
+        suspend fun resume(threadJson: String? = null) {
             val request = transport.next("thread/resume")
             transport.reply(
                 request,
                 """{
-                    "thread":{"id":"child","turns":[{"id":"turn-1","status":"inProgress","items":[
-                        {"id":"message-1","type":"agentMessage","text":"hello"}
-                    ]}]},
+                    "thread":${threadJson ?: """{"id":"child","turns":[{"id":"turn-1","status":"inProgress","items":[{"id":"message-1","type":"agentMessage","text":"hello"}]}]}"""},
                     "model":"gpt-5","modelProvider":"openai","cwd":"/workspace",
                     "approvalPolicy":"on-request","approvalsReviewer":"user",
                     "sandbox":{"type":"workspaceWrite","writableRoots":["/workspace"],"networkAccess":true}

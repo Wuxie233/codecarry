@@ -101,6 +101,10 @@ data class CodexChatUiState(
     val activeTurnId: String? = null,
     val isLoading: Boolean = true,
     val isSending: Boolean = false,
+    val editingMessage: CodexMessageEdit? = null,
+    val isRewritingHistory: Boolean = false,
+    val isHistoryRewriteUncertain: Boolean = false,
+    val isHistoryAttachmentRecoveryRequired: Boolean = false,
     val isAwaitingAuthoritativeTurn: Boolean = false,
     val isSendConfirmationPending: Boolean = false,
     val memoryModeReceipt: CodexMemoryModeReceipt? = null,
@@ -137,6 +141,14 @@ data class CodexChatUiState(
     val filePreview: CodexFilePreviewState? = null,
 ) {
     val draft: String get() = composerValue.text
+    val canRewriteHistory: Boolean get() = isConnected && !isLoading && !isSending &&
+        !isRewritingHistory && !isHistoryRewriteUncertain && !isHistoryAttachmentRecoveryRequired && !isAwaitingAuthoritativeTurn &&
+        !isSendConfirmationPending && activeTurnId == null && pendingRequests.isEmpty()
+    val canRetryLastResponse: Boolean get() = canRewriteHistory && editingMessage == null &&
+        thread?.turns?.lastOrNull()?.let { turn ->
+            val messages = turn.items.filter { it.type == "userMessage" || it.type == "steeringUserMessage" }
+            messages.singleOrNull()?.id?.let { planCodexMessageEdit(thread, it) } != null
+        } == true
     val asyncQuestions: List<CodexAsyncQuestion>
         get() = thread?.let(::codexAsyncQuestions).orEmpty().map { question ->
             val accepted = question.answer ?: asyncAnswers[question.id]
@@ -186,6 +198,10 @@ class CodexChatViewModel @Inject constructor(
             thread = connectionManager.get(serverId)?.events?.value?.threads?.get(threadId),
             isSendConfirmationPending = restoredPendingSendContent != null && restoredPendingSendId != null,
             isAwaitingAuthoritativeTurn = authoritativeTurnTracker.isAwaiting,
+            isHistoryRewriteUncertain = savedStateHandle.get<ArrayList<String>>(ROLLBACK_RETAINED_IDS_KEY) != null,
+            isHistoryAttachmentRecoveryRequired = savedStateHandle.get<Boolean>(REWRITE_ATTACHMENTS_LOST_KEY) == true,
+            composerAttachments = savedStateHandle.get<ArrayList<String>>(REWRITE_ATTACHMENTS_KEY).orEmpty()
+                .mapNotNull(::restoreCodexAttachment),
         ),
     )
     val uiState: StateFlow<CodexChatUiState> = _uiState.asStateFlow()
@@ -214,6 +230,15 @@ class CodexChatViewModel @Inject constructor(
     private var selectionRevision = 0L
     private var selectionPending = false
     private var familyVisible = false
+    private var draftBeforeEditing: Pair<TextFieldValue, List<CodexComposerAttachment>>? =
+        savedStateHandle.get<String>(REWRITE_PREVIOUS_DRAFT_KEY)
+            ?.takeIf { savedStateHandle.contains(ROLLBACK_RETAINED_IDS_KEY) }
+            ?.let { TextFieldValue(it) to emptyList() }
+    private var draftAfterRewrite: Pair<TextFieldValue, List<CodexComposerAttachment>>? =
+        savedStateHandle.get<String>(REWRITE_PREVIOUS_DRAFT_KEY)
+            ?.takeUnless { savedStateHandle.contains(ROLLBACK_RETAINED_IDS_KEY) }
+            ?.let { TextFieldValue(it) to emptyList() }
+    private var rewriteRequiresNewTurn = savedStateHandle.contains(REWRITE_PREVIOUS_DRAFT_KEY)
     private var hasBeenVisible = false
     private val asyncReplyIdentities = mutableMapOf<String, Pair<String, String>>()
     private val familyProjection = CodexChatFamilyProjection()
@@ -523,11 +548,182 @@ class CodexChatViewModel @Inject constructor(
     )
 
     fun updateComposerValue(value: TextFieldValue) {
-        savedStateHandle["codexDraft"] = value.text
+        // Keep the pre-edit draft durable: process death must not turn an unfinished edit
+        // into a silently appended normal message. Binary attachments stay in memory.
+        if (_uiState.value.editingMessage == null) savedStateHandle["codexDraft"] = value.text
         _uiState.update { it.copy(composerValue = value) }
     }
 
+    fun quoteMessage(text: String) {
+        if (_uiState.value.isSending || _uiState.value.isRewritingHistory) return
+        updateDraft(appendCodexQuote(_uiState.value.draft, text))
+    }
+
+    /** The user has reattached missing inputs or explicitly chosen to omit them. */
+    fun confirmHistoryAttachmentsReviewed() {
+        _uiState.update { it.copy(isHistoryAttachmentRecoveryRequired = false) }
+        saveRewriteAttachments(_uiState.value.composerAttachments)
+    }
+
+    fun beginEditMessage(itemId: String) {
+        val state = _uiState.value
+        if (!state.canRewriteHistory) return
+        val plan = state.thread?.let { planCodexMessageEdit(it, itemId) } ?: return
+        if (draftBeforeEditing == null) draftBeforeEditing = state.composerValue to state.composerAttachments
+        _uiState.update { it.copy(
+            editingMessage = plan,
+            composerValue = TextFieldValue(plan.originalText, TextRange(plan.originalText.length)),
+            composerAttachments = plan.attachments,
+            error = null,
+        ) }
+    }
+
+    fun cancelEditing() {
+        val state = _uiState.value
+        if (state.isRewritingHistory || state.isHistoryRewriteUncertain) return
+        val previous = draftBeforeEditing ?: (state.composerValue to state.composerAttachments)
+        _uiState.update { it.copy(editingMessage = null, composerValue = previous.first,
+            composerAttachments = previous.second, isHistoryAttachmentRecoveryRequired = false) }
+        draftBeforeEditing = null
+        rewriteRequiresNewTurn = false
+        clearPendingRollback()
+        clearSavedRewriteInputs()
+        savedStateHandle["codexDraft"] = previous.first.text
+    }
+
+    /** The UI confirms the destructive history change before calling this method. */
+    fun retryLastResponse() {
+        val state = _uiState.value
+        if (!state.canRetryLastResponse) return
+        val id = state.thread?.turns?.lastOrNull()?.items?.firstOrNull { it.type == "userMessage" }?.id ?: return
+        beginEditMessage(id)
+        val prepared = _uiState.value
+        sendMessage(prepared.draft, prepared.composerAttachments)
+    }
+
+    private fun rewriteHistoryAndSend(text: String, attachments: List<CodexComposerAttachment>) {
+        val state = _uiState.value
+        val edit = state.editingMessage ?: return
+        if (!state.canRewriteHistory || (text.isBlank() && attachments.isEmpty())) return
+        if (text.toByteArray(Charsets.UTF_8).size > 1024 * 1024 || attachments.size > 8 ||
+            attachments.sumOf { it.input.toJson().toString().toByteArray(Charsets.UTF_8).size.toLong() } > 12 * 1024 * 1024) {
+            _uiState.update { it.copy(attachmentLimitReached = true) }
+            return
+        }
+        _uiState.update { it.copy(isRewritingHistory = true, error = null) }
+        viewModelScope.launch {
+            var rollbackIssued = false
+            var rolledBack = false
+            try {
+                val connected = requireConnection()
+                val generation = connected.client.currentConnectionGeneration()
+                // Relative rollback counts are unsafe against a stale catalog or another client's turn.
+                val fresh = connected.client.readThread(threadId, includeTurns = true)
+                check(currentGeneration(connected, generation)) { "Codex connection changed; reload before editing" }
+                check(fresh.turns.map { it.id } == edit.originalTurnIds &&
+                    planCodexMessageEdit(fresh, edit.itemId) != null) { "Codex history changed; cancel this edit and select the message again" }
+                savedStateHandle[ROLLBACK_RETAINED_IDS_KEY] = ArrayList(edit.retainedTurnIds)
+                savedStateHandle[ROLLBACK_ORIGINAL_IDS_KEY] = ArrayList(edit.originalTurnIds)
+                savedStateHandle[ROLLBACK_ITEM_ID_KEY] = edit.itemId
+                saveRewriteAttachments(attachments)
+                savedStateHandle[REWRITE_PREVIOUS_DRAFT_KEY] = draftBeforeEditing?.first?.text.orEmpty()
+                savedStateHandle["codexDraft"] = text
+                rollbackIssued = true
+                val result = connected.client.revertThread(threadId, edit.turnId, edit.removedTurnCount)
+                check(currentGeneration(connected, generation)) { "Codex rollback result belongs to an earlier connection" }
+                check(result.turns.map { it.id } == edit.retainedTurnIds) { "Codex rollback returned unexpected history; check before sending" }
+                connected.reducer.applyThreadRollback(result)
+                connectionManager.updateThreadSession(connected, threadId) { it.copy(thread = result) }
+                clearPendingRollback()
+                draftAfterRewrite = draftBeforeEditing
+                draftBeforeEditing = null
+                rewriteRequiresNewTurn = true
+                rolledBack = true
+                _uiState.update { it.copy(thread = result, activeTurnId = null, editingMessage = null) }
+            } catch (error: CancellationException) {
+                if (rollbackIssued) _uiState.update { it.copy(isHistoryRewriteUncertain = true) }
+                if (error !is TimeoutCancellationException) throw error
+                _uiState.update { it.copy(error = "Codex rollback timed out; check history before sending again") }
+            } catch (error: Throwable) {
+                // A rejected JSON-RPC command is definitive. A lost receipt must never replay rollback.
+                val uncertain = rollbackIssued && error !is CodexRpcException
+                if (!uncertain) {
+                    clearPendingRollback()
+                    clearSavedRewriteInputs()
+                }
+                _uiState.update { it.copy(isHistoryRewriteUncertain = uncertain, error = error.message ?: "Failed to edit Codex message") }
+            } finally {
+                _uiState.update { it.copy(isRewritingHistory = false) }
+            }
+            if (rolledBack) sendMessage(text, attachments)
+        }
+    }
+
+    /** Read-only reconciliation; it never retries rollback or sends a message. */
+    fun recheckHistoryRewrite() {
+        val retained = savedStateHandle.get<ArrayList<String>>(ROLLBACK_RETAINED_IDS_KEY) ?: return
+        if (_uiState.value.isRewritingHistory) return
+        _uiState.update { it.copy(isRewritingHistory = true) }
+        viewModelScope.launch {
+            try {
+                val connected = requireConnection()
+                val generation = connected.client.currentConnectionGeneration()
+                val snapshot = connected.client.readThread(threadId, includeTurns = true)
+                check(currentGeneration(connected, generation)) { "Codex connection changed while checking history" }
+                check(snapshot.id == threadId && snapshot.raw["turns"] is kotlinx.serialization.json.JsonArray) {
+                    "Codex history check returned an incomplete thread"
+                }
+                val original = savedStateHandle.get<ArrayList<String>>(ROLLBACK_ORIGINAL_IDS_KEY)
+                if (snapshot.turns.map { it.id } == original) {
+                    val edit = savedStateHandle.get<String>(ROLLBACK_ITEM_ID_KEY)?.let { planCodexMessageEdit(snapshot, it) }
+                        ?: error("Codex history changed; the edited message could not be restored")
+                    val recovering = _uiState.value.editingMessage == null
+                    // Keep recovery markers until confirmation/cancel. Process recreation
+                    // must still recover an edit, never append it as an ordinary message.
+                    _uiState.update { it.copy(thread = snapshot, editingMessage = edit,
+                        composerAttachments = if (recovering && !savedStateHandle.contains(REWRITE_ATTACHMENTS_KEY)) edit.attachments else it.composerAttachments,
+                        isHistoryRewriteUncertain = false, error = null) }
+                    return@launch // Recovered original history; a new user confirmation is required.
+                }
+                check(snapshot.turns.map { it.id } == retained) { "Codex history changed; no message was resent" }
+                connected.reducer.applyThreadRollback(snapshot)
+                connectionManager.updateThreadSession(connected, threadId) { it.copy(thread = snapshot) }
+                clearPendingRollback()
+                draftAfterRewrite = draftBeforeEditing
+                draftBeforeEditing = null
+                rewriteRequiresNewTurn = true
+                _uiState.update { it.copy(thread = snapshot, activeTurnId = null, editingMessage = null,
+                    isHistoryRewriteUncertain = false, error = null) }
+            } catch (error: CancellationException) { throw error
+            } catch (error: Throwable) { _uiState.update { it.copy(error = error.message) }
+            } finally { _uiState.update { it.copy(isRewritingHistory = false) } }
+        }
+    }
+
+    private fun clearPendingRollback() {
+        savedStateHandle.remove<ArrayList<String>>(ROLLBACK_RETAINED_IDS_KEY)
+        savedStateHandle.remove<ArrayList<String>>(ROLLBACK_ORIGINAL_IDS_KEY)
+        savedStateHandle.remove<String>(ROLLBACK_ITEM_ID_KEY)
+    }
+
+    private fun clearSavedRewriteInputs() {
+        savedStateHandle.remove<ArrayList<String>>(REWRITE_ATTACHMENTS_KEY)
+        savedStateHandle.remove<Boolean>(REWRITE_ATTACHMENTS_LOST_KEY)
+        savedStateHandle.remove<String>(REWRITE_PREVIOUS_DRAFT_KEY)
+    }
+
+    private fun saveRewriteAttachments(attachments: List<CodexComposerAttachment>) {
+        val saved = attachments.mapNotNull(::persistableCodexAttachment)
+        savedStateHandle[REWRITE_ATTACHMENTS_KEY] = ArrayList(saved)
+        savedStateHandle[REWRITE_ATTACHMENTS_LOST_KEY] =
+            saved.size != attachments.size || _uiState.value.isHistoryAttachmentRecoveryRequired
+    }
+
     fun sendMessage(text: String, attachments: List<CodexComposerAttachment> = emptyList()) {
+        if (_uiState.value.editingMessage != null) {
+            rewriteHistoryAndSend(text, attachments)
+            return
+        }
         val content = text.trim()
         if (
             (content.isEmpty() && attachments.isEmpty()) ||
@@ -535,6 +731,9 @@ class CodexChatViewModel @Inject constructor(
             _uiState.value.thread == null ||
             !_uiState.value.isConnected ||
             _uiState.value.isSending ||
+            _uiState.value.isRewritingHistory ||
+            _uiState.value.isHistoryRewriteUncertain ||
+            _uiState.value.isHistoryAttachmentRecoveryRequired ||
             _uiState.value.isAwaitingAuthoritativeTurn ||
             _uiState.value.isSendConfirmationPending
         ) return
@@ -553,6 +752,7 @@ class CodexChatViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val activeTurnId = _uiState.value.activeTurnId
+                check(!rewriteRequiresNewTurn || activeTurnId == null) { "Another turn is running. Wait for it to finish before sending this edited message." }
                 if (activeTurnId != null) {
                     requireClient().steerTurn(
                         threadId = threadId,
@@ -718,8 +918,19 @@ class CodexChatViewModel @Inject constructor(
             it.copy(isSendConfirmationPending = awaitAuthoritativeTurn, error = null)
         }
         if (firstAcceptance) {
-            if (_uiState.value.draft.trim() == content) updateDraft("")
+            val restoreDraft = draftAfterRewrite
+            if (_uiState.value.draft.trim() == content) {
+                updateComposerValue(restoreDraft?.first ?: TextFieldValue())
+            } else if (restoreDraft != null && restoreDraft.first.text.isNotBlank()) {
+                // The user may type a new draft while the send receipt is in flight.
+                // Preserve both it and the draft parked before editing/regenerating.
+                updateDraft(listOf(restoreDraft.first.text, _uiState.value.draft).filter { it.isNotBlank() }.joinToString("\n\n"))
+            }
             _uiState.update { state -> state.copy(composerAttachments = state.composerAttachments.filterNot { it.id in pendingAttachmentIds }) }
+            if (restoreDraft != null) _uiState.update { it.copy(composerAttachments = (it.composerAttachments + restoreDraft.second).distinctBy { attachment -> attachment.id }) }
+            draftAfterRewrite = null
+            rewriteRequiresNewTurn = false
+            clearSavedRewriteInputs()
             _sendResults.emit(CodexSendResult(content, accepted = true, attachmentIds = pendingAttachmentIds))
             pendingAttachmentIds = emptySet()
         }
@@ -1020,10 +1231,12 @@ class CodexChatViewModel @Inject constructor(
                 state.copy(attachmentLimitReached = true)
             } else state.copy(composerAttachments = next, attachmentLimitReached = false)
         }
+        if (savedStateHandle.contains(REWRITE_ATTACHMENTS_KEY)) saveRewriteAttachments(_uiState.value.composerAttachments)
     }
 
     fun removeAttachment(id: String) {
         _uiState.update { it.copy(composerAttachments = it.composerAttachments.filterNot { attachment -> attachment.id == id }, attachmentLimitReached = false) }
+        if (savedStateHandle.contains(REWRITE_ATTACHMENTS_KEY)) saveRewriteAttachments(_uiState.value.composerAttachments)
     }
 
     suspend fun loadRemoteImage(path: String): ByteArray = requireClient().readImageFile(path)
@@ -1076,7 +1289,7 @@ class CodexChatViewModel @Inject constructor(
     ) {
         val state = _uiState.value
         if (state.composerValue != expectedValue || !skill.enabled ||
-            state.isSending || state.isSendConfirmationPending) return
+            state.isSending || state.isSendConfirmationPending || state.isRewritingHistory) return
         val target = codexSkillCompletionTarget(expectedValue) ?: return
         val attachment = CodexComposerAttachment("skill:${skill.path}", skill.name, CodexUserInput.Skill(skill.name, skill.path))
         addAttachment(attachment)
@@ -1306,6 +1519,12 @@ class CodexChatViewModel @Inject constructor(
     }
 
     private companion object {
+        const val ROLLBACK_RETAINED_IDS_KEY = "codexRollbackRetainedTurnIds"
+        const val REWRITE_ATTACHMENTS_KEY = "codexRewriteAttachments"
+        const val REWRITE_ATTACHMENTS_LOST_KEY = "codexRewriteAttachmentsLost"
+        const val REWRITE_PREVIOUS_DRAFT_KEY = "codexRewritePreviousDraft"
+        const val ROLLBACK_ORIGINAL_IDS_KEY = "codexRollbackOriginalTurnIds"
+        const val ROLLBACK_ITEM_ID_KEY = "codexRollbackItemId"
         const val PENDING_SEND_CONTENT_KEY = "codexPendingSendContent"
         const val PENDING_SEND_ID_KEY = "codexPendingSendId"
         const val PENDING_SEND_ACCEPTED_KEY = "codexPendingSendAccepted"

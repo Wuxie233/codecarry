@@ -23,6 +23,57 @@ import androidx.lifecycle.Lifecycle
 
 class CodexChatInteractionTest {
     @Test
+    fun `attachment recovery keeps daemon metadata but never saves image bytes`() {
+        val daemonImage = CodexComposerAttachment("daemon", "photo", dev.wuxie233.codecarry.data.codex.CodexUserInput.LocalImage("/daemon/photo.png", "original"))
+        val restored = requireNotNull(restoreCodexAttachment(requireNotNull(persistableCodexAttachment(daemonImage))))
+        assertEquals(daemonImage.input.toJson(), restored.input.toJson())
+        assertEquals("daemon", restored.id)
+        val binaryImage = CodexComposerAttachment("binary", "photo", dev.wuxie233.codecarry.data.codex.CodexUserInput.Image("data:image/png;base64,AQID"))
+        assertNull(persistableCodexAttachment(binaryImage))
+    }
+
+    @Test
+    fun `history editing counts following turns and preserves attachment wire fields`() {
+        val original = CodexThreadItem.fromJson(Json.parseToJsonElement("""{
+            "id":"user-1","type":"userMessage","content":[
+            {"type":"text","text":"first"},
+            {"type":"image","url":"data:image/png;base64,AQID","detail":"original"},
+            {"type":"mention","name":"README","path":"/repo/README.md"}]}
+        """).jsonObject)
+        val thread = CodexThread(id = "thread", turns = listOf(
+            CodexTurn(id = "keep", status = "completed"),
+            CodexTurn(id = "edit", status = "canceled", items = listOf(original)),
+            CodexTurn(id = "remove", status = "completed"),
+        ))
+        val plan = requireNotNull(planCodexMessageEdit(thread, "user-1"))
+        assertEquals(2, plan.removedTurnCount)
+        assertEquals(listOf("keep"), plan.retainedTurnIds)
+        assertEquals("original", plan.attachments.first().input.toJson()["detail"]?.jsonPrimitive?.content)
+        assertEquals("/repo/README.md", plan.attachments.last().input.toJson()["path"]?.jsonPrimitive?.content)
+        for (running in listOf("inProgress", "in_progress", "running")) {
+            assertNull(planCodexMessageEdit(thread.copy(turns = thread.turns + CodexTurn("live", running)), "user-1"))
+        }
+    }
+
+    @Test
+    fun `history editing rejects unknown attachments instead of dropping them`() {
+        val original = CodexThreadItem.fromJson(Json.parseToJsonElement("""{
+            "id":"user-1","type":"userMessage","content":[
+            {"type":"text","text":"first"},{"type":"futureInput","value":"preserve me"}]}
+        """).jsonObject)
+        val thread = CodexThread(id = "thread", turns = listOf(CodexTurn(
+            id = "edit", status = "completed", items = listOf(original),
+        )))
+        assertNull(planCodexMessageEdit(thread, "user-1"))
+    }
+
+    @Test
+    fun `quote keeps the existing draft and quotes every line without sending`() {
+        assertEquals("draft\n\n> first\n> second\n\n", appendCodexQuote("draft", "first\nsecond"))
+        assertEquals("draft", appendCodexQuote("draft", "  "))
+    }
+
+    @Test
     fun `draft clears only after the matching content is accepted`() {
         assertTrue(shouldClearCodexDraft("  ship it  ", CodexSendResult("ship it", true)))
         assertFalse(shouldClearCodexDraft("ship it", CodexSendResult("ship it", false)))
