@@ -59,10 +59,27 @@ fork based on OC Remote; the Android namespace/applicationId is
 - Keep REST snapshots merge-safe with live events. A late snapshot may fill
   missing history, but must not overwrite newer SSE-derived state.
 - Put JVM tests in `app/src/test` and device/gesture coverage in
-  `app/src/androidTest`. Prefer focused tests for a changed state machine, then
-  run the repository verification commands below once after integration.
+  `app/src/androidTest`. Select verification using the policy below.
 - Keep user-facing strings in Android resources and preserve the existing
   Compose component boundaries when changing chat or session layouts.
+
+## Testing Policy
+
+- Default to implementation first, followed by verification proportional to
+  the change's risk. Use TDD or a failing-test-first sequence only when the
+  user explicitly requests it for the task.
+- Prefer relevant existing tests or a direct reproduction. Add regression
+  tests when behavior or failure risk warrants them; low-impact layout,
+  copy, and documentation changes do not require new tests by default.
+- Choose focused tests, builds, and device checks for the affected behavior.
+  Run the full suite when broad regression risk justifies it, not on a fixed
+  cadence or automatically after every integration. Reuse passing checks
+  while their inputs remain unchanged.
+- Preserve meaningful existing tests and CI checks. Do not weaken assertions
+  to hide failures. Report what was verified and any remaining limitations.
+- This policy supersedes test-first ordering and blanket full-suite mandates
+  in older plans under `thoughts/` and `docs/specs/`; their behavioral
+  acceptance criteria remain applicable.
 
 ## Communication
 
@@ -250,7 +267,8 @@ fork based on OC Remote; the Android namespace/applicationId is
 
 ## Commands
 
-Use Java 21 for Gradle on this host:
+Use Java 21 for Gradle on this host. Select commands according to the testing
+policy above; the full-suite example is not a mandatory per-change checklist:
 
 ```bash
 JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 ./gradlew :app:testDebugUnitTest :app:assembleDebug

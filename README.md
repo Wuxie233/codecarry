@@ -141,11 +141,15 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 Releases are **manual-only**.
 
 1. Update `versionName`, `versionCode`, and `RELEASE_NOTES_<version>.md`
-2. Verify:
+2. Build the debug APK and verify affected behavior according to the
+   [testing policy](AGENTS.md#testing-policy):
 
 ```bash
-./gradlew :app:testDebugUnitTest
 ./gradlew :app:assembleDebug
+# Focused JVM coverage when relevant:
+./gradlew :app:testDebugUnitTest --tests 'fully.qualified.TestClass'
+# Full JVM suite when the change warrants broader regression coverage:
+./gradlew :app:testDebugUnitTest
 ```
 
 3. Push `master`
