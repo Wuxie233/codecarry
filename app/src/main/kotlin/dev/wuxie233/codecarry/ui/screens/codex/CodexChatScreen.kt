@@ -475,7 +475,16 @@ fun CodexChatScreen(
             }
         },
     ) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding)) {
+        Column(Modifier.fillMaxSize().padding(padding)) {
+            if (state.thread != null) {
+                state.error?.let { error ->
+                    CodexOperationErrorNotice(
+                        message = if (state.ephemeralHistoryUnavailable) stringResource(R.string.codex_ephemeral_history_unavailable) else error,
+                        onDismiss = viewModel::dismissError,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                    )
+                }
+            }
             when {
                 state.isLoading && state.thread?.turns.isNullOrEmpty() -> LoadingStateCard(Modifier.padding(16.dp), stringResource(R.string.codex_opening_thread))
                 state.thread == null && state.error != null -> ErrorStateCard(
@@ -490,15 +499,6 @@ fun CodexChatScreen(
                     onFollowTailChanged = viewModel::onFollowTailChanged,
                     manualNavigationKey = activityNavigationKey,
                 ) {
-                    state.error?.let { error ->
-                        item("operation-error") {
-                            dev.wuxie233.codecarry.ui.components.ChatErrorNotice(
-                                message = if (state.ephemeralHistoryUnavailable) stringResource(R.string.codex_ephemeral_history_unavailable) else error, detail = null,
-                                title = stringResource(R.string.chat_failure_operation),
-                                detailsLabel = stringResource(R.string.chat_failure_details),
-                            )
-                        }
-                    }
                     if (state.canRetryConnection) {
                         item("retry-connection") {
                             TextButton(onClick = viewModel::connectAndLoad) { Text(stringResource(R.string.retry)) }
