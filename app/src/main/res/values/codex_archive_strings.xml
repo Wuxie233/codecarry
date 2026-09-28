@@ -1,0 +1,23 @@
+<resources>
+    <string name="codex_archive_undo">Undo</string>
+    <plurals name="codex_archive_done">
+        <item quantity="one">Archived %1$d conversation.</item>
+        <item quantity="other">Archived %1$d conversations.</item>
+    </plurals>
+    <plurals name="codex_archive_restored">
+        <item quantity="one">Restored %1$d conversation.</item>
+        <item quantity="other">Restored %1$d conversations.</item>
+    </plurals>
+    <plurals name="codex_archive_failed">
+        <item quantity="one">Could not archive %1$d conversation.</item>
+        <item quantity="other">Could not archive %1$d conversations.</item>
+    </plurals>
+    <plurals name="codex_archive_restore_failed">
+        <item quantity="one">Could not restore %1$d conversation.</item>
+        <item quantity="other">Could not restore %1$d conversations.</item>
+    </plurals>
+    <plurals name="codex_archive_unknown">
+        <item quantity="one">Result unknown for %1$d conversation. Refresh to check before trying again.</item>
+        <item quantity="other">Result unknown for %1$d conversations. Refresh to check before trying again.</item>
+    </plurals>
+</resources>

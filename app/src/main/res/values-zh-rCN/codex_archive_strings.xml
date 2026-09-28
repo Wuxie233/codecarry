@@ -1,0 +1,23 @@
+<resources>
+    <string name="codex_archive_undo">撤销</string>
+    <plurals name="codex_archive_done">
+        <item quantity="one">已归档 %1$d 个对话。</item>
+        <item quantity="other">已归档 %1$d 个对话。</item>
+    </plurals>
+    <plurals name="codex_archive_restored">
+        <item quantity="one">已恢复 %1$d 个对话。</item>
+        <item quantity="other">已恢复 %1$d 个对话。</item>
+    </plurals>
+    <plurals name="codex_archive_failed">
+        <item quantity="one">%1$d 个对话归档失败。</item>
+        <item quantity="other">%1$d 个对话归档失败。</item>
+    </plurals>
+    <plurals name="codex_archive_restore_failed">
+        <item quantity="one">%1$d 个对话恢复失败。</item>
+        <item quantity="other">%1$d 个对话恢复失败。</item>
+    </plurals>
+    <plurals name="codex_archive_unknown">
+        <item quantity="one">%1$d 个对话的结果未知，请刷新确认后再操作。</item>
+        <item quantity="other">%1$d 个对话的结果未知，请刷新确认后再操作。</item>
+    </plurals>
+</resources>

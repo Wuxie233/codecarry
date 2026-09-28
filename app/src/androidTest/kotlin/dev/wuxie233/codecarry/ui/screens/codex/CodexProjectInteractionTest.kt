@@ -52,13 +52,20 @@ class CodexProjectInteractionTest {
         assertRowRestored(initialLeft)
     }
 
-    private fun showThread(archived: Boolean, actions: MutableList<String>) {
+    @Test fun busyArchiveCannotBeTriggeredAgainBySwipe() {
+        val actions = mutableListOf<String>()
+        showThread(archived = false, actions, archiveBusy = true)
+        swipeThread(right = false)
+        rule.runOnIdle { assertEquals(emptyList<String>(), actions) }
+    }
+
+    private fun showThread(archived: Boolean, actions: MutableList<String>, archiveBusy: Boolean = false) {
         rule.setContent {
             MaterialTheme {
                 Box(Modifier.width(340.dp)) {
                     CodexThreadRow(
                         thread = CodexThread(id = "thread-test", name = "Project conversation"),
-                        archived = archived, pendingCount = 0,
+                        archived = archived, pendingCount = 0, archiveBusy = archiveBusy,
                         onOpen = { actions.add("open") }, onRename = { actions.add("rename") },
                         onFork = { actions.add("fork") }, onArchive = { actions.add("archive") },
                         onRestore = { actions.add("restore") }, onDelete = { actions.add("delete") },

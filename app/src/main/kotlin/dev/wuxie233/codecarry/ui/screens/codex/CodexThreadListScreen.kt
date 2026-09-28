@@ -48,6 +48,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -111,6 +112,8 @@ fun CodexThreadListScreen(
             rename = { renameTarget = it }, delete = { deleteTarget = it },
             forkThread = viewModel::forkThread, archiveThread = viewModel::archiveThread,
             unarchiveThread = viewModel::unarchiveThread,
+            undoArchive = viewModel::undoArchive, dismissArchiveFeedback = viewModel::dismissArchiveFeedback,
+            presentArchiveFeedback = viewModel::presentArchiveFeedback,
             toggleProjectCollapsed = viewModel::toggleProjectCollapsed,
             toggleProjectPinned = viewModel::toggleProjectPinned,
             toggleProjectHidden = viewModel::toggleProjectHidden,
@@ -165,6 +168,7 @@ internal fun CodexThreadRow(
     onDelete: () -> Unit,
     isSubagent: Boolean = false,
     unread: Boolean = false,
+    archiveBusy: Boolean = false,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     val colors = MaterialTheme.colorScheme
@@ -179,7 +183,7 @@ internal fun CodexThreadRow(
         confirmValueChange = { direction ->
             when (direction) {
                 SwipeToDismissBoxValue.StartToEnd -> onRename()
-                SwipeToDismissBoxValue.EndToStart -> if (archived) onRestore() else onArchive()
+                SwipeToDismissBoxValue.EndToStart -> if (!archiveBusy) { if (archived) onRestore() else onArchive() }
                 SwipeToDismissBoxValue.Settled -> Unit
             }
             false
@@ -188,6 +192,7 @@ internal fun CodexThreadRow(
     )
     SwipeToDismissBox(
         state = swipeState,
+        enableDismissFromEndToStart = !archiveBusy,
         modifier = Modifier.testTag("codex_thread_swipe:${thread.id}"),
         backgroundContent = {
             val right = swipeState.dismissDirection == SwipeToDismissBoxValue.StartToEnd
@@ -268,12 +273,12 @@ internal fun CodexThreadRow(
                         if (archived) {
                             DropdownMenuItem(
                                 text = { Text(stringResource(R.string.codex_thread_restore_action)) }, leadingIcon = { Icon(Icons.Default.Restore, null) },
-                                onClick = { menuOpen = false; onRestore() },
+                                onClick = { menuOpen = false; onRestore() }, enabled = !archiveBusy,
                             )
                         } else {
                             DropdownMenuItem(
                                 text = { Text(stringResource(R.string.codex_thread_archive_action)) }, leadingIcon = { Icon(Icons.Default.Archive, null) },
-                                onClick = { menuOpen = false; onArchive() },
+                                onClick = { menuOpen = false; onArchive() }, enabled = !archiveBusy,
                             )
                         }
                         DropdownMenuItem(
@@ -405,6 +410,9 @@ internal data class CodexThreadListActions(
     val toggleProjectHidden: (String) -> Unit = {},
     val createThread: (String) -> Unit = {},
     val archiveProject: (String) -> Unit = {},
+    val undoArchive: (Long) -> Unit = {},
+    val dismissArchiveFeedback: (Long) -> Unit = {},
+    val presentArchiveFeedback: (Long, Long) -> Unit = { _, _ -> },
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -418,6 +426,7 @@ internal fun CodexThreadListContent(
     var collapsedRunning by rememberSaveable { mutableStateOf(emptyList<String>()) }
     var expandedHistory by rememberSaveable { mutableStateOf(emptyList<String>()) }
     val clipboard = LocalClipboardManager.current
+    val archiveSnackbar = remember { SnackbarHostState() }
     val noWorkspace = stringResource(R.string.codex_thread_no_workspace)
     val projectsView = state.projectPreferences.viewMode == SessionListViewMode.PROJECTS
     val displayedThreads = if (projectsView) state.projects.flatMap { it.threads } else state.activityThreads
@@ -432,6 +441,15 @@ internal fun CodexThreadListContent(
     }
 
     Scaffold(
+        snackbarHost = {
+            CodexArchiveFeedbackHost(
+                feedback = state.archiveFeedback.firstOrNull(),
+                hostState = archiveSnackbar,
+                onUndo = actions.undoArchive,
+                onDismiss = actions.dismissArchiveFeedback,
+                onPresent = actions.presentArchiveFeedback,
+            )
+        },
         topBar = {
             TopAppBar(
                 title = {
@@ -538,6 +556,7 @@ internal fun CodexThreadListContent(
                                                 archived = archived,
                                                 pendingCount = state.pendingRequestCounts.getOrDefault(thread.id, 0),
                                                 unread = thread.id in state.unreadThreadIds,
+                                                archiveBusy = thread.id in state.archiveBusyThreadIds,
                                                 onOpen = { onOpenThread(thread.id) },
                                                 onRename = { actions.rename(thread) },
                                                 onFork = { actions.forkThread(thread.id) },
@@ -601,7 +620,7 @@ internal fun CodexThreadListContent(
                                         onToggleHidden = { actions.toggleProjectHidden(project.directory) },
                                         onNewSession = { actions.createThread(project.directory) },
                                         onCopyPath = { clipboard.setText(AnnotatedString(project.directory)) },
-                                        onArchiveAll = if (!state.showArchived) ({ actions.archiveProject(project.directory) }) else null,
+                                        onArchiveAll = if (!state.showArchived && project.threads.none { it.id in state.archiveBusyThreadIds }) ({ actions.archiveProject(project.directory) }) else null,
                                     )
                                 }
                                 if (!project.collapsed) threadRows(project.roots, state.showArchived)

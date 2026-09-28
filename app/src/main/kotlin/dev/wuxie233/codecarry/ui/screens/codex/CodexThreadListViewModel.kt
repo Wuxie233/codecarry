@@ -14,6 +14,7 @@ import dev.wuxie233.codecarry.data.codex.CodexThread
 import dev.wuxie233.codecarry.data.codex.CodexThreadListPage
 import dev.wuxie233.codecarry.data.repository.ServerRepository
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -50,6 +51,8 @@ data class CodexThreadListUiState(
     val activeThreads: List<CodexThread> = emptyList(),
     val archivedThreads: List<CodexThread> = emptyList(),
     val showArchived: Boolean = false,
+    val archiveFeedback: List<CodexArchiveFeedback> = emptyList(),
+    val archiveBusyThreadIds: Set<String> = emptySet(),
     val searchQuery: String = "",
     val filter: CodexThreadFilter = CodexThreadFilter.ALL,
     val pendingRequestCounts: Map<String, Int> = emptyMap(),
@@ -123,8 +126,75 @@ class CodexThreadListViewModel @Inject constructor(
     private var archivesLoaded = false
     private var stateDbSupported = true
     private val connectionMutex = Mutex()
+    private val archiveController = CodexArchiveController(
+        scope = viewModelScope,
+        onUnknown = { threadId -> viewModelScope.launch { reconcileArchiveOutcome(threadId) } },
+        mutate = ::performArchiveMutation,
+    )
+
+    private suspend fun performArchiveMutation(threadId: String, operation: CodexArchiveOperation): CodexArchiveResult {
+        val connected = try {
+            requireConnection().also { it.client.connect() }
+        } catch (_: TimeoutCancellationException) {
+            return CodexArchiveResult.FAILED
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Throwable) {
+            return CodexArchiveResult.FAILED // Nothing was dispatched.
+        }
+        return try {
+            if (operation == CodexArchiveOperation.ARCHIVE) connectionManager.archiveThread(connected, threadId)
+            else connectionManager.unarchiveThread(connected, threadId)
+            CodexArchiveResult.CONFIRMED
+        } catch (_: TimeoutCancellationException) {
+            CodexArchiveResult.UNKNOWN
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: CodexRpcException) {
+            CodexArchiveResult.FAILED // An explicit server rejection is safe to report as failure.
+        } catch (_: Throwable) {
+            // A missing receipt cannot be replayed. Repair only by reading both catalogs.
+            CodexArchiveResult.UNKNOWN
+        }
+    }
+
+    private suspend fun reconcileArchiveOutcome(threadId: String) {
+        try {
+            val connected = requireConnection()
+            connected.client.connect()
+            val generation = connected.client.currentConnectionGeneration()
+            fun ensureCurrent() {
+                check(connectionManager.isCurrent(connected) && connected.client.currentConnectionGeneration() == generation)
+            }
+            val baseline = connected.events.value
+            val active = loadAllCodexThreads { cursor ->
+                ensureCurrent()
+                loadCatalogPage(connected, cursor, archived = false, databaseOnly = false)
+            }
+            val archived = loadAllCodexThreads { cursor ->
+                ensureCurrent()
+                loadCatalogPage(connected, cursor, archived = true, databaseOnly = false)
+            }
+            ensureCurrent()
+            connected.reducer.reconcileThreads(active, archived, baseline)
+            // Absence from both snapshots still leaves the outcome unknown.
+            if (active.any { it.id == threadId } || archived.any { it.id == threadId }) {
+                archiveController.reconciled(setOf(threadId))
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Throwable) {
+            // Keep the unknown result and duplicate guard until a later successful read.
+        }
+    }
 
     init {
+        viewModelScope.launch {
+            combine(archiveController.feedback, archiveController.busy) { feedback, busy -> feedback to busy }
+                .collect { (feedback, busy) ->
+                    _uiState.update { it.copy(archiveFeedback = feedback, archiveBusyThreadIds = busy) }
+                }
+        }
         viewModelScope.launch {
             connectionManager.connections.map { it[serverId]?.connectionId }.distinctUntilChanged().collect { connectionId ->
                 val observed = connection
@@ -180,6 +250,7 @@ class CodexThreadListViewModel @Inject constructor(
                 _uiState.update { it.copy(isLoading = false) }
                 if (_uiState.value.showArchived) loadArchives()
                 scheduleCalibration(acquired.connection, generation)
+                archiveController.unresolvedIds().forEach { reconcileArchiveOutcome(it) }
 
             } catch (error: CancellationException) {
                 throw error
@@ -209,12 +280,10 @@ class CodexThreadListViewModel @Inject constructor(
 
     fun toggleShowHiddenProjects() = _uiState.update { it.copy(showHiddenProjects = !it.showHiddenProjects) }
 
-    fun archiveProject(directory: String) = mutate { connected ->
-        buildCodexThreadTopology(_uiState.value.activeThreads)
+    fun archiveProject(directory: String) {
+        archiveController.archive(buildCodexThreadTopology(_uiState.value.activeThreads)
             .filter { !it.orphan && it.thread.cwd.orEmpty() == directory }
-            .flatMap { it.members }.forEach {
-            connectionManager.archiveThread(connected, it.id)
-        }
+            .flatMap { it.members }.map { it.id }.filterNot { knownArchiveState(it) == true })
     }
 
     suspend fun defaultDirectory(preferred: String?): String? {
@@ -339,9 +408,29 @@ class CodexThreadListViewModel @Inject constructor(
         it.client.setThreadName(threadId, name.trim())
     }
 
-    fun archiveThread(threadId: String) = mutate { connectionManager.archiveThread(it, threadId) }
+    fun archiveThread(threadId: String) {
+        if (_uiState.value.activeThreads.any { it.id == threadId } && knownArchiveState(threadId) != true) {
+            archiveController.archive(listOf(threadId))
+        }
+    }
 
-    fun unarchiveThread(threadId: String) = mutate { connectionManager.unarchiveThread(it, threadId) }
+    fun presentArchiveFeedback(feedbackId: Long, timeoutMillis: Long) = archiveController.present(feedbackId, timeoutMillis)
+
+    fun undoArchive(feedbackId: Long) = archiveController.undo(feedbackId)
+
+    fun dismissArchiveFeedback(feedbackId: Long) = archiveController.dismiss(feedbackId)
+
+    fun unarchiveThread(threadId: String) {
+        if (_uiState.value.archivedThreads.any { it.id == threadId } && knownArchiveState(threadId) != false) {
+            archiveController.restore(listOf(threadId))
+        }
+    }
+
+    private fun knownArchiveState(threadId: String): Boolean? {
+        val events = connection?.takeIf(connectionManager::isCurrent)?.events?.value ?: return null
+        if (threadId !in events.threads) return null
+        return threadId in events.archivedThreadIds
+    }
 
     fun deleteThread(threadId: String) = mutate { it.client.deleteThread(threadId) }
 

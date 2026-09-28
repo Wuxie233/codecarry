@@ -148,7 +148,54 @@ class CodexThreadListViewModelTest {
         assertFalse("Already loaded archives should be reused", f.transport.hasPendingRequests())
     }
 
-    private suspend fun TestScope.fixture(): Fixture {
+    @Test fun `archive receipt creates one undo and restore uses only Codex protocol`() = scope.runTest {
+        val f = fixture()
+        f.completeCatalog(f.transport, "one")
+        f.vm.archiveThread("one")
+        f.vm.archiveThread("one")
+        runCurrent()
+        val archive = f.transport.nextRequest("thread/archive")
+        assertFalse(f.transport.hasPendingRequests())
+        f.transport.reply(archive, "{}")
+        f.awaitUi { it.archiveFeedback.singleOrNull()?.archivedCount == 1 }
+        val feedback = f.vm.uiState.value.archiveFeedback.single()
+        assertTrue(feedback.canUndo)
+        f.vm.undoArchive(feedback.id)
+        f.vm.undoArchive(feedback.id)
+        runCurrent()
+        val restore = f.transport.nextRequest("thread/unarchive")
+        assertFalse(f.transport.hasPendingRequests())
+        f.transport.reply(restore, """{"thread":{"id":"one"}}""")
+        f.awaitUi { it.archiveFeedback.singleOrNull()?.restoredCount == 1 }
+        assertFalse(f.vm.uiState.value.archiveFeedback.single().canUndo)
+    }
+
+    @Test fun `archive timeout reports unknown and reconciles only by reading catalogs`() = scope.runTest {
+        val f = fixture(requestTimeoutMillis = 100)
+        f.completeCatalog(f.transport, "one")
+        f.vm.archiveThread("one")
+        runCurrent()
+        f.transport.nextRequest("thread/archive") // The server may apply this but lose its receipt.
+        advanceTimeBy(100)
+        runCurrent()
+        f.awaitUi { it.archiveFeedback.singleOrNull()?.unknownCount == 1 }
+        assertFalse(f.vm.uiState.value.archiveFeedback.single().canUndo)
+        f.vm.archiveThread("one") // Must not replay while the result is unknown.
+        runCurrent()
+        val active = f.transport.nextList()
+        assertEquals("false", active["params"]?.jsonObject?.get("archived")?.jsonPrimitive?.content)
+        f.transport.reply(active, """{"data":[],"nextCursor":null}""")
+        runCurrent()
+        val archived = f.transport.nextList()
+        assertEquals("true", archived["params"]?.jsonObject?.get("archived")?.jsonPrimitive?.content)
+        f.transport.reply(archived, """{"data":[{"id":"one"}],"nextCursor":null}""")
+        f.awaitUi { it.archivedThreads.any { thread -> thread.id == "one" } && it.archiveBusyThreadIds.isEmpty() }
+        assertFalse(f.transport.hasPendingRequests())
+        assertEquals(1, f.vm.uiState.value.archiveFeedback.single().unknownCount)
+        assertFalse(f.vm.uiState.value.archiveFeedback.single().canUndo)
+    }
+
+    private suspend fun TestScope.fixture(requestTimeoutMillis: Long = 120_000): Fixture {
         val store = object : DataStore<Preferences> {
             override val data = MutableStateFlow(emptyPreferences())
             override suspend fun updateData(transform: suspend (Preferences) -> Preferences): Preferences =
@@ -160,7 +207,7 @@ class CodexThreadListViewModelTest {
         val transports = mutableListOf<FakeTransport>()
         val manager = CodexConnectionManager(
             createClient = {
-                CodexAppServerClient(FakeTransport().also(transports::add), json, scope = backgroundScope)
+                CodexAppServerClient(FakeTransport().also(transports::add), json, scope = backgroundScope, requestTimeoutMillis = requestTimeoutMillis)
             },
             scope = backgroundScope,
             reconnectInitialMillis = 1,
@@ -229,9 +276,10 @@ class CodexThreadListViewModelTest {
             }
         }
         fun hasPendingRequests(): Boolean = !requests.isEmpty
-        fun nextList(): JsonObject = checkNotNull(requests.tryReceive().getOrNull()) {
-            "Expected automatic thread/list request"
-        }.also { assertEquals("thread/list", it["method"]?.jsonPrimitive?.content) }
+        fun nextList(): JsonObject = nextRequest("thread/list")
+        fun nextRequest(method: String): JsonObject = checkNotNull(requests.tryReceive().getOrNull()) {
+            "Expected $method request"
+        }.also { assertEquals(method, it["method"]?.jsonPrimitive?.content) }
         suspend fun reply(request: JsonObject, result: String) {
             incoming.send(buildJsonObject {
                 put("id", request.getValue("id"))
