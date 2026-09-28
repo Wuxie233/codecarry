@@ -232,6 +232,10 @@ fork based on OC Remote; the Android namespace/applicationId is
   keeping their native transport and server-scoped project preferences. Remote
   directory browsing uses `fs/readDirectory`; preserve exact directory strings,
   including trailing spaces, when starting a thread.
+- Codex text drafts use `CodexDraftRepository` with server/thread keys and revision-
+  checked send acknowledgement. Keep newer drafts when an older send completes,
+  and preserve the parked draft while editing history. Binary attachments remain
+  in memory and must not enter draft persistence or saved-state Bundles.
 - Codex composer Enter inserts a newline. Keep submission on the explicit send
   button rather than wiring the text field IME action to submit.
 - Codex owns its compact `CodexChatHeader`, height-bounded `CodexResponseDock`,
@@ -316,7 +320,14 @@ If generated Hilt/Kotlin caches fail, rerun the affected verification after
   and must not block the resume snapshot or overwrite newer live state.
 - Codex failures retain thread/turn ownership and `willRetry`. Local operation
   errors stay separate from remote notifications; render failures even before
-  their turn snapshot arrives, and retire transient retries on terminal state.
+  their turn snapshot arrives, and retire transient retries on terminal state. Local
+  operation errors remain visible independently of the history scroll position.
+- Codex archive feedback belongs to one server list ViewModel. Only confirmed
+  archive receipts grant undo rights; queued feedback starts its accessibility-
+  adjusted expiry on first presentation, and leaving the screen does not reset it.
+  Unknown writes stay guarded until complete, same-generation active and archived
+  catalogs establish current state. Reconciliation never replays a write or grants
+  undo rights retroactively.
 - `ConversationExport.kt` copies the loaded data snapshot independently of lazy
   rows and disclosure state. Label this as loaded messages; it does not fetch
   older pages. Each `MessageMarkdownContent` shares prose selection within its

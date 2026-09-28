@@ -24,6 +24,7 @@ import dev.wuxie233.codecarry.data.codex.readableAgentMessageIds
 import dev.wuxie233.codecarry.data.preferences.SessionListPreferencesRepository
 import dev.wuxie233.codecarry.data.preferences.hasUnreadReplyBeyondReadAnchor
 import dev.wuxie233.codecarry.data.repository.ServerRepository
+import dev.wuxie233.codecarry.data.repository.CodexDraftRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
@@ -180,9 +181,14 @@ class CodexChatViewModel @Inject constructor(
     private val serverRepository: ServerRepository,
     private val sessionListPreferencesRepository: SessionListPreferencesRepository,
     private val fastPreferences: CodexFastPreferences = CodexFastPreferences(),
+    private val draftRepository: CodexDraftRepository = CodexDraftRepository(),
 ) : ViewModel() {
     val serverId: String = decodeCodexRouteArg(savedStateHandle["serverId"])
     val threadId: String = decodeCodexRouteArg(savedStateHandle["threadId"])
+
+    private var durableDraft = draftRepository.get(serverId, threadId)
+        ?: draftRepository.save(serverId, threadId, savedStateHandle.get<String>("codexDraft").orEmpty())
+    private var pendingDraftRevision: String? = savedStateHandle["codexPendingDraftRevision"]
 
     private val restoredPendingSendContent = savedStateHandle.get<String>(PENDING_SEND_CONTENT_KEY)
     private val restoredPendingSendId = savedStateHandle.get<String>(PENDING_SEND_ID_KEY)
@@ -192,7 +198,9 @@ class CodexChatViewModel @Inject constructor(
     )
     private val _uiState = MutableStateFlow(
         CodexChatUiState(
-            composerValue = savedStateHandle.get<String>("codexDraft").orEmpty().let {
+            composerValue = (if (savedStateHandle.contains(REWRITE_PREVIOUS_DRAFT_KEY)) {
+                savedStateHandle.get<String>("codexDraft").orEmpty()
+            } else durableDraft.text).let {
                 TextFieldValue(it, TextRange(it.length))
             },
             thread = connectionManager.get(serverId)?.events?.value?.threads?.get(threadId),
@@ -264,6 +272,9 @@ class CodexChatViewModel @Inject constructor(
     }
 
     init {
+        if (pendingDraftRevision == null && restoredPendingSendContent == durableDraft.text.trim()) {
+            pendingDraftRevision = durableDraft.revision
+        }
         connectAndLoad()
         observePendingRequests()
         observeReadModel()
@@ -550,7 +561,10 @@ class CodexChatViewModel @Inject constructor(
     fun updateComposerValue(value: TextFieldValue) {
         // Keep the pre-edit draft durable: process death must not turn an unfinished edit
         // into a silently appended normal message. Binary attachments stay in memory.
-        if (_uiState.value.editingMessage == null) savedStateHandle["codexDraft"] = value.text
+        if (_uiState.value.editingMessage == null) {
+            savedStateHandle["codexDraft"] = value.text
+            if (value.text != durableDraft.text) durableDraft = draftRepository.save(serverId, threadId, value.text)
+        }
         _uiState.update { it.copy(composerValue = value) }
     }
 
@@ -588,7 +602,7 @@ class CodexChatViewModel @Inject constructor(
         rewriteRequiresNewTurn = false
         clearPendingRollback()
         clearSavedRewriteInputs()
-        savedStateHandle["codexDraft"] = previous.first.text
+        updateComposerValue(previous.first)
     }
 
     /** The UI confirms the destructive history change before calling this method. */
@@ -655,7 +669,10 @@ class CodexChatViewModel @Inject constructor(
             } finally {
                 _uiState.update { it.copy(isRewritingHistory = false) }
             }
-            if (rolledBack) sendMessage(text, attachments)
+            if (rolledBack) {
+                updateComposerValue(_uiState.value.composerValue)
+                sendMessage(text, attachments)
+            }
         }
     }
 
@@ -747,6 +764,8 @@ class CodexChatViewModel @Inject constructor(
             if (content.isNotBlank()) add(CodexUserInput.Text(content))
             addAll(attachments.map { it.input })
         }
+        pendingDraftRevision = durableDraft.revision
+        savedStateHandle["codexPendingDraftRevision"] = pendingDraftRevision
         savePendingSend(content, clientUserMessageId)
         _uiState.update { it.copy(isSending = true, error = null) }
         viewModelScope.launch {
@@ -904,6 +923,7 @@ class CodexChatViewModel @Inject constructor(
         clientUserMessageId: String,
         awaitAuthoritativeTurn: Boolean,
     ) {
+        val sentDraftRevision = pendingDraftRevision
         val firstAcceptance = sendIdentity.markAccepted(
             content,
             clientUserMessageId,
@@ -919,12 +939,22 @@ class CodexChatViewModel @Inject constructor(
         }
         if (firstAcceptance) {
             val restoreDraft = draftAfterRewrite
-            if (_uiState.value.draft.trim() == content) {
-                updateComposerValue(restoreDraft?.first ?: TextFieldValue())
+            val unchanged = sentDraftRevision == durableDraft.revision && _uiState.value.draft.trim() == content
+            val nextValue = if (unchanged) {
+                restoreDraft?.first ?: TextFieldValue()
             } else if (restoreDraft != null && restoreDraft.first.text.isNotBlank()) {
                 // The user may type a new draft while the send receipt is in flight.
                 // Preserve both it and the draft parked before editing/regenerating.
-                updateDraft(listOf(restoreDraft.first.text, _uiState.value.draft).filter { it.isNotBlank() }.joinToString("\n\n"))
+                val merged = listOf(restoreDraft.first.text, _uiState.value.draft).filter { it.isNotBlank() }.joinToString("\n\n")
+                TextFieldValue(merged, TextRange(merged.length))
+            } else null
+            if (nextValue != null) {
+                // Another instance of this chat may already own a newer draft.
+                draftRepository.replaceIfRevision(serverId, threadId, durableDraft.revision, nextValue.text)?.let {
+                    durableDraft = it
+                    savedStateHandle["codexDraft"] = nextValue.text
+                    _uiState.update { state -> state.copy(composerValue = nextValue) }
+                }
             }
             _uiState.update { state -> state.copy(composerAttachments = state.composerAttachments.filterNot { it.id in pendingAttachmentIds }) }
             if (restoreDraft != null) _uiState.update { it.copy(composerAttachments = (it.composerAttachments + restoreDraft.second).distinctBy { attachment -> attachment.id }) }
@@ -1422,6 +1452,7 @@ class CodexChatViewModel @Inject constructor(
         savedStateHandle.remove<String>(PENDING_SEND_CONTENT_KEY)
         savedStateHandle.remove<String>(PENDING_SEND_ID_KEY)
         savedStateHandle.remove<Boolean>(PENDING_SEND_ACCEPTED_KEY)
+        savedStateHandle.remove<String>("codexPendingDraftRevision")
     }
 
     private fun observePendingRequests() {

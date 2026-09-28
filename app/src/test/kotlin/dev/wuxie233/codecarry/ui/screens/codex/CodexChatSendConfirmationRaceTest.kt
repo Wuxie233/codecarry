@@ -11,6 +11,7 @@ import dev.wuxie233.codecarry.data.codex.CodexConnectionManager
 import dev.wuxie233.codecarry.data.codex.CodexRpcTransport
 import dev.wuxie233.codecarry.data.codex.CodexUserInput
 import dev.wuxie233.codecarry.data.repository.ServerRepository
+import dev.wuxie233.codecarry.data.repository.CodexDraftRepository
 import dev.wuxie233.codecarry.domain.model.ServerType
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
@@ -318,6 +319,97 @@ class CodexChatSendConfirmationRaceTest {
         assertEquals("parked draft", fixture.vm.uiState.value.draft)
     }
 
+    @Test
+    fun `text draft survives returning through list with a fresh navigation state`() = scope.runTest {
+        val fixture = fixture(restoredPending = false)
+        fixture.vm.updateDraft("unfinished message")
+        fixture.vm.viewModelScope.cancel()
+        val reopened = fixture.reopen()
+        assertEquals("unfinished message", reopened.uiState.value.draft)
+    }
+
+    @Test
+    fun `late send receipt preserves a newly typed identical draft`() = scope.runTest {
+        val fixture = fixture(restoredPending = false)
+        fixture.resume()
+        runCurrent()
+        fixture.completeMetadata()
+        fixture.vm.updateDraft("ship it")
+        fixture.vm.sendMessage("ship it")
+        runCurrent()
+        val send = fixture.transport.next("turn/steer")
+        fixture.vm.updateDraft("")
+        fixture.vm.updateDraft("ship it")
+        fixture.transport.reply(send, "{}")
+        runCurrent()
+        assertEquals("ship it", fixture.vm.uiState.value.draft)
+        assertEquals("ship it", fixture.reopen().uiState.value.draft)
+    }
+
+    @Test
+    fun `receipt from old view model cannot clear the draft in a reopened chat`() = scope.runTest {
+        val fixture = fixture(restoredPending = false)
+        fixture.resume()
+        runCurrent()
+        fixture.completeMetadata()
+        fixture.vm.updateDraft("ship it")
+        fixture.vm.sendMessage("ship it")
+        runCurrent()
+        val send = fixture.transport.next("turn/steer")
+        val reopened = fixture.reopen()
+        reopened.updateDraft("new message")
+        fixture.transport.reply(send, "{}")
+        runCurrent()
+        assertEquals("new message", reopened.uiState.value.draft)
+        assertEquals("new message", fixture.reopen().uiState.value.draft)
+    }
+
+    @Test
+    fun `authoritative turn receipt clears the draft after consuming pending send state`() = scope.runTest {
+        val fixture = fixture(restoredPending = false)
+        fixture.resume("""{"id":"child","turns":[]}""")
+        runCurrent()
+        fixture.completeMetadata()
+        fixture.vm.updateDraft("ship it")
+        fixture.vm.sendMessage("ship it")
+        runCurrent()
+        fixture.transport.reply(fixture.transport.next("turn/start"),
+            """{"turn":{"id":"new-turn","status":"inProgress","items":[]}}""")
+        runCurrent()
+        assertEquals("", fixture.vm.uiState.value.draft)
+        assertEquals("", fixture.reopen().uiState.value.draft)
+    }
+
+    @Test
+    fun `accepted send clears durable draft and rejects stale saved composer text`() = scope.runTest {
+        val fixture = fixture(restoredPending = false)
+        fixture.resume()
+        runCurrent()
+        fixture.completeMetadata()
+        fixture.vm.updateDraft("ship it")
+        fixture.vm.sendMessage("ship it")
+        runCurrent()
+        fixture.transport.reply(fixture.transport.next("turn/steer"), "{}")
+        runCurrent()
+        assertEquals("", fixture.vm.uiState.value.draft)
+        assertEquals("", fixture.reopen().uiState.value.draft)
+    }
+
+    @Test
+    fun `edit text does not replace the parked durable draft`() = scope.runTest {
+        val fixture = fixture(restoredPending = false)
+        fixture.resume("""{"id":"child","turns":[{"id":"turn-1","status":"completed","items":[{"id":"user-1","type":"userMessage","content":[{"type":"text","text":"old question"}]}]}]}""")
+        runCurrent()
+        fixture.completeMetadata()
+        fixture.vm.updateDraft("parked")
+        fixture.vm.beginEditMessage("user-1")
+        assertTrue(fixture.vm.uiState.value.editingMessage != null)
+        fixture.vm.updateDraft("edited question")
+        assertEquals("parked", fixture.reopen().uiState.value.draft)
+        fixture.vm.cancelEditing()
+        assertEquals("parked", fixture.vm.uiState.value.draft)
+    }
+
     private suspend fun TestScope.fixture(restoredPending: Boolean, savedHistory: Map<String, Any> = emptyMap()): Fixture {
         val http = HttpClient(MockEngine { error("OpenCode transport must not be used") }).also(httpClients::add)
         val store = object : DataStore<Preferences> {
@@ -343,16 +435,21 @@ class CodexChatSendConfirmationRaceTest {
                 }
             },
         )
-        val vm = CodexChatViewModel(
-            savedState,
+        val drafts = CodexDraftRepository()
+        fun createVm(state: SavedStateHandle) = CodexChatViewModel(
+            state,
             manager,
             repository,
             dev.wuxie233.codecarry.data.preferences.SessionListPreferencesRepository(store),
+            draftRepository = drafts,
         ).also(viewModels::add)
+        val vm = createVm(savedState)
         val sendResults = mutableListOf<CodexSendResult>()
         backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.sendResults.toList(sendResults) }
         runCurrent()
-        return Fixture(vm, transport, this, sendResults)
+        return Fixture(vm, transport, this, sendResults) {
+            createVm(SavedStateHandle(mapOf("serverId" to server.id, "threadId" to "child", "codexDraft" to "stale draft")))
+        }
     }
 
     private inner class Fixture(
@@ -360,6 +457,7 @@ class CodexChatSendConfirmationRaceTest {
         val transport: FakeTransport,
         val testScope: TestScope,
         val sendResults: List<CodexSendResult>,
+        val reopen: () -> CodexChatViewModel,
     ) {
         suspend fun resume(threadJson: String? = null) {
             val request = transport.next("thread/resume")
