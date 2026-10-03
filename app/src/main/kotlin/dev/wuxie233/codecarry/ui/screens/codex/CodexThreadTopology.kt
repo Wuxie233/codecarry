@@ -16,7 +16,7 @@ data class CodexThreadNode(
 
 internal fun buildCodexThreadTopology(threads: List<CodexThread>): List<CodexThreadNode> {
     // Keep early deltas in the reducer without advertising an unverified thread.
-    val byId = threads.filter { it.hasMetadata }.associateBy { it.id }
+    val byId = threads.filter { it.hasMetadata && !it.isInternalReview }.associateBy { it.id }
     val parents = byId.mapValues { (_, thread) -> thread.parentThreadId?.takeIf { it in byId } }.toMutableMap()
     // Break each malformed cycle deterministically. Every thread remains navigable exactly once.
     val finished = mutableSetOf<String>()

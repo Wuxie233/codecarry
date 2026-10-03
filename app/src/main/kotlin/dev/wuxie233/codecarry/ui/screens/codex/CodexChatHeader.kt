@@ -24,6 +24,7 @@ internal fun CodexChatHeader(
     onNavigateBack: () -> Unit,
     onOpenStatus: () -> Unit,
     onOpenOverflow: () -> Unit,
+    actions: @Composable () -> Unit = {},
     overflowMenu: @Composable () -> Unit = {},
 ) {
     Surface(color = MaterialTheme.colorScheme.background) {
@@ -49,6 +50,7 @@ internal fun CodexChatHeader(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
+            actions()
             Box {
                 IconButton(onClick = onOpenOverflow) {
                     Icon(Icons.Default.MoreHoriz, stringResource(R.string.more_options), Modifier.size(22.dp))

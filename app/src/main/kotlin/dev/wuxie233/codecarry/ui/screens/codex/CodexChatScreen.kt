@@ -241,12 +241,14 @@ fun CodexChatScreen(
                 onNavigateBack = onNavigateBack,
                 onOpenStatus = { statusOpen = true },
                 onOpenOverflow = { menuExpanded = true },
+                actions = {
+                    CodexUsageAction(usage, onClick = {
+                        usageOpen = true
+                        viewModel.refreshUsage()
+                    })
+                },
                 overflowMenu = {
                         DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.codex_usage_title)) },
-                                onClick = { menuExpanded = false; usageOpen = true; viewModel.refreshUsage() },
-                            )
                             DropdownMenuItem(
                                 text = { Text(stringResource(R.string.chat_subagents_title)) },
                                 onClick = { menuExpanded = false; relatedOpen = true; viewModel.refreshRelatedThreads() },

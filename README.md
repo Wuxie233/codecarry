@@ -154,7 +154,9 @@ Releases are **manual-only**.
 
 3. Push `master`
 4. Create and push the release tag
-5. Manually trigger `.github/workflows/release.yml` and provide `tag` (e.g. `v1.6.18`)
+5. Publish using either route:
+   - **Local build:** configure `app/keystore/signing.properties` and the existing release keystore, run `./gradlew :app:assembleRelease`, verify the APK with `apksigner verify --print-certs`, and compare its signing certificate with the previous release. Rename it to `codecarry-<version>.apk`, then run `gh release create v<version> codecarry-<version>.apk --verify-tag --title "CodeCarry <version>" --notes-file RELEASE_NOTES_<version>.md`. Keep signing files out of Git.
+   - **GitHub Actions:** manually trigger `.github/workflows/release.yml` and provide `tag` (e.g. `v1.6.18`).
 6. Confirm the GitHub Release has exactly one uploaded APK `codecarry-<version>.apk` and that install metadata matches the tag version
 
 Tag pushes must **not** be relied on to auto-publish releases.

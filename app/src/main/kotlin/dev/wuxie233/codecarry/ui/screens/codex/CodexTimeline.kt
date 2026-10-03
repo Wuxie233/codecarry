@@ -1,5 +1,6 @@
 package dev.wuxie233.codecarry.ui.screens.codex
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -15,6 +16,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.AccountTree
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -177,17 +183,31 @@ private fun CodexSubAgentActivityRow(item: CodexThreadItem, onOpenThread: (Strin
     val title = name?.let { stringResource(R.string.codex_timeline_named_subagent_activity, it) }
         ?: stringResource(R.string.codex_timeline_subagent_activity)
     val activity = kind?.let { codexSubAgentActivityKind(it) }
-    CodexDisclosure(
-        key = item.id ?: item.type,
-        title = title,
-        status = item.status,
-        subtitle = item.status?.let { codexTimelineStatus(it) } ?: activity,
-    ) {
-        path?.let { CodexMonospaceContent(it) }
-        activity?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-        item.status?.let { Text(codexTimelineStatus(it), style = MaterialTheme.typography.labelSmall) }
-        if (threadId != null) TextButton(onClick = { onOpenThread(threadId) }) {
-            Text(stringResource(R.string.codex_timeline_open_subagent))
+    var expanded by rememberSaveable(item.id) { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth()) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Default.AccountTree, contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Column(Modifier.weight(1f).clickable { expanded = !expanded }.padding(8.dp)) {
+                Text(title, style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 2, overflow = TextOverflow.Ellipsis)
+                activity?.let { Text(it, style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            }
+            if (threadId != null) IconButton(onClick = { onOpenThread(threadId) }) {
+                Icon(Icons.AutoMirrored.Filled.OpenInNew,
+                    contentDescription = stringResource(R.string.codex_timeline_open_subagent))
+            }
+            IconButton(onClick = { expanded = !expanded }) {
+                Icon(if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = stringResource(if (expanded) R.string.codex_timeline_collapse else R.string.codex_timeline_expand))
+            }
+        }
+        if (expanded) {
+            path?.let { CodexMonospaceContent(it) }
+            if (threadId != null) TextButton(onClick = { onOpenThread(threadId) }) {
+                Text(stringResource(R.string.codex_timeline_open_subagent))
+            }
         }
     }
 }

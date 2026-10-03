@@ -64,6 +64,7 @@ internal fun codexTurnIsRunning(status: String): Boolean =
 
 /** Terminal turn state wins over stale in-progress tool/reasoning statuses. */
 internal fun codexItemPresentationStatus(item: CodexThreadItem, turnStatus: String?): String? {
+    if (item.type == "subAgentActivity") return item.status
     if (turnStatus !in setOf("completed", "failed", "interrupted", "cancelled", "canceled")) return item.status
     return if (item.status == null || item.status in setOf("inProgress", "in_progress", "running", "pending")) {
         turnStatus
