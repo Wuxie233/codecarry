@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -43,7 +42,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Surface
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -53,6 +51,14 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.platform.LocalAccessibilityManager
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.FolderOpen
+import dev.wuxie233.codecarry.data.codex.CodexProject
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
@@ -78,12 +84,7 @@ import java.util.Date
 import java.util.Locale
 
 import dev.wuxie233.codecarry.data.preferences.SessionListViewMode
-import dev.wuxie233.codecarry.data.preferences.SessionScope
-import dev.wuxie233.codecarry.domain.model.SessionStatus
-import dev.wuxie233.codecarry.ui.screens.sessions.SessionRecentWorkItem
 import dev.wuxie233.codecarry.ui.screens.sessions.components.*
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.rememberSwipeToDismissBoxState
@@ -95,17 +96,33 @@ fun CodexThreadListScreen(
     onNavigateBack: () -> Unit,
     onOpenThread: (String) -> Unit,
     viewModel: CodexThreadListViewModel = hiltViewModel(),
+    onNewConversation: (String?) -> Unit = {},
 ) {
     val state by viewModel.uiState.collectAsState()
-    var createOpen by remember { mutableStateOf(false) }
+    var projectEditorOpen by remember { mutableStateOf(false) }
+    var projectTarget by remember { mutableStateOf<CodexProject?>(null) }
+    var removeProjectTarget by remember { mutableStateOf<CodexProject?>(null) }
+    val accessibility = LocalAccessibilityManager.current
+    val scope = rememberCoroutineScope()
     var renameTarget by remember { mutableStateOf<CodexThread?>(null) }
     var deleteTarget by remember { mutableStateOf<CodexThread?>(null) }
-    LaunchedEffect(Unit) { viewModel.openThread.collect(onOpenThread) }
+    LaunchedEffect(Unit) { viewModel.refresh(); viewModel.openThread.collect(onOpenThread) }
 
     CodexThreadListContent(
-        state = state, onNavigateBack = onNavigateBack, onOpenThread = onOpenThread,
+        state = state, onNavigateBack = onNavigateBack, onOpenThread = { id ->
+            viewModel.selectProject((state.activeThreads + state.archivedThreads).firstOrNull { it.id == id }?.projectId)
+            onOpenThread(id)
+        },
         actions = CodexThreadListActions(
-            refresh = viewModel::refresh, create = { createOpen = true },
+            refresh = viewModel::refresh, create = {
+                onNewConversation(state.projectPreferences.selectedProjectId?.takeIf { id -> state.projectCatalog.any { it.id == id } && state.pendingProjectRemovals.none { it.projectId == id } && id !in state.deletingProjectIds })
+            },
+            createUnassigned = { viewModel.selectProject(null); onNewConversation(null) },
+            addProject = { projectTarget = null; projectEditorOpen = true },
+            editProject = { id -> projectTarget = state.projectCatalog.firstOrNull { it.id == id }; projectEditorOpen = projectTarget != null },
+            removeProject = { id -> removeProjectTarget = state.projectCatalog.firstOrNull { it.id == id } },
+            moveProject = viewModel::moveProject,
+            undoProjectRemoval = viewModel::undoProjectRemoval,
             setViewMode = viewModel::setViewMode, showArchived = viewModel::showArchived,
             setSearchQuery = viewModel::setSearchQuery, setFilter = viewModel::setFilter,
             toggleShowHiddenProjects = viewModel::toggleShowHiddenProjects,
@@ -117,17 +134,29 @@ fun CodexThreadListScreen(
             toggleProjectCollapsed = viewModel::toggleProjectCollapsed,
             toggleProjectPinned = viewModel::toggleProjectPinned,
             toggleProjectHidden = viewModel::toggleProjectHidden,
-            createThread = { viewModel.createThread(it) }, archiveProject = viewModel::archiveProject,
+            createThread = { viewModel.selectProject(it); onNewConversation(it) }, archiveProject = viewModel::archiveProject,
         ),
     )
 
-    if (createOpen) {
-        CodexDirectoryPicker(
-            recentDirectories = state.recentDirectories,
-            defaultDirectory = viewModel::defaultDirectory,
-            readDirectory = viewModel::readDirectory,
-            onDismiss = { createOpen = false },
-            onSelect = { viewModel.createThread(it); createOpen = false },
+    if (projectEditorOpen) {
+        CodexProjectEditor(
+            project = projectTarget, state = state, viewModel = viewModel,
+            onDismiss = { projectEditorOpen = false },
+            onSave = { name, roots, key -> scope.launch {
+                if (viewModel.saveProject(projectTarget?.id, name, roots, key)) projectEditorOpen = false
+            } },
+        )
+    }
+    removeProjectTarget?.let { project ->
+        AlertDialog(
+            onDismissRequest = { removeProjectTarget = null },
+            title = { Text(stringResource(R.string.codex_project_remove)) },
+            text = { Text(stringResource(R.string.codex_project_remove_hint, project.name)) },
+            confirmButton = { TextButton(onClick = {
+                viewModel.removeProject(project.id, accessibility?.calculateRecommendedTimeoutMillis(8000L, containsIcons = false, containsText = true, containsControls = true) ?: 8000L)
+                removeProjectTarget = null
+            }) { Text(stringResource(R.string.codex_project_remove)) } },
+            dismissButton = { TextButton(onClick = { removeProjectTarget = null }) { Text(stringResource(R.string.cancel)) } },
         )
     }
     renameTarget?.let { thread ->
@@ -395,6 +424,12 @@ internal fun CodexListControls(
 internal data class CodexThreadListActions(
     val refresh: () -> Unit = {},
     val create: () -> Unit = {},
+    val createUnassigned: () -> Unit = {},
+    val addProject: () -> Unit = {},
+    val editProject: (String) -> Unit = {},
+    val removeProject: (String) -> Unit = {},
+    val moveProject: (String, String?) -> Unit = { _, _ -> },
+    val undoProjectRemoval: (String) -> Unit = {},
     val setViewMode: (SessionListViewMode) -> Unit = {},
     val showArchived: (Boolean) -> Unit = {},
     val setSearchQuery: (String) -> Unit = {},
@@ -425,20 +460,8 @@ internal fun CodexThreadListContent(
 ) {
     var collapsedRunning by rememberSaveable { mutableStateOf(emptyList<String>()) }
     var expandedHistory by rememberSaveable { mutableStateOf(emptyList<String>()) }
-    val clipboard = LocalClipboardManager.current
     val archiveSnackbar = remember { SnackbarHostState() }
-    val noWorkspace = stringResource(R.string.codex_thread_no_workspace)
-    val projectsView = state.projectPreferences.viewMode == SessionListViewMode.PROJECTS
-    val displayedThreads = if (projectsView) state.projects.flatMap { it.threads } else state.activityThreads
-    val recentWork = remember(state.activeThreads, state.projectPreferences.hidden) {
-        buildCodexThreadTopology(state.activeThreads).filter { !it.orphan && (it.thread.recencyAt ?: it.thread.updatedAt ?: it.thread.createdAt ?: 0L) > 0L && it.thread.cwd.orEmpty() !in state.projectPreferences.hidden }
-            .take(6).map { node ->
-                val it = node.thread
-                SessionRecentWorkItem(it.id, it.displayTitle.orEmpty(),
-                    it.cwd.orEmpty(), (it.recencyAt ?: it.updatedAt ?: it.createdAt ?: 0L) * 1000,
-                    if (it.status.type == "active") SessionStatus.Busy else SessionStatus.Idle)
-            }
-    }
+    var controlsOpen by rememberSaveable { mutableStateOf(false) }
 
     Scaffold(
         snackbarHost = {
@@ -463,16 +486,14 @@ internal fun CodexThreadListContent(
                     }
                 },
                 actions = {
+                    IconButton(onClick = { controlsOpen = !controlsOpen }) {
+                        Icon(Icons.Default.Search, contentDescription = stringResource(R.string.codex_project_filters))
+                    }
                     IconButton(onClick = actions.refresh) {
                         Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.codex_refresh))
                     }
                 },
             )
-        },
-        floatingActionButton = {
-            FloatingActionButton(onClick = actions.create) {
-                Icon(Icons.Default.Add, contentDescription = stringResource(R.string.codex_thread_new))
-            }
         },
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.TopCenter) {
@@ -480,33 +501,28 @@ internal fun CodexThreadListContent(
                 Modifier.widthIn(max = 960.dp).fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                SessionWorkspaceOverview(
-                    recentWork = if (recentWork.isNotEmpty()) ({
-                        SessionRecentWork(recentWork, onSessionClick = { id, _ -> onOpenThread(id) })
-                    }) else null,
-                    viewControl = {
-                        SessionWorkspaceViewControl(
-                            state.projectPreferences.viewMode, state.activityThreads.size, actions.setViewMode,
-                        )
-                    },
-                    projectControls = if (projectsView) ({
-                        SessionScopeSegmentedControl(
-                            if (state.showArchived) SessionScope.ARCHIVED else SessionScope.INBOX,
-                            state.archivedThreads.size,
-                            { actions.showArchived(it == SessionScope.ARCHIVED) },
-                        )
-                    }) else null,
-                )
-                CodexListControls(
-                    searchQuery = state.searchQuery,
-                    onSearchQueryChange = actions.setSearchQuery,
-                    filter = state.filter,
-                    onFilterChange = actions.setFilter,
-                )
-                if (projectsView && state.projectPreferences.hidden.isNotEmpty()) {
-                    TextButton(onClick = actions.toggleShowHiddenProjects, modifier = Modifier.padding(horizontal = 8.dp)) {
-                        Text(stringResource(if (state.showHiddenProjects) R.string.codex_projects_hide_hidden else R.string.codex_projects_show_hidden,
-                            state.projectPreferences.hidden.size))
+                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Button(onClick = actions.create, modifier = Modifier.weight(1f)) {
+                        Icon(Icons.Default.Add, null)
+                        Spacer(Modifier.width(8.dp))
+                        Text(stringResource(R.string.codex_project_new_conversation))
+                    }
+                    IconButton(onClick = actions.addProject) {
+                        Icon(Icons.Default.FolderOpen, stringResource(R.string.codex_project_add))
+                    }
+                }
+                if (controlsOpen) {
+                    CodexListControls(state.searchQuery, actions.setSearchQuery, state.filter, actions.setFilter)
+                    Row(Modifier.padding(horizontal = 16.dp)) {
+                        FilterChip(selected = state.showArchived, onClick = { actions.showArchived(!state.showArchived) },
+                            label = { Text(stringResource(R.string.codex_project_archived)) })
+                    }
+                }
+                state.projectError?.let { Text(it, Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.error) }
+                state.pendingProjectRemovals.forEach { removal ->
+                    Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(stringResource(R.string.codex_project_removed, removal.name), Modifier.weight(1f))
+                        TextButton(onClick = { actions.undoProjectRemoval(removal.projectId) }) { Text(stringResource(R.string.codex_project_undo)) }
                     }
                 }
                 state.error?.takeIf { state.activeThreads.isNotEmpty() || state.archivedThreads.isNotEmpty() }?.let {
@@ -514,16 +530,16 @@ internal fun CodexThreadListContent(
                 }
                 Box(Modifier.fillMaxSize()) {
                     when {
-                        (if (state.showArchived) state.isLoadingArchived && state.archivedThreads.isEmpty() else state.isLoading && state.activeThreads.isEmpty()) -> LoadingStateCard(Modifier.padding(12.dp), stringResource(R.string.codex_thread_loading))
-                        state.error != null && state.activeThreads.isEmpty() && state.archivedThreads.isEmpty() -> ErrorStateCard(
+                        (if (state.showArchived) state.isLoadingArchived && state.archivedThreads.isEmpty() else (state.isLoading || state.projectsLoading) && state.activeThreads.isEmpty() && state.projects.isEmpty()) -> LoadingStateCard(Modifier.padding(12.dp), stringResource(R.string.codex_thread_loading))
+                        state.error != null && state.activeThreads.isEmpty() && state.archivedThreads.isEmpty() && state.projects.isEmpty() -> ErrorStateCard(
                             title = stringResource(R.string.codex_thread_load_failed),
                             message = state.error.orEmpty(),
                             onRetry = actions.refresh,
                             modifier = Modifier.padding(12.dp),
                         )
-                        displayedThreads.isEmpty() -> EmptyStateCard(
-                            title = if (!projectsView) stringResource(R.string.codex_projects_no_activity) else if (state.hasListConstraints) stringResource(R.string.codex_sessions_no_matches) else if (state.showArchived) stringResource(R.string.codex_thread_archived_empty) else stringResource(R.string.codex_thread_empty),
-                            message = if (!projectsView) stringResource(R.string.codex_projects_no_activity_hint) else if (state.hasListConstraints) stringResource(R.string.codex_sessions_no_matches_hint) else if (state.showArchived) stringResource(R.string.codex_thread_archived_empty_message) else stringResource(R.string.codex_thread_empty_message),
+                        state.projects.isEmpty() && !state.projectsLoading -> EmptyStateCard(
+                            title = if (state.hasListConstraints) stringResource(R.string.codex_sessions_no_matches) else if (state.showArchived) stringResource(R.string.codex_thread_archived_empty) else stringResource(R.string.codex_thread_empty),
+                            message = if (state.hasListConstraints) stringResource(R.string.codex_sessions_no_matches_hint) else if (state.showArchived) stringResource(R.string.codex_thread_archived_empty_message) else stringResource(R.string.codex_thread_empty_message),
                             action = when {
                                 state.hasListConstraints -> ({
                                     TextButton(onClick = {
@@ -601,26 +617,17 @@ internal fun CodexThreadListContent(
                                     childGroup(historical, history = true)
                                 }
                             }
-                            if (!projectsView) {
-                                threadRows(state.activityRoots, false)
-                            } else state.projects.forEach { project ->
-                                item("project:${project.orphan}:${project.directory}") {
-                                    if (project.orphan) {
-                                        Text(stringResource(R.string.codex_topology_orphans), Modifier.padding(16.dp), style = MaterialTheme.typography.titleSmall)
-                                    } else ProjectGroupHeader(
-                                        projectName = project.directory.trimEnd('/', '\\').substringAfterLast('/').substringAfterLast('\\').ifBlank { noWorkspace },
-                                        tildeDirectory = project.directory.ifBlank { noWorkspace },
-                                        sessionCount = project.threads.size,
-                                        activeCount = project.roots.sumOf { it.runningCount },
-                                        unreadCount = project.threads.count { it.id in state.unreadThreadIds },
-                                        additions = 0, deletions = 0,
-                                        isPinned = project.pinned, isCollapsed = project.collapsed, isHidden = project.hidden,
-                                        onToggleCollapsed = { actions.toggleProjectCollapsed(project.directory) },
-                                        onTogglePinned = { actions.toggleProjectPinned(project.directory) },
-                                        onToggleHidden = { actions.toggleProjectHidden(project.directory) },
-                                        onNewSession = { actions.createThread(project.directory) },
-                                        onCopyPath = { clipboard.setText(AnnotatedString(project.directory)) },
-                                        onArchiveAll = if (!state.showArchived && project.threads.none { it.id in state.archiveBusyThreadIds }) ({ actions.archiveProject(project.directory) }) else null,
+                            state.projects.forEachIndexed { index, project ->
+                                item("project:${project.projectId ?: "unassigned"}") {
+                                    CompactCodexProjectHeader(
+                                        project = project,
+                                        busy = project.projectId in state.deletingProjectIds,
+                                        onToggle = { project.projectId?.let(actions.toggleProjectCollapsed) },
+                                        onNew = { project.projectId?.let(actions.createThread) ?: actions.createUnassigned() },
+                                        onEdit = { project.projectId?.let(actions.editProject) },
+                                        onRemove = { project.projectId?.let(actions.removeProject) },
+                                        onMoveUp = if (index > 0 && project.projectId != null) ({ actions.moveProject(project.projectId, state.projects[index - 1].projectId) }) else null,
+                                        onMoveDown = if (index < state.projects.indexOfLast { it.projectId != null } && project.projectId != null) ({ actions.moveProject(project.projectId, state.projects.getOrNull(index + 2)?.projectId) }) else null,
                                     )
                                 }
                                 if (!project.collapsed) threadRows(project.roots, state.showArchived)
@@ -632,4 +639,88 @@ internal fun CodexThreadListContent(
         }
     }
 
+}
+
+@Composable
+private fun CompactCodexProjectHeader(
+    project: CodexThreadProject,
+    busy: Boolean,
+    onToggle: () -> Unit,
+    onNew: () -> Unit,
+    onEdit: () -> Unit,
+    onRemove: () -> Unit,
+    onMoveUp: (() -> Unit)?,
+    onMoveDown: (() -> Unit)?,
+) {
+    var menu by remember { mutableStateOf(false) }
+    Row(Modifier.fillMaxWidth().clickable(onClick = onToggle).padding(start = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (project.projectId != null) Icon(
+            if (project.collapsed) Icons.Default.ChevronRight else Icons.Default.ExpandMore,
+            contentDescription = null, modifier = Modifier.size(24.dp),
+        )
+        Text(project.name ?: stringResource(R.string.codex_project_unassigned),
+            Modifier.weight(1f).padding(start = 8.dp), style = MaterialTheme.typography.titleSmall,
+            maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(project.threads.size.toString(), style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        IconButton(enabled = !busy, onClick = onNew) { Icon(Icons.Default.Add, stringResource(R.string.codex_project_new_conversation)) }
+        if (project.projectId != null) Box {
+            IconButton(enabled = !busy, onClick = { menu = true }) { Icon(Icons.Default.MoreVert, stringResource(R.string.codex_project_actions)) }
+            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                DropdownMenuItem(text = { Text(stringResource(R.string.codex_project_edit)) }, onClick = { menu = false; onEdit() })
+                onMoveUp?.let { action -> DropdownMenuItem(text = { Text(stringResource(R.string.codex_project_move_up)) }, onClick = { menu = false; action() }) }
+                onMoveDown?.let { action -> DropdownMenuItem(text = { Text(stringResource(R.string.codex_project_move_down)) }, onClick = { menu = false; action() }) }
+                DropdownMenuItem(text = { Text(stringResource(R.string.codex_project_remove)) }, onClick = { menu = false; onRemove() })
+            }
+        }
+    }
+}
+
+@Composable
+private fun CodexProjectEditor(
+    project: CodexProject?,
+    state: CodexThreadListUiState,
+    viewModel: CodexThreadListViewModel,
+    onDismiss: () -> Unit,
+    onSave: (String, List<String>, String) -> Unit,
+) {
+    var name by rememberSaveable(project?.id) { mutableStateOf(project?.name.orEmpty()) }
+    var roots by rememberSaveable(project?.id) { mutableStateOf(project?.roots?.map { it.path }.orEmpty()) }
+    var picker by remember { mutableStateOf(false) }
+    val idempotencyKey = rememberSaveable(project?.id) { java.util.UUID.randomUUID().toString() }
+    AlertDialog(
+        onDismissRequest = { if (!state.projectBusy) onDismiss() },
+        title = { Text(stringResource(if (project == null) R.string.codex_project_add else R.string.codex_project_edit)) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(value = name, onValueChange = { name = it }, enabled = !state.projectBusy,
+                    label = { Text(stringResource(R.string.codex_project_name)) }, singleLine = true)
+                Text(stringResource(R.string.codex_project_roots), style = MaterialTheme.typography.labelLarge)
+                roots.forEachIndexed { index, root ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(root, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                        IconButton(enabled = !state.projectBusy, onClick = { roots = roots.filterIndexed { i, _ -> i != index } }) {
+                            Icon(Icons.Default.Close, stringResource(R.string.codex_project_remove_root))
+                        }
+                    }
+                }
+                TextButton(enabled = !state.projectBusy, onClick = { picker = true }) { Text(stringResource(R.string.codex_project_add_root)) }
+                state.projectError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            }
+        },
+        confirmButton = { TextButton(enabled = !state.projectBusy && name.isNotBlank() && roots.isNotEmpty(),
+            onClick = { onSave(name, roots, idempotencyKey) }) { Text(stringResource(R.string.codex_thread_save)) } },
+        dismissButton = { TextButton(enabled = !state.projectBusy, onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
+    )
+    if (picker) CodexDirectoryPicker(
+        recentDirectories = (roots + state.recentDirectories).distinct(),
+        defaultDirectory = viewModel::defaultDirectory,
+        readDirectory = viewModel::readDirectory,
+        onDismiss = { picker = false },
+        onSelect = { path ->
+            roots = (roots + path).distinct()
+            if (name.isBlank()) name = path.trimEnd('/').substringAfterLast('/')
+            picker = false
+        },
+    )
 }

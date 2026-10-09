@@ -54,6 +54,7 @@ class CodexServerConnection internal constructor(
     private val validateRequest: (CodexServerRequest) -> Unit,
     private val validateApproval: (CodexApprovalRequest) -> Unit,
     private val validateUserInput: (CodexToolUserInputRequest) -> Unit,
+    val projects: StateFlow<CodexProjectCatalogState> = MutableStateFlow(CodexProjectCatalogState()),
 ) {
     suspend fun reply(request: CodexServerRequest, result: kotlinx.serialization.json.JsonElement) {
         validateRequest(request)
@@ -155,6 +156,175 @@ class CodexConnectionManager {
     private val usageStores = mutableMapOf<String, Pair<ConnectionKey, CodexAccountUsageStore>>()
     private val _accountUsage = MutableStateFlow<Map<String, CodexAccountUsageState>>(emptyMap())
     val accountUsage: StateFlow<Map<String, CodexAccountUsageState>> = _accountUsage.asStateFlow()
+
+    private val _projectRemovals = MutableStateFlow<Map<String, CodexProjectRemovalState>>(emptyMap())
+    val projectRemovals: StateFlow<Map<String, CodexProjectRemovalState>> = _projectRemovals.asStateFlow()
+
+    fun requestProjectRemoval(connection: CodexServerConnection, projectId: String, timeoutMillis: Long) {
+        synchronized(lock) {
+            val entry = entries[connection.serverId] ?: return
+            if (entry.connection !== connection || entry.client.connectionState.value !is CodexClientConnectionState.Connected) return
+            val state = _projectRemovals.value[connection.serverId] ?: CodexProjectRemovalState()
+            if (state.pending.any { it.projectId == projectId } || projectId in state.deletingProjectIds) return
+            val project = entry.projects.value.projects.find { it.id == projectId } ?: return
+            val generation = entry.client.currentConnectionGeneration()
+            _projectRemovals.update { it + (connection.serverId to state.copy(
+                pending = state.pending + CodexPendingProjectRemoval(projectId, project.name), error = null,
+            )) }
+            entry.idleDisconnectJob?.cancel()
+            entry.idleDisconnectJob = null
+            entry.projectRemovalJobs[projectId] = scope.launch(start = CoroutineStart.LAZY) {
+                delay(timeoutMillis.coerceAtLeast(0))
+                val canDelete = synchronized(lock) {
+                    val current = _projectRemovals.value[connection.serverId] ?: CodexProjectRemovalState()
+                    val valid = entries[connection.serverId] === entry &&
+                        entry.client.currentConnectionGeneration() == generation &&
+                        entry.client.connectionState.value is CodexClientConnectionState.Connected
+                    _projectRemovals.update { it + (connection.serverId to current.copy(
+                        pending = current.pending.filterNot { pending -> pending.projectId == projectId },
+                        deletingProjectIds = if (valid) current.deletingProjectIds + projectId else current.deletingProjectIds,
+                        error = if (valid) null else "Connection changed; project was not removed",
+                    )) }
+                    valid
+                }
+                try {
+                    if (canDelete) {
+                        try {
+                            withTimeout(15_000) { entry.client.deleteProject(projectId) }
+                        } catch (error: Exception) {
+                            if (error is CancellationException && error !is kotlinx.coroutines.TimeoutCancellationException) throw error
+                            synchronized(lock) {
+                                val current = _projectRemovals.value[connection.serverId] ?: CodexProjectRemovalState()
+                                _projectRemovals.update { it + (connection.serverId to current.copy(
+                                    error = error.message ?: "Project removal needs catalog reconciliation",
+                                )) }
+                            }
+                        }
+                        synchronized(lock) {
+                            if (entries[connection.serverId] === entry) {
+                                entry.projectRemovalReadbacks[projectId] = entry.projectRevision + 1
+                                refreshProjects(connection.serverId)
+                            }
+                        }
+                    }
+                } finally {
+                    synchronized(lock) {
+                        entry.projectRemovalJobs.remove(projectId)
+                        scheduleIdleDisconnectLocked(entry)
+                    }
+                }
+            }.also(Job::start)
+        }
+    }
+
+    fun undoProjectRemoval(serverId: String, projectId: String) {
+        synchronized(lock) {
+            val entry = entries[serverId] ?: return
+            val state = _projectRemovals.value[serverId] ?: return
+            if (state.pending.none { it.projectId == projectId }) return
+            entry.projectRemovalJobs.remove(projectId)?.cancel()
+            _projectRemovals.update { it + (serverId to state.copy(
+                pending = state.pending.filterNot { pending -> pending.projectId == projectId },
+            )) }
+            scheduleIdleDisconnectLocked(entry)
+        }
+    }
+
+    /** Replace only a complete catalog from the current socket and catalog revision. */
+    fun refreshProjects(serverId: String) {
+        synchronized(lock) {
+            val entry = entries[serverId] ?: return
+            if (entry.client.connectionState.value !is CodexClientConnectionState.Connected) return
+            entry.projectJob?.cancel()
+            val revision = ++entry.projectRevision
+            val generation = entry.client.currentConnectionGeneration()
+            entry.projects.value = entry.projects.value.copy(loading = true, error = null)
+            entry.projectJob = scope.launch {
+                try {
+                    val projects = withTimeout(30_000) {
+                        val result = mutableListOf<CodexProject>()
+                        val cursors = mutableSetOf<String>()
+                        var cursor: String? = null
+                        do {
+                            val page = entry.client.listProjects(cursor)
+                            result += page.projects
+                            cursor = page.nextCursor
+                            check(cursor == null || cursors.add(cursor)) { "Codex project catalog repeated its cursor" }
+                        } while (cursor != null)
+                        result.distinctBy(CodexProject::id)
+                    }
+                    synchronized(lock) {
+                        if (entries[serverId] === entry && entry.projectRevision == revision &&
+                            entry.client.currentConnectionGeneration() == generation) {
+                            entry.projects.value = CodexProjectCatalogState(projects = projects)
+                            val reconciled = entry.projectRemovalReadbacks.filterValues { it <= revision }.keys
+                            if (reconciled.isNotEmpty()) {
+                                val removal = _projectRemovals.value[serverId] ?: CodexProjectRemovalState()
+                                _projectRemovals.update { it + (serverId to removal.copy(
+                                    deletingProjectIds = removal.deletingProjectIds - reconciled,
+                                    error = if (projects.any { it.id in reconciled })
+                                        "Project still exists; removal was not confirmed" else null,
+                                )) }
+                                reconciled.forEach(entry.projectRemovalReadbacks::remove)
+                                scheduleIdleDisconnectLocked(entry)
+                            }
+                        }
+                    }
+                } catch (error: Exception) {
+                    if (error is CancellationException && error !is kotlinx.coroutines.TimeoutCancellationException) throw error
+                    synchronized(lock) {
+                        if (entries[serverId] === entry && entry.projectRevision == revision &&
+                            entry.client.currentConnectionGeneration() == generation) {
+                            entry.projects.value = entry.projects.value.copy(loading = false, error = error.message ?: "Codex project catalog unavailable")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    suspend fun createProject(
+        connection: CodexServerConnection,
+        name: String,
+        roots: List<String>,
+        idempotencyKey: String = java.util.UUID.randomUUID().toString(),
+    ): CodexProject = mutateProject(connection) { it.createProject(name, roots, idempotencyKey) }
+
+    suspend fun updateProject(
+        connection: CodexServerConnection,
+        projectId: String,
+        name: String? = null,
+        roots: List<String>? = null,
+    ): CodexProject = mutateProject(connection) { it.updateProject(projectId, name, roots) }
+
+    suspend fun moveProject(connection: CodexServerConnection, projectId: String, beforeProjectId: String?) {
+        mutateProject(connection) { it.moveProject(projectId, beforeProjectId) }
+    }
+
+    suspend fun deleteProject(connection: CodexServerConnection, projectId: String) {
+        mutateProject(connection) { it.deleteProject(projectId) }
+    }
+
+    private suspend fun <T> mutateProject(
+        connection: CodexServerConnection,
+        mutation: suspend (CodexAppServerClient) -> T,
+    ): T {
+        val (entry, generation) = synchronized(lock) {
+            val current = entries[connection.serverId]
+            check(current?.connection === connection && connection.state.value is CodexClientConnectionState.Connected) {
+                "Codex project connection is unavailable"
+            }
+            current!! to current.client.currentConnectionGeneration()
+        }
+        val result = mutation(entry.client)
+        synchronized(lock) {
+            check(entries[connection.serverId] === entry && entry.client.currentConnectionGeneration() == generation) {
+                "Codex project connection changed; refresh the catalog before retrying"
+            }
+            refreshProjects(connection.serverId)
+        }
+        return result
+    }
 
     fun refreshUsage(serverId: String) {
         synchronized(lock) {
@@ -508,7 +678,7 @@ class CodexConnectionManager {
             entry.persistent = false
             val retainedThreadIds = entry.retainedThreadIds.toList()
             entry.retainedThreadIds.clear()
-            if (entry.references > 0) {
+            if (entry.hasOwnersLocked()) {
                 retainedThreadIds.forEach { threadId ->
                     scheduleThreadUnsubscribeLocked(entry, threadId)
                 }
@@ -635,6 +805,7 @@ class CodexConnectionManager {
         fun validate(request: CodexServerRequest) = validateRequest(entry, request)
         fun validate(approval: CodexApprovalRequest) = validateApproval(entry, approval)
         fun validate(userInput: CodexToolUserInputRequest) = validateUserInput(entry, userInput)
+        val projects = MutableStateFlow(CodexProjectCatalogState())
         val connection = CodexServerConnection(
             serverId = server.id,
             client = client,
@@ -646,6 +817,7 @@ class CodexConnectionManager {
             validateRequest = ::validate,
             validateApproval = ::validate,
             validateUserInput = ::validate,
+            projects = projects.asStateFlow(),
         )
         val inboundJob = scope.launch(start = CoroutineStart.UNDISPATCHED) {
             client.inboundEvents.collect { event ->
@@ -667,6 +839,7 @@ class CodexConnectionManager {
                         synchronized(lock) {
                             if (entries[server.id] !== entry) return@collect
                             when (notification.method) {
+                                "project/changed" -> refreshProjects(server.id)
                                 "account/rateLimits/updated" -> {
                                     entry.usage.applyPush(notification.params, System.currentTimeMillis())
                                     publishUsage(entry)
@@ -754,6 +927,15 @@ class CodexConnectionManager {
             inboundJob = inboundJob,
             publish = ::publish,
             usage = usage,
+            projects = projects,
+            removalClosed = {
+                _projectRemovals.update { states ->
+                    val removal = states[server.id] ?: CodexProjectRemovalState()
+                    states + (server.id to removal.copy(pending = emptyList()))
+                }
+            },
+            projectRemovalReadbacks = _projectRemovals.value[server.id]?.deletingProjectIds
+                .orEmpty().associateWith { 0L }.toMutableMap(),
             usageClosed = { synchronized(lock) { usage.invalidate(); _accountUsage.update { it + (server.id to usage.state) } } },
         )
         entries[server.id] = entry
@@ -769,6 +951,9 @@ class CodexConnectionManager {
                         entry.threadResumeJobs.values.toList().forEach { it.cancel() }
                         entry.threadResumeJobs.clear()
                         entry.threadSessions.clear()
+                        entry.projectJob?.cancel()
+                        entry.projectRevision++
+                        entry.projects.value = entry.projects.value.copy(loading = false)
                         entry.modelJob?.cancel()
                         entry.modelJob = null
                         entry.modelCatalog = null
@@ -783,7 +968,10 @@ class CodexConnectionManager {
                 } else {
                     entry.state.value = clientState
                 }
-                if (clientState is CodexClientConnectionState.Connected) refreshUsage(server.id)
+                if (clientState is CodexClientConnectionState.Connected) {
+                    refreshUsage(server.id)
+                    refreshProjects(server.id)
+                }
                 publish(entry)
             }
         }
@@ -1114,6 +1302,12 @@ class CodexConnectionManager {
         val publish: (Entry) -> Unit,
         val usage: CodexAccountUsageStore,
         val usageClosed: () -> Unit,
+        val projects: MutableStateFlow<CodexProjectCatalogState>,
+        val removalClosed: () -> Unit,
+        var projectJob: Job? = null,
+        var projectRevision: Long = 0,
+        val projectRemovalJobs: MutableMap<String, Job> = mutableMapOf(),
+        val projectRemovalReadbacks: MutableMap<String, Long> = mutableMapOf(),
         var usageJob: Job? = null,
         var references: Int = 0,
         var persistent: Boolean = false,
@@ -1137,9 +1331,15 @@ class CodexConnectionManager {
         fun requiredThreadIdsLocked(): Set<String> =
             (openThreadReferences.keys + retainedThreadIds + recentThreadJobs.keys) - reducer.state.value.archivedThreadIds
 
-        fun hasOwnersLocked(): Boolean = persistent || references > 0 || retainedThreadIds.isNotEmpty()
+        fun hasOwnersLocked(): Boolean = persistent || references > 0 || retainedThreadIds.isNotEmpty() ||
+            projectRemovalJobs.isNotEmpty() || projectRemovalReadbacks.isNotEmpty()
 
         fun close() {
+            removalClosed()
+            projectRemovalJobs.values.toList().forEach(Job::cancel)
+            projectRemovalJobs.clear()
+            projectRemovalReadbacks.clear()
+            projectJob?.cancel()
             modelJob?.cancel()
             threadResumeJobs.values.toList().forEach { it.cancel() }
             threadResumeJobs.clear()

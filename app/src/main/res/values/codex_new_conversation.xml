@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="codex_new_title">New conversation</string>
+    <string name="codex_new_prompt">What would you like to work on?</string>
+    <string name="codex_new_send">Send</string>
+    <string name="codex_new_retry">Retry connection</string>
+    <string name="codex_new_unknown">The result of the first submission is not confirmed. Your draft is saved and will not be sent again automatically. Check the conversation list before starting another conversation.</string>
+    <string name="codex_new_workspace_after_send">The workspace is created when you send the first message.</string>
+    <string name="codex_new_no_roots">This project has no working directory. Add a directory before sending.</string>
+    <string name="codex_new_attachment_limit">Use up to 8 attachments, totaling at most 12 MB.</string>
+    <string name="codex_new_text_limit">Message exceeds 1 MB.</string>
+    <string name="codex_new_abandon">Stop waiting</string>
+    <string name="codex_new_edit_again">Edit draft again</string>
+    <string name="codex_new_abandon_message">An empty conversation may already exist. Your first message has not been sent. Keep this draft and stop waiting? Sending again will create a new conversation; the original request will not be replayed.</string>
+    <string name="codex_new_abandon_submission_message">Your message may already have been sent. Check the conversation list before sending again. Stop waiting and keep the draft for a new conversation? This does not cancel or resend the original message.</string>
+</resources>

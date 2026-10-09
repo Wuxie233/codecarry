@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="codex_new_title">新对话</string>
+    <string name="codex_new_prompt">想做些什么？</string>
+    <string name="codex_new_send">发送</string>
+    <string name="codex_new_retry">重试连接</string>
+    <string name="codex_new_unknown">首次提交的结果尚未确认。草稿已保留，不会自动重发。请先检查对话列表，再决定是否新建其他对话。</string>
+    <string name="codex_new_workspace_after_send">首次发送后会创建工作目录。</string>
+    <string name="codex_new_no_roots">此项目还没有工作目录，请先添加目录再发送。</string>
+    <string name="codex_new_attachment_limit">最多添加 8 个附件，总大小不超过 12 MB。</string>
+    <string name="codex_new_text_limit">消息大小不能超过 1 MB。</string>
+    <string name="codex_new_abandon">放弃等待</string>
+    <string name="codex_new_edit_again">重新编辑草稿</string>
+    <string name="codex_new_abandon_message">可能已经创建了一个空对话，但首条消息尚未发送。是否保留草稿并放弃等待？之后再次点击发送会新建对话，不会重试原来的操作。</string>
+    <string name="codex_new_abandon_submission_message">这条消息可能已经发送，请先到对话列表核对。是否放弃等待并保留草稿，供新对话使用？这不会取消或重新发送原消息。</string>
+</resources>

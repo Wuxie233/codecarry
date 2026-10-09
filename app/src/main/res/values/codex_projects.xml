@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="codex_project_new_conversation">New conversation</string>
+    <string name="codex_project_add">New project</string>
+    <string name="codex_project_filters">Search and filters</string>
+    <string name="codex_project_archived">Archived conversations</string>
+    <string name="codex_project_remove">Remove project</string>
+    <string name="codex_project_remove_hint">Remove “%1$s”? Conversations and files will be kept.</string>
+    <string name="codex_project_removed">Removing “%1$s”</string>
+    <string name="codex_project_undo">Undo</string>
+    <string name="codex_project_unassigned">Other conversations</string>
+    <string name="codex_project_actions">Project actions</string>
+    <string name="codex_project_edit">Edit project</string>
+    <string name="codex_project_move_up">Move up</string>
+    <string name="codex_project_move_down">Move down</string>
+    <string name="codex_project_name">Project name</string>
+    <string name="codex_project_roots">Working directories · first directory is used for new conversations</string>
+    <string name="codex_project_remove_root">Remove directory</string>
+    <string name="codex_project_add_root">Add directory</string>
+</resources>

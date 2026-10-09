@@ -35,6 +35,7 @@ import dev.wuxie233.codecarry.data.repository.SettingsRepository
 import dev.wuxie233.codecarry.domain.model.ServerConfig
 import dev.wuxie233.codecarry.domain.model.ServerType
 import dev.wuxie233.codecarry.domain.model.Session
+import dev.wuxie233.codecarry.ui.screens.codex.CodexNewConversationScreen
 import dev.wuxie233.codecarry.ui.screens.codex.CodexChatScreen
 import dev.wuxie233.codecarry.ui.screens.codex.CodexThreadListScreen
 import dev.wuxie233.codecarry.ui.screens.chat.ChatScreen
@@ -527,6 +528,27 @@ fun NavGraph(
                 onNavigateBack = { navController.popBackStack() },
                 onOpenThread = { threadId ->
                     navController.navigate(Screen.CodexChat.createRoute(serverId, threadId))
+                },
+                onNewConversation = { projectId ->
+                    navController.navigate(Screen.CodexNewConversation.createRoute(serverId, projectId))
+                },
+            )
+        }
+
+        composable(
+            route = "codex_new_conversation?serverId={serverId}&projectId={projectId}",
+            arguments = listOf(
+                navArgument("serverId") { type = NavType.StringType },
+                navArgument("projectId") { type = NavType.StringType; defaultValue = "" },
+            ),
+        ) { backStackEntry ->
+            val serverId = decodeRouteArg(backStackEntry.arguments?.getString("serverId"))
+            CodexNewConversationScreen(
+                onNavigateBack = { navController.popBackStack() },
+                onOpenThread = { threadId ->
+                    navController.navigate(Screen.CodexChat.createRoute(serverId, threadId)) {
+                        popUpTo(backStackEntry.destination.id) { inclusive = true }
+                    }
                 },
             )
         }

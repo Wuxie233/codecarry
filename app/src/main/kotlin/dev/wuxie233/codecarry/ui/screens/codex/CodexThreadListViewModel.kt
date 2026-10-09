@@ -42,10 +42,18 @@ import dev.wuxie233.codecarry.data.preferences.SessionListPreferencesRepository
 import dev.wuxie233.codecarry.data.preferences.SessionListViewMode
 import dev.wuxie233.codecarry.data.codex.CodexDirectoryListing
 
+data class CodexProjectRemoval(val projectId: String, val name: String)
+
 enum class CodexThreadFilter { ALL, RUNNING, PENDING, FAILED }
 
 data class CodexThreadListUiState(
     val serverName: String = "Codex",
+    val projectCatalog: List<dev.wuxie233.codecarry.data.codex.CodexProject> = emptyList(),
+    val projectsLoading: Boolean = true,
+    val projectError: String? = null,
+    val projectBusy: Boolean = false,
+    val deletingProjectIds: Set<String> = emptySet(),
+    val pendingProjectRemovals: List<CodexProjectRemoval> = emptyList(),
     val projectPreferences: CodexProjectPreferences = CodexProjectPreferences(),
     val showHiddenProjects: Boolean = false,
     val activeThreads: List<CodexThread> = emptyList(),
@@ -79,7 +87,7 @@ data class CodexThreadListUiState(
     val activityThreads: List<CodexThread> get() = activityRoots.map { it.thread }
 
     val projects: List<CodexThreadProject> by lazy {
-        buildCodexTopologyProjects(visibleRoots, projectPreferences, showHiddenProjects, searchQuery.isNotBlank())
+        buildCodexCatalogProjects(projectCatalog.filter { project -> pendingProjectRemovals.none { it.projectId == project.id } }, visibleRoots, projectPreferences, hasListConstraints, if (filter == CodexThreadFilter.ALL) searchQuery else "")
     }
 
     val hasListConstraints: Boolean
@@ -117,6 +125,7 @@ class CodexThreadListViewModel @Inject constructor(
     val openThread: SharedFlow<String> = _openThread.asSharedFlow()
     private var lease: CodexConnectionLease? = null
     private var connection: CodexServerConnection? = null
+    private var projectsJob: Job? = null
     private var eventsJob: Job? = null
     private var connectionStateJob: Job? = null
     private var observedEventState: CodexEventState? = null
@@ -190,6 +199,20 @@ class CodexThreadListViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
+            var previousRemovalError: String? = null
+            connectionManager.projectRemovals.collect { removals ->
+                val removal = removals[serverId]
+                _uiState.update { it.copy(
+                    pendingProjectRemovals = removal?.pending.orEmpty().map { pending ->
+                        CodexProjectRemoval(pending.projectId, pending.name)
+                    },
+                    deletingProjectIds = removal?.deletingProjectIds.orEmpty(),
+                    projectError = removal?.error ?: it.projectError.takeUnless { error -> error == previousRemovalError },
+                ) }
+                previousRemovalError = removal?.error
+            }
+        }
+        viewModelScope.launch {
             combine(archiveController.feedback, archiveController.busy) { feedback, busy -> feedback to busy }
                 .collect { (feedback, busy) ->
                     _uiState.update { it.copy(archiveFeedback = feedback, archiveBusyThreadIds = busy) }
@@ -226,6 +249,7 @@ class CodexThreadListViewModel @Inject constructor(
                 val server = serverRepository.getServer(serverId) ?: error("Codex server is no longer configured")
                 val acquired = acquireCurrentConnection(server)
                 acquired.connection.client.connect()
+                connectionManager.refreshProjects(serverId)
                 val generation = acquired.connection.client.currentConnectionGeneration()
                 fun ensureCurrent() {
                     check(connectionManager.isCurrent(acquired.connection) &&
@@ -260,6 +284,46 @@ class CodexThreadListViewModel @Inject constructor(
                 }
             }
         }
+    }
+
+    fun selectProject(projectId: String?) = viewModelScope.launch {
+        projectPreferencesRepository.selectProject(serverId, projectId)
+    }
+
+    suspend fun saveProject(projectId: String?, name: String, roots: List<String>, idempotencyKey: String): Boolean {
+        if (_uiState.value.projectBusy) return false
+        _uiState.update { it.copy(projectBusy = true, projectError = null) }
+        return try {
+            val connected = requireConnection()
+            connected.client.connect()
+            val project = if (projectId == null) connectionManager.createProject(connected, name, roots, idempotencyKey)
+                else connectionManager.updateProject(connected, projectId, name, roots)
+            projectPreferencesRepository.selectProject(serverId, project.id)
+            true
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            _uiState.update { it.copy(projectError = error.message) }
+            false
+        } finally {
+            _uiState.update { it.copy(projectBusy = false) }
+        }
+    }
+
+    fun moveProject(projectId: String, beforeProjectId: String?) = viewModelScope.launch {
+        try {
+            connectionManager.moveProject(requireConnection(), projectId, beforeProjectId)
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (error: Throwable) { _uiState.update { it.copy(projectError = error.message) } }
+    }
+
+    fun removeProject(projectId: String, timeoutMillis: Long) {
+        val connected = connection ?: return
+        connectionManager.requestProjectRemoval(connected, projectId, timeoutMillis)
+    }
+
+    fun undoProjectRemoval(projectId: String) {
+        connectionManager.undoProjectRemoval(serverId, projectId)
     }
 
     fun setViewMode(mode: SessionListViewMode) = viewModelScope.launch {
@@ -441,6 +505,12 @@ class CodexThreadListViewModel @Inject constructor(
     }
 
     private fun observeEvents(connected: CodexServerConnection) {
+        projectsJob?.cancel()
+        projectsJob = viewModelScope.launch {
+            connected.projects.collect { catalog ->
+                _uiState.update { it.copy(projectCatalog = catalog.projects, projectsLoading = catalog.loading, projectError = catalog.error ?: connectionManager.projectRemovals.value[serverId]?.error) }
+            }
+        }
         eventsJob?.cancel()
         connectionStateJob?.cancel()
         connectionStateJob = viewModelScope.launch {
@@ -491,6 +561,8 @@ class CodexThreadListViewModel @Inject constructor(
     }
 
     private fun resetConnectionLocked() {
+        projectsJob?.cancel()
+        projectsJob = null
         eventsJob?.cancel()
         eventsJob = null
         connectionStateJob?.cancel()
@@ -512,6 +584,7 @@ class CodexThreadListViewModel @Inject constructor(
     }
 
     override fun onCleared() {
+        projectsJob?.cancel()
         refreshJob?.cancel()
         archiveJob?.cancel()
         calibrationJob?.cancel()

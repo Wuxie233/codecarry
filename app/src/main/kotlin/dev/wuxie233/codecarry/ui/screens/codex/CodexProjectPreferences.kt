@@ -17,6 +17,7 @@ data class CodexProjectPreferences(
     val pinned: Set<String> = emptySet(),
     val hidden: Set<String> = emptySet(),
     val viewMode: SessionListViewMode = SessionListViewMode.PROJECTS,
+    val selectedProjectId: String? = null,
 )
 
 class CodexProjectPreferencesRepository @Inject constructor(
@@ -26,6 +27,7 @@ class CodexProjectPreferencesRepository @Inject constructor(
     private fun viewKey(serverId: String) = stringPreferencesKey("codex_projects:$serverId:view")
     fun observe(serverId: String) = dataStore.data.map { prefs ->
         CodexProjectPreferences(
+            selectedProjectId = prefs[stringPreferencesKey("codex_projects:$serverId:selected")],
             collapsed = prefs[key(serverId, "collapsed")].orEmpty(),
             pinned = prefs[key(serverId, "pinned")].orEmpty(),
             hidden = prefs[key(serverId, "hidden")].orEmpty(),
@@ -41,6 +43,12 @@ class CodexProjectPreferencesRepository @Inject constructor(
             prefs[key] = if (directory in current) current - directory else current + directory
         }
     }
+    suspend fun selectProject(serverId: String, projectId: String?) {
+        dataStore.edit { prefs ->
+            val key = stringPreferencesKey("codex_projects:$serverId:selected")
+            if (projectId == null) prefs.remove(key) else prefs[key] = projectId
+        }
+    }
     suspend fun setViewMode(serverId: String, mode: SessionListViewMode) {
         dataStore.edit { it[viewKey(serverId)] = mode.name }
     }
@@ -54,6 +62,9 @@ data class CodexThreadProject(
     val hidden: Boolean,
     val roots: List<CodexThreadNode> = emptyList(),
     val orphan: Boolean = false,
+    val projectId: String? = null,
+    val name: String? = null,
+    val directories: List<String> = emptyList(),
 )
 
 internal fun buildCodexThreadProjects(
@@ -80,3 +91,30 @@ internal fun buildCodexTopologyProjects(
         .thenBy { it.orphan }
         .thenByDescending { it.roots.maxOfOrNull { node -> node.recency } ?: 0L }
         .thenBy { it.directory })
+
+/** Catalog identity, never cwd equality, decides project membership. */
+internal fun buildCodexCatalogProjects(
+    catalog: List<dev.wuxie233.codecarry.data.codex.CodexProject>,
+    roots: List<CodexThreadNode>,
+    preferences: CodexProjectPreferences,
+    constrained: Boolean,
+    searchQuery: String = "",
+): List<CodexThreadProject> {
+    val ids = catalog.mapTo(hashSetOf()) { it.id }
+    val grouped = roots.groupBy { it.thread.projectId?.takeIf(ids::contains) }
+    val projects = catalog.mapNotNull { project ->
+        val nodes = grouped[project.id].orEmpty()
+        if (constrained && nodes.isEmpty() && (searchQuery.isBlank() || !project.name.contains(searchQuery, ignoreCase = true))) null else CodexThreadProject(
+            directory = project.roots.firstOrNull()?.path.orEmpty(),
+            threads = nodes.flatMap { it.members }, pinned = false,
+            collapsed = !constrained && project.id in preferences.collapsed, hidden = false,
+            roots = nodes, projectId = project.id, name = project.name,
+            directories = project.roots.map { it.path },
+        )
+    }
+    val unassigned = grouped[null].orEmpty()
+    return if (unassigned.isEmpty()) projects else projects + CodexThreadProject(
+        directory = "", threads = unassigned.flatMap { it.members }, pinned = false,
+        collapsed = false, hidden = false, roots = unassigned,
+    )
+}

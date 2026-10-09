@@ -1481,6 +1481,10 @@ class CodexConnectionManagerTest {
                 respond(message.getValue("id").jsonPrimitive, buildJsonObject { put("rateLimits", buildJsonObject {}) })
                 return
             }
+            if (message["method"]?.jsonPrimitive?.content == "project/list") {
+                respond(message.getValue("id").jsonPrimitive, json.parseToJsonElement("""{"data":[],"nextCursor":null}"""))
+                return
+            }
             sent.send(text)
         }
 

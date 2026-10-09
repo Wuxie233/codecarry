@@ -187,6 +187,9 @@ class CodexEventReducer(
                 val status = notification.params["status"] ?: return@updateThread thread
                 thread.copy(status = CodexThreadStatus.fromJson(status))
             }
+            "thread/project/updated" -> updateThread(notification.threadId) { thread ->
+                thread.copy(projectId = notification.params.string("projectId"), projectRevision = thread.projectRevision + 1)
+            }
             "thread/name/updated" -> updateThread(notification.threadId) { thread ->
                 thread.copy(name = notification.params.string("threadName"))
             }
@@ -397,6 +400,8 @@ private fun CodexEventState.retireSettledThreadRetry(
 
 private fun CodexThread.mergeMetadata(incoming: CodexThread, baseline: CodexThread?): CodexThread = incoming.copy(
     name = if (name != baseline?.name) name else incoming.name,
+    projectId = if (projectRevision != (baseline?.projectRevision ?: 0L)) projectId else incoming.projectId,
+    projectRevision = projectRevision,
     status = if (baseline?.turns.orEmpty().any { old -> turns.none { it.id == old.id } } ||
         status != (baseline?.status ?: CodexThreadStatus()) || turns.any { live ->
         live.status == "inProgress" && baseline?.turns.orEmpty().none { it.id == live.id } &&

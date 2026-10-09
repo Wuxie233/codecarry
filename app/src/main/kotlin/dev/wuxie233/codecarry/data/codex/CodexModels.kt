@@ -185,6 +185,8 @@ data class CodexThread(
     val forkedFromId: String? = null,
     val extra: JsonObject = JsonObject(emptyMap()),
     val raw: JsonObject = JsonObject(emptyMap()),
+    val projectId: String? = null,
+    internal val projectRevision: Long = 0,
 ) {
     // Guardian reviews are internal approval checks, not user-spawned conversations.
     val isInternalReview: Boolean get() =
@@ -205,6 +207,7 @@ data class CodexThread(
                 id = value.string("id").orEmpty(),
                 sessionId = value.string("sessionId"),
                 name = value.string("name"),
+                projectId = value.string("projectId"),
                 preview = value.string("preview").orEmpty(),
                 agentNickname = value.string("agentNickname")?.takeIf(String::isNotBlank)
                     ?: (((value["source"] as? JsonObject)?.get("subAgent") as? JsonObject)
@@ -227,6 +230,7 @@ data class CodexThread(
                     "id",
                     "sessionId",
                     "name",
+                    "projectId",
                     "preview",
                     "agentNickname",
                     "cwd",

@@ -30,6 +30,10 @@ class CodexProjectPreferencesTest {
         assertEquals(setOf("/same/path"), repository.observe("one").first().pinned)
     }
 
+    // Legacy directory preferences remain readable; native catalogs use project IDs.
+    private val CodexThreadListUiState.legacyProjects: List<CodexThreadProject>
+        get() = buildCodexTopologyProjects(visibleRoots, projectPreferences, showHiddenProjects, searchQuery.isNotBlank())
+
     private val old = CodexThread(id = "old", cwd = "/projects/a", updatedAt = 1)
     private val recent = CodexThread(id = "recent", cwd = "/projects/b", updatedAt = 2)
 
@@ -46,18 +50,18 @@ class CodexProjectPreferencesTest {
     @Test fun `pinned project precedes newer project without losing members`() {
         val state = CodexThreadListUiState(activeThreads = listOf(recent, old, old.copy(id = "sibling")),
             projectPreferences = CodexProjectPreferences(pinned = setOf("/projects/a")))
-        assertEquals(listOf("/projects/a", "/projects/b"), state.projects.map { it.directory })
-        assertEquals(setOf("old", "sibling"), state.projects.first().threads.map { it.id }.toSet())
+        assertEquals(listOf("/projects/a", "/projects/b"), state.legacyProjects.map { it.directory })
+        assertEquals(setOf("old", "sibling"), state.legacyProjects.first().threads.map { it.id }.toSet())
     }
 
     @Test fun `hidden project remains recoverable and search opens collapsed matches`() {
         val state = CodexThreadListUiState(activeThreads = listOf(old, recent),
             projectPreferences = CodexProjectPreferences(hidden = setOf("/projects/a"), collapsed = setOf("/projects/b")))
-        assertEquals(listOf("/projects/b"), state.projects.map { it.directory })
-        assertTrue(state.projects.single().collapsed)
-        assertEquals(2, state.copy(showHiddenProjects = true).projects.size)
-        assertFalse(state.copy(searchQuery = "projects/b").projects.single().collapsed)
-        assertTrue(state.copy(showHiddenProjects = true).projects.first { it.directory == "/projects/a" }.hidden)
+        assertEquals(listOf("/projects/b"), state.legacyProjects.map { it.directory })
+        assertTrue(state.legacyProjects.single().collapsed)
+        assertEquals(2, state.copy(showHiddenProjects = true).legacyProjects.size)
+        assertFalse(state.copy(searchQuery = "projects/b").legacyProjects.single().collapsed)
+        assertTrue(state.copy(showHiddenProjects = true).legacyProjects.first { it.directory == "/projects/a" }.hidden)
     }
 
     @Test fun `activity excludes archived and idle but includes requests and errors`() {
@@ -73,7 +77,7 @@ class CodexProjectPreferencesTest {
     @Test fun `same basename in different paths remains distinct and archive scope stays separate`() {
         val state = CodexThreadListUiState(activeThreads = listOf(old, recent.copy(cwd = "/elsewhere/a")),
             archivedThreads = listOf(old.copy(id = "archived")))
-        assertEquals(2, state.projects.size)
-        assertEquals(listOf("archived"), state.copy(showArchived = true).projects.single().threads.map { it.id })
+        assertEquals(2, state.legacyProjects.size)
+        assertEquals(listOf("archived"), state.copy(showArchived = true).legacyProjects.single().threads.map { it.id })
     }
 }

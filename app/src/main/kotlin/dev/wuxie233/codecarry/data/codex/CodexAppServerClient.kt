@@ -438,6 +438,45 @@ open class CodexAppServerClient internal constructor(
         ),
     ).let { payload -> withContext(decodingDispatcher) { CodexThreadListPage.fromJson(payload) } }
 
+    suspend fun listProjects(cursor: String? = null, limit: Int = 100): CodexProjectListPage {
+        val result = request("project/list", paramsOf("cursor" to cursor, "limit" to limit)).objectOrEmpty()
+        return CodexProjectListPage(
+            (result["data"] as? JsonArray).orEmpty().map { CodexProject.fromJson(it.objectOrEmpty()) },
+            (result["nextCursor"] as? JsonPrimitive)?.contentOrNull,
+        )
+    }
+
+    suspend fun readProject(projectId: String): CodexProject = CodexProject.fromJson(
+        request("project/read", paramsOf("projectId" to projectId)).objectOrEmpty()["project"].objectOrEmpty(),
+    )
+
+    suspend fun createProject(name: String, roots: List<String>, idempotencyKey: String): CodexProject =
+        CodexProject.fromJson(request("project/create", paramsOf(
+            "name" to name, "roots" to projectRoots(roots), "idempotencyKey" to idempotencyKey,
+        )).objectOrEmpty()["project"].objectOrEmpty())
+
+    suspend fun updateProject(projectId: String, name: String? = null, roots: List<String>? = null): CodexProject =
+        CodexProject.fromJson(request("project/update", paramsOf(
+            "projectId" to projectId, "name" to name, "roots" to roots?.let(::projectRoots),
+        )).objectOrEmpty()["project"].objectOrEmpty())
+
+    suspend fun moveProject(projectId: String, beforeProjectId: String?) {
+        request("project/move", paramsOf("projectId" to projectId,
+            "beforeProjectId" to (beforeProjectId?.let(::JsonPrimitive) ?: JsonNull)))
+    }
+
+    suspend fun deleteProject(projectId: String) {
+        request("project/delete", paramsOf("projectId" to projectId))
+    }
+
+    suspend fun updateThreadProject(threadId: String, projectId: String?) {
+        request("thread/metadata/update", paramsOf("threadId" to threadId, "projectId" to projectId.orEmpty()))
+    }
+
+    private fun projectRoots(roots: List<String>): JsonArray = JsonArray(roots.map { path ->
+        buildJsonObject { put("path", path) }
+    })
+
     suspend fun readThread(threadId: String, includeTurns: Boolean = true): CodexThread {
         freshThreads[threadId]?.let { return it.thread }
         val result = request(
@@ -456,6 +495,8 @@ open class CodexAppServerClient internal constructor(
         developerInstructions: String? = null,
         serviceTier: String? = null,
         extraParams: JsonObject = JsonObject(emptyMap()),
+        projectId: String? = null,
+        workspaceRoots: List<String>? = null,
     ): CodexThreadSession = request(
         "thread/start",
         paramsOf(
@@ -466,6 +507,8 @@ open class CodexAppServerClient internal constructor(
             "ephemeral" to ephemeral,
             "developerInstructions" to developerInstructions,
             "serviceTier" to serviceTier,
+            "projectId" to projectId,
+            "runtimeWorkspaceRoots" to workspaceRoots?.let(::stringArray),
             extras = extraParams,
         ),
     ).let { payload -> withContext(decodingDispatcher) { CodexThreadSession.fromJson(payload) } }.also { freshThreads[it.thread.id] = it }
