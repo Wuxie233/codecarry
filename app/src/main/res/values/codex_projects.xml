@@ -17,4 +17,6 @@
     <string name="codex_project_roots">Working directories · first directory is used for new conversations</string>
     <string name="codex_project_remove_root">Remove directory</string>
     <string name="codex_project_add_root">Add directory</string>
+    <string name="codex_conversations_tab">Conversations</string>
+    <string name="codex_archived_tab">Archived</string>
 </resources>

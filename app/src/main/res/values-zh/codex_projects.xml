@@ -17,4 +17,6 @@
     <string name="codex_project_roots">工作目录 · 新对话使用第一个目录</string>
     <string name="codex_project_remove_root">移除目录</string>
     <string name="codex_project_add_root">添加目录</string>
+    <string name="codex_conversations_tab">对话</string>
+    <string name="codex_archived_tab">已归档</string>
 </resources>

@@ -68,6 +68,7 @@ data class CodexThreadListUiState(
     val unreadThreadIds: Set<String> = emptySet(),
     val isLoading: Boolean = true,
     val isLoadingArchived: Boolean = false,
+    val archiveError: String? = null,
     val error: String? = null,
 ) {
     val topology: List<CodexThreadNode> by lazy {
@@ -242,6 +243,7 @@ class CodexThreadListViewModel @Inject constructor(
     }
 
     fun refresh() {
+        if (_uiState.value.showArchived) loadArchives()
         refreshJob?.cancel()
         refreshJob = viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
@@ -272,7 +274,6 @@ class CodexThreadListViewModel @Inject constructor(
                 }
                 ensureCurrent()
                 _uiState.update { it.copy(isLoading = false) }
-                if (_uiState.value.showArchived) loadArchives()
                 scheduleCalibration(acquired.connection, generation)
                 archiveController.unresolvedIds().forEach { reconcileArchiveOutcome(it) }
 
@@ -363,7 +364,7 @@ class CodexThreadListViewModel @Inject constructor(
     fun setFilter(filter: CodexThreadFilter) = _uiState.update { it.copy(filter = filter) }
 
     fun showArchived(show: Boolean) {
-        _uiState.update { it.copy(showArchived = show) }
+        _uiState.update { it.copy(showArchived = show, filter = CodexThreadFilter.ALL) }
         if (show && !archivesLoaded) loadArchives()
     }
 
@@ -387,7 +388,7 @@ class CodexThreadListViewModel @Inject constructor(
     private fun loadArchives() {
         if (archiveJob?.isActive == true) return
         archiveJob = viewModelScope.launch {
-            _uiState.update { it.copy(isLoadingArchived = true) }
+            _uiState.update { it.copy(isLoadingArchived = true, archiveError = null) }
             try {
                 val connected = requireConnection()
                 connected.client.connect()
@@ -396,7 +397,6 @@ class CodexThreadListViewModel @Inject constructor(
                 loadAllCodexThreads(onPage = { page ->
                     check(connectionManager.isCurrent(connected) && connected.client.currentConnectionGeneration() == generation)
                     connected.reducer.mergeThreadPage(page.threads, true, baseline)
-                    _uiState.update { it.copy(isLoadingArchived = false) }
                 }) { cursor ->
                     check(connectionManager.isCurrent(connected) && connected.client.currentConnectionGeneration() == generation)
                     baseline = connected.events.value
@@ -406,7 +406,7 @@ class CodexThreadListViewModel @Inject constructor(
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Throwable) {
-                showError(error)
+                _uiState.update { it.copy(archiveError = error.message ?: "Failed to load archived Codex threads") }
             } finally {
                 _uiState.update { it.copy(isLoadingArchived = false) }
             }

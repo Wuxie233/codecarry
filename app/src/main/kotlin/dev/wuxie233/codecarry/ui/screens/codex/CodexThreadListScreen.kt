@@ -50,6 +50,9 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
@@ -198,6 +201,7 @@ internal fun CodexThreadRow(
     isSubagent: Boolean = false,
     unread: Boolean = false,
     archiveBusy: Boolean = false,
+    projectLabel: String? = null,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     val colors = MaterialTheme.colorScheme
@@ -260,6 +264,10 @@ internal fun CodexThreadRow(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    projectLabel?.let { label ->
+                        Text(label, style = MaterialTheme.typography.bodySmall,
+                            color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
                     Spacer(Modifier.height(2.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                         (thread.recencyAt ?: thread.updatedAt ?: thread.createdAt)?.let { seconds ->
@@ -284,6 +292,12 @@ internal fun CodexThreadRow(
                                 color = statusColor,
                             )
                         }
+                    }
+                }
+                if (archived) {
+                    TextButton(onClick = onRestore, enabled = !archiveBusy,
+                        modifier = Modifier.testTag("codex_restore:${thread.id}")) {
+                        Text(stringResource(R.string.codex_thread_restore_action))
                     }
                 }
                 Box {
@@ -353,6 +367,7 @@ internal fun CodexListControls(
     onSearchQueryChange: (String) -> Unit,
     filter: CodexThreadFilter,
     onFilterChange: (CodexThreadFilter) -> Unit,
+    showStatusFilters: Boolean = true,
 ) {
     var expanded by rememberSaveable { mutableStateOf(searchQuery.isNotBlank()) }
     val colors = MaterialTheme.colorScheme
@@ -390,7 +405,7 @@ internal fun CodexListControls(
                 }
             }
         }
-        Row(
+        if (showStatusFilters) Row(
             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp).heightIn(min = 48.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -462,6 +477,9 @@ internal fun CodexThreadListContent(
     var expandedHistory by rememberSaveable { mutableStateOf(emptyList<String>()) }
     val archiveSnackbar = remember { SnackbarHostState() }
     var controlsOpen by rememberSaveable { mutableStateOf(false) }
+    val listError = if (state.showArchived) state.archiveError ?: state.error else state.error
+    val listEmpty = if (state.showArchived) state.visibleRoots.isEmpty() else state.projects.isEmpty()
+    val listConstrained = state.searchQuery.isNotBlank() || (!state.showArchived && state.filter != CodexThreadFilter.ALL)
 
     Scaffold(
         snackbarHost = {
@@ -501,7 +519,15 @@ internal fun CodexThreadListContent(
                 Modifier.widthIn(max = 960.dp).fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                TabRow(selectedTabIndex = if (state.showArchived) 1 else 0) {
+                    Tab(selected = !state.showArchived, onClick = { actions.showArchived(false) },
+                        modifier = Modifier.testTag("codex_active_tab"),
+                        text = { Text(stringResource(R.string.codex_conversations_tab)) })
+                    Tab(selected = state.showArchived, onClick = { actions.showArchived(true) },
+                        modifier = Modifier.testTag("codex_archived_tab"),
+                        text = { Text(stringResource(R.string.codex_archived_tab)) })
+                }
+                if (!state.showArchived) Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                     Button(onClick = actions.create, modifier = Modifier.weight(1f)) {
                         Icon(Icons.Default.Add, null)
                         Spacer(Modifier.width(8.dp))
@@ -512,39 +538,42 @@ internal fun CodexThreadListContent(
                     }
                 }
                 if (controlsOpen) {
-                    CodexListControls(state.searchQuery, actions.setSearchQuery, state.filter, actions.setFilter)
-                    Row(Modifier.padding(horizontal = 16.dp)) {
-                        FilterChip(selected = state.showArchived, onClick = { actions.showArchived(!state.showArchived) },
-                            label = { Text(stringResource(R.string.codex_project_archived)) })
-                    }
+                    CodexListControls(state.searchQuery, actions.setSearchQuery, state.filter, actions.setFilter,
+                        showStatusFilters = !state.showArchived)
                 }
-                state.projectError?.let { Text(it, Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.error) }
+                if (state.showArchived && state.isLoadingArchived && state.archivedThreads.isNotEmpty()) {
+                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                }
+                if (!state.showArchived) state.projectError?.let { Text(it, Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.error) }
                 state.pendingProjectRemovals.forEach { removal ->
                     Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text(stringResource(R.string.codex_project_removed, removal.name), Modifier.weight(1f))
                         TextButton(onClick = { actions.undoProjectRemoval(removal.projectId) }) { Text(stringResource(R.string.codex_project_undo)) }
                     }
                 }
-                state.error?.takeIf { state.activeThreads.isNotEmpty() || state.archivedThreads.isNotEmpty() }?.let {
-                    Text(it, modifier = Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.error)
+                listError?.takeIf { !listEmpty }?.let { error ->
+                    Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(error, Modifier.weight(1f), color = MaterialTheme.colorScheme.error)
+                        TextButton(onClick = actions.refresh) { Text(stringResource(R.string.codex_refresh)) }
+                    }
                 }
                 Box(Modifier.fillMaxSize()) {
                     when {
                         (if (state.showArchived) state.isLoadingArchived && state.archivedThreads.isEmpty() else (state.isLoading || state.projectsLoading) && state.activeThreads.isEmpty() && state.projects.isEmpty()) -> LoadingStateCard(Modifier.padding(12.dp), stringResource(R.string.codex_thread_loading))
-                        state.error != null && state.activeThreads.isEmpty() && state.archivedThreads.isEmpty() && state.projects.isEmpty() -> ErrorStateCard(
+                        listError != null && listEmpty -> ErrorStateCard(
                             title = stringResource(R.string.codex_thread_load_failed),
-                            message = state.error.orEmpty(),
+                            message = listError.orEmpty(),
                             onRetry = actions.refresh,
                             modifier = Modifier.padding(12.dp),
                         )
-                        state.projects.isEmpty() && !state.projectsLoading -> EmptyStateCard(
-                            title = if (state.hasListConstraints) stringResource(R.string.codex_sessions_no_matches) else if (state.showArchived) stringResource(R.string.codex_thread_archived_empty) else stringResource(R.string.codex_thread_empty),
-                            message = if (state.hasListConstraints) stringResource(R.string.codex_sessions_no_matches_hint) else if (state.showArchived) stringResource(R.string.codex_thread_archived_empty_message) else stringResource(R.string.codex_thread_empty_message),
+                        listEmpty && (state.showArchived || !state.projectsLoading) -> EmptyStateCard(
+                            title = if (listConstrained) stringResource(R.string.codex_sessions_no_matches) else if (state.showArchived) stringResource(R.string.codex_thread_archived_empty) else stringResource(R.string.codex_thread_empty),
+                            message = if (listConstrained) stringResource(R.string.codex_sessions_no_matches_hint) else if (state.showArchived) stringResource(R.string.codex_thread_archived_empty_message) else stringResource(R.string.codex_thread_empty_message),
                             action = when {
-                                state.hasListConstraints -> ({
+                                listConstrained -> ({
                                     TextButton(onClick = {
                                         actions.setSearchQuery("")
-                                        actions.setFilter(CodexThreadFilter.ALL)
+                                        if (!state.showArchived) actions.setFilter(CodexThreadFilter.ALL)
                                     }) { Text(stringResource(R.string.codex_sessions_clear_filters)) }
                                 })
                                 state.showArchived -> null
@@ -570,6 +599,8 @@ internal fun CodexThreadListContent(
                                                 thread = thread,
                                                 isSubagent = depth > 0 || node.orphan,
                                                 archived = archived,
+                                                projectLabel = if (archived) state.projectCatalog.firstOrNull { it.id == thread.projectId }?.name
+                                                    ?: stringResource(R.string.codex_project_unassigned) else null,
                                                 pendingCount = state.pendingRequestCounts.getOrDefault(thread.id, 0),
                                                 unread = thread.id in state.unreadThreadIds,
                                                 archiveBusy = thread.id in state.archiveBusyThreadIds,
@@ -588,7 +619,7 @@ internal fun CodexThreadListContent(
                                         history: Boolean,
                                     ) {
                                         if (children.isEmpty()) return
-                                        val expanded = state.hasListConstraints || if (history) {
+                                        val expanded = listConstrained || if (history) {
                                             thread.id in expandedHistory
                                         } else thread.id !in collapsedRunning
                                         item("disclosure:${thread.id}:$history") {
@@ -617,7 +648,9 @@ internal fun CodexThreadListContent(
                                     childGroup(historical, history = true)
                                 }
                             }
-                            state.projects.forEachIndexed { index, project ->
+                            if (state.showArchived) {
+                                threadRows(state.visibleRoots, archived = true)
+                            } else state.projects.forEachIndexed { index, project ->
                                 item("project:${project.projectId ?: "unassigned"}") {
                                     CompactCodexProjectHeader(
                                         project = project,
