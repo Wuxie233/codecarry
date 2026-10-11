@@ -138,7 +138,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 ## Release
 
-Releases are **manual-only**.
+Completed and verified content changes are released automatically by the implementing agent under the standing [release policy](AGENTS.md#release-workflow), without a separate user reminder. The agent runs the publication steps below; GitHub Actions remains explicitly dispatched.
 
 1. Update `versionName`, `versionCode`, and `RELEASE_NOTES_<version>.md`
 2. Build the debug APK and verify affected behavior according to the

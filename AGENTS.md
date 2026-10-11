@@ -90,7 +90,8 @@ fork based on OC Remote; the Android namespace/applicationId is
 
 ## Release Workflow
 
-- Releases are manual-only and should follow `README.md`: bump `versionName` and `versionCode`, add `RELEASE_NOTES_<version>.md`, verify locally, push `master`, create/push tag, then manually trigger `.github/workflows/release.yml` with the tag.
+- After completing and verifying new repository content changes, automatically publish a new release as part of delivery without waiting for another user request. This is standing authorization to bump versions, commit/push, tag, and publish; an explicit task instruction to defer release takes precedence. Batch one completed task into one release, preserving unrelated work.
+- Follow `README.md#release` for versioning, verification, signing, and publication. Delivery is complete after the public release and its APK version/signature are verified; report actual blockers if publication fails.
 - Tag pushes alone do not publish releases for this repo.
 - Use `JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64` for local Gradle verification in this environment.
 - If Gradle/Hilt/Kotlin generated cache errors appear, run a clean build/test before treating them as code failures.
