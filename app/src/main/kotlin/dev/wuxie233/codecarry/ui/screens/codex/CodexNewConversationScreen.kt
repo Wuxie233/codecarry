@@ -3,6 +3,8 @@
 package dev.wuxie233.codecarry.ui.screens.codex
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
@@ -88,11 +90,17 @@ fun CodexNewConversationScreen(
                             files = state.files, loading = state.attachmentsLoading, error = state.attachmentsError,
                             onLoadSkills = { viewModel.loadSkills() }, onSearchFiles = { viewModel.searchFiles(it) },
                             onAdd = viewModel::addAttachment)
-                        CodexModelControls(state.copy(isRewritingHistory = !enabled), viewModel::selectModel,
-                            viewModel::selectEffort, viewModel::loadModels)
-                        if (state.selectedModel.codexFastTier() != null) {
-                            FilterChip(selected = state.fastEnabled, onClick = viewModel::toggleFast,
-                                enabled = enabled, label = { Text(stringResource(R.string.codex_fast)) })
+                        Row(
+                            modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            CodexModelControls(state.copy(isRewritingHistory = !enabled), viewModel::selectModel,
+                                viewModel::selectEffort, viewModel::loadModels)
+                            if (state.selectedModel.codexFastTier() != null) {
+                                FilterChip(selected = state.fastEnabled, onClick = viewModel::toggleFast,
+                                    enabled = enabled, label = { Text(stringResource(R.string.codex_fast), maxLines = 1) })
+                            }
                         }
                     }
                 },

@@ -32,7 +32,8 @@ suspend fun CodexAppServerClient.prepareProjectlessWorkspace(prompt: String): St
                 (it.objectOrEmpty()["fileName"] as? JsonPrimitive)?.contentOrNull == ".codex-global-state.json"
             }
             if (hasLegacy) configured = Json.parseToJsonElement(
-                readTextFile(join(codexHome, ".codex-global-state.json")),
+                // Global state includes desktop history and can exceed the preview's 1 MiB cap.
+                readTextFile(join(codexHome, ".codex-global-state.json"), maxBytes = 16 * 1024 * 1024),
             ).objectOrEmpty()["projectlessWorkspaceRoot"]
         }
     }
