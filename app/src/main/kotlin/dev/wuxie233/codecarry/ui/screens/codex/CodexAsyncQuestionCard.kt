@@ -1,12 +1,20 @@
 package dev.wuxie233.codecarry.ui.screens.codex
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -21,6 +29,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.unit.dp
 import dev.wuxie233.codecarry.R
 import dev.wuxie233.codecarry.data.codex.CodexAsyncQuestion
@@ -40,14 +51,79 @@ internal fun CodexAsyncQuestionCard(
     var drafts by rememberSaveable(key) { mutableStateOf(ArrayList(List(questions.size) { "" })) }
     var custom by rememberSaveable(key) { mutableStateOf(ArrayList(List(questions.size) { "" })) }
     val canEdit = enabled && !submitting
+    var expanded by rememberSaveable(key) { mutableStateOf(false) }
     Surface(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
         color = MaterialTheme.colorScheme.surfaceContainerLow,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
+        Row(Modifier.padding(start = 14.dp, end = 6.dp, top = 8.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                questions.joinToString("\n") { it.title },
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            TextButton(onClick = { expanded = true }) {
+                Text(stringResource(R.string.codex_async_question_title))
+            }
+        }
+    }
+    if (!expanded) return
+    Dialog(
+        onDismissRequest = { expanded = false },
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        BoxWithConstraints(
+            Modifier.fillMaxSize().imePadding().padding(16.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Surface(
+                modifier = Modifier.widthIn(max = 560.dp).fillMaxWidth().heightIn(max = maxHeight),
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+            ) {
+                Column {
+                    Row(Modifier.fillMaxWidth().padding(start = 14.dp, end = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(stringResource(R.string.codex_async_question_title),
+                            modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+                        TextButton(onClick = { expanded = false }) { Text(stringResource(R.string.close)) }
+                    }
+                    Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) {
+                        QuestionForm(questions, canEdit, submitting, error, drafts, custom,
+                            onDrafts = { drafts = it }, onCustom = { custom = it }, onAnswer = onAnswer)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun QuestionForm(
+    questions: List<CodexAsyncQuestion>,
+    canEdit: Boolean,
+    submitting: Boolean,
+    error: String?,
+    drafts: ArrayList<String>,
+    custom: ArrayList<String>,
+    onDrafts: (ArrayList<String>) -> Unit,
+    onCustom: (ArrayList<String>) -> Unit,
+    onAnswer: (Map<String, String>) -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text(stringResource(R.string.codex_async_question_title), style = MaterialTheme.typography.titleSmall)
             questions.forEachIndexed { index, question ->
                 Text(question.title, style = MaterialTheme.typography.bodyMedium)
                 when {
@@ -66,8 +142,8 @@ internal fun CodexAsyncQuestionCard(
                             val selected = drafts[index] == option && custom[index].isEmpty()
                             Surface(
                                 onClick = {
-                                    drafts = ArrayList(drafts).apply { set(index, option) }
-                                    custom = ArrayList(custom).apply { set(index, "") }
+                                    onDrafts(ArrayList(drafts).apply { set(index, option) })
+                                    onCustom(ArrayList(custom).apply { set(index, "") })
                                     if (questions.size == 1) onAnswer(mapOf(question.id to option))
                                 },
                                 enabled = canEdit,
@@ -87,8 +163,8 @@ internal fun CodexAsyncQuestionCard(
                         OutlinedTextField(
                             value = custom[index],
                             onValueChange = { value ->
-                                custom = ArrayList(custom).apply { set(index, value) }
-                                drafts = ArrayList(drafts).apply { set(index, value) }
+                                onCustom(ArrayList(custom).apply { set(index, value) })
+                                onDrafts(ArrayList(drafts).apply { set(index, value) })
                             },
                             enabled = canEdit,
                             label = { Text(stringResource(R.string.question_custom_answer)) },
