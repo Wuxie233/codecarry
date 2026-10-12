@@ -161,7 +161,10 @@ class CodexThreadListViewModel @Inject constructor(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: CodexRpcException) {
-            CodexArchiveResult.FAILED // An explicit server rejection is safe to report as failure.
+            // Another client may already have changed the archive state. Read it back,
+            // but do not turn a rejected write into an undoable success.
+            refresh()
+            CodexArchiveResult.FAILED
         } catch (_: Throwable) {
             // A missing receipt cannot be replayed. Repair only by reading both catalogs.
             CodexArchiveResult.UNKNOWN
@@ -259,11 +262,12 @@ class CodexThreadListViewModel @Inject constructor(
                         "Codex connection changed while loading threads; retry the refresh"
                     }
                 }
+                val previouslyActiveIds = _uiState.value.activeThreads.mapTo(mutableSetOf(), CodexThread::id)
                 var pageBaseline = acquired.connection.events.value
                 _uiState.update { it.copy(serverName = server.displayName) }
                 // Publish each database page immediately. A partial or database-only catalog
                 // must never infer deletion from absence.
-                loadAllCodexThreads(onPage = { page ->
+                val active = loadAllCodexThreads(onPage = { page ->
                     ensureCurrent()
                     acquired.connection.reducer.mergeThreadPage(page.threads, false, pageBaseline)
                     _uiState.update { it.copy(isLoading = false) }
@@ -274,6 +278,10 @@ class CodexThreadListViewModel @Inject constructor(
                 }
                 ensureCurrent()
                 _uiState.update { it.copy(isLoading = false) }
+                // Missing active rows are not proof of deletion. Check positive archive
+                // evidence immediately instead of waiting for the filesystem calibration.
+                val activeIds = active.mapTo(mutableSetOf(), CodexThread::id)
+                if (previouslyActiveIds.any { it !in activeIds }) loadArchives(afterFirstPaint = true)
                 scheduleCalibration(acquired.connection, generation)
                 archiveController.unresolvedIds().forEach { reconcileArchiveOutcome(it) }
 
@@ -385,7 +393,7 @@ class CodexThreadListViewModel @Inject constructor(
         loadCatalogPage(connected, cursor, archived, databaseOnly = false)
     }
 
-    private fun loadArchives() {
+    private fun loadArchives(afterFirstPaint: Boolean = false) {
         if (archiveJob?.isActive == true) return
         archiveJob = viewModelScope.launch {
             _uiState.update { it.copy(isLoadingArchived = true, archiveError = null) }
@@ -393,6 +401,9 @@ class CodexThreadListViewModel @Inject constructor(
                 val connected = requireConnection()
                 connected.client.connect()
                 val generation = connected.client.currentConnectionGeneration()
+                // Let the active list render first, including after reconnect. This is a
+                // cheap database follow-up, not the delayed filesystem calibration.
+                if (afterFirstPaint) delay(250)
                 var baseline = connected.events.value
                 loadAllCodexThreads(onPage = { page ->
                     check(connectionManager.isCurrent(connected) && connected.client.currentConnectionGeneration() == generation)

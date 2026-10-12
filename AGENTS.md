@@ -344,7 +344,10 @@ If generated Hilt/Kotlin caches fail, rerun the affected verification after
 
 - Codex catalogs page by stable `created_at` while presentation keeps recency
   order. Database-only pages publish progressively without deleting omitted
-  threads; archives load on demand. Repeated cursors fail the refresh. Only
+  threads; archives load on demand and immediately when a completed active
+  refresh omits cached active rows. List resume refreshes the catalog, and
+  rejected archive writes trigger readback without granting undo.
+  Repeated cursors fail the refresh. Only
   complete active plus archived repair snapshots from the same connection
   generation may reconcile omissions. Filesystem repair is delayed and
   throttled, never part of first-page readiness. Reducer reset

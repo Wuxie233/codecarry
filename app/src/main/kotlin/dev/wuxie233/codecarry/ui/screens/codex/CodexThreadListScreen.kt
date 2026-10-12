@@ -77,6 +77,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.res.stringResource
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import dev.wuxie233.codecarry.R
 import dev.wuxie233.codecarry.data.codex.CodexThread
 import dev.wuxie233.codecarry.ui.components.EmptyStateCard
@@ -109,7 +111,8 @@ fun CodexThreadListScreen(
     val scope = rememberCoroutineScope()
     var renameTarget by remember { mutableStateOf<CodexThread?>(null) }
     var deleteTarget by remember { mutableStateOf<CodexThread?>(null) }
-    LaunchedEffect(Unit) { viewModel.refresh(); viewModel.openThread.collect(onOpenThread) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.refresh() }
+    LaunchedEffect(Unit) { viewModel.openThread.collect(onOpenThread) }
 
     CodexThreadListContent(
         state = state, onNavigateBack = onNavigateBack, onOpenThread = { id ->
