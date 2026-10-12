@@ -18,8 +18,8 @@ android {
         applicationId = "dev.wuxie233.codecarry"
         minSdk = 26
         targetSdk = 34
-        versionCode = 145
-        versionName = "1.17.3"
+        versionCode = 146
+        versionName = "1.17.4"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {

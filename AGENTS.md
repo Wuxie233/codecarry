@@ -439,3 +439,7 @@ Before domain exploration, read `docs/agents/domain.md`.
   Reconcile only unambiguous same-turn identities and retain confirmed aliases
   across subsequent item updates. Equal question text alone does not establish
   identity, and separate calls must remain separate questions.
+
+- Codex completion notifications require confirmed main-thread metadata. Suppress
+  subagent and metadata-pending completions; keep approval/input notifications
+  independent of this completion-only policy.

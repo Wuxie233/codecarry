@@ -664,6 +664,10 @@ class OpenCodeConnectionService : Service() {
     ) {
         val threadId = event.notification.threadId ?: return
         val turn = event.notification.turn ?: return
+        val thread = codexConnectionManager.get(event.serverId)
+            ?.events?.value?.threads?.get(threadId) ?: return
+        // Completion alerts belong only to confirmed main threads, not subagents.
+        if (!thread.hasMetadata || thread.isSubagent) return
         val decision = codexTurnNotificationDecision(
             serverId = event.serverId,
             notification = event.notification,
