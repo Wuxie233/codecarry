@@ -16,6 +16,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.serialization.json.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.UUID
@@ -37,6 +39,7 @@ class CodexNewConversationViewModel @Inject constructor(
     private var phase = saved("phase")
     private var createdThreadId = saved("threadId")
     private var clientMessageId = saved("clientMessageId")
+    private var creationRequestId = saved("creationRequestId")
     private var modelChoice = saved("model")
     private var selectionRevision = 0L
     private var modelReadRevision = 0L
@@ -194,6 +197,34 @@ class CodexNewConversationViewModel @Inject constructor(
         phase = next
     }
 
+    private suspend fun acceptCreation(client: CodexAppServerClient, initial: JsonObject?) {
+        var receipt = initial
+        repeat(120) {
+            val value = receipt ?: error("Creation receipt is not available; the request will not be replayed")
+            check(value["requestId"]?.jsonPrimitive?.content == creationRequestId) { "Creation receipt identity mismatch" }
+            when (value["status"]?.jsonPrimitive?.content) {
+                "created" -> {
+                    val threadId = value["threadId"]?.jsonPrimitive?.contentOrNull
+                    check(!threadId.isNullOrBlank()) { "Created thread receipt is missing its thread ID" }
+                    complete(threadId)
+                    return
+                }
+                "failed" -> {
+                    journal(null)
+                    preferences.edit().remove("$key:creationRequestId").commit()
+                    creationRequestId = null
+                    error(value["error"]?.jsonPrimitive?.contentOrNull ?: "Thread creation failed")
+                }
+                "outcome-unknown" -> error(value["error"]?.jsonPrimitive?.contentOrNull ?: "Thread creation outcome is unknown")
+                "queued" -> Unit
+                else -> error("Invalid creation receipt status")
+            }
+            delay(1_000)
+            receipt = client.readCoordinatedCreation(checkNotNull(creationRequestId))
+        }
+        error("Thread creation is still pending; check its receipt again")
+    }
+
     fun send() {
         val snapshot = _state.value
         if (snapshot.isSending || snapshot.isLoading || phase != null || snapshot.isHistoryAttachmentRecoveryRequired ||
@@ -210,6 +241,31 @@ class CodexNewConversationViewModel @Inject constructor(
                 connected = connection()
                 connected.client.connect()
                 val generation = connected.client.currentConnectionGeneration()
+                if (createdThreadId == null && connected.client.supportsCoordinatedCreation()) {
+                    creationRequestId = UUID.randomUUID().toString()
+                    check(preferences.edit().putString("$key:creationRequestId", creationRequestId).commit())
+                    val command = buildJsonObject {
+                        put("requestId", creationRequestId)
+                        put("target", buildJsonObject {
+                            if (projectId != null) {
+                                put("type", "project")
+                                put("projectId", projectId)
+                                put("environment", buildJsonObject { put("type", "local") })
+                            } else put("type", "projectless")
+                        })
+                        put("input", JsonArray(buildList {
+                            if (snapshot.draft.isNotBlank()) add(CodexUserInput.Text(snapshot.draft.trim()).toJson())
+                            addAll(snapshot.composerAttachments.map { it.input.toJson() })
+                        }))
+                        (snapshot.selectedModel?.model ?: modelChoice)?.let { put("model", it) }
+                        snapshot.selectedEffort?.let { put("effort", it) }
+                        codexFastTurnParams(snapshot.selectedModel, snapshot.fastEnabled, true).forEach { (name, value) -> put(name, value) }
+                    }
+                    journal("coordinator")
+                    dispatched = true
+                    acceptCreation(connected.client, connected.client.createCoordinatedThread(command))
+                    return@launch
+                }
                 if (createdThreadId == null) {
                     val currentRoots = if (projectId != null) connected.client.readProject(projectId).roots.map { it.path }
                         else listOf(saved("cwd") ?: connected.client.prepareProjectlessWorkspace(snapshot.draft).also { cwd ->
@@ -250,7 +306,7 @@ class CodexNewConversationViewModel @Inject constructor(
                 _state.update { it.copy(isSendConfirmationPending = phase != null,
                     error = if (phase != null) context.getString(R.string.codex_new_unknown) else cancelled.message) }
             } catch (error: Exception) {
-                if (!dispatched || !isUncertainCodexSendFailure(error)) {
+                if (phase != "coordinator" && (!dispatched || !isUncertainCodexSendFailure(error))) {
                     journal(null)
                     createdThreadId?.let { manager.releaseProvisionalTurn(serverId, it) }
                 }
@@ -261,11 +317,16 @@ class CodexNewConversationViewModel @Inject constructor(
     }
 
     fun recheck() = viewModelScope.launch {
-        val threadId = createdThreadId ?: return@launch
+        if (createdThreadId == null && creationRequestId == null) return@launch
         _state.update { it.copy(isSending = true) }
         try {
             val connected = connection()
             connected.client.connect()
+            if (phase == "coordinator") {
+                acceptCreation(connected.client, connected.client.readCoordinatedCreation(checkNotNull(creationRequestId)))
+                return@launch
+            }
+            val threadId = checkNotNull(createdThreadId)
             val session = manager.resumeThread(connected, threadId, forceRefresh = true)
             if (clientMessageId?.let { session.thread.hasClientMessage(it) } == true) {
                 manager.releaseProvisionalTurn(serverId, threadId)
@@ -274,20 +335,21 @@ class CodexNewConversationViewModel @Inject constructor(
             else _state.update { it.copy(error = context.getString(R.string.codex_new_unknown)) }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (error: Exception) { _state.update { it.copy(error = error.message) } }
-        finally { _state.update { it.copy(isSending = false) } }
+        finally { _state.update { it.copy(isSending = false, isSendConfirmationPending = phase != null) } }
     }
 
-    val canRecheck: Boolean get() = createdThreadId != null
+    val canRecheck: Boolean get() = createdThreadId != null || creationRequestId != null
 
     val canAbandonWait: Boolean get() = phase != null
-    val submissionMayHaveSent: Boolean get() = phase == "sending"
+    val submissionMayHaveSent: Boolean get() = phase == "sending" || phase == "coordinator"
 
     /** Explicit user acknowledgement abandons only the local wait, never replays the unknown request. */
     fun abandonWait() {
         if (!canAbandonWait || _state.value.isSending) return
-        check(preferences.edit().remove("$key:phase").remove("$key:cwd").remove("$key:clientMessageId").remove("$key:threadId").commit())
+        check(preferences.edit().remove("$key:phase").remove("$key:cwd").remove("$key:clientMessageId").remove("$key:threadId").remove("$key:creationRequestId").commit())
         createdThreadId?.let { manager.releaseProvisionalTurn(serverId, it) }
         createdThreadId = null
+        creationRequestId = null
         phase = null
         clientMessageId = null
         _state.update { it.copy(isSendConfirmationPending = false, error = null) }
@@ -295,7 +357,8 @@ class CodexNewConversationViewModel @Inject constructor(
 
     private fun complete(threadId: String) {
         check(preferences.edit().remove("$key:phase").remove("$key:threadId").remove("$key:clientMessageId")
-            .remove("$key:text").remove("$key:attachments").remove("$key:cwd").commit())
+            .remove("$key:text").remove("$key:attachments").remove("$key:cwd").remove("$key:creationRequestId").commit())
+        creationRequestId = null
         phase = null
         _state.update { it.copy(composerValue = TextFieldValue(), composerAttachments = emptyList(), isSendConfirmationPending = false) }
         _openThread.value = threadId

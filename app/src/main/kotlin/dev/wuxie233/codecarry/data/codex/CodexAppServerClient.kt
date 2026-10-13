@@ -486,6 +486,34 @@ open class CodexAppServerClient internal constructor(
         return withContext(decodingDispatcher) { CodexThread.fromJson(result["thread"].objectOrEmpty()) }
     }
 
+    /** Only explicit unsupported capability permits the native creation path. */
+    suspend fun supportsCoordinatedCreation(): Boolean {
+        val capabilities = try {
+            request("codexWeb/capabilities", JsonObject(emptyMap())).objectOrEmpty()
+        } catch (error: CodexRpcException) {
+            if (error.code == -32601L) return false
+            throw error
+        }
+        return when (capabilities["threadCreation"]) {
+            JsonPrimitive(true) -> true
+            JsonPrimitive(false) -> false
+            else -> error("Invalid Codex coordinator capabilities")
+        }
+    }
+
+    suspend fun createCoordinatedThread(command: JsonObject): JsonObject =
+        request("codexWeb/thread/create", buildJsonObject {
+            put("hostId", "local")
+            put("command", command)
+        }).objectOrEmpty()
+
+    suspend fun readCoordinatedCreation(requestId: String): JsonObject? =
+        request("codexWeb/thread/creation/read", buildJsonObject {
+            put("hostId", "local")
+            put("requestId", requestId)
+        })
+            .let { if (it == JsonNull) null else it.objectOrEmpty() }
+
     suspend fun startThread(
         cwd: String? = null,
         model: String? = null,

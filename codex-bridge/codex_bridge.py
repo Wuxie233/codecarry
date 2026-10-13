@@ -7,7 +7,9 @@ TLS termination belongs to the reverse proxy; the listener is loopback-only.
 import argparse
 import asyncio
 import hmac
+import json
 import logging
+import os
 import signal
 from http import HTTPStatus
 from pathlib import Path
@@ -34,6 +36,63 @@ class CodexBridge:
             raise ValueError("Daemon message limit must be positive")
         self.max_daemon_message = max_daemon_message
         self.active = 0
+        self.coordinator_socket = Path(os.environ.get("CODEX_HOME") or Path.home()/".codex") / "codex-web-coordinator.sock"
+        # These requests outlive a phone connection. Only the coordinator owns
+        # their durable operation state; this set keeps transports alive.
+        self.coordinator_requests = set()
+
+    async def coordinator_rpc(self, client, request):
+        request_id = request.get("id")
+        writer = None
+        response = None
+        async def exchange():
+            nonlocal writer, response
+            reader, writer = await asyncio.open_unix_connection(
+                str(self.coordinator_socket), limit=MAX_MESSAGE,
+            )
+            # The native caller cannot choose another client's authority.
+            forwarded = {
+                "jsonrpc": "2.0", "id": request_id,
+                "method": request["method"], "params": request.get("params", {}),
+                "clientIdentity": "codecarry",
+            }
+            encoded = json.dumps(forwarded, ensure_ascii=False, separators=(",", ":")).encode() + b"\n"
+            if len(encoded) > MAX_MESSAGE:
+                raise ValueError("Coordinator request exceeds transport limit")
+            writer.write(encoded)
+            await writer.drain()
+            line = await reader.readline()
+            if not line.endswith(b"\n") or len(line) > MAX_MESSAGE:
+                raise ValueError("Invalid coordinator response framing")
+            response = json.loads(line)
+            if not isinstance(response, dict) or response.get("id") != request_id or (
+                ("result" in response) == ("error" in response)
+            ):
+                raise ValueError("Invalid coordinator response")
+        try:
+            await asyncio.wait_for(exchange(), timeout=60)
+        except (OSError, asyncio.TimeoutError, ValueError, UnicodeError):
+            # An uncertain write is not evidence that this protocol is absent.
+            # The client must reconcile by its original requestId, never send
+            # the same operation through the daemon as a fallback.
+            LOG.warning("Codex coordinator request failed; outcome may be unknown")
+            response = {"jsonrpc": "2.0", "id": request_id, "error": {
+                "code": -32000,
+                "message": "Codex coordinator request failed; query the original requestId before retrying",
+            }}
+        finally:
+            if writer is not None:
+                writer.close()
+                try:
+                    await writer.wait_closed()
+                except OSError:
+                    pass
+        if "id" in request:
+            try:
+                await client.send(json.dumps(response, ensure_ascii=False, separators=(",", ":")))
+            except (ConnectionClosed, OSError):
+                # The receipt remains in the coordinator for reconnect lookup.
+                pass
 
     async def authorize(self, connection, request):
         values = request.headers.get_all("Authorization")
@@ -58,13 +117,23 @@ class CodexBridge:
                 max_size=self.max_daemon_message, max_queue=4,
                 ping_interval=20, ping_timeout=20,
             ) as daemon:
-                async def relay(source, target):
+                async def relay(source, target, route_coordinator=False):
                     async for message in source:
                         if not isinstance(message, str):
                             await source.close(1003, "JSON text frames required")
                             return
+                        if route_coordinator:
+                            try:
+                                request = json.loads(message)
+                            except ValueError:
+                                request = None
+                            if isinstance(request, dict) and isinstance(request.get("method"), str) and request["method"].startswith("codexWeb/"):
+                                task = asyncio.create_task(self.coordinator_rpc(client, request))
+                                self.coordinator_requests.add(task)
+                                task.add_done_callback(self.coordinator_requests.discard)
+                                continue
                         await target.send(message)
-                pumps = [asyncio.create_task(relay(client, daemon)), asyncio.create_task(relay(daemon, client))]
+                pumps = [asyncio.create_task(relay(client, daemon, True)), asyncio.create_task(relay(daemon, client))]
                 done, _ = await asyncio.wait(pumps, return_when=asyncio.FIRST_COMPLETED)
                 for task in done:
                     task.result()
