@@ -48,6 +48,8 @@ import dev.wuxie233.codecarry.data.dsh.dshMessageSeq
 import dev.wuxie233.codecarry.data.dsh.dshPromptRequest
 import dev.wuxie233.codecarry.data.dsh.DshHistoryFolder
 import dev.wuxie233.codecarry.data.dsh.mapDshApproval
+import dev.wuxie233.codecarry.data.dsh.catalogAddress
+import dev.wuxie233.codecarry.data.dsh.directSubagentSessions
 import dev.wuxie233.codecarry.data.dsh.mapDshEventStateToSessions
 import dev.wuxie233.codecarry.data.dsh.mapDshQuestion
 import dev.wuxie233.codecarry.data.dsh.toSessionEvent
@@ -456,6 +458,7 @@ class ChatViewModel @Inject constructor(
     /** Whether a "load older" request is in flight. */
     private val _isLoadingOlder = MutableStateFlow(false)
     private val _questionUnlockEpoch = MutableStateFlow(0)
+    private val _dshSubagentSessions = MutableStateFlow<List<Session>>(emptyList())
     val uiState: StateFlow<ChatUiState> = combine(
         listOf(
             eventReducer.serverSessionDetails,
@@ -482,6 +485,7 @@ class ChatViewModel @Inject constructor(
             _hasOlderMessages,
             _isLoadingOlder,
             _questionUnlockEpoch,
+            _dshSubagentSessions,
         )
     ) { args ->
         @Suppress("UNCHECKED_CAST")
@@ -525,10 +529,12 @@ class ChatViewModel @Inject constructor(
         val questionUnlockEpoch = args[23] as Int
 
         val session = allSessions.find { it.id == sessionId && it.id in currentServerSessionIds }
+        @Suppress("UNCHECKED_CAST")
+        val subagentSessions = if (isDsh) args[24] as List<Session> else allSessions
         val subagents = buildDirectChatSubagents(
             parentSessionId = sessionId,
-            sessions = allSessions,
-            allowedSessionIds = currentServerSessionIds,
+            sessions = subagentSessions,
+            allowedSessionIds = if (isDsh) subagentSessions.mapTo(mutableSetOf()) { it.id } else currentServerSessionIds,
             statuses = statuses,
             questions = questions,
             permissions = permissions,
@@ -774,7 +780,7 @@ class ChatViewModel @Inject constructor(
 
     private fun dshHistoryAddress(): DshSessionAddress? {
         val snapshot = dshReducer.state.value.sessions[sessionId]
-        val resolved = snapshot?.historyAddress()
+        val resolved = dshReducer.state.value.catalogAddress(sessionId) ?: snapshot?.historyAddress()
         when (resolved) {
             is DshSessionAddress.Subagent -> {
                 dshKnownAddress = resolved
@@ -854,6 +860,10 @@ class ChatViewModel @Inject constructor(
 
     private fun applyDshState(state: DshEventState) {
         val mapped = mapDshEventStateToSessions(state)
+        _dshSubagentSessions.value = state.directSubagentSessions(
+            sessionId,
+            mapped.sessions.firstOrNull { it.id == sessionId }?.directory ?: sessionDirectory.orEmpty(),
+        )
         eventReducer.replaceSessions(serverId, mapped.sessions)
         mapped.statuses.forEach { (id, status) ->
             eventReducer.updateSessionStatus(serverId, id, status)
@@ -911,8 +921,8 @@ class ChatViewModel @Inject constructor(
     }
 
     private suspend fun loadDshOlderHistory() {
-        val snapshot = dshReducer.state.value.sessions[sessionId]
-        val address = snapshot?.historyAddress() ?: return
+        val snapshot = dshReducer.state.value.sessions[sessionId] ?: return
+        val address = dshHistoryAddress() ?: return
         val throughSeq = snapshot.pageThroughSeq ?: return
         val beforeSeq = snapshot.events.minOfOrNull { it.seq } ?: return
         try {

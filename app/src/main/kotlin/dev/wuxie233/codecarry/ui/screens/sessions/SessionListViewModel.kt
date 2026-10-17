@@ -637,7 +637,9 @@ class SessionListViewModel @Inject constructor(
         // Unknown (null) connection state keeps operations enabled until a load proves otherwise.
         val serverOperationsAvailable = serverConnected ?: true
 
-        val serverScopedSessions = sessionsByServer[serverId].orEmpty().values.toList()
+        val serverScopedSessions = sessionsByServer[serverId].orEmpty().values.filter { session ->
+            !isDsh || (session.parentId == null && dshState.sessions[session.id]?.origin != "subagent")
+        }
         val rootPendingQuestions = aggregateSessionRequestsByRoot(serverScopedSessions, pendingQuestions)
         val rootPendingPermissions = aggregateSessionRequestsByRoot(serverScopedSessions, pendingPermissions)
         val archivedCount = serverScopedSessions.count { it.parentId == null && it.isArchived }
@@ -871,7 +873,7 @@ class SessionListViewModel @Inject constructor(
             eventReducer.setQuestions(serverId, session.id, state.pendingQuestionsFor(session.id).map(::mapDshQuestion))
         }
         _projects.value = mapped.sessions
-            .filter { it.parentId == null }
+            .filter { it.parentId == null && state.sessions[it.id]?.origin != "subagent" }
             .map { it.directory }
             .distinct()
             .map { directory ->

@@ -240,6 +240,54 @@ class ChatViewModelDshFollowTest {
     }
 
     @Test
+    fun `parent catalog opens unlisted child and control updates its drawer`() = runTest(dispatcher) {
+        val mux = FakeDownlink()
+        val unary = CopyOnWriteArrayList<String>()
+        val compactRequested = CompletableDeferred<Unit>()
+        val harness = dshHarness(mux, unary, onCommandExecute = { compactRequested.complete(Unit) })
+        val parent = newViewModel(harness.client, harness.manager)
+        collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { parent.uiState.collect {} }
+        harness.manager.connect(SERVER_ID, DshConnection.from("http://127.0.0.1:3080", token = "launch-token"))
+        runCurrent()
+        pushBaselines(mux)
+        harness.manager.states.first { it[SERVER_ID]?.isReady == true }
+        harness.manager.reducer(SERVER_ID).state.first { it.sessions.containsKey(SESSION_ID) }
+        runCurrent()
+        val follow = json.parseToJsonElement(mux.sent.last { it.contains("\"session/follow\"") }).jsonObject
+        val streamId = follow.getValue("streamId").jsonPrimitive.content
+        mux.incoming.trySend(item(streamId, """{"type":"snapshot","header":{},"cursor":10,"records":[],"hasMore":false,"projections":{"asOfSeq":10,"values":{"subagentCatalog":[{"id":"child","createdAt":1,"mode":"continuable","label":"Worker"}]}}}"""))
+        runCurrent()
+        assertEquals(listOf("child"), parent.uiState.value.subagents.map { it.id })
+        assertEquals("Worker", parent.uiState.value.subagents.single().title)
+
+        val child = newViewModel(harness.client, harness.manager, "child")
+        collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { child.uiState.collect {} }
+        runCurrent()
+        val childOpen = json.parseToJsonElement(mux.sent.last { it.contains("\"session/follow\"") }).jsonObject
+        val address = childOpen.getValue("payload").jsonObject.getValue("args").jsonObject
+            .getValue("request").jsonObject.getValue("address").jsonObject
+        assertEquals("subagent", address.getValue("kind").jsonPrimitive.content)
+        assertEquals(SESSION_ID, address.getValue("parentSessionId").jsonPrimitive.content)
+        assertEquals("child", address.getValue("childSessionId").jsonPrimitive.content)
+        assertEquals("continuable", address.getValue("mode").jsonPrimitive.content)
+        assertEquals("compact", child.dshSkills.first { it.commands.isNotEmpty() }.commands.single().name)
+        assertEquals("grill", child.dshSkills.first { it.skills.isNotEmpty() }.skills.single().name)
+        child.compactDshSession()
+        compactRequested.await()
+        runCurrent()
+        val compact = json.parseToJsonElement(unary.single { it.contains("\"commands/execute\"") }).jsonObject
+            .getValue("payload").jsonObject.getValue("args").jsonObject
+        assertEquals("child", compact.getValue("agentId").jsonPrimitive.content)
+        assertEquals("/compact", compact.getValue("line").jsonPrimitive.content)
+        assertNull(child.uiState.value.error)
+
+        mux.incoming.trySend(item("st-1", """{"type":"projection","sessionId":"$SESSION_ID","key":"subagentCatalog","seq":11,"value":[{"id":"second","createdAt":2,"mode":"one-shot","label":"Second"}]}"""))
+        runCurrent()
+        assertEquals(listOf("second"), parent.uiState.value.subagents.map { it.id })
+        assertFalse(unary.any { it.contains("subagents/list") })
+    }
+
+    @Test
     fun `idle child send uses queue delivery`() = childSendDelivery(false, "queue")
 
     @Test
@@ -659,6 +707,7 @@ class ChatViewModelDshFollowTest {
         beforePresetList: suspend () -> Unit = {},
         beforeSkillList: suspend () -> Unit = {},
         beforePresetSelect: suspend () -> Unit = {},
+        onCommandExecute: () -> Unit = {},
         presetSelectResult: String = """{"ok":true,"value":"standard"}""",
         openMux: () -> DshDownlink = { mux },
         listItem: String = """{"sessionId":"$SESSION_ID","updatedAt":2,"running":false,"blank":false,"cwd":"/root/CODE/Minecraft"}""",
@@ -690,6 +739,14 @@ class ChatViewModelDshFollowTest {
                     unary += (request.body as TextContent).text
                     respond(
                         content = """{"type":"server-response","rpcId":"fixed","result":{"ok":true,"value":[{"name":"compact","description":"Compact history"}]}}""",
+                        headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
+                    )
+                }
+                "/api/commands/execute" -> {
+                    unary += (request.body as TextContent).text
+                    onCommandExecute()
+                    respond(
+                        content = """{"type":"server-response","rpcId":"fixed","result":{"ok":true,"value":{"commandId":"compact","result":{"kind":"success"}}}}""",
                         headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
                     )
                 }
@@ -767,7 +824,7 @@ class ChatViewModelDshFollowTest {
         return DshHarness(client, manager)
     }
 
-    private fun newViewModel(dshApi: DshApiClient, manager: DshConnectionManager): ChatViewModel {
+    private fun newViewModel(dshApi: DshApiClient, manager: DshConnectionManager, sessionId: String = SESSION_ID): ChatViewModel {
         return ChatViewModel(
             appContext = object : ContextWrapper(null) {},
             savedStateHandle = SavedStateHandle(
@@ -777,7 +834,7 @@ class ChatViewModelDshFollowTest {
                     "password" to "",
                     "serverName" to "DSH",
                     "serverId" to SERVER_ID,
-                    "sessionId" to SESSION_ID,
+                    "sessionId" to sessionId,
                     "directory" to "/root/CODE/Minecraft",
                     "serverType" to ServerType.DSH.name,
                     "token" to "launch-token",
