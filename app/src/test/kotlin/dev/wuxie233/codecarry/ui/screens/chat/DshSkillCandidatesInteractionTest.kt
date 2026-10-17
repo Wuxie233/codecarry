@@ -32,11 +32,9 @@ class DshSkillCandidatesInteractionTest {
             skills = listOf(DshSkillEntry("compact", "A skill", modelInvocable = true))))
         var sends = 0
         val gate = ChatConfirmationGate()
-        compose.setContent {
-            CompositionLocalProvider(LocalChatConfirmationGate provides gate) {
-                MaterialTheme { DshSkillCandidates(input.value, state.value, { input.value = it }, {},
-                    onCompact = { sends++ }) }
-            }
+        setContentWithGate(gate) {
+            MaterialTheme { DshSkillCandidates(input.value, state.value, { input.value = it }, {},
+                onCompact = { sends++ }) }
         }
         compose.onNodeWithText("/compact").assertDoesNotExist()
         compose.runOnIdle { state.value = state.value.copy(commands = listOf(
@@ -66,7 +64,7 @@ class DshSkillCandidatesInteractionTest {
 
     @Test fun selectingCandidateOnlyEditsDraftAndBackDismisses() {
         val input = mutableStateOf(TextFieldValue("before /GR after", TextRange(10)))
-        compose.setContent {
+        setContentWithGate {
             MaterialTheme { Column {
                 DshSkillCandidates(input.value, DshSkillCandidateState(true, skills = listOf(skill)), { input.value = it }, {})
                 TextField(input.value, { input.value = it }, Modifier.testTag("draft"))
@@ -84,7 +82,7 @@ class DshSkillCandidatesInteractionTest {
 
     @Test fun deletingSlashAndImeCompositionHideRowsWithoutChangingDraft() {
         val input = mutableStateOf(TextFieldValue("/gr", TextRange(3), TextRange(1, 3)))
-        compose.setContent {
+        setContentWithGate {
             MaterialTheme { DshSkillCandidates(input.value,
                 DshSkillCandidateState(true, skills = listOf(skill)), { input.value = it }, {}) }
         }
@@ -103,7 +101,7 @@ class DshSkillCandidatesInteractionTest {
         val input = mutableStateOf(TextFieldValue("/", TextRange(1)))
         val state = mutableStateOf(DshSkillCandidateState(true, loading = true))
         var retries = 0
-        compose.setContent {
+        setContentWithGate {
             MaterialTheme { DshSkillCandidates(input.value, state.value, { input.value = it }, { retries++ }) }
         }
         compose.onNodeWithText(compose.activity.getString(R.string.dsh_skills_loading)).assertIsDisplayed()
@@ -114,4 +112,30 @@ class DshSkillCandidatesInteractionTest {
         compose.runOnIdle { state.value = DshSkillCandidateState() }
         compose.onNodeWithText(compose.activity.getString(R.string.dsh_skills_no_match)).assertDoesNotExist()
     }
+    @Test fun compactRequiresAnExplicitConfirmationOwner() {
+        org.junit.Assert.assertThrows(IllegalStateException::class.java) {
+            compose.setContent {
+                DshSkillCandidates(TextFieldValue("/co", TextRange(3)),
+                    DshSkillCandidateState(true), {}, {})
+            }
+            compose.waitForIdle()
+        }
+    }
+
+    @Test fun rewindRequiresAnExplicitConfirmationOwner() {
+        org.junit.Assert.assertThrows(IllegalStateException::class.java) {
+            compose.setContent { DshRewindAction("message", false, false) {} }
+            compose.waitForIdle()
+        }
+    }
+
+    private fun setContentWithGate(
+        gate: ChatConfirmationGate = ChatConfirmationGate(),
+        content: @androidx.compose.runtime.Composable () -> Unit,
+    ) {
+        compose.setContent {
+            CompositionLocalProvider(LocalChatConfirmationGate provides gate, content = content)
+        }
+    }
+
 }

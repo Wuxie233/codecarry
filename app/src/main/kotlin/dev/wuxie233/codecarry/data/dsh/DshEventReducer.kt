@@ -46,8 +46,6 @@ data class DshSessionSnapshot(
      */
     val historyOpened: Boolean = false,
     val events: List<DshSessionEvent> = emptyList(),
-    val queue: List<DshQueuedInboxItem> = emptyList(),
-    val jobs: List<DshJobView> = emptyList(),
     val projections: Map<String, Pair<Long, JsonElement?>> = emptyMap(),
     val error: String? = null,
     /** True after `session/list` or `api-session/added` supplied this identity. */
@@ -207,10 +205,6 @@ class DshEventReducer(
         when (frame) {
             is DshControlFrame.Baseline -> _state.update { current ->
                 var next = current
-                // Current Host control carries projections only; retired surfaces stay empty.
-                next = next.copy(sessions = next.sessions.mapValues { (_, session) ->
-                    session.copy(queue = emptyList(), jobs = emptyList())
-                })
                 frame.projections.forEach { (sessionId, block) ->
                     next = applyProjections(next, sessionId, block)
                 }

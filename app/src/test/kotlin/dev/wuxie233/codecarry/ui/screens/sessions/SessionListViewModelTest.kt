@@ -614,6 +614,32 @@ class SessionListViewModelTest {
     }
 
     @Test
+    fun `dsh row requires a live agent to display running without changing host state`() = runTest(dispatcher) {
+        val manager = readyDshManager()
+        val vm = newSessionListViewModel(
+            dshApi = dshSessionApi(Collections.synchronizedList(mutableListOf())),
+            dshConnectionManager = manager, savedStateHandle = dshSavedStateHandle(),
+        )
+        collectUiState(vm)
+        advanceUntilIdle()
+        val reducer = manager.reducer("srv-session-list")
+        for ((running, available, expected) in listOf(
+            Triple(true, false, SessionStatus.Idle),
+            Triple(true, true, SessionStatus.Busy),
+            Triple(false, true, SessionStatus.Idle),
+            Triple(false, false, SessionStatus.Idle),
+        )) {
+            reducer.applySessionList(listOf(DshSessionSummary("s", 1, running, false,
+                agentAvailable = available, cwd = "/work")))
+            advanceUntilIdle()
+            val row = vm.uiState.value.sessionGroups.flatMap { it.sessions }.single { it.session.id == "s" }
+            assertEquals(expected, row.status)
+            assertEquals(running, reducer.state.value.sessions.getValue("s").running)
+            assertEquals(available, reducer.state.value.sessions.getValue("s").agentAvailable)
+        }
+    }
+
+    @Test
     fun `dsh migration hint follows current catalog metadata`() = runTest(dispatcher) {
         val manager = readyDshManager()
         val vm = newSessionListViewModel(

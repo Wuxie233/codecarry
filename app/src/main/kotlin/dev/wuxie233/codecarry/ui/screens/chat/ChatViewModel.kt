@@ -337,7 +337,11 @@ class ChatViewModel @Inject constructor(
     val dshPresets: StateFlow<DshChatPresetState> = _dshPresets
     private var dshPresetLoadJob: Job? = null
     private val _dshSkills = MutableStateFlow(DshSkillCandidateState())
-    val dshSkills: StateFlow<DshSkillCandidateState> = _dshSkills
+    val dshSkills: StateFlow<DshSkillCandidateState> = combine(_dshSkills, dshReducer.state) { skills, state ->
+        if (sessionId in state.archivedSessionIds) {
+            skills.copy(commands = skills.commands.filterNot { it.name == "compact" })
+        } else skills
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, DshSkillCandidateState())
     private val _dshRewindInFlight = MutableStateFlow(false)
     // A marker can arrive before its command receipt (or after a timeout). Do not
     // apply an unconfirmed local write to the displayed history or draft.
@@ -1149,9 +1153,12 @@ class ChatViewModel @Inject constructor(
 
     fun compactDshSession() {
         if (!isDsh || dshCompactJob?.isActive == true || _dshRewindInFlight.value) return
+        if (sessionId in dshReducer.state.value.archivedSessionIds) {
+            _error.value = appContext.getString(R.string.dsh_compact_archived)
+            return
+        }
         val connection = dshConnectionManager.states.value[serverId]
-        if (connection?.isReady != true || !_dshSkills.value.matchesCompact("") ||
-            sessionId in dshReducer.state.value.archivedSessionIds) return
+        if (connection?.isReady != true || !_dshSkills.value.matchesCompact("")) return
         dshCompactJob = viewModelScope.launch {
             try {
                 val result = dshApi.commandExecute(dshConn, sessionId, "/compact")

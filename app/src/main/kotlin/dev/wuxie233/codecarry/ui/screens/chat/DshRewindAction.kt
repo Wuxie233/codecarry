@@ -6,7 +6,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.remember
 import androidx.compose.ui.res.stringResource
 import dev.wuxie233.codecarry.R
 
@@ -18,7 +17,7 @@ internal fun DshRewindAction(
     busy: Boolean,
     onConfirm: () -> Unit,
 ) {
-    val gate = LocalChatConfirmationGate.current ?: remember { ChatConfirmationGate() }
+    val gate = LocalChatConfirmationGate.current
     val owner = "rewind:$messageId"
     DisposableEffect(gate, owner) { onDispose { gate.release(owner) } }
     TextButton(enabled = !inFlight && gate.owner == null, onClick = { gate.acquire(owner) }) {
