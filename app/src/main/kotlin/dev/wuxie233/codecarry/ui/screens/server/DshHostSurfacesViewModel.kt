@@ -22,6 +22,7 @@ import dev.wuxie233.codecarry.data.dsh.DshSettingsNamespaceView
 import dev.wuxie233.codecarry.data.dsh.DshWorkspaceCreateValue
 import dev.wuxie233.codecarry.data.dsh.DshWorkspaceListValue
 import dev.wuxie233.codecarry.data.dsh.dshHostSurfaceCatalog
+import dev.wuxie233.codecarry.data.dsh.dshPromptMode
 import dev.wuxie233.codecarry.data.dsh.mapDshEventStateToSessions
 import dev.wuxie233.codecarry.data.repository.ServerRepository
 import dev.wuxie233.codecarry.domain.model.ServerType
@@ -450,7 +451,8 @@ class DshHostSurfacesViewModel @Inject constructor(
         val host = controller ?: return
         val parent = _uiState.value.selectedSessionId ?: return
         launchAction {
-            host.subagentPrompt(parent, childSessionId, text)
+            val child = _uiState.value.sessions.data?.firstOrNull { it.sessionId == childSessionId }
+            host.subagentPrompt(parent, childSessionId, text, delivery = dshPromptMode(child?.running == true))
             loadSubagents()
         }
     }

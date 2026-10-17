@@ -341,7 +341,12 @@ class DshApiClientTest {
     }
 
     @Test
-    fun `subagent prompt includes mode continuable`() = runTest {
+    fun `subagent prompt includes queue delivery and mode continuable`() = subagentPromptDelivery("queue")
+
+    @Test
+    fun `subagent prompt includes steer delivery and mode continuable`() = subagentPromptDelivery("steer")
+
+    private fun subagentPromptDelivery(delivery: String) = runTest {
         val captured = mutableListOf<HttpRequestData>()
         val client = api(captured) { request ->
             val envelope = json.parseToJsonElement((request.body as TextContent).text).jsonObject
@@ -350,12 +355,19 @@ class DshApiClientTest {
             assertEquals("parent-1", requestArgs.getValue("parentSessionId").jsonPrimitive.content)
             assertEquals("child-1", requestArgs.getValue("childSessionId").jsonPrimitive.content)
             assertEquals("continuable", requestArgs.getValue("mode").jsonPrimitive.content)
+            assertEquals(delivery, requestArgs.getValue("delivery").jsonPrimitive.content)
+            assertEquals("request-1", requestArgs.getValue("requestId").jsonPrimitive.content)
+            assertEquals("Asia/Shanghai", requestArgs.getValue("clientTimeZone").jsonPrimitive.content)
+            assertEquals(json.parseToJsonElement("""[{"type":"text","text":"hello"}]"""), requestArgs.getValue("content"))
             """{"type":"server-response","rpcId":"${envelope.getValue("rpcId").jsonPrimitive.content}","result":{"ok":true,"value":{"messageId":"m-1"}}}"""
         }
         val receipt = client.subagentPrompt(
             connection,
             parentSessionId = "parent-1",
             childSessionId = "child-1",
+            delivery = delivery,
+            requestId = "request-1",
+            clientTimeZone = "Asia/Shanghai",
             content = buildJsonArray { add(buildJsonObject { put("type", "text"); put("text", "hello") }) },
         )
         assertEquals("m-1", receipt.messageId)

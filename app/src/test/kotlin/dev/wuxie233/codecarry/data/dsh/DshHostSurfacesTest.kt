@@ -100,7 +100,7 @@ class DshHostSurfacesTest {
         assertEquals("deepseek-official", controller.llmProviders().providers.single().id)
         assertEquals("v3", controller.llmModels().groups.single().models.single().id)
         assertEquals("child-1", controller.subagentList("s1").entries.single().id)
-        assertEquals("m-1", controller.subagentPrompt("s1", "child-1", "continue").messageId)
+        assertEquals("m-1", controller.subagentPrompt("s1", "child-1", "continue", delivery = "queue").messageId)
         assertTrue(controller.subagentInterrupt("s1", "child-1").accepted)
         assertEquals("harness:identity", controller.systemPromptList().sections.single().name)
 

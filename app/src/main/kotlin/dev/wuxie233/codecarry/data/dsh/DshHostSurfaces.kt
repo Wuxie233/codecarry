@@ -223,6 +223,7 @@ class DshHostSurfaceController(
         parentSessionId: String,
         childSessionId: String,
         text: String,
+        delivery: String,
         clientTimeZone: String? = null,
     ): DshSubagentPromptReceipt {
         requireMethod("subagents/prompt")
@@ -236,7 +237,8 @@ class DshHostSurfaceController(
                     put("text", text)
                 })
             },
-            clientTimeZone,
+            delivery = delivery,
+            clientTimeZone = clientTimeZone,
         )
     }
 
