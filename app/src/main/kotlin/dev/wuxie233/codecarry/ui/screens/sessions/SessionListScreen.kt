@@ -661,6 +661,9 @@ fun SessionListScreen(
                                             supportsRestore = uiState.supportsSessionRestore,
                                             supportsDelete = uiState.supportsSessionDelete,
                                             supportsRehome = uiState.supportsRehome,
+                                            pinState = if (item.session.id in uiState.pinnableSessionIds)
+                                                item.session.id in uiState.pinnedSessionIds else null,
+                                            onTogglePin = { viewModel.toggleSessionPin(item.session.id) },
                                             operationsEnabled = operationsEnabled,
                                         )
                              }
@@ -961,12 +964,14 @@ private fun SessionRowWithSubagents(
     onDelete: () -> Unit,
     onSubagentClick: (sessionId: String, directory: String) -> Unit,
     onRehome: () -> Unit = {},
+    onTogglePin: () -> Unit = {},
     supportsManagement: Boolean = true,
     supportsRename: Boolean = true,
     supportsArchive: Boolean = true,
     supportsRestore: Boolean = true,
     supportsDelete: Boolean = true,
     supportsRehome: Boolean = false,
+    pinState: Boolean? = null,
     operationsEnabled: Boolean = true,
 ) {
     val hasRunning = subagents.running.isNotEmpty()
@@ -991,6 +996,8 @@ private fun SessionRowWithSubagents(
             onRestore = onRestore,
             onDelete = onDelete,
             onRehome = onRehome,
+            onTogglePin = onTogglePin,
+            pinState = pinState,
             supportsManagement = supportsManagement,
             supportsRename = supportsRename,
             supportsArchive = supportsArchive,
@@ -1811,6 +1818,7 @@ private fun NewSessionQuickDialog(
 }
 
 internal enum class SessionRowMenuAction {
+    TOGGLE_PIN,
     RENAME,
     REHOME,
     ARCHIVE,
@@ -1825,8 +1833,10 @@ internal fun sessionRowMenuActions(
     supportsRestore: Boolean = true,
     supportsDelete: Boolean = true,
     supportsRehome: Boolean = false,
+    pinState: Boolean? = null,
 ): List<SessionRowMenuAction> {
     return buildList {
+        if (!isArchived && pinState != null) add(SessionRowMenuAction.TOGGLE_PIN)
         if (supportsRename) add(SessionRowMenuAction.RENAME)
         if (supportsRehome) add(SessionRowMenuAction.REHOME)
         if (isArchived && supportsRestore) add(SessionRowMenuAction.RESTORE)
@@ -1859,12 +1869,14 @@ private fun SessionRow(
     onRestore: () -> Unit,
     onDelete: () -> Unit,
     onRehome: () -> Unit = {},
+    onTogglePin: () -> Unit = {},
     supportsManagement: Boolean = true,
     supportsRename: Boolean = true,
     supportsArchive: Boolean = true,
     supportsRestore: Boolean = true,
     supportsDelete: Boolean = true,
     supportsRehome: Boolean = false,
+    pinState: Boolean? = null,
     operationsEnabled: Boolean = true,
 ) {
     val isAmoled = isAmoledTheme()
@@ -2082,6 +2094,7 @@ private fun SessionRow(
                             onDismissRequest = { menuExpanded = false },
                         ) {
                             sessionRowMenuActions(
+                                pinState = pinState,
                                 isArchived = item.session.isArchived,
                                 supportsRename = supportsRename,
                                 supportsArchive = supportsArchive,
@@ -2090,6 +2103,11 @@ private fun SessionRow(
                                 supportsRehome = supportsRehome,
                             ).forEach { action ->
                                 when (action) {
+                                    SessionRowMenuAction.TOGGLE_PIN -> DropdownMenuItem(
+                                        text = { Text(stringResource(if (pinState == true) R.string.sessions_unpin else R.string.sessions_pin)) },
+                                        onClick = { menuExpanded = false; onTogglePin() },
+                                        enabled = operationsEnabled,
+                                    )
                                     SessionRowMenuAction.RENAME -> DropdownMenuItem(
                                         text = { Text(stringResource(R.string.session_rename)) },
                                         enabled = operationsEnabled,

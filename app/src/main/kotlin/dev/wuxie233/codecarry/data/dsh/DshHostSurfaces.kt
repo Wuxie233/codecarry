@@ -67,14 +67,14 @@ class DshHostSurfaceController(
         return client.workspaceDelete(connection, workspaceId)
     }
 
-    suspend fun hideWorkspace(workspaceId: String): DshHiddenWorkspacesValue {
-        requireMethod("workspace/hide")
-        return client.workspaceHide(connection, workspaceId)
+    suspend fun pinSession(sessionId: String): DshPinnedSessionsValue {
+        requireMethod("workspace/pinSession")
+        return client.workspacePinSession(connection, sessionId)
     }
 
-    suspend fun showWorkspace(workspaceId: String): DshHiddenWorkspacesValue {
-        requireMethod("workspace/show")
-        return client.workspaceShow(connection, workspaceId)
+    suspend fun unpinSession(sessionId: String): DshPinnedSessionsValue {
+        requireMethod("workspace/unpinSession")
+        return client.workspaceUnpinSession(connection, sessionId)
     }
 
     suspend fun addWorkspaceFolder(workspaceId: String, path: String): DshWorkspaceValue {

@@ -528,7 +528,7 @@ class ChatViewModelDshFollowTest {
         val ids = secondMux.sent.map { json.parseToJsonElement(it).jsonObject.getValue("streamId").jsonPrimitive.content }
         secondMux.incoming.trySend(item(ids[0], """{"type":"ready","clientId":"client-2","host":{"home":"/root"}}"""))
         secondMux.incoming.trySend(item(ids[1], """{"type":"baseline","value":{"queues":{},"jobs":{},"projections":{}}}"""))
-        secondMux.incoming.trySend(item(ids[2], """{"type":"baseline","value":{"items":[],"archivedSessionIds":[],"hiddenWorkspaceIds":[]}}"""))
+        secondMux.incoming.trySend(item(ids[2], """{"type":"baseline","value":{"items":[],"archivedSessionIds":[],"pinnedSessionIds":[]}}"""))
         listFailed.await()
         runCurrent()
         assertTrue("Known conversation history must not depend on catalog recovery",
@@ -682,7 +682,7 @@ class ChatViewModelDshFollowTest {
         mux.incoming.trySend(item("st-0", """{"type":"ready","clientId":"client-1","host":{"home":"/root"}}"""))
         mux.incoming.trySend(item("st-1", """{"type":"baseline","value":{"queues":{},"jobs":{},"projections":{}}}"""))
         mux.incoming.trySend(
-            item("st-2", """{"type":"baseline","value":{"items":[],"archivedSessionIds":[],"hiddenWorkspaceIds":[]}}"""),
+            item("st-2", """{"type":"baseline","value":{"items":[],"archivedSessionIds":[],"pinnedSessionIds":[]}}"""),
         )
     }
 

@@ -1010,4 +1010,7 @@
         <item quantity="other">%1$d 个角色</item>
     </plurals>
 
+    <string name="sessions_pin">置顶</string>
+    <string name="sessions_unpin">取消置顶</string>
+    <string name="sessions_pin_failed">置顶状态更新失败，请重试。</string>
 </resources>

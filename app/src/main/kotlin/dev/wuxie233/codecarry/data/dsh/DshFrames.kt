@@ -115,7 +115,7 @@ sealed interface DshWorkspaceFrame {
     data class Remove(val workspaceId: String) : DshWorkspaceFrame
     data class Order(val workspaceIds: List<String>) : DshWorkspaceFrame
     data class Archived(val archivedSessionIds: List<String>) : DshWorkspaceFrame
-    data class Hidden(val hiddenWorkspaceIds: List<String>) : DshWorkspaceFrame
+    data class Pinned(val pinnedSessionIds: List<String>) : DshWorkspaceFrame
 }
 
 /** Frames carried by one addressed `session/follow` logical stream. */
@@ -213,7 +213,7 @@ fun parseWorkspaceFrame(value: JsonElement?): DshWorkspaceFrame? {
         "remove" -> DshWorkspaceFrame.Remove(obj.reqStr("workspaceId"))
         "order" -> DshWorkspaceFrame.Order(stringList(obj["workspaceIds"]))
         "archived" -> DshWorkspaceFrame.Archived(stringList(obj["archivedSessionIds"]))
-        "hidden" -> DshWorkspaceFrame.Hidden(stringList(obj["hiddenWorkspaceIds"]))
+        "pinned" -> DshWorkspaceFrame.Pinned(stringList(obj["pinnedSessionIds"]))
         else -> null
     }
 }
@@ -282,7 +282,7 @@ private fun parseWorkspaceListValue(element: JsonElement?): DshWorkspaceListValu
     return DshWorkspaceListValue(
         items = (obj["items"] as? JsonArray).orEmpty().mapNotNull(::parseWorkspaceView),
         archivedSessionIds = stringList(obj["archivedSessionIds"]),
-        hiddenWorkspaceIds = stringList(obj["hiddenWorkspaceIds"]),
+        pinnedSessionIds = stringList(obj["pinnedSessionIds"]),
     )
 }
 

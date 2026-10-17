@@ -1081,4 +1081,7 @@ Tokens: ~%4$d -&gt; ~%5$d</string>
         <item quantity="other">%1$d personas</item>
     </plurals>
 
+    <string name="sessions_pin">Pin</string>
+    <string name="sessions_unpin">Unpin</string>
+    <string name="sessions_pin_failed">Could not update pin. Try again.</string>
 </resources>

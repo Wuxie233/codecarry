@@ -749,6 +749,59 @@ class SessionListViewModelTest {
         vm.createWithDshPreset(null)
     }
 
+    @Test
+    fun `dsh pins wait for confirmation reject safely and exclude archived and child sessions`() = runTest(dispatcher) {
+        val captured = Collections.synchronizedList(mutableListOf<String>())
+        val manager = readyDshManager()
+        val reducer = manager.reducer("srv-session-list")
+        var reject = false
+        var unpin = false
+        val confirmation = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val vm = newSessionListViewModel(
+            dshApi = dshSessionApi(captured, onPin = {
+                confirmation.await()
+                if (reject) null else if (unpin) """{"pinnedSessionIds":["b"]}""" else """{"pinnedSessionIds":["b","a"]}"""
+            }),
+            dshConnectionManager = manager,
+            savedStateHandle = dshSavedStateHandle(),
+        )
+        collectUiState(vm)
+        advanceUntilIoSettles { "session/list" in captured && !vm.uiState.value.isLoading }
+        reducer.applySessionList(listOf(
+            DshSessionSummary(sessionId = "a", updatedAt = 1L, running = false, blank = false, cwd = "/repo"),
+            DshSessionSummary(sessionId = "b", updatedAt = 1L, running = false, blank = false, cwd = "/repo"),
+            DshSessionSummary(sessionId = "child", updatedAt = 1L, running = false, blank = false, cwd = "/repo", origin = "subagent"),
+            DshSessionSummary(sessionId = "old", updatedAt = 1L, running = false, blank = false, cwd = "/repo"),
+        ))
+        reducer.applyWorkspaceFrame(dev.wuxie233.codecarry.data.dsh.DshWorkspaceFrame.Baseline(
+            dev.wuxie233.codecarry.data.dsh.DshWorkspaceListValue(archivedSessionIds = listOf("old")),
+        ))
+        advanceUntilIoSettles { vm.uiState.value.pinnableSessionIds == setOf("a", "b") }
+        vm.toggleSessionPin("child")
+        vm.toggleSessionPin("old")
+        assertFalse(captured.any { it == "workspace/pinSession" })
+        vm.toggleSessionPin("a")
+        advanceUntilIoSettles { "workspace/pinSession" in captured }
+        assertTrue(reducer.state.value.pinnedSessionIds.isEmpty())
+        confirmation.complete(Unit)
+        advanceUntilIoSettles { vm.uiState.value.pinnedSessionIds == setOf("a", "b") }
+        assertEquals(listOf("b", "a"), vm.uiState.value.groups.single().sessions.take(2).map { it.session.id })
+        reject = true
+        val failures = mutableListOf<UndoAction>()
+        collectJobs += testScope.backgroundScope.launch(UnconfinedTestDispatcher(scheduler)) {
+            vm.undoState.collect { failures += it }
+        }
+        vm.toggleSessionPin("a")
+        advanceUntilIoSettles { failures.isNotEmpty() }
+        assertTrue(failures.single() is UndoAction.Failure)
+        assertEquals(listOf("b", "a"), reducer.state.value.pinnedSessionIds)
+        assertTrue("workspace/unpinSession" in captured)
+        reject = false
+        unpin = true
+        vm.toggleSessionPin("a")
+        advanceUntilIoSettles { reducer.state.value.pinnedSessionIds == listOf("b") }
+    }
+
     private fun readyDshManager(): DshConnectionManager =
         unusedDshConnectionManager(testScope.backgroundScope, json).also { setDshGeneration(it, 1) }
 
@@ -847,6 +900,7 @@ class SessionListViewModelTest {
         captured: MutableList<String>,
         reuseBlank: Boolean = false,
         onCreate: () -> Unit = {},
+        onPin: suspend (String) -> String? = { """{"pinnedSessionIds":[]}""" },
     ): DshApiClient {
         val engine = MockEngine { request ->
             val body = (request.body as TextContent).text
@@ -856,6 +910,11 @@ class SessionListViewModelTest {
             captured += method
             val payload = envelope.getValue("payload").jsonObject
             val value = when (method) {
+                "workspace/pinSession", "workspace/unpinSession" -> onPin(method) ?: return@MockEngine respond(
+                    content = """{"type":"server-response","rpcId":"$rpcId","result":{"ok":false,"error":{"code":"workspace/rejected","message":"host rejected"}}}""",
+                    status = HttpStatusCode.OK,
+                    headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
+                )
                 "session/list" -> """{"items":[]}"""
                 "agentPresets/list" -> """{"presets":[]}"""
                 "directoryPicker/list" -> """{"path":"/root","home":"/root","crumbs":[],"entries":[],"truncated":false}"""
@@ -891,6 +950,7 @@ class SessionListViewModelTest {
         createFailure: Throwable? = null,
         createDirectoryHeaders: MutableList<String?> = Collections.synchronizedList(mutableListOf()),
         onCreate: () -> Unit = {},
+        onPin: suspend (String) -> String? = { """{"pinnedSessionIds":[]}""" },
     ): OpenCodeApi {
         val engine = MockEngine { request ->
             val body = when (request.url.encodedPath) {
