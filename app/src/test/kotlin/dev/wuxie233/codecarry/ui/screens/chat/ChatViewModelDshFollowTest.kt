@@ -98,6 +98,31 @@ class ChatViewModelDshFollowTest {
     }
 
     @Test
+    fun `skills retry and disconnect preserve session scoped request lifetime`() = runTest(dispatcher) {
+        val mux = FakeDownlink()
+        val unary = CopyOnWriteArrayList<String>()
+        var fail = true
+        val harness = dshHarness(mux, unary, beforeSkillList = {
+            if (fail) error("skills unavailable")
+        })
+        val vm = newViewModel(harness.client, harness.manager)
+        assertFalse(vm.dshSkills.value.available)
+        harness.manager.connect(SERVER_ID, DshConnection.from("http://127.0.0.1:3080", token = "launch-token"))
+        runCurrent()
+        pushBaselines(mux)
+        vm.dshSkills.first { it.failed }
+        fail = false
+        vm.refreshDshSkills()
+        assertEquals("grill", vm.dshSkills.first { it.skills.isNotEmpty() }.skills.single().name)
+        val request = json.parseToJsonElement(unary.last { it.contains("\"skills/list\"") }).jsonObject
+        assertEquals(SESSION_ID, request["payload"]!!.jsonObject["args"]!!.jsonObject["request"]!!.jsonObject["sessionId"]!!.jsonPrimitive.content)
+        harness.manager.disconnect(SERVER_ID)
+        runCurrent()
+        assertFalse(vm.dshSkills.value.available)
+        assertTrue(vm.dshSkills.value.skills.isEmpty())
+    }
+
+    @Test
     fun `opening a DSH chat follows the snapshot and never pages with a sentinel`() = runTest(dispatcher) {
         val mux = FakeDownlink()
         val unary = CopyOnWriteArrayList<String>()
@@ -584,6 +609,7 @@ class ChatViewModelDshFollowTest {
         unary: MutableList<String>,
         beforeSessionList: suspend () -> Unit = {},
         beforePresetList: suspend () -> Unit = {},
+        beforeSkillList: suspend () -> Unit = {},
         openMux: () -> DshDownlink = { mux },
         listItem: String = """{"sessionId":"$SESSION_ID","updatedAt":2,"running":false,"blank":false,"cwd":"/root/CODE/Minecraft"}""",
     ): DshHarness {
@@ -607,6 +633,14 @@ class ChatViewModelDshFollowTest {
                             """{"type":"server-response","rpcId":"fixed","result":{"ok":true,"value":{"items":[$listItem]}}}""",
                         ),
                         status = HttpStatusCode.OK,
+                        headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
+                    )
+                }
+                "/api/skills/list" -> {
+                    unary += (request.body as TextContent).text
+                    beforeSkillList()
+                    respond(
+                        content = """{"type":"server-response","rpcId":"fixed","result":{"ok":true,"value":{"skills":[{"name":"grill","description":"Discuss","modelInvocable":true}]}}}""",
                         headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
                     )
                 }

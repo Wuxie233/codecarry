@@ -31,6 +31,8 @@ object DshMethods {
         "workspace/pinSession",
         "workspace/unpinSession",
         "skills/list",
+        "commands/list",
+        "commands/execute",
         "agentPresets/list",
         "agentPresets/select",
         "agentPresets/read",

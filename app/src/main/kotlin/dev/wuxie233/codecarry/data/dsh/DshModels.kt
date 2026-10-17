@@ -168,6 +168,7 @@ data class DshAcceptedValue(
 data class DshCommandResult(
     val kind: String,
     val text: String? = null,
+    val sourceEventSeq: Long? = null,
 )
 
 @Serializable
@@ -391,3 +392,17 @@ data class DshQuestionAnswerItem(
 data class DshQuestionAnswer(
     val answers: List<DshQuestionAnswerItem> = emptyList(),
 )
+
+@Serializable
+data class DshCommandDescriptor(
+    val name: String,
+    val description: String,
+    val definitionId: String? = null,
+    val input: DshCommandInput? = null,
+)
+
+@Serializable
+data class DshCommandInput(val hint: String, val attachments: Boolean = false)
+
+@Serializable
+data class DshCommandExecution(val commandId: String, val result: DshCommandResult)
