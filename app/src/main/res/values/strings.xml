@@ -1074,4 +1074,9 @@ Tokens: ~%4$d -&gt; ~%5$d</string>
     <string name="sessions_pin">Pin</string>
     <string name="sessions_unpin">Unpin</string>
     <string name="sessions_pin_failed">Could not update pin. Try again.</string>
+    <string name="dsh_rewind_failed">Rewind did not complete. The conversation and draft have not been changed.</string>
+    <string name="dsh_rewind_action">Rewind</string>
+    <string name="dsh_rewind_body">This message and the conversation after it will disappear from chat. The log is kept and files stay unchanged. This message’s text will replace your unsent draft without sending it. There is no undo.</string>
+    <string name="dsh_rewind_busy">The current reply will also be interrupted.</string>
+    <string name="dsh_rewind_confirm">Rewind conversation</string>
 </resources>

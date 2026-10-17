@@ -93,8 +93,8 @@ fun parseDshSurfaceOp(element: JsonElement?): DshSurfaceOp? {
         is JsonPrimitive -> if (element.contentOrNull == "append") DshSurfaceOp(append = true) else null
         is JsonObject -> {
             if (element.str("op") != "replace") return null
-            val start = element.long("start") ?: return null
-            val end = element.long("end") ?: return null
+            val start = element.long("startSeq") ?: element.long("start") ?: return null
+            val end = element.long("endSeq") ?: element.long("end") ?: return null
             DshSurfaceOp(append = false, start = start, end = end)
         }
         else -> null
@@ -166,6 +166,8 @@ class DshHistoryFolder {
         val ids = seqToMessageId.filter { (seq, _) -> seq in start..end }.values.toSet()
         ids.forEach { messages.remove(it) }
         seqToMessageId.entries.removeAll { it.value in ids }
+        streamByStep.entries.removeAll { it.value.messageId in ids }
+        toolOwners.entries.removeAll { it.value in ids }
     }
 
     private fun applyAll(events: List<DshSessionEvent>) {
@@ -180,13 +182,17 @@ class DshHistoryFolder {
             "user/message" -> {
                 val op = parseDshSurfaceOp(event.surfaceOp) ?: return
                 val sourceKind = event.data?.obj()?.obj("source")?.str("kind")
-                val isUserRewrite = !op.append && sourceKind == "user"
+                val isRewind = !op.append && sourceKind == "dsh-rewind"
+                val isUserRewrite = !op.append && (sourceKind == "user" || isRewind)
                 if (!op.append && !isUserRewrite) return
                 if (isUserRewrite) {
                     val start = op.start ?: return
                     val end = op.end ?: return
-                    removeRange(start, end)
+                    // Cancelled replies can leave log-only chunks after the last
+                    // model-surface node. Rewind hides these up to its marker too.
+                    removeRange(start, if (isRewind) event.seq - 1 else end)
                 }
+                if (isRewind) return // Durable surface marker, never a user prompt.
                 val message = userMessage(sessionId, event) ?: return
                 val messageId = dshFoldedMessageId(event.seq, message.info.id)
                 messages[messageId] = message.copy(info = (message.info as Message.User).copy(id = messageId))
