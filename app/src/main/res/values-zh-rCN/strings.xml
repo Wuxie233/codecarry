@@ -1003,4 +1003,9 @@
     <string name="sessions_pin">置顶</string>
     <string name="sessions_unpin">取消置顶</string>
     <string name="sessions_pin_failed">置顶状态更新失败，请重试。</string>
+    <string name="dsh_rewind_failed">回退未完成，对话和草稿均未更改。</string>
+    <string name="dsh_rewind_action">回退</string>
+    <string name="dsh_rewind_body">这条消息及其后的对话将从界面消失，日志保留，文件不动。这条消息的文字会替换未发送草稿，不会自动发送。回退后无法撤销。</string>
+    <string name="dsh_rewind_busy">当前回复也会被打断。</string>
+    <string name="dsh_rewind_confirm">回退对话</string>
 </resources>

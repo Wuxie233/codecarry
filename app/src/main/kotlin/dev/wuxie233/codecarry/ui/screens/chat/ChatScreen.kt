@@ -1215,6 +1215,7 @@ fun ChatScreen(
     val filePreview by viewModel.filePreview.collectAsState()
     val dshPresets by viewModel.dshPresets.collectAsState()
     val dshSkills by viewModel.dshSkills.collectAsState()
+    val dshRewind by viewModel.dshRewind.collectAsState()
     val confirmationGate = remember(viewModel) { ChatConfirmationGate() }
     val draftText by viewModel.draftText.collectAsState()
     val draftAttachmentUris by viewModel.draftAttachmentUris.collectAsState()
@@ -2955,8 +2956,8 @@ fun ChatScreen(
                                 return@itemsIndexed
                             }
 
-                            Box(
-                                modifier = Modifier.padding(
+                            Column(
+                                modifier = Modifier.fillMaxWidth().padding(
                                     bottom = if (nextBelongsToSameMessage) 1.dp else messageSpacing,
                                 ),
                             ) {
@@ -2989,7 +2990,7 @@ fun ChatScreen(
                                             is ChatMessageRow.Whole -> chatMessage.isAssistant
                                             else -> false
                                         },
-                                        onRevert = if (chatMessage.isUser) {
+                                        onRevert = if (chatMessage.isUser && !uiState.isDsh) {
                                             {
                                                 val revertText = chatMessage.parts
                                                     .filterIsInstance<Part.Text>()
@@ -3019,6 +3020,14 @@ fun ChatScreen(
                                         },
                                         onMessageActionsRequested = { actionMenuMessage = it }
                                     )
+                                }
+                                if (isFirstMessageRow && chatMessage.isUser &&
+                                    dev.wuxie233.codecarry.data.dsh.dshMessageSeq(chatMessage.message.id) in dshRewind.messageSeqs) {
+                                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                                        DshRewindAction(chatMessage.message.id, dshRewind.inFlight, isBusy) {
+                                            viewModel.rewindDshMessage(chatMessage.message.id)
+                                        }
+                                    }
                                 }
                             }
                         }

@@ -46,6 +46,8 @@ import dev.wuxie233.codecarry.data.dsh.DshRpcResult
 import dev.wuxie233.codecarry.data.dsh.dshQuestionAnswer
 import dev.wuxie233.codecarry.data.dsh.dshMessageSeq
 import dev.wuxie233.codecarry.data.dsh.dshPromptRequest
+import dev.wuxie233.codecarry.data.dsh.DshSessionEvent
+import dev.wuxie233.codecarry.data.dsh.parseDshSurfaceOp
 import dev.wuxie233.codecarry.data.dsh.DshHistoryFolder
 import dev.wuxie233.codecarry.data.dsh.mapDshApproval
 import dev.wuxie233.codecarry.data.dsh.mapDshEventStateToSessions
@@ -334,6 +336,31 @@ class ChatViewModel @Inject constructor(
     private var dshPresetLoadJob: Job? = null
     private val _dshSkills = MutableStateFlow(DshSkillCandidateState())
     val dshSkills: StateFlow<DshSkillCandidateState> = _dshSkills
+    private val _dshRewindInFlight = MutableStateFlow(false)
+    // A marker can arrive before its command receipt (or after a timeout). Do not
+    // apply an unconfirmed local write to the displayed history or draft.
+    private val unconfirmedDshRewinds = mutableSetOf<Long>()
+    val dshRewind: StateFlow<DshRewindState> = combine(
+        dshReducer.state, _dshSkills, _dshRewindInFlight,
+    ) { state, skills, inFlight ->
+        DshRewindState(dshRewindTargets(state, skills), inFlight)
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, DshRewindState())
+
+    private fun dshRewindTargets(state: DshEventState, skills: DshSkillCandidateState): Set<Long> {
+        val session = state.sessions[sessionId] ?: return emptySet()
+        if (!isDsh || !skills.available || skills.loading || skills.failed ||
+            skills.commands.none { it.name == "rewind" } || session.origin == "subagent" ||
+            sessionId in state.archivedSessionIds || !session.historyOpened) return emptySet()
+        return dshRewindableSeqs(session.events)
+    }
+
+    private fun confirmedDshEvents(events: List<DshSessionEvent>): List<DshSessionEvent> =
+        if (unconfirmedDshRewinds.isEmpty()) events else events.filterNot { event ->
+            val source = (event.data as? JsonObject)?.get("source") as? JsonObject
+            source?.get("kind")?.jsonPrimitive?.content == "dsh-rewind" &&
+                parseDshSurfaceOp(event.surfaceOp)?.start in unconfirmedDshRewinds
+        }
+
     private var dshSkillLoadJob: Job? = null
     private var dshSessionLoadJob: Job? = null
     private var dshModelCatalogDefault: DshModelSelection? = null
@@ -871,8 +898,8 @@ class ChatViewModel @Inject constructor(
         }
         // Reconnect first supplies catalog/control metadata with no history. Keep
         // the displayed messages until this generation opens the history stream.
-        if (snapshot?.historyOpened == true) {
-            val folded = dshHistoryFolder.fold(sessionId, snapshot.events)
+        if (snapshot?.historyOpened == true && !_dshRewindInFlight.value) {
+            val folded = dshHistoryFolder.fold(sessionId, confirmedDshEvents(snapshot.events))
             val lastSeq = snapshot.events.maxOfOrNull { it.seq } ?: -1L
             eventReducer.setMessages(serverId, sessionId, applyCachedDshAttachments(folded))
             sessionDirectory = snapshot.cwd?.takeIf { it.isNotBlank() } ?: sessionDirectory
@@ -969,8 +996,8 @@ class ChatViewModel @Inject constructor(
             }
             val current = dshReducer.state.value.sessions[sessionId] ?: return@launch
             val currentSeq = current.events.maxOfOrNull { it.seq } ?: -1L
-            if (currentSeq < foldSeq) return@launch
-            eventReducer.setMessages(serverId, sessionId, applyCachedDshAttachments(dshHistoryFolder.fold(sessionId, current.events)))
+            if (currentSeq < foldSeq || _dshRewindInFlight.value) return@launch
+            eventReducer.setMessages(serverId, sessionId, applyCachedDshAttachments(dshHistoryFolder.fold(sessionId, confirmedDshEvents(current.events))))
             dshAppliedEventSeq = currentSeq
         }
     }
@@ -1015,8 +1042,54 @@ class ChatViewModel @Inject constructor(
 
     private var dshCompactJob: Job? = null
 
+    fun rewindDshMessage(messageId: String) {
+        if (!isDsh || _dshRewindInFlight.value || dshCompactJob?.isActive == true) return
+        val connection = dshConnectionManager.states.value[serverId] ?: return
+        if (!connection.isReady) return
+        val targetSeq = dshMessageSeq(messageId) ?: return
+        val state = dshReducer.state.value
+        if (targetSeq !in dshRewindTargets(state, _dshSkills.value)) return
+        val target = uiState.value.messages
+            .firstOrNull { it.message.id == messageId && it.isUser } ?: return
+        val text = target.parts.filterIsInstance<Part.Text>().joinToString("\n") { it.text }
+        unconfirmedDshRewinds.add(targetSeq)
+        _error.value = null
+        _dshRewindInFlight.value = true
+        viewModelScope.launch {
+            fun isCurrent() = dshConnectionManager.states.value[serverId]?.let {
+                it.generation == connection.generation && it.isReady
+            } == true
+            try {
+                kotlinx.coroutines.withTimeout(30_000) {
+                    val result = dshApi.commandExecute(dshConn, sessionId, "/rewind @$targetSeq chat")?.result
+                    check(isCurrent() && result?.kind == "success")
+                    val markerSeq = checkNotNull(result?.sourceEventSeq)
+                    // Wait for the actual Host surface replacement, not a guessed range.
+                    dshReducer.state.first { current ->
+                        !isCurrent() || current.sessions[sessionId]?.events?.any {
+                            it.seq == markerSeq && parseDshSurfaceOp(it.surfaceOp)?.start == targetSeq
+                        } == true
+                    }
+                    check(isCurrent())
+                    unconfirmedDshRewinds.remove(targetSeq)
+                    restoreRevertedDraft(RevertedDraftPayload(text = text))
+                    saveDraft()
+                }
+            } catch (error: kotlinx.coroutines.TimeoutCancellationException) {
+                _error.value = appContext.getString(R.string.dsh_rewind_failed)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                _error.value = appContext.getString(R.string.dsh_rewind_failed)
+            } finally {
+                _dshRewindInFlight.value = false
+                applyDshState(dshReducer.state.value)
+            }
+        }
+    }
+
     fun compactDshSession() {
-        if (!isDsh || dshCompactJob?.isActive == true) return
+        if (!isDsh || dshCompactJob?.isActive == true || _dshRewindInFlight.value) return
         val connection = dshConnectionManager.states.value[serverId]
         if (connection?.isReady != true || !_dshSkills.value.matchesCompact("") ||
             sessionId in dshReducer.state.value.archivedSessionIds) return

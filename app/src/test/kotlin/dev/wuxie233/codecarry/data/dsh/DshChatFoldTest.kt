@@ -19,6 +19,39 @@ import org.junit.Test
 
 class DshChatFoldTest {
     @Test
+    fun `rewind marker removes target and later messages without becoming a prompt`() {
+        fun user(seq: Long) = DshSessionEvent(
+            type = "user/message", seq = seq, time = seq,
+            data = buildJsonObject {
+                put("source", buildJsonObject { put("kind", "user") })
+                put("content", buildJsonArray { add(buildJsonObject { put("type", "text"); put("text", "prompt $seq") }) })
+            }, surfaceOp = JsonPrimitive("append"),
+        )
+        val folder = DshHistoryFolder()
+        val events = listOf(user(1), user(2), user(3))
+        assertEquals(3, folder.fold("s", events).size)
+        val marker = DshSessionEvent(type = "user/message", seq = 4, time = 4,
+            data = buildJsonObject {
+                put("source", buildJsonObject { put("kind", "dsh-rewind") })
+                put("content", buildJsonArray { add(buildJsonObject { put("type", "text"); put("text", "(empty message)") }) })
+            }, surfaceOp = buildJsonObject { put("op", "replace"); put("startSeq", 2); put("endSeq", 3) })
+        assertEquals(listOf("prompt 1"), folder.fold("s", events + marker).map { (it.parts.single() as Part.Text).text })
+        assertEquals(1, foldDshHistory("s", events + marker).size)
+        val chunk = DshSessionEvent(type = "assistant/chunk", seq = 3, time = 3,
+            data = buildJsonObject {
+                put("turn", 1); put("step", 1)
+                put("chunk", buildJsonObject { put("type", "text-delta"); put("text", "unfinished") })
+            })
+        val busyHistory = listOf(user(1), user(2), chunk)
+        assertEquals(3, folder.fold("busy", busyHistory).size)
+        val busyMarker = marker.copy(surfaceOp = buildJsonObject {
+            put("op", "replace"); put("startSeq", 2); put("endSeq", 2)
+        })
+        assertEquals(1, folder.fold("busy", busyHistory + busyMarker).size)
+        assertEquals(1, foldDshHistory("busy", busyHistory + busyMarker).size)
+    }
+
+    @Test
     fun `history plus mux chunks fold into user and streaming assistant`() {
         val history = listOf(
             DshSessionEvent(
