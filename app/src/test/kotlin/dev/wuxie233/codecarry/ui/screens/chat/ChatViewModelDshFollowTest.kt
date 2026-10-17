@@ -760,6 +760,78 @@ class ChatViewModelDshFollowTest {
         assertEquals(2, unary.count { it.contains("\"commands/execute\"") })
     }
 
+    @Test
+    fun `rewind restores ordered images only for the open conversation`() = checkRewindImages()
+
+    @Test
+    fun `rewind keeps readable images and names failed images and omitted files`() = checkRewindImages(
+        extraContent = """,{"type":"image","attachment":{"attachmentId":"missing","name":"missing.png"}},
+            {"type":"image","attachment":{"attachmentId":"transport","name":"transport.png"}},
+            {"type":"image","attachment":{"attachmentId":"invalid","name":"invalid.png"}},
+            {"type":"image","attachment":{"attachmentId":"slow","name":"slow.png"}},
+            {"type":"image","attachment":{"name":"no-id.png"}},
+            {"type":"file","attachment":{"attachmentId":"document","mediaType":"application/pdf","name":"notes.pdf"}}""",
+        notices = listOf("missing.png", "transport.png", "invalid.png", "slow.png", "no-id.png", "notes.pdf"),
+    )
+
+    @Test
+    fun `image only rewind replaces unsent text with empty text`() = checkRewindImages(text = "")
+
+    private fun checkRewindImages(
+        text: String = "pictures",
+        extraContent: String = "",
+        notices: List<String> = emptyList(),
+    ) = runTest(dispatcher) {
+        val mux = FakeDownlink()
+        val unary = CopyOnWriteArrayList<String>()
+        val drafts = draftRepository()
+        val harness = dshHarness(mux, unary,
+            commandList = """[{"name":"rewind","description":"Rewind"}]""",
+            executeCommand = { """{"commandId":"rewind","result":{"kind":"success","sourceEventSeq":2}}""" },
+            readAttachment = { attachmentId ->
+                when (attachmentId) {
+                    "missing" -> return@dshHarness "null"
+                    "transport" -> throw java.io.IOException("attachment transport failed")
+                    "slow" -> kotlinx.coroutines.delay(16_000)
+                }
+                val data = if (attachmentId == "second") "Yg==" else "YQ=="
+                """{"attachment":{"attachmentId":"$attachmentId","mediaType":"image/png","bytes":1,"width":1,"height":1},"data":"${if (attachmentId == "invalid") "%%%" else data}"}"""
+            })
+        val vm = newViewModel(harness.client, harness.manager, drafts = drafts)
+        collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
+        harness.manager.connect(SERVER_ID, DshConnection.from("http://127.0.0.1:3080", token = "launch-token"))
+        runCurrent()
+        pushBaselines(mux)
+        harness.manager.states.first { it[SERVER_ID]?.isReady == true }
+        vm.dshSkills.first { it.commands.any { command -> command.name == "rewind" } }
+        runCurrent()
+        val reducer = harness.manager.reducer(SERVER_ID)
+        reducer.applyFollowSnapshot(SESSION_ID, dev.wuxie233.codecarry.data.dsh.DshFollowFrame.Snapshot(
+            header = null, cursor = 1, records = emptyList(), hasMore = false,
+        ))
+        reducer.mergeHistory(SESSION_ID, listOf(rewindUser(1).copy(data = json.parseToJsonElement(
+            """{"source":{"kind":"user"},"content":[${if (text.isEmpty()) "" else """{"type":"text","text":"$text"},"""}{"type":"image","attachment":{"attachmentId":"second","mediaType":"image/png","name":"second.png"}}$extraContent,{"type":"image","attachment":{"attachmentId":"first","mediaType":"image/png","name":"first.png"}}]}"""
+        ))))
+        runCurrent()
+        vm.updateDraftText("unsent")
+        vm.addDraftAttachment("content://old")
+        vm.rewindDshMessage(vm.uiState.value.messages.single().message.id)
+        reducer.mergeHistory(SESSION_ID, listOf(rewindMarker(2, 1, 1)))
+        runCurrent()
+        vm.draftText.first { it == text }
+        vm.dshRewind.first { !it.inFlight }
+        runCurrent()
+        assertEquals(listOf("data:image/png;base64,Yg==", "data:image/png;base64,YQ=="), vm.draftAttachmentUris.value)
+        assertTrue(vm.uiState.value.messages.isEmpty())
+        notices.forEach { name -> assertTrue("Missing notice for $name: ${vm.uiState.value.error}", vm.uiState.value.error.orEmpty().contains(name)) }
+        if (notices.isEmpty()) assertNull(vm.uiState.value.error)
+        vm.updateDraftText("edited pictures")
+        vm.selectAgent("test")
+        val reopened = newViewModel(harness.client, harness.manager, drafts = drafts)
+        assertEquals("edited pictures", reopened.draftText.value)
+        assertTrue(reopened.draftAttachmentUris.value.isEmpty())
+    }
+
     @Test fun `unmatched rewind keeps conversation and draft`() = checkRewindFailure { "null" }
     @Test fun `rejected rewind keeps conversation and draft`() = checkRewindFailure {
         """{"commandId":"cmd","result":{"kind":"error","text":"rejected"}}"""
@@ -895,6 +967,7 @@ class ChatViewModelDshFollowTest {
         onCommandExecute: () -> Unit = {},
         commandList: String = """[{"name":"compact","description":"Compact history"}]""",
         executeCommand: suspend () -> String = { """{"commandId":"compact","result":{"kind":"success"}}""" },
+        readAttachment: suspend (String) -> String = { error("attachment unavailable") },
         presetSelectResult: String = """{"ok":true,"value":"standard"}""",
         openMux: () -> DshDownlink = { mux },
         listItem: String = """{"sessionId":"$SESSION_ID","updatedAt":2,"running":false,"blank":false,"cwd":"/root/CODE/Minecraft"}""",
@@ -934,6 +1007,16 @@ class ChatViewModelDshFollowTest {
                     onCommandExecute()
                     respond(
                         content = """{"type":"server-response","rpcId":"fixed","result":{"ok":true,"value":${executeCommand()}}}""",
+                        headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
+                    )
+                }
+                "/api/session/attachment" -> {
+                    val body = (request.body as TextContent).text
+                    unary += body
+                    val args = json.parseToJsonElement(body).jsonObject["payload"]!!.jsonObject["args"]!!.jsonObject["request"]!!.jsonObject
+                    assertEquals(SESSION_ID, args["sessionId"]!!.jsonPrimitive.content)
+                    respond(
+                        content = """{"type":"server-response","rpcId":"fixed","result":{"ok":true,"value":${readAttachment(args["attachmentId"]!!.jsonPrimitive.content)}}}""",
                         headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
                     )
                 }
@@ -1011,7 +1094,7 @@ class ChatViewModelDshFollowTest {
         return DshHarness(client, manager)
     }
 
-    private fun newViewModel(dshApi: DshApiClient, manager: DshConnectionManager, sessionId: String = SESSION_ID): ChatViewModel {
+    private fun newViewModel(dshApi: DshApiClient, manager: DshConnectionManager, sessionId: String = SESSION_ID, drafts: DraftRepository = draftRepository()): ChatViewModel {
         return ChatViewModel(
             appContext = org.robolectric.RuntimeEnvironment.getApplication(),
             savedStateHandle = SavedStateHandle(
@@ -1030,7 +1113,7 @@ class ChatViewModelDshFollowTest {
             eventReducer = EventReducer(),
             api = unusedOpenCodeApi(),
             json = json,
-            draftRepository = draftRepository(),
+            draftRepository = drafts,
             sessionListPreferencesRepository = sessionListPreferencesRepository(),
             settingsRepository = settingsRepository(),
             dshApi = dshApi,
