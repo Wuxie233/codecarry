@@ -10,11 +10,11 @@ data class DshSessionSummary(
     val updatedAt: Long,
     val running: Boolean,
     val blank: Boolean,
-    val interrupted: Boolean? = null,
+    val agentAvailable: Boolean = false,
+    val formatStatus: String? = null,
     val parentSessionId: String? = null,
     val origin: String? = null,
     val cwd: String? = null,
-    val agentPreset: String? = null,
     val projections: DshProjectionsBlock? = null,
 )
 

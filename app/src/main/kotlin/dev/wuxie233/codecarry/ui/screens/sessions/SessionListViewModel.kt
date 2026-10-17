@@ -49,6 +49,8 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
@@ -345,6 +347,7 @@ data class SessionItem(
     val status: SessionStatus = SessionStatus.Idle,
     val isUnread: Boolean = false,
     val backendState: BackendSessionState = BackendSessionState.IDLE,
+    val requiresMigration: Boolean = false,
 )
 
 internal fun matchesSessionFilter(item: SessionItem, filter: SessionFilter): Boolean {
@@ -593,6 +596,9 @@ class SessionListViewModel @Inject constructor(
             _serverConnected,
             _pendingOperation,
             _operationError,
+            dshReducer.state.map { state ->
+                state.sessions.filterValues { it.formatStatus == "migration-required" }.keys
+            }.distinctUntilChanged(),
         )
     ) { values ->
         val sessionsByServer = values[0] as Map<String, Map<String, Session>>
@@ -619,6 +625,7 @@ class SessionListViewModel @Inject constructor(
         val serverConnected = values[18] as Boolean?
         val pendingOperation = values[19] as SessionListOperation?
         val operationError = values[20] as SessionListOperationError?
+        val migrationRequiredIds = values[21] as Set<String>
         // Unknown (null) connection state keeps operations enabled until a load proves otherwise.
         val serverOperationsAvailable = serverConnected ?: true
 
@@ -645,6 +652,7 @@ class SessionListViewModel @Inject constructor(
         val itemsById = serverScopedSessions.associate { session ->
             session.id to SessionItem(
                 session = session,
+                requiresMigration = isDsh && session.id in migrationRequiredIds,
                 status = effectiveStatuses[session.id] ?: SessionStatus.Idle,
                 isUnread = session.parentId == null && session.id in unreadMainSessionIds,
                 backendState = backendStates[session.id] ?: when (effectiveStatuses[session.id]) {
@@ -1214,6 +1222,7 @@ class SessionListViewModel @Inject constructor(
                     normalizeDirectory = ::normalizeDirectory,
                 )
                 if (targetIds.isEmpty()) return@launch
+                if (rejectRunningDshArchive(targetIds)) return@launch
 
                 coroutineScope {
                     targetIds.map { sessionId ->
@@ -1233,12 +1242,19 @@ class SessionListViewModel @Inject constructor(
         }
     }
 
+    private suspend fun rejectRunningDshArchive(sessionIds: List<String>): Boolean {
+        if (!isDsh || sessionIds.none { dshReducer.state.value.sessions[it]?.running == true }) return false
+        _undoState.send(UndoAction.Failure(messageResId = R.string.sessions_archive_running))
+        return true
+    }
+
     fun archiveSession(sessionId: String) {
         val operation = SessionListOperation.Archive(sessionId)
         if (!beginOperation(operation)) return
         viewModelScope.launch {
             val title = serverScopedSessions().firstOrNull { it.id == sessionId }?.title.orEmpty()
             try {
+                if (rejectRunningDshArchive(listOf(sessionId))) return@launch
                 if (isDsh) dshApi.workspaceArchiveSession(dshConn, sessionId)
                 else api.archiveSession(conn, sessionId)
                 loadSessions()

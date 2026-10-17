@@ -19,6 +19,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -27,6 +28,26 @@ import org.junit.Test
 class DshApiClientTest {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val connection = DshConnection.from("http://192.168.1.8:3080")
+
+    @Test
+    fun `current session rows decode availability and optional format without legacy fields`() = runTest {
+        val client = api(mutableListOf()) { request ->
+            val envelope = json.parseToJsonElement((request.body as TextContent).text).jsonObject
+            """{"type":"server-response","rpcId":"${envelope.getValue("rpcId").jsonPrimitive.content}","result":{"ok":true,"value":{"items":[{"sessionId":"old","updatedAt":1,"running":false,"blank":false,"agentAvailable":false,"formatStatus":"migration-required","projections":{"asOfSeq":1,"values":{"agentPreset":"chosen"}}},{"sessionId":"live","updatedAt":2,"running":true,"blank":false,"agentAvailable":true,"formatStatus":"current"},{"sessionId":"optional","updatedAt":3,"running":false,"blank":false,"agentAvailable":false}]}}}"""
+        }
+        val rows = client.sessionList(connection).items
+        assertEquals("migration-required", rows[0].formatStatus)
+        assertFalse(rows[0].agentAvailable)
+        assertTrue(rows[1].agentAvailable)
+        assertEquals("current", rows[1].formatStatus)
+        assertNull(rows[2].formatStatus)
+        val reducer = DshEventReducer()
+        reducer.applySessionList(rows)
+        assertEquals("chosen", reducer.state.value.sessions.getValue("old").currentAgentPreset)
+        assertEquals("migration-required", reducer.state.value.sessions.getValue("old").formatStatus)
+        assertTrue(reducer.state.value.sessions.getValue("live").agentAvailable)
+        assertEquals(3, mapDshEventStateToSessions(reducer.state.value).sessions.size)
+    }
 
     @Test
     fun `preset roster matches the host path free list contract`() = runTest {

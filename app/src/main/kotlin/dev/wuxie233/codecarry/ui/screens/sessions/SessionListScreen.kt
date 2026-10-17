@@ -151,6 +151,7 @@ fun SessionListScreen(
     val archiveSuccessFmt = stringResource(R.string.sessions_archive_success)
     val restoreSuccessFmt = stringResource(R.string.sessions_restore_success)
     val undoLabel = stringResource(R.string.sessions_undo_action)
+    val archiveRunningMsg = stringResource(R.string.sessions_archive_running)
     val archiveFailedMsg = stringResource(R.string.sessions_archive_failed)
     val restoreFailedMsg = stringResource(R.string.sessions_restore_failed)
     val untitledLabel = stringResource(R.string.session_untitled)
@@ -199,6 +200,7 @@ fun SessionListScreen(
                 }
                 is UndoAction.Failure -> {
                     val msg = when (event.messageResId) {
+                        R.string.sessions_archive_running -> archiveRunningMsg
                         R.string.sessions_archive_failed -> archiveFailedMsg
                         R.string.sessions_restore_failed -> restoreFailedMsg
                         else -> archiveFailedMsg
@@ -1943,6 +1945,14 @@ private fun SessionRow(
                     )
 
                     Spacer(modifier = Modifier.height(2.dp))
+
+                    if (item.requiresMigration) {
+                        Text(
+                            text = stringResource(R.string.sessions_migration_required),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
 
                     // Date + status + diff summary row
                     Row(

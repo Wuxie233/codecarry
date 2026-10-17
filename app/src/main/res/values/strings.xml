@@ -1069,4 +1069,6 @@ Tokens: ~%4$d -&gt; ~%5$d</string>
         <item quantity="other">%1$d personas</item>
     </plurals>
 
+    <string name="sessions_migration_required">Migration required</string>
+    <string name="sessions_archive_running">This session is running. Stop it before archiving.</string>
 </resources>

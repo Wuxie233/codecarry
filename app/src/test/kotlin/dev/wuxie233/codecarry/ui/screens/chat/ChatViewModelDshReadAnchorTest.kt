@@ -316,7 +316,7 @@ class ChatViewModelDshReadAnchorTest {
 
     private fun pushBaselines(mux: FakeDownlink) {
         mux.incoming.trySend(item("st-0", """{"type":"ready","clientId":"client-1","host":{"home":"/root"}}"""))
-        mux.incoming.trySend(item("st-1", """{"type":"baseline","value":{"queues":{},"jobs":{},"projections":{}}}"""))
+        mux.incoming.trySend(item("st-1", """{"type":"baseline","value":{"projections":{}}}"""))
         mux.incoming.trySend(
             item("st-2", """{"type":"baseline","value":{"items":[],"archivedSessionIds":[],"hiddenWorkspaceIds":[]}}"""),
         )

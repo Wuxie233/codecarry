@@ -1,5 +1,7 @@
 package dev.wuxie233.codecarry.ui.screens.sessions
 
+import dev.wuxie233.codecarry.R
+import kotlinx.coroutines.flow.first
 import android.content.ContextWrapper
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.lifecycle.SavedStateHandle
@@ -609,6 +611,61 @@ class SessionListViewModelTest {
         assertEquals("rapid taps should only create one conversation", 1, createCount)
         assertEquals("rapid taps should only navigate once", 1, navigated.size)
         assertEquals("ses_created_1", navigated.single().id)
+    }
+
+    @Test
+    fun `dsh migration hint follows current catalog metadata`() = runTest(dispatcher) {
+        val manager = readyDshManager()
+        val vm = newSessionListViewModel(
+            dshApi = dshSessionApi(Collections.synchronizedList(mutableListOf())),
+            dshConnectionManager = manager,
+            savedStateHandle = dshSavedStateHandle(),
+        )
+        collectUiState(vm)
+        advanceUntilIdle()
+        val reducer = manager.reducer("srv-session-list")
+        for (format in listOf("migration-required", "current", null)) {
+            reducer.applySessionList(listOf(DshSessionSummary("s", 1, false, false,
+                agentAvailable = false, formatStatus = format, cwd = "/work")))
+            advanceUntilIdle()
+            val row = vm.uiState.value.sessionGroups.flatMap { it.sessions }.single { it.session.id == "s" }
+            assertEquals(format == "migration-required", row.requiresMigration)
+        }
+    }
+
+    @Test
+    fun `dsh running archive refuses single and project actions without stopping work`() = runTest(dispatcher) {
+        val captured = Collections.synchronizedList(mutableListOf<String>())
+        val manager = readyDshManager()
+        val vm = newSessionListViewModel(
+            dshApi = dshSessionApi(captured), dshConnectionManager = manager,
+            savedStateHandle = dshSavedStateHandle(),
+        )
+        collectUiState(vm)
+        advanceUntilIdle()
+        val reducer = manager.reducer("srv-session-list")
+        reducer.applySessionList(listOf(
+            DshSessionSummary("busy", 1, true, false, agentAvailable = true, cwd = "/work"),
+            DshSessionSummary("idle", 1, false, false, agentAvailable = true, cwd = "/work"),
+        ))
+        advanceUntilIdle()
+        captured.clear()
+        vm.archiveSession("busy")
+        advanceUntilIdle()
+        assertEquals(UndoAction.Failure(R.string.sessions_archive_running), vm.undoState.first())
+        vm.archiveProjectSessions("/work")
+        advanceUntilIdle()
+        assertEquals(UndoAction.Failure(R.string.sessions_archive_running), vm.undoState.first())
+        assertTrue(captured.isEmpty())
+        assertTrue(reducer.state.value.sessions.getValue("busy").running)
+        assertTrue(reducer.state.value.archivedSessionIds.isEmpty())
+        assertEquals(null, vm.uiState.value.pendingOperation)
+
+        vm.archiveSession("idle")
+        advanceUntilIoSettles { "workspace/archiveSession" in captured }
+        advanceUntilIdle()
+        assertTrue(vm.undoState.first() is UndoAction.Archive)
+        assertFalse(captured.any { it.contains("interrupt") || it.contains("stop") })
     }
 
     @Test

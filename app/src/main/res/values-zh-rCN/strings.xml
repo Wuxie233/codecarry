@@ -998,4 +998,6 @@
         <item quantity="other">%1$d 个角色</item>
     </plurals>
 
+    <string name="sessions_migration_required">需要迁移</string>
+    <string name="sessions_archive_running">会话仍在运行，请先停止再归档。</string>
 </resources>
