@@ -535,6 +535,50 @@ class ChatViewModelDshFollowTest {
             secondMux.sent.any { it.contains("\"session/follow\"") })
     }
 
+    @Test
+    fun `preset selection waits for host confirmation`() = runTest(dispatcher) {
+        val started = CompletableDeferred<Unit>()
+        val response = CompletableDeferred<Unit>()
+        val mux = FakeDownlink()
+        val harness = dshHarness(mux, CopyOnWriteArrayList(), beforePresetSelect = {
+            started.complete(Unit)
+            response.await()
+        }, listItem = """{"sessionId":"$SESSION_ID","updatedAt":2,"running":false,"blank":false,"projections":{"asOfSeq":10,"values":{"agentPreset":"old"}}}""")
+        val vm = newViewModel(harness.client, harness.manager)
+        harness.manager.connect(SERVER_ID, DshConnection.from("http://127.0.0.1:3080", token = "launch-token"))
+        runCurrent()
+        pushBaselines(mux)
+        vm.dshPresets.first { it.currentId == "old" && !it.loading }
+        val result = CompletableDeferred<Boolean>()
+        vm.selectDshPreset("standard") { result.complete(it) }
+        started.await()
+        assertTrue(vm.dshPresets.value.selecting)
+        assertEquals("old", vm.dshPresets.value.currentId)
+        assertFalse(result.isCompleted)
+        response.complete(Unit)
+        assertTrue(result.await())
+        vm.dshPresets.first { it.currentId == "standard" && !it.selecting }
+    }
+
+    @Test
+    fun `rejected preset selection retains the original preset and reports failure`() = runTest(dispatcher) {
+        val mux = FakeDownlink()
+        val harness = dshHarness(mux, CopyOnWriteArrayList(), presetSelectResult =
+            """{"ok":false,"error":{"message":"Preset rejected","code":"preset/rejected"}}""",
+            listItem = """{"sessionId":"$SESSION_ID","updatedAt":2,"running":false,"blank":false,"projections":{"asOfSeq":10,"values":{"agentPreset":"old"}}}""")
+        val vm = newViewModel(harness.client, harness.manager)
+        harness.manager.connect(SERVER_ID, DshConnection.from("http://127.0.0.1:3080", token = "launch-token"))
+        runCurrent()
+        pushBaselines(mux)
+        vm.dshPresets.first { it.currentId == "old" && !it.loading }
+        val result = CompletableDeferred<Boolean>()
+        vm.selectDshPreset("standard") { result.complete(it) }
+        assertFalse(result.await())
+        val failed = vm.dshPresets.first { it.error != null && !it.selecting }
+        assertEquals("old", failed.currentId)
+        assertTrue(failed.error!!.contains("Preset rejected"))
+    }
+
     private data class DshHarness(
         val client: DshApiClient,
         val manager: DshConnectionManager,
@@ -545,6 +589,8 @@ class ChatViewModelDshFollowTest {
         unary: MutableList<String>,
         beforeSessionList: suspend () -> Unit = {},
         beforePresetList: suspend () -> Unit = {},
+        beforePresetSelect: suspend () -> Unit = {},
+        presetSelectResult: String = """{"ok":true,"value":"standard"}""",
         openMux: () -> DshDownlink = { mux },
         listItem: String = """{"sessionId":"$SESSION_ID","updatedAt":2,"running":false,"blank":false,"cwd":"/root/CODE/Minecraft"}""",
     ): DshHarness {
@@ -575,7 +621,15 @@ class ChatViewModelDshFollowTest {
                     unary += (request.body as TextContent).text
                     beforePresetList()
                     respond(
-                        content = """{"type":"server-response","rpcId":"fixed","result":{"ok":true,"value":{"presets":[{"id":"standard","trust":"system","isDefault":true}],"authorable":true}}}""",
+                        content = """{"type":"server-response","rpcId":"fixed","result":{"ok":true,"value":{"presets":[{"id":"standard","isDefault":true}]}}}""",
+                        headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
+                    )
+                }
+                "/api/agentPresets/select" -> {
+                    unary += (request.body as TextContent).text
+                    beforePresetSelect()
+                    respond(
+                        content = """{"type":"server-response","rpcId":"fixed","result":$presetSelectResult}""",
                         headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
                     )
                 }

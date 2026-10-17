@@ -492,7 +492,7 @@ class DshHostSurfacesViewModelTest {
         fun valueFor(method: String): String = when (method) {
             "session/list" -> sessionsValue
             "skills/list" -> skillsValue
-            "agentPresets/list" -> """{"presets":[{"id":"coder","trust":"system","isDefault":true}],"authorable":false}"""
+            "agentPresets/list" -> """{"presets":[{"id":"coder","isDefault":true}]}"""
             "automation/list" -> AUTOMATION
             "settings/describe" -> SETTINGS_DESCRIBE
             "settings/mutate" -> MUTATED

@@ -314,7 +314,6 @@ data class DshSessionGitView(
 @Serializable
 data class DshAgentPresetEntry(
     val id: String,
-    val trust: String,
     val isDefault: Boolean,
     val name: String? = null,
     val description: String? = null,
@@ -324,8 +323,6 @@ data class DshAgentPresetEntry(
 @Serializable
 data class DshAgentPresetListValue(
     val presets: List<DshAgentPresetEntry> = emptyList(),
-    val authorable: Boolean = false,
-    val hasDocument: Boolean = false,
 )
 
 @Serializable

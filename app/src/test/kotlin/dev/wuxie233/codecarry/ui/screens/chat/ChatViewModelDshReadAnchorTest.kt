@@ -222,7 +222,7 @@ class ChatViewModelDshReadAnchorTest {
                 "/api/agentPresets/list" -> {
                     unary += (request.body as io.ktor.http.content.TextContent).text
                     respond(
-                        content = """{"type":"server-response","rpcId":"fixed","result":{"ok":true,"value":{"presets":[{"id":"standard","trust":"system","isDefault":true}],"authorable":true}}}""",
+                        content = """{"type":"server-response","rpcId":"fixed","result":{"ok":true,"value":{"presets":[{"id":"standard","isDefault":true}]}}}""",
                         headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
                     )
                 }

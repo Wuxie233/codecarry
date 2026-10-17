@@ -177,7 +177,7 @@ class DshHostSurfacesTest {
             "directoryPicker/createDirectory" -> """{"path":"/tmp/new"}"""
             "skills/list" -> """{"skills":[{"name":"commit-helper","description":"Git","modelInvocable":true}]}"""
             "git/describe" -> """{"currentBranch":"main","detached":false,"worktreePath":"/tmp","isolated":false,"dirtyCount":0,"unpushedCount":0,"branches":[]}"""
-            "agentPresets/list" -> """{"presets":[{"id":"coder","trust":"system","isDefault":true}],"authorable":false}"""
+            "agentPresets/list" -> """{"presets":[{"id":"coder","isDefault":true}]}"""
             "agentPresets/select" -> """"coder""""
             "goals/create" -> """{"ref":{"id":"g1","revision":1}}"""
             "automation/list" -> """{"items":[{"id":"auto-1","name":"nightly","enabled":true,"task":"check","workspaceId":"w1","onOverlap":"skip","selector":{},"scheduledAt":"t","createdAt":"t","updatedAt":"t","state":"scheduled","nextAt":"t"}]}"""
