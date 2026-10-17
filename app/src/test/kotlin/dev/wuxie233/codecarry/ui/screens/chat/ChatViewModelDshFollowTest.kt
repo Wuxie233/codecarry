@@ -210,6 +210,44 @@ class ChatViewModelDshFollowTest {
     }
 
     @Test
+    fun `idle child send uses queue delivery`() = childSendDelivery(false, "queue")
+
+    @Test
+    fun `busy child send uses steer delivery`() = childSendDelivery(true, "steer")
+
+    private fun childSendDelivery(running: Boolean, delivery: String) = runTest(dispatcher) {
+        val mux = FakeDownlink()
+        val unary = CopyOnWriteArrayList<String>()
+        val harness = dshHarness(
+            mux,
+            unary,
+            listItem = """{"sessionId":"$SESSION_ID","updatedAt":2,"running":$running,"blank":false,"cwd":"/root/CODE/Minecraft","origin":"subagent","parentSessionId":"$PARENT_ID"}""",
+        )
+        val vm = newViewModel(harness.client, harness.manager)
+        collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
+        harness.manager.connect(SERVER_ID, DshConnection.from("http://127.0.0.1:3080", token = "launch-token"))
+        runCurrent()
+        pushBaselines(mux)
+        harness.manager.states.first { it[SERVER_ID]?.isReady == true }
+        harness.manager.reducer(SERVER_ID).state.first { it.sessions.containsKey(SESSION_ID) }
+        runCurrent()
+
+        var sent: Boolean? = null
+        vm.sendMessage("continue") { sent = it }
+        runCurrent()
+
+        assertEquals(true, sent)
+        val body = unary.single { it.contains("\"subagents/prompt\"") }
+        val request = json.parseToJsonElement(body).jsonObject.getValue("payload").jsonObject
+            .getValue("args").jsonObject.getValue("request").jsonObject
+        assertEquals(delivery, request.getValue("delivery").jsonPrimitive.content)
+        assertEquals("continuable", request.getValue("mode").jsonPrimitive.content)
+        assertEquals(PARENT_ID, request.getValue("parentSessionId").jsonPrimitive.content)
+        assertEquals(SESSION_ID, request.getValue("childSessionId").jsonPrimitive.content)
+        assertFalse(unary.any { it.contains("\"session/prompt\"") })
+    }
+
+    @Test
     fun `subagent origin without parent does not follow as session`() = runTest(dispatcher) {
         val mux = FakeDownlink()
         val unary = CopyOnWriteArrayList<String>()
@@ -586,6 +624,13 @@ class ChatViewModelDshFollowTest {
                             """{"type":"server-response","rpcId":"fixed","result":{"ok":true,"value":{"default":{"provider":"p","model":"m"},"groups":[]}}}""",
                         ),
                         status = HttpStatusCode.OK,
+                        headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
+                    )
+                }
+                "/api/subagents/prompt" -> {
+                    unary += (request.body as TextContent).text
+                    respond(
+                        content = """{"type":"server-response","rpcId":"fixed","result":{"ok":true,"value":{"messageId":"child-message"}}}""",
                         headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
                     )
                 }

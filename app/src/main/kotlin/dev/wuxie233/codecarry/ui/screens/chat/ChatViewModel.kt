@@ -1806,6 +1806,7 @@ class ChatViewModel @Inject constructor(
                 parentSessionId = address.parentSessionId,
                 childSessionId = address.childSessionId,
                 content = content,
+                delivery = mode,
             )
             is DshSessionAddress.Session -> dshApi.sessionPrompt(dshConn, sessionId, mode, content)
             null -> error("DSH session address is not ready")

@@ -822,6 +822,7 @@ class DshApiClient(
         parentSessionId: String,
         childSessionId: String,
         content: JsonArray,
+        delivery: String,
         clientTimeZone: String? = null,
         requestId: String = DshRpc.mintRequestId(),
     ): DshSubagentPromptReceipt = decode(
@@ -836,6 +837,7 @@ class DshApiClient(
                         put("parentSessionId", parentSessionId)
                         put("childSessionId", childSessionId)
                         put("mode", "continuable")
+                        put("delivery", delivery)
                         put("content", content)
                         clientTimeZone?.let { put("clientTimeZone", it) }
                     },

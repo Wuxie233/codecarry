@@ -350,9 +350,27 @@ class DshHostSurfacesViewModelTest {
         val promptBody = harness.host.requests.single("subagents/prompt")
         assertTrue(promptBody.contains("\"parentSessionId\":\"ses_a\""))
         assertTrue(promptBody.contains("\"childSessionId\":\"child-1\""))
+        assertTrue(promptBody.contains("\"delivery\":\"queue\""))
         val interruptBody = harness.host.requests.single("subagents/interruptByParent")
         assertTrue(interruptBody.contains("\"parentSessionId\":\"ses_a\""))
         assertTrue(interruptBody.contains("\"childSessionId\":\"child-1\""))
+    }
+
+    @Test
+    fun `subagent send uses busy child status instead of idle parent`() = runTest(dispatcher) {
+        val harness = harness(sessionsValue = """{"items":[
+            {"sessionId":"ses_a","updatedAt":10,"running":false,"blank":false},
+            {"sessionId":"child-1","updatedAt":11,"running":true,"blank":false,"origin":"subagent","parentSessionId":"ses_a"}
+        ]}""")
+        val vm = harness.vm
+        vm.uiState.first { it.sessions.data != null }
+        vm.selectSession("ses_a")
+        vm.uiState.first { it.skills.data != null }
+
+        vm.promptSubagent("child-1", "continue")
+        vm.uiState.first { harness.host.requests.bodies("subagents/prompt").isNotEmpty() }
+
+        assertTrue(harness.host.requests.single("subagents/prompt").contains("\"delivery\":\"steer\""))
     }
 
     @Test
