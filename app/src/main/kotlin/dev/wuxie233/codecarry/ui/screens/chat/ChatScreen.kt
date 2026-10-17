@@ -1215,6 +1215,7 @@ fun ChatScreen(
     val filePreview by viewModel.filePreview.collectAsState()
     val dshPresets by viewModel.dshPresets.collectAsState()
     val dshSkills by viewModel.dshSkills.collectAsState()
+    val confirmationGate = remember(viewModel) { ChatConfirmationGate() }
     val draftText by viewModel.draftText.collectAsState()
     val draftAttachmentUris by viewModel.draftAttachmentUris.collectAsState()
     var inputText by remember { mutableStateOf(TextFieldValue("")) }
@@ -1812,6 +1813,7 @@ fun ChatScreen(
     }
 
     CompositionLocalProvider(
+        LocalChatConfirmationGate provides confirmationGate,
         LocalChatFontSize provides chatFontSize,
         LocalCodeWordWrap provides codeWordWrap,
         LocalCompactMessages provides compactMessages,
@@ -2334,6 +2336,7 @@ fun ChatScreen(
                 onVariantClick = { if (!dshPresets.selecting) showVariantPicker = true },
                 dshSkills = if (uiState.isDsh) dshSkills else null,
                 onDshSkillsRetry = viewModel::refreshDshSkills,
+                onDshCompact = viewModel::compactDshSession,
                 commands = if (uiState.supportsCommands) uiState.commands else emptyList(),
                 fileSearchResults = fileSearchResults,
                 confirmedFilePaths = confirmedFilePaths,
@@ -2888,16 +2891,20 @@ fun ChatScreen(
                             // Long-press to revert (undo compaction and subsequent messages)
                             if (isCompactionTrigger) {
                                 var showRevertDialog by remember { mutableStateOf(false) }
+                                DisposableEffect(confirmationGate) {
+                                    onDispose { if (showRevertDialog) confirmationGate.release("revert-banner") }
+                                }
 
                                 if (showRevertDialog) {
                                     AlertDialog(
-                                        onDismissRequest = { showRevertDialog = false },
+                                        onDismissRequest = { showRevertDialog = false; confirmationGate.release("revert-banner") },
                                         title = { Text(stringResource(R.string.chat_revert_title)) },
                                         text = { Text(stringResource(R.string.chat_revert_message)) },
                                         confirmButton = {
                                             TextButton(
                                                 onClick = {
                                                     showRevertDialog = false
+                                                    confirmationGate.release("revert-banner")
                                                     viewModel.revertMessage(chatMessage.message.id) { ok ->
                                                         coroutineScope.launch {
                                                             snackbarHostState.showSnackbar(
@@ -2911,7 +2918,7 @@ fun ChatScreen(
                                             }
                                         },
                                         dismissButton = {
-                                            TextButton(onClick = { showRevertDialog = false }) {
+                                            TextButton(onClick = { showRevertDialog = false; confirmationGate.release("revert-banner") }) {
                                                 Text(stringResource(R.string.cancel))
                                             }
                                         }
@@ -2924,7 +2931,7 @@ fun ChatScreen(
                                         .fillMaxWidth()
                                         .combinedClickable(
                                             onClick = { },
-                                            onLongClick = { showRevertDialog = true }
+                                            onLongClick = { if (confirmationGate.acquire("revert-banner")) showRevertDialog = true }
                                         )
                                         .padding(vertical = 4.dp, horizontal = 32.dp),
                                     horizontalArrangement = Arrangement.Center,
@@ -3275,7 +3282,7 @@ fun ChatScreen(
                         }
                     }
                     MessageCardAction.RestoreToHere -> {
-                        restoreConfirmMessage = selectedMessage
+                        if (confirmationGate.acquire("restore")) restoreConfirmMessage = selectedMessage
                     }
                 }
             },
@@ -3285,7 +3292,7 @@ fun ChatScreen(
 
     restoreConfirmMessage?.let { selectedMessage ->
         AlertDialog(
-            onDismissRequest = { restoreConfirmMessage = null },
+            onDismissRequest = { restoreConfirmMessage = null; confirmationGate.release("restore") },
             title = { Text(stringResource(R.string.message_action_restore_confirm_title)) },
             text = { Text(stringResource(R.string.message_action_restore_confirm_body)) },
             confirmButton = {
@@ -3294,6 +3301,7 @@ fun ChatScreen(
                         val messageId = selectedMessage.message.id
                         val revertedText = if (selectedMessage.isUser) messagePlainText(selectedMessage) else null
                         restoreConfirmMessage = null
+                        confirmationGate.release("restore")
                         viewModel.revertMessage(messageId, revertedText) { ok ->
                             coroutineScope.launch {
                                 snackbarHostState.showSnackbar(
@@ -3307,7 +3315,7 @@ fun ChatScreen(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { restoreConfirmMessage = null }) {
+                TextButton(onClick = { restoreConfirmMessage = null; confirmationGate.release("restore") }) {
                     Text(stringResource(R.string.cancel))
                 }
             }
@@ -4663,6 +4671,11 @@ private fun ChatMessageBubble(
         if (isUser && onRevert != null) {
             // Swipe-to-revert for user messages with confirmation dialog
             var showRevertConfirmation by remember { mutableStateOf(false) }
+            val confirmationGate = LocalChatConfirmationGate.current
+            val confirmationOwner = remember { "revert-${java.util.UUID.randomUUID()}" }
+            DisposableEffect(confirmationGate, confirmationOwner) {
+                onDispose { confirmationGate?.release(confirmationOwner) }
+            }
             val hapticEnabled = LocalHapticFeedbackEnabled.current
             val bubbleView = LocalView.current
 
@@ -4677,7 +4690,7 @@ private fun ChatMessageBubble(
                                         android.view.HapticFeedbackConstants.FLAG_IGNORE_GLOBAL_SETTING
                             )
                         }
-                        showRevertConfirmation = true
+                        if (confirmationGate?.acquire(confirmationOwner) != false) showRevertConfirmation = true
                     }
                     false // don't actually dismiss; wait for dialog confirmation
                 }
@@ -4685,13 +4698,14 @@ private fun ChatMessageBubble(
 
             if (showRevertConfirmation) {
                 AlertDialog(
-                    onDismissRequest = { showRevertConfirmation = false },
+                    onDismissRequest = { showRevertConfirmation = false; confirmationGate?.release(confirmationOwner) },
                     title = { Text(stringResource(R.string.chat_revert_title)) },
                     text = { Text(stringResource(R.string.chat_revert_message)) },
                     confirmButton = {
                         TextButton(
                             onClick = {
                                 showRevertConfirmation = false
+                                confirmationGate?.release(confirmationOwner)
                                 onRevert()
                             }
                         ) {
@@ -4699,7 +4713,7 @@ private fun ChatMessageBubble(
                         }
                     },
                     dismissButton = {
-                        TextButton(onClick = { showRevertConfirmation = false }) {
+                        TextButton(onClick = { showRevertConfirmation = false; confirmationGate?.release(confirmationOwner) }) {
                             Text(stringResource(R.string.cancel))
                         }
                     }
@@ -7254,6 +7268,7 @@ private fun ChatInputBar(
     onVariantClick: () -> Unit = {},
     dshSkills: DshSkillCandidateState? = null,
     onDshSkillsRetry: () -> Unit = {},
+    onDshCompact: () -> Unit = {},
     commands: List<CommandInfo> = emptyList(),
     fileSearchResults: List<String> = emptyList(),
     confirmedFilePaths: Set<String> = emptySet(),
@@ -7328,7 +7343,7 @@ private fun ChatInputBar(
         )
 
         if (dshSkills != null) {
-            DshSkillCandidates(textFieldValue, dshSkills, onTextFieldValueChange, onDshSkillsRetry)
+            DshSkillCandidates(textFieldValue, dshSkills, onTextFieldValueChange, onDshSkillsRetry, onDshCompact)
         }
 
         // Slash command suggestions popup (scrollable, max 40% screen height)

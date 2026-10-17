@@ -17,6 +17,7 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import dev.wuxie233.codecarry.R
 import dev.wuxie233.codecarry.data.dsh.DshSkillEntry
+import dev.wuxie233.codecarry.data.dsh.DshCommandDescriptor
 
 internal data class DshSkillTarget(val start: Int, val end: Int, val query: String)
 
@@ -40,7 +41,11 @@ data class DshSkillCandidateState(
     val loading: Boolean = false,
     val failed: Boolean = false,
     val skills: List<DshSkillEntry> = emptyList(),
+    val commands: List<DshCommandDescriptor> = emptyList(),
 ) {
+    fun matchesCompact(query: String): Boolean = available && !loading && !failed &&
+        commands.any { it.name == "compact" } && "compact".startsWith(query, ignoreCase = true)
+
     fun matching(query: String): List<DshSkillEntry> =
         if (!available || loading || failed) emptyList()
         else skills.filter { it.name.startsWith(query, ignoreCase = true) }
@@ -57,6 +62,21 @@ internal fun insertDshSkill(
     return TextFieldValue(value.text.replaceRange(target.start, target.end, inserted), TextRange(target.start + inserted.length))
 }
 
+/** Shared by compact and message rewind confirmations in one chat. */
+@Stable
+internal class ChatConfirmationGate {
+    var owner: String? by mutableStateOf(null)
+        private set
+    fun acquire(value: String): Boolean {
+        if (owner != null) return false
+        owner = value
+        return true
+    }
+    fun release(value: String) { if (owner == value) owner = null }
+}
+
+internal val LocalChatConfirmationGate = staticCompositionLocalOf<ChatConfirmationGate?> { null }
+
 /** Presentation only: the ViewModel owns the session catalog and its request lifetime. */
 @Composable
 internal fun DshSkillCandidates(
@@ -64,13 +84,32 @@ internal fun DshSkillCandidates(
     state: DshSkillCandidateState,
     onChange: (TextFieldValue) -> Unit,
     onRetry: () -> Unit,
+    onCompact: () -> Unit = {},
 ) {
+    val gate = LocalChatConfirmationGate.current ?: remember { ChatConfirmationGate() }
+    DisposableEffect(gate) { onDispose { gate.release("compact") } }
     val target = dshSkillTarget(value)
     var dismissed by remember(value) { mutableStateOf(false) }
     val currentValue by rememberUpdatedState(value)
     val currentState by rememberUpdatedState(state)
     val currentOnChange by rememberUpdatedState(onChange)
-    val visible = state.available && target != null && !dismissed
+    val visible = state.available && target != null && !dismissed && gate.owner == null
+    if (gate.owner == "compact") {
+        AlertDialog(
+            onDismissRequest = { gate.release("compact") },
+            title = { Text(stringResource(R.string.dsh_compact_title)) },
+            text = { Text(stringResource(R.string.dsh_compact_body)) },
+            confirmButton = { TextButton(onClick = {
+                if (gate.owner == "compact") {
+                    gate.release("compact")
+                    onCompact()
+                }
+            }) { Text(stringResource(R.string.dsh_compact_confirm)) } },
+            dismissButton = { TextButton(onClick = { gate.release("compact") }) {
+                Text(stringResource(R.string.cancel))
+            } },
+        )
+    }
     val acceptingSelection by rememberUpdatedState(visible)
     BackHandler(visible) { dismissed = true }
     if (!visible || target == null) return
@@ -91,11 +130,23 @@ internal fun DshSkillCandidates(
                             Text(stringResource(R.string.dsh_skills_failed))
                             TextButton(onClick = onRetry) { Text(stringResource(R.string.dsh_skills_retry)) }
                         }
-                        state.matching(target.query).isEmpty() -> Text(stringResource(R.string.dsh_skills_no_match))
+                        state.matching(target.query).isEmpty() && !state.matchesCompact(target.query) -> Text(stringResource(R.string.dsh_skills_no_match))
                         else -> LazyColumn {
-                            items(state.matching(target.query), key = { it.name }) { skill ->
+                            if (state.matchesCompact(target.query)) item(key = "command:compact") {
                                 Column(Modifier.fillMaxWidth().clickable {
-                                    if (acceptingSelection && !dismissed) insertDshSkill(currentValue, target, skill, currentState)?.let {
+                                    if (acceptingSelection && !dismissed &&
+                                        dshSkillTarget(currentValue) == target &&
+                                        currentState.matchesCompact(target.query) && gate.acquire("compact")) {
+                                        dismissed = true
+                                    }
+                                }.padding(8.dp)) {
+                                    Text("/compact", style = MaterialTheme.typography.titleSmall)
+                                    Text(stringResource(R.string.dsh_compact_description), style = MaterialTheme.typography.bodySmall)
+                                }
+                            }
+                            items(state.matching(target.query), key = { "skill:${it.name}" }) { skill ->
+                                Column(Modifier.fillMaxWidth().clickable {
+                                    if (acceptingSelection && !dismissed && gate.owner == null) insertDshSkill(currentValue, target, skill, currentState)?.let {
                                         dismissed = true
                                         currentOnChange(it)
                                     }
