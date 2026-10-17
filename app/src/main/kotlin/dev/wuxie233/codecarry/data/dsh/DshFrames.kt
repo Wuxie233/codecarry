@@ -84,19 +84,7 @@ sealed interface DshEventsFrame {
 /** Frames carried by the `session/control` logical stream. */
 sealed interface DshControlFrame {
     data class Baseline(
-        val queues: Map<String, List<DshQueuedInboxItem>>,
-        val jobs: Map<String, List<DshJobView>>,
         val projections: Map<String, DshProjectionsBlock>,
-    ) : DshControlFrame
-
-    data class Queue(
-        val sessionId: String,
-        val items: List<DshQueuedInboxItem>,
-    ) : DshControlFrame
-
-    data class Jobs(
-        val sessionId: String,
-        val jobs: List<DshJobView>,
     ) : DshControlFrame
 
     data class Projection(
@@ -174,8 +162,6 @@ fun parseControlFrame(value: JsonElement?): DshControlFrame? {
         "baseline" -> {
             val base = obj["value"]?.jsonObject ?: JsonObject(emptyMap())
             DshControlFrame.Baseline(
-                queues = recordOfLists(base["queues"]) { parseQueueItem(it) },
-                jobs = recordOfLists(base["jobs"]) { parseJob(it) },
                 projections = base["projections"]?.jsonObject?.entries?.associate { (sessionId, block) ->
                     sessionId to (
                         runCatching { parseProjectionsBlock(block) }.getOrNull()
@@ -184,14 +170,6 @@ fun parseControlFrame(value: JsonElement?): DshControlFrame? {
                 }.orEmpty(),
             )
         }
-        "queue" -> DshControlFrame.Queue(
-            sessionId = obj.reqStr("sessionId"),
-            items = (obj["items"] as? JsonArray).orEmpty().mapNotNull(::parseQueueItem),
-        )
-        "jobs" -> DshControlFrame.Jobs(
-            sessionId = obj.reqStr("sessionId"),
-            jobs = (obj["jobs"] as? JsonArray).orEmpty().mapNotNull(::parseJob),
-        )
         "projection" -> DshControlFrame.Projection(
             sessionId = obj.reqStr("sessionId"),
             key = obj.reqStr("key"),
@@ -307,16 +285,6 @@ private fun parseProjectionsBlock(element: JsonElement?): DshProjectionsBlock? {
     )
 }
 
-private fun <T> recordOfLists(
-    element: JsonElement?,
-    parse: (JsonElement) -> T?,
-): Map<String, List<T>> {
-    val obj = (element as? JsonObject) ?: return emptyMap()
-    return obj.entries.associate { (sessionId, rows) ->
-        sessionId to (rows as? JsonArray).orEmpty().mapNotNull(parse)
-    }
-}
-
 private fun parseQuestionItem(element: JsonElement): DshQuestionItem? {
     val obj = element as? JsonObject ?: return null
     val options = (obj["options"] as? JsonArray).orEmpty().mapNotNull { option ->
@@ -345,29 +313,6 @@ private fun parseQuestionItem(element: JsonElement): DshQuestionItem? {
 
 fun parseQuestionItems(element: JsonElement?): List<DshQuestionItem> =
     (element as? JsonArray).orEmpty().mapNotNull(::parseQuestionItem)
-
-private fun parseQueueItem(element: JsonElement): DshQueuedInboxItem? {
-    val obj = element as? JsonObject ?: return null
-    return DshQueuedInboxItem(
-        id = obj.reqStr("id"),
-        placement = obj.reqStr("placement"),
-        message = obj["message"] ?: JsonObject(emptyMap()),
-    )
-}
-
-private fun parseJob(element: JsonElement): DshJobView? {
-    val obj = element as? JsonObject ?: return null
-    return DshJobView(
-        id = obj.reqStr("id"),
-        kind = obj.reqStr("kind"),
-        label = obj.reqStr("label"),
-        status = obj.reqStr("status"),
-        detail = obj.str("detail"),
-        startedAt = obj.long("startedAt"),
-        finishedAt = obj["finishedAt"]?.jsonPrimitive?.longOrNull
-            ?: obj["finishedAt"]?.jsonPrimitive?.intOrNull?.toLong(),
-    )
-}
 
 private fun stringList(element: JsonElement?): List<String> =
     (element as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull } ?: emptyList()

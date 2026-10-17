@@ -17,7 +17,7 @@ class DshSessionPresetProjectionTest {
     fun `existing session list uses current projected preset instead of creation identity`() {
         val reducer = DshEventReducer()
         reducer.applySessionList(listOf(DshSessionSummary("s", 1, false, false,
-            agentPreset = "creation", projections = block(10, "selected"))))
+            projections = block(10, "selected"))))
         assertEquals("selected", reducer.state.value.sessions.getValue("s").currentAgentPreset)
     }
 
@@ -36,7 +36,7 @@ class DshSessionPresetProjectionTest {
     fun `explicit null stays unknown instead of substituting creation or global default`() {
         val reducer = DshEventReducer()
         reducer.applySessionList(listOf(DshSessionSummary("s", 1, false, false,
-            agentPreset = "creation", projections = block(10, null))))
+            projections = block(10, null))))
         assertNull(reducer.state.value.sessions.getValue("s").currentAgentPreset)
     }
 
@@ -46,7 +46,7 @@ class DshSessionPresetProjectionTest {
         reducer.applyFollowSnapshot("s", DshFollowFrame.Snapshot(
             buildJsonObject { put("agentPreset", "deleted-preset") }, 10, emptyList(), false))
         assertNull(reducer.state.value.sessions.getValue("s").currentAgentPreset)
-        reducer.applyControlFrame(DshControlFrame.Baseline(emptyMap(), emptyMap(), mapOf("s" to block(10, "current"))))
+        reducer.applyControlFrame(DshControlFrame.Baseline(mapOf("s" to block(10, "current"))))
         assertEquals("current", reducer.state.value.sessions.getValue("s").currentAgentPreset)
     }
 

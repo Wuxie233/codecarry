@@ -44,7 +44,6 @@ import dev.wuxie233.codecarry.data.dsh.DshRpcResult
 import dev.wuxie233.codecarry.data.dsh.dshQuestionAnswer
 import dev.wuxie233.codecarry.data.dsh.dshMessageSeq
 import dev.wuxie233.codecarry.data.dsh.dshPromptRequest
-import dev.wuxie233.codecarry.data.dsh.dshQueueItemText
 import dev.wuxie233.codecarry.data.dsh.DshHistoryFolder
 import dev.wuxie233.codecarry.data.dsh.mapDshApproval
 import dev.wuxie233.codecarry.data.dsh.mapDshEventStateToSessions
@@ -449,7 +448,6 @@ class ChatViewModel @Inject constructor(
     private val _hasOlderMessages = MutableStateFlow(false)
     /** Whether a "load older" request is in flight. */
     private val _isLoadingOlder = MutableStateFlow(false)
-    private val _dshQueueTick = MutableStateFlow(0L)
     private val _questionUnlockEpoch = MutableStateFlow(0)
     val uiState: StateFlow<ChatUiState> = combine(
         listOf(
@@ -476,7 +474,6 @@ class ChatViewModel @Inject constructor(
             _commands,
             _hasOlderMessages,
             _isLoadingOlder,
-            _dshQueueTick,
             _questionUnlockEpoch,
         )
     ) { args ->
@@ -518,9 +515,7 @@ class ChatViewModel @Inject constructor(
         val commands = args[20] as List<CommandInfo>
         val hasOlderMessages = args[21] as Boolean
         val isLoadingOlder = args[22] as Boolean
-        @Suppress("UNUSED_VARIABLE")
-        val dshQueueTick = args[23] as Long
-        val questionUnlockEpoch = args[24] as Int
+        val questionUnlockEpoch = args[23] as Int
 
         val session = allSessions.find { it.id == sessionId && it.id in currentServerSessionIds }
         val subagents = buildDirectChatSubagents(
@@ -661,13 +656,7 @@ class ChatViewModel @Inject constructor(
             supportsRename = true,
             supportsSessionCreate = true,
             isDsh = isDsh,
-            queuedPrompts = if (isDsh) {
-                dshReducer.state.value.sessions[sessionId]?.queue.orEmpty().map { item ->
-                    ChatQueueItem(id = item.id, placement = item.placement, text = dshQueueItemText(item))
-                }
-            } else {
-                emptyList()
-            },
+            queuedPrompts = emptyList(),
             permissionAlwaysAvailable = !isDsh,
             supportsShell = dshCapabilities.shellAndTerminal,
             supportsTerminal = dshCapabilities.shellAndTerminal,
@@ -890,10 +879,6 @@ class ChatViewModel @Inject constructor(
             sessionId,
             state.pendingQuestionsFor(sessionId).map(::mapDshQuestion),
         )
-        val queueTick = snapshot?.queue.orEmpty().hashCode().toLong()
-        if (_dshQueueTick.value != queueTick) {
-            _dshQueueTick.value = queueTick
-        }
     }
 
     private suspend fun loadDshSession() {

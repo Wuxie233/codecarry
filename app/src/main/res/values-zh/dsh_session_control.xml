@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="sessions_migration_required">需要迁移</string>
+    <string name="sessions_archive_running">会话仍在运行，请先停止再归档。</string>
+</resources>

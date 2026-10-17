@@ -30,6 +30,8 @@ data class DshSessionSnapshot(
     val sessionId: String,
     val blank: Boolean = true,
     val running: Boolean = false,
+    val agentAvailable: Boolean = false,
+    val formatStatus: String? = null,
     val parentSessionId: String? = null,
     val origin: String? = null,
     val cwd: String? = null,
@@ -196,22 +198,14 @@ class DshEventReducer(
         when (frame) {
             is DshControlFrame.Baseline -> _state.update { current ->
                 var next = current
-                frame.queues.forEach { (sessionId, items) ->
-                    next = next.updateSession(sessionId) { it.copy(queue = items) }
-                }
-                frame.jobs.forEach { (sessionId, jobs) ->
-                    next = next.updateSession(sessionId) { it.copy(jobs = jobs) }
-                }
+                // Current Host control carries projections only; retired surfaces stay empty.
+                next = next.copy(sessions = next.sessions.mapValues { (_, session) ->
+                    session.copy(queue = emptyList(), jobs = emptyList())
+                })
                 frame.projections.forEach { (sessionId, block) ->
                     next = applyProjections(next, sessionId, block)
                 }
                 next
-            }
-            is DshControlFrame.Queue -> _state.update { current ->
-                current.updateSession(frame.sessionId) { it.copy(queue = frame.items) }
-            }
-            is DshControlFrame.Jobs -> _state.update { current ->
-                current.updateSession(frame.sessionId) { it.copy(jobs = frame.jobs) }
             }
             is DshControlFrame.Projection -> _state.update { current ->
                 current.updateSession(frame.sessionId) { session ->
@@ -368,11 +362,12 @@ class DshEventReducer(
                     session.copy(
                         blank = item.blank,
                         running = item.running,
+                        agentAvailable = item.agentAvailable,
+                        formatStatus = item.formatStatus,
                         updatedAt = item.updatedAt,
                         parentSessionId = item.parentSessionId ?: session.parentSessionId,
                         origin = item.origin ?: session.origin,
                         cwd = item.cwd ?: session.cwd,
-                        agentPreset = item.agentPreset ?: session.agentPreset,
                         projections = nextProjections,
                         listed = true,
                     )
@@ -453,7 +448,8 @@ class DshEventReducer(
         parentSessionId = obj.strValue("parentSessionId"),
         origin = obj.strValue("origin"),
         cwd = obj.strValue("cwd"),
-        agentPreset = obj.strValue("agentPreset"),
+        agentAvailable = obj.strValue("agentAvailable") == "true",
+        formatStatus = obj.strValue("formatStatus"),
         projections = runCatching {
             val block = obj["projections"]?.jsonObject ?: return@runCatching null
             DshProjectionsBlock(

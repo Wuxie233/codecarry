@@ -112,6 +112,7 @@ class ChatViewModelDshFollowTest {
         harness.manager.reducer(SERVER_ID).state.first { it.sessions.containsKey(SESSION_ID) }
         runCurrent()
 
+        assertTrue(vm.uiState.value.queuedPrompts.isEmpty())
         val followOpen = mux.sent.last { it.contains("\"session/follow\"") }
         val followId = json.parseToJsonElement(followOpen).jsonObject.getValue("streamId").jsonPrimitive.content
         mux.incoming.trySend(
@@ -527,7 +528,7 @@ class ChatViewModelDshFollowTest {
         harness.manager.states.first { it[SERVER_ID]?.muxOpen == true && opens == 2 }
         val ids = secondMux.sent.map { json.parseToJsonElement(it).jsonObject.getValue("streamId").jsonPrimitive.content }
         secondMux.incoming.trySend(item(ids[0], """{"type":"ready","clientId":"client-2","host":{"home":"/root"}}"""))
-        secondMux.incoming.trySend(item(ids[1], """{"type":"baseline","value":{"queues":{},"jobs":{},"projections":{}}}"""))
+        secondMux.incoming.trySend(item(ids[1], """{"type":"baseline","value":{"projections":{}}}"""))
         secondMux.incoming.trySend(item(ids[2], """{"type":"baseline","value":{"items":[],"archivedSessionIds":[],"hiddenWorkspaceIds":[]}}"""))
         listFailed.await()
         runCurrent()
@@ -680,7 +681,7 @@ class ChatViewModelDshFollowTest {
 
     private fun pushBaselines(mux: FakeDownlink) {
         mux.incoming.trySend(item("st-0", """{"type":"ready","clientId":"client-1","host":{"home":"/root"}}"""))
-        mux.incoming.trySend(item("st-1", """{"type":"baseline","value":{"queues":{},"jobs":{},"projections":{}}}"""))
+        mux.incoming.trySend(item("st-1", """{"type":"baseline","value":{"projections":{}}}"""))
         mux.incoming.trySend(
             item("st-2", """{"type":"baseline","value":{"items":[],"archivedSessionIds":[],"hiddenWorkspaceIds":[]}}"""),
         )
