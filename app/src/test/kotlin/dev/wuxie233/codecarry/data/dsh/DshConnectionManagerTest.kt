@@ -55,7 +55,7 @@ class DshConnectionManagerTest {
         runCurrent()
         assertFalse(manager.states.value["dsh-1"]?.isReady == true)
         mux.incoming.trySend(
-            item("st-workspace", """{"type":"baseline","value":{"items":[],"archivedSessionIds":[],"hiddenWorkspaceIds":[]}}"""),
+            item("st-workspace", """{"type":"baseline","value":{"items":[],"archivedSessionIds":[],"pinnedSessionIds":[]}}"""),
         )
         val ready = manager.states.first { it["dsh-1"]?.isReady == true }["dsh-1"]!!
         assertEquals("/root", ready.describe!!.home)
@@ -306,7 +306,7 @@ class DshConnectionManagerTest {
             item("st-control", """{"type":"baseline","value":{"projections":{}}}"""),
         )
         mux.incoming.trySend(
-            item("st-workspace", """{"type":"baseline","value":{"items":[],"archivedSessionIds":[],"hiddenWorkspaceIds":[]}}"""),
+            item("st-workspace", """{"type":"baseline","value":{"items":[],"archivedSessionIds":[],"pinnedSessionIds":[]}}"""),
         )
     }
 

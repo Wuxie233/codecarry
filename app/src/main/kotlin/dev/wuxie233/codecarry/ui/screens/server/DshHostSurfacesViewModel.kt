@@ -431,7 +431,7 @@ class DshHostSurfacesViewModel @Inject constructor(
         return DshWorkspaceListValue(
             items = order.mapNotNull { id -> state.workspaces[id]?.let(::workspaceViewOf) },
             archivedSessionIds = state.archivedSessionIds.toList(),
-            hiddenWorkspaceIds = state.hiddenWorkspaceIds.toList(),
+            pinnedSessionIds = state.pinnedSessionIds.toList(),
         )
     }
 

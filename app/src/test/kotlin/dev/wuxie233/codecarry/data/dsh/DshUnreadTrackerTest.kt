@@ -465,7 +465,7 @@ class DshUnreadTrackerTest {
         mux.incoming.trySend(item(events, """{"type":"ready","clientId":"client-1","host":{"home":"/root"}}"""))
         mux.incoming.trySend(item(control, """{"type":"baseline","value":{"projections":{}}}"""))
         mux.incoming.trySend(
-            item(workspace, """{"type":"baseline","value":{"items":[],"archivedSessionIds":[],"hiddenWorkspaceIds":[]}}"""),
+            item(workspace, """{"type":"baseline","value":{"items":[],"archivedSessionIds":[],"pinnedSessionIds":[]}}"""),
         )
         return events
     }

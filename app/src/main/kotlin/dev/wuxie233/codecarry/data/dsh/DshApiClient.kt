@@ -482,21 +482,21 @@ class DshApiClient(
             ),
         )
 
-    suspend fun workspaceHide(connection: DshConnection, workspaceId: String): DshHiddenWorkspacesValue =
+    suspend fun workspacePinSession(connection: DshConnection, sessionId: String): DshPinnedSessionsValue =
         decode(
             callValue(
                 connection,
-                "workspace/hide",
-                wrapRequest(buildJsonObject { put("workspaceId", workspaceId) }),
+                "workspace/pinSession",
+                wrapRequest(buildJsonObject { put("sessionId", sessionId) }),
             ),
         )
 
-    suspend fun workspaceShow(connection: DshConnection, workspaceId: String): DshHiddenWorkspacesValue =
+    suspend fun workspaceUnpinSession(connection: DshConnection, sessionId: String): DshPinnedSessionsValue =
         decode(
             callValue(
                 connection,
-                "workspace/show",
-                wrapRequest(buildJsonObject { put("workspaceId", workspaceId) }),
+                "workspace/unpinSession",
+                wrapRequest(buildJsonObject { put("sessionId", sessionId) }),
             ),
         )
 

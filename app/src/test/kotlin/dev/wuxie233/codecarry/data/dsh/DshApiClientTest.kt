@@ -50,6 +50,20 @@ class DshApiClientTest {
     }
 
     @Test
+    fun `pin and unpin use session request and retain host order`() = runTest {
+        val captured = mutableListOf<HttpRequestData>()
+        val client = api(captured) { request ->
+            val envelope = json.parseToJsonElement((request.body as TextContent).text).jsonObject
+            val args = envelope.getValue("payload").jsonObject.getValue("args").jsonObject
+            assertEquals("s1", args.getValue("request").jsonObject.getValue("sessionId").jsonPrimitive.content)
+            """{"type":"server-response","rpcId":"${envelope.getValue("rpcId").jsonPrimitive.content}","result":{"ok":true,"value":{"pinnedSessionIds":["s2","s1"]}}}"""
+        }
+        assertEquals(listOf("s2", "s1"), client.workspacePinSession(connection, "s1").pinnedSessionIds)
+        assertEquals(listOf("s2", "s1"), client.workspaceUnpinSession(connection, "s1").pinnedSessionIds)
+        assertEquals(listOf("/api/workspace/pinSession", "/api/workspace/unpinSession"), captured.map { it.url.encodedPath })
+    }
+
+    @Test
     fun `preset roster matches the host path free list contract`() = runTest {
         val captured = mutableListOf<HttpRequestData>()
         val client = api(captured) { request ->

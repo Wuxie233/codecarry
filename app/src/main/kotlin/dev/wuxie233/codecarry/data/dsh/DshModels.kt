@@ -222,7 +222,7 @@ data class DshWorkspaceView(
 data class DshWorkspaceListValue(
     val items: List<DshWorkspaceView> = emptyList(),
     val archivedSessionIds: List<String> = emptyList(),
-    val hiddenWorkspaceIds: List<String> = emptyList(),
+    val pinnedSessionIds: List<String> = emptyList(),
 )
 
 @Serializable
@@ -252,8 +252,8 @@ data class DshArchivedSessionsValue(
 )
 
 @Serializable
-data class DshHiddenWorkspacesValue(
-    val hiddenWorkspaceIds: List<String> = emptyList(),
+data class DshPinnedSessionsValue(
+    val pinnedSessionIds: List<String> = emptyList(),
 )
 
 @Serializable

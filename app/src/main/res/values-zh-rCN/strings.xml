@@ -1000,4 +1000,7 @@
 
     <string name="sessions_migration_required">需要迁移</string>
     <string name="sessions_archive_running">会话仍在运行，请先停止再归档。</string>
+    <string name="sessions_pin">置顶</string>
+    <string name="sessions_unpin">取消置顶</string>
+    <string name="sessions_pin_failed">置顶状态更新失败，请重试。</string>
 </resources>

@@ -75,7 +75,8 @@ data class DshEventState(
     val home: String? = null,
     val sessions: Map<String, DshSessionSnapshot> = emptyMap(),
     val archivedSessionIds: Set<String> = emptySet(),
-    val hiddenWorkspaceIds: Set<String> = emptySet(),
+    val pinnedSessionIds: List<String> = emptyList(),
+    val pinRevision: Long = 0,
     val workspaceOrder: List<String> = emptyList(),
     val workspaces: Map<String, JsonObject> = emptyMap(),
     val pendingApprovals: Map<String, DshPendingApproval> = emptyMap(),
@@ -103,6 +104,14 @@ class DshEventReducer(
                 agentPreset = presetId,
                 presetSelectionReceipt = observedSeq to presetId,
             )))
+        }
+    }
+
+    /** A newer follow frame or connection always wins over a late command receipt. */
+    fun applyPinnedSessions(ids: List<String>, generation: Long, observedRevision: Long) {
+        _state.update {
+            if (it.generation != generation || it.pinRevision != observedRevision) it
+            else it.copy(pinnedSessionIds = ids, pinRevision = it.pinRevision + 1)
         }
     }
 
@@ -238,8 +247,8 @@ class DshEventReducer(
             is DshWorkspaceFrame.Archived -> _state.update {
                 it.copy(archivedSessionIds = frame.archivedSessionIds.toSet())
             }
-            is DshWorkspaceFrame.Hidden -> _state.update {
-                it.copy(hiddenWorkspaceIds = frame.hiddenWorkspaceIds.toSet())
+            is DshWorkspaceFrame.Pinned -> _state.update {
+                it.copy(pinnedSessionIds = frame.pinnedSessionIds, pinRevision = it.pinRevision + 1)
             }
         }
     }
@@ -383,7 +392,8 @@ class DshEventReducer(
                 workspaces = value.items.associate { item -> item.workspaceId to item.toJsonObject() },
                 workspaceOrder = value.items.map { it.workspaceId },
                 archivedSessionIds = value.archivedSessionIds.toSet(),
-                hiddenWorkspaceIds = value.hiddenWorkspaceIds.toSet(),
+                pinnedSessionIds = value.pinnedSessionIds,
+                pinRevision = current.pinRevision + 1,
             )
         }
     }

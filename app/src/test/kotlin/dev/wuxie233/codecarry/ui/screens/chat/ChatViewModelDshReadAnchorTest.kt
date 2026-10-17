@@ -318,7 +318,7 @@ class ChatViewModelDshReadAnchorTest {
         mux.incoming.trySend(item("st-0", """{"type":"ready","clientId":"client-1","host":{"home":"/root"}}"""))
         mux.incoming.trySend(item("st-1", """{"type":"baseline","value":{"projections":{}}}"""))
         mux.incoming.trySend(
-            item("st-2", """{"type":"baseline","value":{"items":[],"archivedSessionIds":[],"hiddenWorkspaceIds":[]}}"""),
+            item("st-2", """{"type":"baseline","value":{"items":[],"archivedSessionIds":[],"pinnedSessionIds":[]}}"""),
         )
     }
 

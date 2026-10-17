@@ -13,7 +13,43 @@ import org.junit.Test
 
 class DshEventReducerTest {
     @Test
-    fun `retired queue and job frames are ignored`() {
+    fun `workspace wire decodes ordered pins from baseline and increments`() {
+        val json = kotlinx.serialization.json.Json
+        val baseline = parseWorkspaceFrame(json.parseToJsonElement(
+            """{"type":"baseline","value":{"items":[],"archivedSessionIds":[],"pinnedSessionIds":["b","a"]}}""",
+        )) as DshWorkspaceFrame.Baseline
+        assertEquals(listOf("b", "a"), baseline.value.pinnedSessionIds)
+        val update = parseWorkspaceFrame(json.parseToJsonElement(
+            """{"type":"pinned","pinnedSessionIds":["a","b"]}""",
+        )) as DshWorkspaceFrame.Pinned
+        assertEquals(listOf("a", "b"), update.pinnedSessionIds)
+    }
+
+    @Test
+    fun `pin order follows host and stale receipts cannot replace live or reconnect state`() {
+        val reducer = DshEventReducer()
+        reducer.resetGeneration(1)
+        reducer.applyWorkspaceFrame(DshWorkspaceFrame.Baseline(
+            DshWorkspaceListValue(pinnedSessionIds = listOf("b", "a")),
+        ))
+        assertEquals(listOf("b", "a"), reducer.state.value.pinnedSessionIds)
+        val revision = reducer.state.value.pinRevision
+        reducer.applyWorkspaceFrame(DshWorkspaceFrame.Pinned(listOf("c", "b", "a")))
+        reducer.applyPinnedSessions(listOf("b"), 1, revision)
+        assertEquals(listOf("c", "b", "a"), reducer.state.value.pinnedSessionIds)
+        reducer.applyPinnedSessions(listOf("c", "a"), 1, reducer.state.value.pinRevision)
+        assertEquals(listOf("c", "a"), reducer.state.value.pinnedSessionIds)
+        reducer.resetGeneration(2)
+        reducer.applyPinnedSessions(listOf("stale"), 1, 0)
+        assertTrue(reducer.state.value.pinnedSessionIds.isEmpty())
+        reducer.applyWorkspaceFrame(DshWorkspaceFrame.Baseline(
+            DshWorkspaceListValue(pinnedSessionIds = listOf("a", "c")),
+        ))
+        assertEquals(listOf("a", "c"), reducer.state.value.pinnedSessionIds)
+    }
+
+    @Test
+    fun `retired queue and job frames no longer parse`() {
         val reducer = DshEventReducer()
         reducer.applyFollowEvent("s1", DshSessionEvent(type = "user/message", seq = 1, time = 10))
         for (type in listOf("queue", "jobs")) {
@@ -157,13 +193,13 @@ class DshEventReducerTest {
                 value = DshWorkspaceListValue(
                     items = listOf(view),
                     archivedSessionIds = listOf("old"),
-                    hiddenWorkspaceIds = listOf("w0"),
+                    pinnedSessionIds = listOf("w0"),
                 ),
             ),
         )
         assertEquals(listOf("w1"), reducer.state.value.workspaceOrder)
         assertEquals(setOf("old"), reducer.state.value.archivedSessionIds)
-        assertEquals(setOf("w0"), reducer.state.value.hiddenWorkspaceIds)
+        assertEquals(listOf("w0"), reducer.state.value.pinnedSessionIds)
         reducer.applyWorkspaceFrame(DshWorkspaceFrame.Remove("w1"))
         assertTrue(reducer.state.value.workspaces.isEmpty())
     }
