@@ -114,12 +114,16 @@ class ChatViewModelDshFollowTest {
         fail = false
         vm.refreshDshSkills()
         assertEquals("grill", vm.dshSkills.first { it.skills.isNotEmpty() }.skills.single().name)
+        assertEquals("compact", vm.dshSkills.value.commands.single().name)
+        val commandRequest = json.parseToJsonElement(unary.last { it.contains("\"commands/list\"") }).jsonObject
+        assertEquals(SESSION_ID, commandRequest["payload"]!!.jsonObject["args"]!!.jsonObject["agentId"]!!.jsonPrimitive.content)
         val request = json.parseToJsonElement(unary.last { it.contains("\"skills/list\"") }).jsonObject
         assertEquals(SESSION_ID, request["payload"]!!.jsonObject["args"]!!.jsonObject["request"]!!.jsonObject["sessionId"]!!.jsonPrimitive.content)
         harness.manager.disconnect(SERVER_ID)
         runCurrent()
         assertFalse(vm.dshSkills.value.available)
         assertTrue(vm.dshSkills.value.skills.isEmpty())
+        assertTrue(vm.dshSkills.value.commands.isEmpty())
     }
 
     @Test
@@ -679,6 +683,13 @@ class ChatViewModelDshFollowTest {
                             """{"type":"server-response","rpcId":"fixed","result":{"ok":true,"value":{"items":[$listItem]}}}""",
                         ),
                         status = HttpStatusCode.OK,
+                        headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
+                    )
+                }
+                "/api/commands/list" -> {
+                    unary += (request.body as TextContent).text
+                    respond(
+                        content = """{"type":"server-response","rpcId":"fixed","result":{"ok":true,"value":[{"name":"compact","description":"Compact history"}]}}""",
                         headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
                     )
                 }

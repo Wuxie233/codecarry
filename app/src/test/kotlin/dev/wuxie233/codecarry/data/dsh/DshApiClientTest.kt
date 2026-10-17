@@ -30,6 +30,34 @@ class DshApiClientTest {
     private val connection = DshConnection.from("http://192.168.1.8:3080")
 
     @Test
+    fun `slash submission resolves once and only unresolved commands fall back`() = runTest {
+        val captured = mutableListOf<HttpRequestData>()
+        var outcome = """{"commandId":"compact","result":{"kind":"success"}}"""
+        var fail = false
+        val client = api(captured) { request ->
+            if (fail) throw java.io.IOException("offline")
+            val envelope = json.parseToJsonElement((request.body as TextContent).text).jsonObject
+            val value = if (request.url.encodedPath == "/api/commands/execute") outcome else """{"accepted":true}"""
+            """{"type":"server-response","rpcId":"${envelope.getValue("rpcId").jsonPrimitive.content}","result":{"ok":true,"value":$value}}"""
+        }
+        val content = buildJsonArray { add(buildJsonObject { put("type", "text"); put("text", "/compact") }) }
+        val address = DshSessionAddress.Session("s1")
+        assertFalse(client.submitPrompt(connection, address, "queue", content))
+        assertEquals(listOf("/api/commands/execute"), captured.map { it.url.encodedPath })
+        captured.clear()
+        outcome = "null"
+        assertTrue(client.submitPrompt(connection, address, "steer", content))
+        assertEquals(listOf("/api/commands/execute", "/api/session/prompt"), captured.map { it.url.encodedPath })
+        for (networkFailure in listOf(false, true)) {
+            captured.clear()
+            outcome = """{"commandId":"compact","result":{"kind":"error","text":"Busy"}}"""
+            fail = networkFailure
+            assertTrue(runCatching { client.submitPrompt(connection, address, "queue", content) }.isFailure)
+            assertEquals(listOf("/api/commands/execute"), captured.map { it.url.encodedPath })
+        }
+    }
+
+    @Test
     fun `current session rows decode availability and optional format without legacy fields`() = runTest {
         val client = api(mutableListOf()) { request ->
             val envelope = json.parseToJsonElement((request.body as TextContent).text).jsonObject

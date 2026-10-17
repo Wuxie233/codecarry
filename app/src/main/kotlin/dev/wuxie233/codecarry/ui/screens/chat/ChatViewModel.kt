@@ -34,6 +34,8 @@ import dev.wuxie233.codecarry.data.dsh.DshConnectionManager
 import dev.wuxie233.codecarry.data.dsh.DshEventState
 import dev.wuxie233.codecarry.data.dsh.DshFollowFrame
 import dev.wuxie233.codecarry.data.dsh.DshGenerationStatus
+import dev.wuxie233.codecarry.data.dsh.submitPrompt
+import dev.wuxie233.codecarry.data.dsh.isDshSlashCommand
 import dev.wuxie233.codecarry.data.dsh.DshSessionAddress
 import dev.wuxie233.codecarry.data.dsh.historyAddress
 import dev.wuxie233.codecarry.data.dsh.connectDshConversation
@@ -993,11 +995,13 @@ class ChatViewModel @Inject constructor(
         _dshSkills.value = DshSkillCandidateState(available = true, loading = true)
         dshSkillLoadJob = viewModelScope.launch {
             try {
-                val skills = withContext(Dispatchers.IO) {
-                    kotlinx.coroutines.withTimeout(15_000) { dshApi.skillList(dshConn, sessionId).skills }
+                val catalog = withContext(Dispatchers.IO) {
+                    kotlinx.coroutines.withTimeout(15_000) {
+                        dshApi.skillList(dshConn, sessionId).skills to dshApi.commandList(dshConn, sessionId)
+                    }
                 }
                 if (isCurrent()) {
-                    _dshSkills.value = DshSkillCandidateState(available = true, skills = skills)
+                    _dshSkills.value = DshSkillCandidateState(available = true, skills = catalog.first, commands = catalog.second)
                 }
             } catch (error: kotlinx.coroutines.TimeoutCancellationException) {
                 if (isCurrent()) _dshSkills.value = DshSkillCandidateState(available = true, failed = true)
@@ -1005,6 +1009,29 @@ class ChatViewModel @Inject constructor(
                 throw error
             } catch (error: Exception) {
                 if (isCurrent()) _dshSkills.value = DshSkillCandidateState(available = true, failed = true)
+            }
+        }
+    }
+
+    private var dshCompactJob: Job? = null
+
+    fun compactDshSession() {
+        if (!isDsh || dshCompactJob?.isActive == true) return
+        val connection = dshConnectionManager.states.value[serverId]
+        if (connection?.isReady != true || !_dshSkills.value.matchesCompact("") ||
+            sessionId in dshReducer.state.value.archivedSessionIds) return
+        dshCompactJob = viewModelScope.launch {
+            try {
+                val result = dshApi.commandExecute(dshConn, sessionId, "/compact")
+                if (dshConnectionManager.states.value[serverId]?.generation == connection.generation &&
+                    result?.result?.kind != "success") {
+                    _error.value = appContext.getString(R.string.dsh_command_not_executed)
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                if (dshConnectionManager.states.value[serverId]?.generation == connection.generation)
+                    _error.value = appContext.getString(R.string.dsh_command_not_executed)
             }
         }
     }
@@ -1822,19 +1849,8 @@ class ChatViewModel @Inject constructor(
         if (_pendingSendError.value == null) drainPendingDshSends()
     }
 
-    private suspend fun sendDshPrompt(mode: String, content: kotlinx.serialization.json.JsonArray) {
-        when (val address = dshHistoryAddress()) {
-            is DshSessionAddress.Subagent -> dshApi.subagentPrompt(
-                connection = dshConn,
-                parentSessionId = address.parentSessionId,
-                childSessionId = address.childSessionId,
-                content = content,
-                delivery = mode,
-            )
-            is DshSessionAddress.Session -> dshApi.sessionPrompt(dshConn, sessionId, mode, content)
-            null -> error("DSH session address is not ready")
-        }
-    }
+    private suspend fun sendDshPrompt(mode: String, content: kotlinx.serialization.json.JsonArray): Boolean =
+        dshApi.submitPrompt(dshConn, dshHistoryAddress() ?: error("DSH session address is not ready"), mode, content)
 
     private suspend fun abortDshSession(): Boolean {
         return when (val address = dshHistoryAddress()) {
@@ -1858,14 +1874,16 @@ class ChatViewModel @Inject constructor(
                     try {
                         val steer = uiState.value.sessionStatus is SessionStatus.Busy
                         val request = dshPromptRequest(head.parts, steer)
-                        sendDshPrompt(request.mode, request.content)
+                        val prompted = sendDshPrompt(request.mode, request.content)
                         pendingOpenCodeSends.removeFirst()
                         _pendingSendCount.value = pendingOpenCodeSends.size
                         _pendingSendError.value = null
-                        eventReducer.updateSessionStatus(serverId, sessionId, SessionStatus.Busy)
+                        if (prompted) eventReducer.updateSessionStatus(serverId, sessionId, SessionStatus.Busy)
                     } catch (error: Exception) {
                         Log.e(TAG, "Failed to send DSH prompt", error)
-                        _pendingSendError.value = error.message ?: "Failed to send queued message"
+                        _pendingSendError.value = if (isDshSlashCommand(dshPromptRequest(head.parts, false).content))
+                            appContext.getString(R.string.dsh_command_not_executed)
+                        else error.message ?: "Failed to send queued message"
                         _error.value = _pendingSendError.value
                         break
                     }

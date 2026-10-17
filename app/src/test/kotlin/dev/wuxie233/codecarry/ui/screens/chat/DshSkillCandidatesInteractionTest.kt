@@ -4,6 +4,7 @@ import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.TextField
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -23,6 +24,45 @@ import org.robolectric.RobolectricTestRunner
 class DshSkillCandidatesInteractionTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
     private val skill = DshSkillEntry("grill", "Discuss a plan", modelInvocable = true)
+
+    @Test fun compactCommandConfirmsWithoutEditingDraftAndStaysSeparateFromSkill() {
+        val original = TextFieldValue("draft /CO suffix", TextRange(9))
+        val input = mutableStateOf(original)
+        val state = mutableStateOf(DshSkillCandidateState(true,
+            skills = listOf(DshSkillEntry("compact", "A skill", modelInvocable = true))))
+        var sends = 0
+        val gate = ChatConfirmationGate()
+        compose.setContent {
+            CompositionLocalProvider(LocalChatConfirmationGate provides gate) {
+                MaterialTheme { DshSkillCandidates(input.value, state.value, { input.value = it }, {},
+                    onCompact = { sends++ }) }
+            }
+        }
+        compose.onNodeWithText("/compact").assertDoesNotExist()
+        compose.runOnIdle { state.value = state.value.copy(commands = listOf(
+            dev.wuxie233.codecarry.data.dsh.DshCommandDescriptor("compact", "Compact history"))) }
+        compose.onNodeWithText("compact").assertIsDisplayed()
+        org.junit.Assert.assertTrue(compose.onNodeWithText("/compact").fetchSemanticsNode().boundsInRoot.top <
+            compose.onNodeWithText("compact").fetchSemanticsNode().boundsInRoot.top)
+        compose.runOnIdle { gate.acquire("rewind") }
+        compose.onNodeWithText("/compact").assertDoesNotExist()
+        compose.runOnIdle { gate.release("rewind") }
+        compose.onNodeWithText("/compact").performClick()
+        compose.onNodeWithText("compact").assertDoesNotExist()
+        compose.runOnIdle {
+            assertEquals(original, input.value); assertEquals(0, sends)
+            org.junit.Assert.assertFalse(gate.acquire("rewind"))
+        }
+        compose.onNodeWithText(compose.activity.getString(R.string.cancel)).performClick()
+        compose.runOnIdle { assertEquals(original, input.value); assertEquals(0, sends) }
+        compose.runOnIdle { input.value = TextFieldValue("draft /C suffix", TextRange(8)) }
+        compose.onNodeWithText("/compact").performClick()
+        compose.onNodeWithText(compose.activity.getString(R.string.dsh_compact_confirm)).performClick()
+        compose.runOnIdle { assertEquals("draft /C suffix", input.value.text); assertEquals(1, sends)
+            input.value = TextFieldValue("/com", TextRange(4)) }
+        compose.onNodeWithText("compact").performClick()
+        compose.runOnIdle { assertEquals("/compact ", input.value.text); assertEquals(1, sends) }
+    }
 
     @Test fun selectingCandidateOnlyEditsDraftAndBackDismisses() {
         val input = mutableStateOf(TextFieldValue("before /GR after", TextRange(10)))
