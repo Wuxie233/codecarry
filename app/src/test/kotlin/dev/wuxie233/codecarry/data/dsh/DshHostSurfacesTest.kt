@@ -196,7 +196,7 @@ class DshHostSurfacesTest {
             "directoryPicker/list" -> """{"path":"/tmp","home":"/root","crumbs":[],"entries":[],"truncated":false}"""
             "directoryPicker/createDirectory" -> """{"path":"/tmp/new"}"""
             "skills/list" -> """{"skills":[{"name":"commit-helper","description":"Git","modelInvocable":true}]}"""
-            "agentPresets/list" -> """{"presets":[{"id":"coder","trust":"system","isDefault":true}],"authorable":false}"""
+            "agentPresets/list" -> """{"presets":[{"id":"coder","isDefault":true}]}"""
             "agentPresets/select" -> """"coder""""
             "goals/create" -> """{"ref":{"id":"g1","revision":1}}"""
             "settings/describe" -> """{"writable":true,"hasDocument":false,"namespaces":[{"ns":"llm-deepseek","schema":{},"value":{},"applies":"live","secrets":[],"revision":3}]}"""

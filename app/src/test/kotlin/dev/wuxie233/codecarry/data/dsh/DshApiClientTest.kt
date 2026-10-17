@@ -101,11 +101,14 @@ class DshApiClientTest {
             val envelope = json.parseToJsonElement((request.body as TextContent).text).jsonObject
             assertEquals("agentPresets/list", envelope.getValue("method").jsonPrimitive.content)
             assertTrue(envelope.getValue("payload").jsonObject.getValue("args").jsonObject.isEmpty())
-            """{"type":"server-response","rpcId":"${envelope.getValue("rpcId").jsonPrimitive.content}","result":{"ok":true,"value":{"presets":[{"id":"standard","trust":"system","isDefault":true},{"id":"custom","trust":"user","isDefault":false,"name":"Custom","description":"My preset","broken":"Missing plugin"}],"authorable":true}}}"""
+            """{"type":"server-response","rpcId":"${envelope.getValue("rpcId").jsonPrimitive.content}","result":{"ok":true,"value":{"presets":[{"id":"standard","isDefault":true},{"id":"custom","isDefault":false,"name":"Custom","description":"My preset","broken":"Missing plugin"}]}}}"""
         }
         val roster = client.agentPresetList(connection)
         assertEquals(listOf("standard", "custom"), roster.presets.map { it.id })
-        assertTrue(roster.authorable)
+        assertTrue(roster.presets[0].isDefault)
+        assertNull(roster.presets[0].name)
+        assertEquals("Custom", roster.presets[1].name)
+        assertEquals("My preset", roster.presets[1].description)
         assertEquals("Missing plugin", roster.presets[1].broken)
         assertEquals("/api/agentPresets/list", captured.single().url.encodedPath)
     }

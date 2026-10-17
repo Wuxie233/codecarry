@@ -21,8 +21,8 @@ class DshPresetSelectionTest {
 
     @Test
     fun `search matches case insensitive name id and description and preserves catalog order`() {
-        val first = DshAgentPresetEntry("coder", "system", true, "Engineering", "Build applications")
-        val second = DshAgentPresetEntry("writer", "user", false, "Writing", "Explain ideas")
+        val first = DshAgentPresetEntry("coder", true, "Engineering", "Build applications")
+        val second = DshAgentPresetEntry("writer", false, "Writing", "Explain ideas")
         val presets = listOf(first, second)
         assertEquals(listOf(first), filterDshPresets(presets, "  CODER  "))
         assertEquals(listOf(first), filterDshPresets(presets, "engineer"))
