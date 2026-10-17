@@ -574,7 +574,7 @@
     <string name="about_license_value">MIT</string>
     <string name="server_settings_title">服务器设置</string>
     <string name="dsh_host_surfaces_title">DSH 宿主面</string>
-    <string name="dsh_host_surfaces_desc">此 DSH 宿主的工作区、技能、Git、预设、目标、自动化、设置和模型</string>
+    <string name="dsh_host_surfaces_desc">此 DSH 宿主的工作区、技能、预设、目标、设置和模型</string>
     <string name="dsh_host_surfaces_available">可用方法</string>
     <string name="dsh_host_surfaces_hidden_loopback">非回环地址上已隐藏</string>
     <string name="dsh_host_surfaces_workspaces">工作区</string>

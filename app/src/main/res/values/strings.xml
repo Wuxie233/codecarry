@@ -700,7 +700,7 @@
     <string name="server_settings_empty">No models found</string>
     <string name="server_settings_load_error">Failed to load models</string>
     <string name="dsh_host_surfaces_title">DSH host surfaces</string>
-    <string name="dsh_host_surfaces_desc">Workspaces, skills, git, presets, goals, automation, settings, and models for this DSH host</string>
+    <string name="dsh_host_surfaces_desc">Workspaces, skills, presets, goals, settings, and models for this DSH host</string>
     <string name="dsh_host_surfaces_available">Available methods</string>
     <string name="dsh_host_surfaces_hidden_loopback">Hidden on this non-loopback URL</string>
     <string name="dsh_host_surfaces_workspaces">Workspaces</string>
