@@ -1523,9 +1523,8 @@ fun ChatScreen(
     // Rebuild attachment objects from persisted draft URIs on first composition
     LaunchedEffect(draftAttachmentUris, compressImageAttachments, imageAttachmentMaxLongSide, imageAttachmentWebpQuality) {
         // Only rebuild if attachments list doesn't match URIs (e.g. on session restore)
-        val currentUris = attachments.map { it.uri.toString() }.toSet()
-        val draftUriSet = draftAttachmentUris.toSet()
-        if (currentUris == draftUriSet) return@LaunchedEffect
+        val currentUris = attachments.map { it.uri.toString() }
+        if (currentUris == draftAttachmentUris) return@LaunchedEffect
 
         val restored = mutableListOf<ImageAttachment>()
         for (uriStr in draftAttachmentUris) {

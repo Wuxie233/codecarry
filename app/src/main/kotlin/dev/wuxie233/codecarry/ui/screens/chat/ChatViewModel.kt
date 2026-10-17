@@ -440,6 +440,7 @@ class ChatViewModel @Inject constructor(
 
     /** Draft attachment URIs (content:// URIs as strings) — survives navigation / app restart. */
     private val _draftAttachmentUris = MutableStateFlow<List<String>>(emptyList())
+    private var dshRewindImageUris: Set<String> = emptySet()
     val draftAttachmentUris: StateFlow<List<String>> = _draftAttachmentUris
 
     /** Set of file paths that have been confirmed by user selection from the popup */
@@ -1062,6 +1063,8 @@ class ChatViewModel @Inject constructor(
         val target = uiState.value.messages
             .firstOrNull { it.message.id == messageId && it.isUser } ?: return
         val text = target.parts.filterIsInstance<Part.Text>().joinToString("\n") { it.text }
+        val targetContent = (state.sessions[sessionId]?.events?.firstOrNull { it.seq == targetSeq }
+            ?.data as? JsonObject)?.get("content") as? kotlinx.serialization.json.JsonArray
         unconfirmedDshRewinds.add(targetSeq)
         _error.value = null
         _dshRewindInFlight.value = true
@@ -1085,6 +1088,52 @@ class ChatViewModel @Inject constructor(
                     restoreRevertedDraft(RevertedDraftPayload(text = text))
                     saveDraft()
                 }
+                val restoredImages = mutableListOf<String>()
+                val missingImages = mutableListOf<String>()
+                val omittedFiles = mutableListOf<String>()
+                targetContent.orEmpty().forEachIndexed { index, content ->
+                    val block = content as? JsonObject ?: return@forEachIndexed
+                    val type = (block["type"] as? JsonPrimitive)?.contentOrNull
+                    if (type != "image" && type != "file") return@forEachIndexed
+                    val attachment = block["attachment"] as? JsonObject
+                    val attachmentId = (attachment?.get("attachmentId") as? JsonPrimitive)?.contentOrNull
+                    val name = (attachment?.get("name") as? JsonPrimitive)?.contentOrNull
+                        ?: (block["name"] as? JsonPrimitive)?.contentOrNull
+                        ?: attachmentId
+                        ?: appContext.getString(R.string.dsh_rewind_attachment_name, index + 1)
+                    if (type == "file") {
+                        omittedFiles.add(name)
+                        return@forEachIndexed
+                    }
+                    try {
+                        check(!attachmentId.isNullOrBlank() && isCurrent())
+                        val image = withContext(Dispatchers.IO) {
+                            kotlinx.coroutines.withTimeoutOrNull(15_000) {
+                                val fetched = dshApi.sessionAttachment(dshConn, sessionId, attachmentId)
+                                check(fetched.attachment.mediaType.startsWith("image/", ignoreCase = true))
+                                check(fetched.data.isNotBlank() && fetched.data.length.toLong() * 3 / 4 <= DSH_ATTACHMENT_MAX_BYTES)
+                                check(java.util.Base64.getDecoder().decode(fetched.data).isNotEmpty())
+                                "data:${fetched.attachment.mediaType};base64,${fetched.data}"
+                            }
+                        }
+                        check(image != null && isCurrent())
+                        restoredImages.add(image)
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (error: Exception) {
+                        missingImages.add(name)
+                    }
+                }
+                dshRewindImageUris = restoredImages.toSet()
+                _draftAttachmentUris.value = restoredImages
+                _error.value = listOfNotNull(
+                    missingImages.takeIf { it.isNotEmpty() }?.let {
+                        appContext.getString(R.string.dsh_rewind_images_missing, it.joinToString(", "))
+                    },
+                    omittedFiles.takeIf { it.isNotEmpty() }?.let {
+                        appContext.getString(R.string.dsh_rewind_files_omitted, it.joinToString(", "))
+                    },
+                ).takeIf { it.isNotEmpty() }?.joinToString("\n")
             } catch (error: kotlinx.coroutines.TimeoutCancellationException) {
                 _error.value = appContext.getString(R.string.dsh_rewind_failed)
             } catch (error: CancellationException) {
@@ -1761,7 +1810,7 @@ class ChatViewModel @Inject constructor(
         val agentPair = _selectedAgent.value
         val draft = dev.wuxie233.codecarry.data.repository.Draft(
             text = _draftText.value,
-            imageUris = _draftAttachmentUris.value,
+            imageUris = _draftAttachmentUris.value.filterNot { it in dshRewindImageUris },
             confirmedFilePaths = _confirmedFilePaths.value.toList(),
             selectedAgent = agentPair.first.takeIf { agentPair.second },
             selectedVariant = _selectedVariant.value

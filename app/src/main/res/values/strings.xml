@@ -1075,6 +1075,9 @@ Tokens: ~%4$d -&gt; ~%5$d</string>
     <string name="sessions_unpin">Unpin</string>
     <string name="sessions_pin_failed">Could not update pin. Try again.</string>
     <string name="dsh_rewind_failed">Rewind did not complete. The conversation and draft have not been changed.</string>
+    <string name="dsh_rewind_images_missing">Rewind completed, but these images could not be restored: %1$s. Your text and readable images were kept.</string>
+    <string name="dsh_rewind_files_omitted">These files remain in the log and were not returned to the composer: %1$s.</string>
+    <string name="dsh_rewind_attachment_name">Attachment %1$d</string>
     <string name="dsh_rewind_action">Rewind</string>
     <string name="dsh_rewind_body">This message and the conversation after it will disappear from chat. The log is kept and files stay unchanged. This message’s text will replace your unsent draft without sending it. There is no undo.</string>
     <string name="dsh_rewind_busy">The current reply will also be interrupted.</string>
