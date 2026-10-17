@@ -5,24 +5,18 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.wuxie233.codecarry.data.dsh.DshAgentPresetListValue
-import dev.wuxie233.codecarry.data.dsh.DshAutomationListValue
 import dev.wuxie233.codecarry.data.dsh.DshConnection
-import dev.wuxie233.codecarry.data.dsh.DshDirectoryListing
 import dev.wuxie233.codecarry.data.dsh.DshHostSurfaceCatalog
 import dev.wuxie233.codecarry.data.dsh.DshHostSurfaceController
 import dev.wuxie233.codecarry.data.dsh.DshLlmModelsValue
 import dev.wuxie233.codecarry.data.dsh.DshLlmProvidersValue
-import dev.wuxie233.codecarry.data.dsh.DshSessionGitView
 import dev.wuxie233.codecarry.data.dsh.DshSettingsDescribeValue
 import dev.wuxie233.codecarry.data.dsh.DshSkillCatalogValue
-import dev.wuxie233.codecarry.data.dsh.DshSubagentCatalog
-import dev.wuxie233.codecarry.data.dsh.DshSystemPromptListValue
 import dev.wuxie233.codecarry.data.dsh.DshGoalRefValue
 import dev.wuxie233.codecarry.data.dsh.DshSettingsNamespaceView
 import dev.wuxie233.codecarry.data.dsh.DshWorkspaceCreateValue
 import dev.wuxie233.codecarry.data.dsh.DshWorkspaceListValue
 import dev.wuxie233.codecarry.data.dsh.dshHostSurfaceCatalog
-import dev.wuxie233.codecarry.data.dsh.dshPromptMode
 import dev.wuxie233.codecarry.data.dsh.mapDshEventStateToSessions
 import dev.wuxie233.codecarry.data.repository.ServerRepository
 import dev.wuxie233.codecarry.domain.model.ServerType
@@ -60,16 +54,11 @@ data class DshSurfaceModuleState<T>(
 /** Host-surface modules that can be retried individually. */
 enum class DshHostModule {
     SESSIONS,
-    DIRECTORY,
-    GIT,
     PRESETS,
-    AUTOMATION,
     SETTINGS,
     PROVIDERS,
     MODELS,
-    SYSTEM_PROMPT,
     SKILLS,
-    SUBAGENTS,
 }
 
 /** One selectable session target for the session-scoped host surfaces. */
@@ -103,16 +92,11 @@ data class DshHostSurfacesUiState(
     val serverName: String = "",
     val catalog: DshHostSurfaceCatalog? = null,
     val workspaces: DshWorkspaceListValue? = null,
-    val directory: DshSurfaceModuleState<DshDirectoryListing> = DshSurfaceModuleState(),
     val skills: DshSurfaceModuleState<DshSkillCatalogValue> = DshSurfaceModuleState(),
-    val git: DshSurfaceModuleState<DshSessionGitView?> = DshSurfaceModuleState(),
     val presets: DshSurfaceModuleState<DshAgentPresetListValue> = DshSurfaceModuleState(),
-    val automation: DshSurfaceModuleState<DshAutomationListValue> = DshSurfaceModuleState(),
     val settings: DshSurfaceModuleState<DshSettingsDescribeValue> = DshSurfaceModuleState(),
     val providers: DshSurfaceModuleState<DshLlmProvidersValue> = DshSurfaceModuleState(),
     val models: DshSurfaceModuleState<DshLlmModelsValue> = DshSurfaceModuleState(),
-    val systemPrompt: DshSurfaceModuleState<DshSystemPromptListValue> = DshSurfaceModuleState(),
-    val subagents: DshSurfaceModuleState<DshSubagentCatalog> = DshSurfaceModuleState(),
     val sessions: DshSurfaceModuleState<List<DshSessionOption>> = DshSurfaceModuleState(),
     val selectedSessionId: String? = null,
     val lastGoal: DshGoalRefValue? = null,
@@ -143,7 +127,6 @@ class DshHostSurfacesViewModel @Inject constructor(
 
     private var controller: DshHostSurfaceController? = null
     private val moduleJobs = mutableMapOf<DshHostModule, Job>()
-    private var directoryPath: String? = null
 
     init {
         viewModelScope.launch { bind() }
@@ -154,14 +137,10 @@ class DshHostSurfacesViewModel @Inject constructor(
         val catalog = host.catalog()
         _uiState.update { it.copy(actionError = null, formError = null) }
         if (catalog.can("session/list")) loadSessionOptions()
-        if (catalog.canBrowseHost) loadDirectory(null)
-        if (catalog.canDescribeGit) loadGit()
         if (catalog.canListPresets) loadPresets()
-        if (catalog.canManageAutomation) loadAutomation()
         if (catalog.can("settings/describe")) loadSettingsDescribe()
         if (catalog.can("llm/listProviders")) loadProviders()
         if (catalog.can("session/modelCatalog")) loadModels()
-        if (catalog.canListSystemPrompt) loadSystemPrompt()
         if (catalog.canListSkills) {
             _uiState.value.selectedSessionId?.let(::loadSkills)
         }
@@ -171,16 +150,11 @@ class DshHostSurfacesViewModel @Inject constructor(
     fun retry(module: DshHostModule) {
         when (module) {
             DshHostModule.SESSIONS -> loadSessionOptions()
-            DshHostModule.DIRECTORY -> loadDirectory(directoryPath)
-            DshHostModule.GIT -> loadGit()
             DshHostModule.PRESETS -> loadPresets()
-            DshHostModule.AUTOMATION -> loadAutomation()
             DshHostModule.SETTINGS -> loadSettingsDescribe()
             DshHostModule.PROVIDERS -> loadProviders()
             DshHostModule.MODELS -> loadModels()
-            DshHostModule.SYSTEM_PROMPT -> loadSystemPrompt()
             DshHostModule.SKILLS -> retrySkills()
-            DshHostModule.SUBAGENTS -> loadSubagents()
         }
     }
 
@@ -188,7 +162,7 @@ class DshHostSurfacesViewModel @Inject constructor(
 
     /**
      * Set the session context every session-scoped surface targets. Skills
-     * reload for the new session; subagent and git views re-resolve too.
+     * reload for the new session.
      */
     fun selectSession(sessionId: String) {
         if (sessionId.isBlank()) return
@@ -198,12 +172,10 @@ class DshHostSurfacesViewModel @Inject constructor(
             it.copy(
                 selectedSessionId = sessionId,
                 skills = DshSurfaceModuleState(),
-                subagents = DshSurfaceModuleState(),
                 formError = null,
             )
         }
         if (host.catalog().canListSkills) loadSkills(sessionId)
-        if (host.catalog().canDescribeGit) loadGit()
     }
 
     /** Skills are session-scoped on current DSH; load them for one session. */
@@ -256,7 +228,6 @@ class DshHostSurfacesViewModel @Inject constructor(
                 sessions = state.sessions.copy(loading = false, error = null, data = options),
                 selectedSessionId = if (stale) null else inherited,
                 skills = if (stale) DshSurfaceModuleState() else state.skills,
-                subagents = if (stale) DshSurfaceModuleState() else state.subagents,
             )
         }
         val selected = _uiState.value.selectedSessionId
@@ -268,46 +239,6 @@ class DshHostSurfacesViewModel @Inject constructor(
 
     // ---- Independent module loads (#46) ----
 
-    private fun loadDirectory(path: String?) {
-        val host = controller ?: return
-        if (!host.catalog().canBrowseHost) return
-        directoryPath = path
-        launchModule(DshHostModule.DIRECTORY) {
-            loadModuleState(
-                DshHostModule.DIRECTORY,
-                { state -> state.directory },
-                { state, module -> state.copy(directory = module) },
-            ) {
-                host.listDirectory(path)
-            }
-        }
-    }
-
-    private fun loadGit() {
-        val host = controller ?: return
-        if (!host.catalog().canDescribeGit) return
-        launchModule(DshHostModule.GIT) {
-            loadModuleState(
-                DshHostModule.GIT,
-                { state -> state.git },
-                { state, module -> state.copy(git = module) },
-            ) {
-                val selected = _uiState.value.selectedSessionId
-                val workspaces = workspaceCatalogFromReducer()
-                val targetSession = selected
-                    ?: workspaces.items.firstNotNullOfOrNull { it.sessionIds.firstOrNull() }
-                val targetWorkspace = workspaces.items.firstOrNull()
-                    ?.takeIf { selected == null }
-                    ?.workspaceId
-                if (targetSession == null && targetWorkspace == null) {
-                    null
-                } else {
-                    host.gitDescribe(sessionId = targetSession, workspaceId = targetWorkspace)
-                }
-            }
-        }
-    }
-
     private fun loadPresets() {
         val host = controller ?: return
         if (!host.catalog().canListPresets) return
@@ -318,20 +249,6 @@ class DshHostSurfacesViewModel @Inject constructor(
                 { state, module -> state.copy(presets = module) },
             ) {
                 host.agentPresetList()
-            }
-        }
-    }
-
-    private fun loadAutomation() {
-        val host = controller ?: return
-        if (!host.catalog().canManageAutomation) return
-        launchModule(DshHostModule.AUTOMATION) {
-            loadModuleState(
-                DshHostModule.AUTOMATION,
-                { state -> state.automation },
-                { state, module -> state.copy(automation = module) },
-            ) {
-                host.automationList()
             }
         }
     }
@@ -378,20 +295,6 @@ class DshHostSurfacesViewModel @Inject constructor(
         }
     }
 
-    private fun loadSystemPrompt() {
-        val host = controller ?: return
-        if (!host.catalog().canListSystemPrompt) return
-        launchModule(DshHostModule.SYSTEM_PROMPT) {
-            loadModuleState(
-                DshHostModule.SYSTEM_PROMPT,
-                { state -> state.systemPrompt },
-                { state, module -> state.copy(systemPrompt = module) },
-            ) {
-                host.systemPromptList()
-            }
-        }
-    }
-
     // ---- Actions (#47) ----
 
     fun createWorkspace(path: String) {
@@ -400,18 +303,6 @@ class DshHostSurfacesViewModel @Inject constructor(
             val created = host.createWorkspace(path)
             applyCreatedWorkspace(created)
         }
-    }
-
-    fun createDirectory(path: String, name: String) {
-        val host = controller ?: return
-        launchAction {
-            val created = host.createDirectory(path, name)
-            loadDirectory(created.path)
-        }
-    }
-
-    fun browse(path: String) {
-        loadDirectory(path)
     }
 
     fun selectPreset(presetId: String) {
@@ -429,40 +320,6 @@ class DshHostSurfacesViewModel @Inject constructor(
         launchAction {
             val goal = host.goalCreate(sessionId, objective)
             _uiState.update { it.copy(lastGoal = goal, actionError = null) }
-        }
-    }
-
-    fun loadSubagents() {
-        val host = controller ?: return
-        if (!host.catalog().canListSubagents) return
-        val parent = _uiState.value.selectedSessionId ?: return
-        launchModule(DshHostModule.SUBAGENTS) {
-            loadModuleState(
-                DshHostModule.SUBAGENTS,
-                { state -> state.subagents },
-                { state, module -> state.copy(subagents = module) },
-            ) {
-                host.subagentList(parent)
-            }
-        }
-    }
-
-    fun promptSubagent(childSessionId: String, text: String) {
-        val host = controller ?: return
-        val parent = _uiState.value.selectedSessionId ?: return
-        launchAction {
-            val child = _uiState.value.sessions.data?.firstOrNull { it.sessionId == childSessionId }
-            host.subagentPrompt(parent, childSessionId, text, delivery = dshPromptMode(child?.running == true))
-            loadSubagents()
-        }
-    }
-
-    fun interruptSubagent(childSessionId: String) {
-        val host = controller ?: return
-        val parent = _uiState.value.selectedSessionId ?: return
-        launchAction {
-            host.subagentInterrupt(parent, childSessionId)
-            loadSubagents()
         }
     }
 

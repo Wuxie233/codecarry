@@ -296,20 +296,6 @@ class DshApiClient(
             ),
         )
 
-    suspend fun sessionRehome(connection: DshConnection, sessionId: String, path: String): DshRehomeValue =
-        decode(
-            callValue(
-                connection,
-                "session/rehome",
-                wrapRequest(
-                    buildJsonObject {
-                        put("sessionId", sessionId)
-                        put("path", path)
-                    },
-                ),
-            ),
-        )
-
     suspend fun sessionFork(connection: DshConnection, sessionId: String, atSeq: Long? = null): DshForkValue =
         decode(
             callValue(
@@ -323,27 +309,6 @@ class DshApiClient(
                 ),
             ),
         )
-
-    suspend fun sessionRewrite(
-        connection: DshConnection,
-        sessionId: String,
-        atSeq: Long,
-        content: JsonArray,
-        clientTimeZone: String? = null,
-    ): DshAcceptedValue = decode(
-        callValue(
-            connection,
-            "session/rewrite",
-            wrapRequest(
-                buildJsonObject {
-                    put("sessionId", sessionId)
-                    put("atSeq", atSeq)
-                    put("content", content)
-                    clientTimeZone?.let { put("clientTimeZone", it) }
-                },
-            ),
-        ),
-    )
 
     /** `session/prompt` requires a client-minted `requestId`. */
     suspend fun sessionPrompt(
@@ -535,76 +500,12 @@ class DshApiClient(
             ),
         )
 
-    suspend fun workspaceAddFolder(connection: DshConnection, workspaceId: String, path: String): DshWorkspaceValue =
-        decode(
-            callValue(
-                connection,
-                "workspace/addFolder",
-                wrapRequest(
-                    buildJsonObject {
-                        put("workspaceId", workspaceId)
-                        put("path", path)
-                    },
-                ),
-            ),
-        )
-
-    suspend fun workspaceRemoveFolder(connection: DshConnection, workspaceId: String, path: String): DshWorkspaceValue =
-        decode(
-            callValue(
-                connection,
-                "workspace/removeFolder",
-                wrapRequest(
-                    buildJsonObject {
-                        put("workspaceId", workspaceId)
-                        put("path", path)
-                    },
-                ),
-            ),
-        )
-
     suspend fun skillList(connection: DshConnection, sessionId: String): DshSkillListValue =
         decode(
             callValue(
                 connection,
                 "skills/list",
                 buildJsonObject { put("request", buildJsonObject { put("sessionId", sessionId) }) },
-            ),
-        )
-
-    suspend fun gitDescribe(
-        connection: DshConnection,
-        sessionId: String? = null,
-        workspaceId: String? = null,
-    ): DshSessionGitView = decode(
-        callValue(
-            connection,
-            "git/describe",
-            optionalObject("sessionId" to sessionId, "workspaceId" to workspaceId),
-        ),
-    )
-
-    suspend fun gitCheckout(connection: DshConnection, sessionId: String, branch: String): DshSessionGitView =
-        decode(
-            callValue(
-                connection,
-                "git/checkout",
-                buildJsonObject {
-                    put("sessionId", sessionId)
-                    put("branch", branch)
-                },
-            ),
-        )
-
-    suspend fun gitCreateBranch(connection: DshConnection, sessionId: String, branch: String): DshSessionGitView =
-        decode(
-            callValue(
-                connection,
-                "git/createBranch",
-                buildJsonObject {
-                    put("sessionId", sessionId)
-                    put("branch", branch)
-                },
             ),
         )
 
@@ -694,48 +595,6 @@ class DshApiClient(
     suspend fun goalClear(connection: DshConnection, sessionId: String, ref: DshGoalRef): DshGoalClearedValue =
         decode(callValue(connection, "goals/clear", goalRefArgs(sessionId, ref)))
 
-    suspend fun automationList(connection: DshConnection): DshAutomationListValue =
-        decode(callValue(connection, "automation/list"))
-
-    suspend fun automationCreate(connection: DshConnection, payload: JsonObject): DshAutomationRuleValue =
-        decode(callValue(connection, "automation/create", wrapRequest(payload)))
-
-    suspend fun automationUpdate(connection: DshConnection, payload: JsonObject): DshAutomationRuleValue =
-        decode(callValue(connection, "automation/update", wrapRequest(payload)))
-
-    suspend fun automationDelete(connection: DshConnection, id: String): DshAutomationDeleteValue =
-        decode(callValue(connection, "automation/delete", buildJsonObject { put("id", id) }))
-
-    suspend fun automationSetEnabled(connection: DshConnection, id: String, enabled: Boolean): DshAutomationRuleValue =
-        decode(
-            callValue(
-                connection,
-                "automation/setEnabled",
-                buildJsonObject {
-                    put("id", id)
-                    put("enabled", enabled)
-                },
-            ),
-        )
-
-    suspend fun automationRunNow(connection: DshConnection, id: String): DshAutomationRunValue =
-        decode(callValue(connection, "automation/runNow", buildJsonObject { put("id", id) }))
-
-    suspend fun automationListRuns(connection: DshConnection, id: String, limit: Int? = null): DshAutomationRunsValue =
-        decode(
-            callValue(
-                connection,
-                "automation/listRuns",
-                buildJsonObject {
-                    put("id", id)
-                    limit?.let { put("limit", it) }
-                },
-            ),
-        )
-
-    suspend fun automationDeleteRun(connection: DshConnection, id: String): DshAutomationDeleteValue =
-        decode(callValue(connection, "automation/deleteRun", buildJsonObject { put("id", id) }))
-
     suspend fun settingsDescribe(connection: DshConnection): DshSettingsDescribeValue =
         decode(callValue(connection, "settings/describe"))
 
@@ -808,15 +667,6 @@ class DshApiClient(
     suspend fun llmModels(connection: DshConnection): DshLlmModelsValue =
         decode(callValue(connection, "session/modelCatalog"))
 
-    suspend fun subagentList(connection: DshConnection, parentSessionId: String): DshSubagentCatalog =
-        decode(
-            callValue(
-                connection,
-                "subagents/list",
-                buildJsonObject { put("parentSessionId", parentSessionId) },
-            ),
-        )
-
     suspend fun subagentPrompt(
         connection: DshConnection,
         parentSessionId: String,
@@ -861,9 +711,6 @@ class DshApiClient(
             },
         ),
     )
-
-    suspend fun systemPromptList(connection: DshConnection): DshSystemPromptListValue =
-        decode(callValue(connection, "systemPrompt/list"))
 
     /** Answer one `approval/request` waterfall on `$events/result`. */
     suspend fun answerApproval(

@@ -54,11 +54,10 @@ class SessionRowMenuActionsTest {
     }
 
     @Test
-    fun `dsh session menu includes rehome and hides delete`() {
+    fun `dsh session menu keeps rename and archive only`() {
         assertEquals(
             listOf(
                 SessionRowMenuAction.RENAME,
-                SessionRowMenuAction.REHOME,
                 SessionRowMenuAction.ARCHIVE,
             ),
             sessionRowMenuActions(
@@ -67,7 +66,6 @@ class SessionRowMenuActionsTest {
                 supportsArchive = true,
                 supportsRestore = true,
                 supportsDelete = false,
-                supportsRehome = true,
             ),
         )
     }

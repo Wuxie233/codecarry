@@ -1,6 +1,5 @@
 package dev.wuxie233.codecarry.data.dsh
 
-import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -155,13 +154,6 @@ data class DshRenameValue(
 )
 
 @Serializable
-data class DshRehomeValue(
-    val workspaceId: String,
-    val path: String,
-    val cwd: String,
-)
-
-@Serializable
 data class DshForkValue(
     val sessionId: String,
 )
@@ -294,24 +286,6 @@ data class DshSkillCatalogValue(
 )
 
 @Serializable
-data class DshGitBranchView(
-    val name: String,
-    val current: Boolean,
-    val remote: Boolean,
-)
-
-@Serializable
-data class DshSessionGitView(
-    val currentBranch: String,
-    val detached: Boolean,
-    val worktreePath: String,
-    val isolated: Boolean,
-    val dirtyCount: Int,
-    val unpushedCount: Int,
-    val branches: List<DshGitBranchView> = emptyList(),
-)
-
-@Serializable
 data class DshAgentPresetEntry(
     val id: String,
     val trust: String,
@@ -347,76 +321,6 @@ data class DshGoalRefValue(
 @Serializable
 data class DshGoalClearedValue(
     val cleared: Boolean = true,
-)
-
-@Serializable
-data class DshAutomationLocalAt(
-    val date: String,
-    val time: String,
-    @SerialName("time_zone") val timeZone: String,
-)
-
-@Serializable
-data class DshAutomationLocalClock(
-    val time: String,
-    @SerialName("time_zone") val timeZone: String,
-    val weekdays: List<Int>? = null,
-)
-
-@Serializable
-data class DshAutomationRuleView(
-    val id: String,
-    val name: String,
-    val enabled: Boolean,
-    val task: String,
-    val workspaceId: String,
-    val agentPreset: String? = null,
-    val permissionPreset: String? = null,
-    val onOverlap: String,
-    val selector: JsonElement? = null,
-    val scheduledAt: String,
-    val createdAt: String,
-    val updatedAt: String,
-    val state: String,
-    val nextAt: String,
-)
-
-@Serializable
-data class DshAutomationRunView(
-    val id: String,
-    val ruleId: String,
-    val sessionId: String? = null,
-    val startedAt: String,
-    val endedAt: String? = null,
-    val outcome: String,
-    val source: String? = null,
-    val errorCode: String? = null,
-)
-
-@Serializable
-data class DshAutomationListValue(
-    val items: List<DshAutomationRuleView> = emptyList(),
-)
-
-@Serializable
-data class DshAutomationRuleValue(
-    val rule: DshAutomationRuleView,
-)
-
-@Serializable
-data class DshAutomationDeleteValue(
-    val id: String,
-    val deleted: Boolean,
-)
-
-@Serializable
-data class DshAutomationRunValue(
-    val run: DshAutomationRunView,
-)
-
-@Serializable
-data class DshAutomationRunsValue(
-    val items: List<DshAutomationRunView> = emptyList(),
 )
 
 @Serializable
@@ -472,38 +376,8 @@ data class DshLlmModelsValue(
 )
 
 @Serializable
-data class DshSubagentChild(
-    val kind: String,
-    val id: String,
-    val activity: String? = null,
-    val hasChildren: Boolean? = null,
-    val mode: String? = null,
-    val label: String? = null,
-    val reason: String? = null,
-)
-
-@Serializable
-data class DshSubagentCatalog(
-    val entries: List<DshSubagentChild> = emptyList(),
-    val parentAvailable: Boolean,
-)
-
-@Serializable
 data class DshSubagentPromptReceipt(
     val messageId: String,
-)
-
-@Serializable
-data class DshPromptSectionView(
-    val name: String,
-    val order: Double,
-    val text: String,
-    val complete: Boolean,
-)
-
-@Serializable
-data class DshSystemPromptListValue(
-    val sections: List<DshPromptSectionView> = emptyList(),
 )
 
 @Serializable

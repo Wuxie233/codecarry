@@ -92,17 +92,17 @@ class DshHostSurfacesViewModelTest {
 
     @Test
     fun `module failure isolates while other modules still publish`() = runTest(dispatcher) {
-        val harness = harness(failMethods = setOf("automation/list"))
+        val harness = harness(failMethods = setOf("llm/listProviders"))
         val vm = harness.vm
 
-        val state = vm.uiState.first { it.presets.data != null && it.settings.data != null && it.models.data != null }
+        val state = vm.uiState.first { it.providers.error != null && it.presets.data != null && it.settings.data != null && it.models.data != null }
 
-        assertNotNull(state.automation.error)
-        assertNull(state.automation.data)
+        assertNotNull(state.providers.error)
+        assertNull(state.providers.data)
         assertNull(state.presets.error)
         assertNull(state.settings.error)
         assertNull(state.models.error)
-        assertTrue(harness.host.requests.bodies("automation/list").isNotEmpty())
+        assertTrue(harness.host.requests.bodies("llm/listProviders").isNotEmpty())
     }
 
     @Test
@@ -123,71 +123,71 @@ class DshHostSurfacesViewModelTest {
 
     @Test
     fun `per-module retry reloads only the failed module`() = runTest(dispatcher) {
-        val harness = harness(failMethods = setOf("automation/list"))
+        val harness = harness(failMethods = setOf("llm/listProviders"))
         val vm = harness.vm
-        vm.uiState.first { it.automation.error != null }
+        vm.uiState.first { it.providers.error != null }
 
         harness.host.failMethods.clear()
-        vm.retry(DshHostModule.AUTOMATION)
-        val recovered = vm.uiState.first { it.automation.data != null }
+        vm.retry(DshHostModule.PROVIDERS)
+        val recovered = vm.uiState.first { it.providers.data != null }
 
-        assertNull(recovered.automation.error)
+        assertNull(recovered.providers.error)
         assertEquals(1, harness.host.requests.requestCount("settings/describe"))
         assertEquals(1, harness.host.requests.requestCount("session/list"))
-        assertEquals(1, harness.host.requests.requestCount("llm/listProviders"))
-        assertEquals(2, harness.host.requests.requestCount("automation/list"))
+        assertEquals(1, harness.host.requests.requestCount("session/modelCatalog"))
+        assertEquals(2, harness.host.requests.requestCount("llm/listProviders"))
     }
 
     @Test
     fun `failed refresh keeps already-obtained module data`() = runTest(dispatcher) {
         val harness = harness()
         val vm = harness.vm
-        val loaded = vm.uiState.first { it.automation.data != null }
+        val loaded = vm.uiState.first { it.providers.data != null }
 
-        harness.host.failMethods += "automation/list"
+        harness.host.failMethods += "llm/listProviders"
         vm.refresh()
-        val state = vm.uiState.first { it.automation.error != null }
+        val state = vm.uiState.first { it.providers.error != null }
 
-        assertEquals(loaded.automation.data, state.automation.data)
-        assertFalse(state.automation.loading)
+        assertEquals(loaded.providers.data, state.providers.data)
+        assertFalse(state.providers.loading)
     }
 
     @Test
     fun `cancelling an in-flight module load never publishes an error`() = runTest(dispatcher) {
-        val harness = harness(stallFirstMethods = setOf("directoryPicker/list"))
+        val harness = harness(stallFirstMethods = setOf("session/modelCatalog"))
         val vm = harness.vm
         runCurrent()
-        vm.uiState.first { it.directory.loading }
+        vm.uiState.first { it.models.loading }
 
         // A retry cancels the stalled request; cancellation must not surface
         // as a module error.
-        vm.retry(DshHostModule.DIRECTORY)
+        vm.retry(DshHostModule.MODELS)
         harness.host.stallGate.complete(Unit)
 
-        val state = vm.uiState.first { it.directory.data != null }
-        assertNull(state.directory.error)
+        val state = vm.uiState.first { it.models.data != null }
+        assertNull(state.models.error)
     }
 
     @Test
     fun `result from an obsolete connection generation is dropped`() = runTest(dispatcher) {
-        val harness = harness(stallFirstMethods = setOf("automation/list"))
+        val harness = harness(stallFirstMethods = setOf("llm/listProviders"))
         val vm = harness.vm
         runCurrent()
-        vm.uiState.first { it.automation.loading }
+        vm.uiState.first { it.providers.loading }
 
         // A generation transition (disconnect) mid-flight fences the result.
         harness.manager.disconnect(harness.serverId)
         harness.host.stallGate.complete(Unit)
         runCurrent()
 
-        val state = vm.uiState.first { !it.automation.loading }
-        assertNull(state.automation.data)
-        assertNull(state.automation.error)
+        val state = vm.uiState.first { !it.providers.loading }
+        assertNull(state.providers.data)
+        assertNull(state.providers.error)
 
         // The module is not stuck: a retry publishes again.
-        vm.retry(DshHostModule.AUTOMATION)
-        val recovered = vm.uiState.first { it.automation.data != null }
-        assertNull(recovered.automation.error)
+        vm.retry(DshHostModule.PROVIDERS)
+        val recovered = vm.uiState.first { it.providers.data != null }
+        assertNull(recovered.providers.error)
     }
 
     // ---------- #45: session-scoped skills entry ----------
@@ -331,49 +331,6 @@ class DshHostSurfacesViewModelTest {
     }
 
     @Test
-    fun `subagent operations inherit the selected parent session`() = runTest(dispatcher) {
-        val harness = harness()
-        val vm = harness.vm
-        vm.uiState.first { it.sessions.data != null }
-        vm.selectSession("ses_a")
-        vm.uiState.first { it.skills.data != null }
-
-        vm.loadSubagents()
-        vm.uiState.first { it.subagents.data != null }
-
-        vm.promptSubagent("child-1", "continue")
-        vm.interruptSubagent("child-1")
-        vm.uiState.first { harness.host.requests.bodies("subagents/interruptByParent").isNotEmpty() }
-
-        // Both actions reload the catalog after their receipt.
-        assertTrue(harness.host.requests.bodies("subagents/list").first().contains("\"parentSessionId\":\"ses_a\""))
-        val promptBody = harness.host.requests.single("subagents/prompt")
-        assertTrue(promptBody.contains("\"parentSessionId\":\"ses_a\""))
-        assertTrue(promptBody.contains("\"childSessionId\":\"child-1\""))
-        assertTrue(promptBody.contains("\"delivery\":\"queue\""))
-        val interruptBody = harness.host.requests.single("subagents/interruptByParent")
-        assertTrue(interruptBody.contains("\"parentSessionId\":\"ses_a\""))
-        assertTrue(interruptBody.contains("\"childSessionId\":\"child-1\""))
-    }
-
-    @Test
-    fun `subagent send uses busy child status instead of idle parent`() = runTest(dispatcher) {
-        val harness = harness(sessionsValue = """{"items":[
-            {"sessionId":"ses_a","updatedAt":10,"running":false,"blank":false},
-            {"sessionId":"child-1","updatedAt":11,"running":true,"blank":false,"origin":"subagent","parentSessionId":"ses_a"}
-        ]}""")
-        val vm = harness.vm
-        vm.uiState.first { it.sessions.data != null }
-        vm.selectSession("ses_a")
-        vm.uiState.first { it.skills.data != null }
-
-        vm.promptSubagent("child-1", "continue")
-        vm.uiState.first { harness.host.requests.bodies("subagents/prompt").isNotEmpty() }
-
-        assertTrue(harness.host.requests.single("subagents/prompt").contains("\"delivery\":\"steer\""))
-    }
-
-    @Test
     fun `settings form parses simple fields and submits typed set ops`() = runTest(dispatcher) {
         val harness = harness()
         val vm = harness.vm
@@ -511,19 +468,12 @@ class DshHostSurfacesViewModelTest {
             "session/list" -> sessionsValue
             "skills/list" -> skillsValue
             "agentPresets/list" -> """{"presets":[{"id":"coder","trust":"system","isDefault":true}],"authorable":false}"""
-            "automation/list" -> AUTOMATION
             "settings/describe" -> SETTINGS_DESCRIBE
             "settings/mutate" -> MUTATED
             "llm/listProviders" -> """[{"id":"deepseek-official","name":"DeepSeek"}]"""
             "session/modelCatalog" -> MODEL_CATALOG
-            "systemPrompt/list" -> """{"sections":[{"name":"harness:identity","order":0,"text":"hi","complete":false}]}"""
-            "git/describe" -> GIT
-            "directoryPicker/list" -> DIRECTORY
             "agentPresets/select" -> """"coder""""
             "goals/create" -> """{"ref":{"id":"g1","revision":1}}"""
-            "subagents/list" -> SUBAGENTS
-            "subagents/prompt" -> """{"messageId":"m-1"}"""
-            "subagents/interruptByParent" -> """{"accepted":true}"""
             else -> error(method)
         }
     }
@@ -619,9 +569,6 @@ class DshHostSurfacesViewModelTest {
 
         private const val SKILLS = """{"skills":[{"name":"commit-helper","description":"Git","modelInvocable":true}]}"""
 
-        private const val AUTOMATION =
-            """{"items":[{"id":"auto-1","name":"nightly","enabled":true,"task":"check","workspaceId":"w1","onOverlap":"skip","selector":{},"scheduledAt":"t","createdAt":"t","updatedAt":"t","state":"scheduled","nextAt":"t"}]}"""
-
         private const val SETTINGS_DESCRIBE =
             """{"writable":true,"hasDocument":false,"namespaces":[{"ns":"llm-deepseek","schema":{"type":"object","properties":{"model":{"type":"string"},"maxTokens":{"type":"integer"},"verbose":{"type":"boolean"},"nested":{"type":"object"}}},"value":{"model":"v3","maxTokens":5,"verbose":false},"applies":"live","secrets":[],"revision":3}]}"""
 
@@ -630,14 +577,5 @@ class DshHostSurfacesViewModelTest {
 
         private const val MODEL_CATALOG =
             """{"default":{"provider":"deepseek-official","model":"deepseek-v4-flash"},"routableProviders":["deepseek-official"],"groups":[{"id":"deepseek-official","name":"DeepSeek","models":[{"id":"v3","name":"V3"}]}],"failures":[]}"""
-
-        private const val GIT =
-            """{"currentBranch":"main","detached":false,"worktreePath":"/tmp","isolated":false,"dirtyCount":0,"unpushedCount":0,"branches":[]}"""
-
-        private const val DIRECTORY =
-            """{"path":"/tmp","home":"/root","crumbs":[],"entries":[],"truncated":false}"""
-
-        private const val SUBAGENTS =
-            """{"entries":[{"kind":"child","id":"child-1","mode":"continuable","activity":"inactive","hasChildren":false,"label":"worker"}],"parentAvailable":true}"""
     }
 }
