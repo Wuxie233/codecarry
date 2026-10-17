@@ -26,6 +26,30 @@ class DshHostSurfacesTest {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
     @Test
+    fun `removed host methods are absent from every connection catalog and loopback fence`() {
+        val removed = setOf(
+            "session/rehome", "session/rewrite", "workspace/addFolder", "workspace/removeFolder",
+            "git/describe", "git/checkout", "git/createBranch", "systemPrompt/list",
+            "agentPresets/copy", "agentPresets/deletePreset", "subagents/list",
+            "settings/canOpenAgentPresetDirectory", "settings/openAgentPresetDirectory",
+        )
+        val connections = listOf(
+            DshConnection.from("http://127.0.0.1:3080"),
+            DshConnection.from("http://192.168.1.8:3080"),
+            DshConnection.from("https://example.com", "secret"),
+        )
+        val methodSets = listOf(DshMethods.unary.toSet(), DshRpc.LOOPBACK_ONLY_METHODS) +
+            connections.flatMap { connection ->
+                val catalog = dshHostSurfaceCatalog(connection)
+                listOf(catalog.availableMethods, catalog.loopbackOnlyHidden)
+            }
+        methodSets.forEach { methods ->
+            assertTrue("Removed methods remain: ${methods.intersect(removed)}", methods.intersect(removed).isEmpty())
+            assertFalse(methods.any { it.startsWith("automation/") })
+        }
+    }
+
+    @Test
     fun `non-loopback catalog hides locked methods and keeps remaining unary surfaces`() {
         val catalog = dshHostSurfaceCatalog(DshConnection.from("http://192.168.1.8:3080"))
         assertFalse(catalog.isLoopback)
@@ -34,10 +58,10 @@ class DshHostSurfacesTest {
             assertTrue(method, method in catalog.loopbackOnlyHidden)
         }
         listOf(
-            "workspace/create", "skills/list", "git/describe",
-            "agentPresets/list", "agentPresets/select", "goals/create", "automation/list",
+            "workspace/create", "skills/list",
+            "agentPresets/list", "agentPresets/select", "goals/create",
             "settings/describe", "settings/mutate", "llm/listProviders", "session/modelCatalog",
-            "subagents/list", "systemPrompt/list", "directoryPicker/list", "directoryPicker/createDirectory",
+            "directoryPicker/list", "directoryPicker/createDirectory",
         ).forEach { method -> assertTrue(method, catalog.can(method)) }
         assertTrue(catalog.canManageWorkspaces)
         assertTrue(catalog.canBrowseHost)
@@ -79,11 +103,9 @@ class DshHostSurfacesTest {
         assertEquals("s1", controller.sessionList().items.single().sessionId)
         assertEquals("/tmp", controller.listDirectory().path)
         assertEquals("/tmp/new", controller.createDirectory("/tmp", "new").path)
-        assertEquals("main", controller.gitDescribe().currentBranch)
         assertEquals("coder", controller.agentPresetList().presets.single().id)
         assertEquals("coder", controller.agentPresetSelect("s1", "coder").agentPreset)
         assertEquals("g1", controller.goalCreate("s1", "ship").ref.id)
-        assertEquals("auto-1", controller.automationList().items.single().id)
         assertEquals("llm-deepseek", controller.settingsDescribe().namespaces.single().ns)
         val mutated = controller.settingsMutate(
             "llm-deepseek",
@@ -99,20 +121,18 @@ class DshHostSurfacesTest {
         assertEquals(4L, mutated.revision)
         assertEquals("deepseek-official", controller.llmProviders().providers.single().id)
         assertEquals("v3", controller.llmModels().groups.single().models.single().id)
-        assertEquals("child-1", controller.subagentList("s1").entries.single().id)
         assertEquals("m-1", controller.subagentPrompt("s1", "child-1", "continue").messageId)
         assertTrue(controller.subagentInterrupt("s1", "child-1").accepted)
-        assertEquals("harness:identity", controller.systemPromptList().sections.single().name)
 
         assertTrue(
             captured.containsAll(
                 listOf(
                     "session/list",
                     "workspace/create", "directoryPicker/list", "directoryPicker/createDirectory",
-                    "git/describe", "agentPresets/list", "agentPresets/select",
-                    "goals/create", "automation/list", "settings/describe", "settings/mutate",
-                    "llm/listProviders", "session/modelCatalog", "subagents/list", "subagents/prompt",
-                    "subagents/interruptByParent", "systemPrompt/list",
+                    "agentPresets/list", "agentPresets/select",
+                    "goals/create", "settings/describe", "settings/mutate",
+                    "llm/listProviders", "session/modelCatalog", "subagents/prompt",
+                    "subagents/interruptByParent",
                 ),
             ),
         )
@@ -176,19 +196,15 @@ class DshHostSurfacesTest {
             "directoryPicker/list" -> """{"path":"/tmp","home":"/root","crumbs":[],"entries":[],"truncated":false}"""
             "directoryPicker/createDirectory" -> """{"path":"/tmp/new"}"""
             "skills/list" -> """{"skills":[{"name":"commit-helper","description":"Git","modelInvocable":true}]}"""
-            "git/describe" -> """{"currentBranch":"main","detached":false,"worktreePath":"/tmp","isolated":false,"dirtyCount":0,"unpushedCount":0,"branches":[]}"""
             "agentPresets/list" -> """{"presets":[{"id":"coder","trust":"system","isDefault":true}],"authorable":false}"""
             "agentPresets/select" -> """"coder""""
             "goals/create" -> """{"ref":{"id":"g1","revision":1}}"""
-            "automation/list" -> """{"items":[{"id":"auto-1","name":"nightly","enabled":true,"task":"check","workspaceId":"w1","onOverlap":"skip","selector":{},"scheduledAt":"t","createdAt":"t","updatedAt":"t","state":"scheduled","nextAt":"t"}]}"""
             "settings/describe" -> """{"writable":true,"hasDocument":false,"namespaces":[{"ns":"llm-deepseek","schema":{},"value":{},"applies":"live","secrets":[],"revision":3}]}"""
             "settings/mutate" -> """{"ns":"llm-deepseek","schema":{},"value":{},"applies":"live","secrets":[],"revision":4}"""
             "llm/listProviders" -> """[{"id":"deepseek-official","name":"DeepSeek"}]"""
             "session/modelCatalog" -> """{"default":{"provider":"deepseek-official","model":"deepseek-v4-flash"},"routableProviders":["deepseek-official"],"groups":[{"id":"deepseek-official","name":"DeepSeek","models":[{"id":"v3","name":"V3"}]}],"failures":[]}"""
-            "subagents/list" -> """{"entries":[{"kind":"child","id":"child-1","mode":"continuable","activity":"inactive","hasChildren":false,"label":"worker"}],"parentAvailable":true}"""
             "subagents/prompt" -> """{"messageId":"m-1"}"""
             "subagents/interruptByParent" -> """{"accepted":true}"""
-            "systemPrompt/list" -> """{"sections":[{"name":"harness:identity","order":0,"text":"hi","complete":false}]}"""
             else -> error(method)
         }
         return """{"type":"server-response","rpcId":"$rpcId","result":{"ok":true,"value":$value}}"""

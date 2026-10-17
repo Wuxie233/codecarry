@@ -136,7 +136,6 @@ data class SessionListUiState(
     val supportsDirectorySearch: Boolean = true,
     val supportsDirectoryCreation: Boolean = true,
     val supportsMcp: Boolean = true,
-    val supportsRehome: Boolean = false,
     val supportsNoRepoCreate: Boolean = false,
     val isDsh: Boolean = false,
 )
@@ -437,7 +436,6 @@ sealed interface SessionListOperation {
     data class Restore(val sessionId: String) : SessionListOperation
     data class Delete(val sessionId: String) : SessionListOperation
     data class DeleteSelected(val sessionIds: Set<String>) : SessionListOperation
-    data class Rehome(val sessionId: String, val path: String) : SessionListOperation
     data object Refresh : SessionListOperation
 }
 
@@ -804,7 +802,6 @@ class SessionListViewModel @Inject constructor(
             supportsDirectorySearch = !isDsh,
             supportsDirectoryCreation = true,
             supportsMcp = !isDsh,
-            supportsRehome = isDsh,
             supportsNoRepoCreate = isDsh,
             isDsh = isDsh,
         )
@@ -1087,23 +1084,6 @@ class SessionListViewModel @Inject constructor(
         }
     }
 
-    fun rehomeSession(sessionId: String, path: String) {
-        if (!isDsh) return
-        val operation = SessionListOperation.Rehome(sessionId, path)
-        if (!beginOperation(operation)) return
-        viewModelScope.launch {
-            try {
-                dshApi.sessionRehome(dshConn, sessionId, path)
-                loadSessions()
-            } catch (e: Exception) {
-                logErrorCompat(TAG, "Failed to rehome session $sessionId", e)
-                reportOperationFailure(operation, "Failed to move session", e)
-            } finally {
-                endOperation()
-            }
-        }
-    }
-
     fun renameSession(sessionId: String, newTitle: String) {
         val operation = SessionListOperation.Rename(sessionId, newTitle)
         if (!beginOperation(operation)) return
@@ -1346,7 +1326,6 @@ class SessionListViewModel @Inject constructor(
             is SessionListOperation.Restore -> restoreSession(operation.sessionId)
             is SessionListOperation.Delete -> deleteSession(operation.sessionId)
             is SessionListOperation.DeleteSelected -> deleteSessions(operation.sessionIds)
-            is SessionListOperation.Rehome -> rehomeSession(operation.sessionId, operation.path)
             SessionListOperation.Refresh -> loadSessions()
         }
     }

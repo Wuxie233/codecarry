@@ -16,15 +16,11 @@ data class DshHostSurfaceCatalog(
     val canBrowseHost: Boolean get() = can("directoryPicker/list") && can("directoryPicker/createDirectory")
     val canManageWorkspaces: Boolean get() = can("workspace/create")
     val canListSkills: Boolean get() = can("skills/list")
-    val canDescribeGit: Boolean get() = can("git/describe")
     val canListPresets: Boolean get() = can("agentPresets/list")
     val canSelectPreset: Boolean get() = can("agentPresets/select")
     val canManageGoals: Boolean get() = can("goals/create")
-    val canManageAutomation: Boolean get() = can("automation/list")
     val canMutateSettings: Boolean get() = can("settings/describe") && can("settings/mutate")
     val canListLlm: Boolean get() = can("llm/listProviders") && can("session/modelCatalog")
-    val canListSubagents: Boolean get() = can("subagents/list")
-    val canListSystemPrompt: Boolean get() = can("systemPrompt/list")
 }
 
 fun dshHostSurfaceCatalog(connection: DshConnection): DshHostSurfaceCatalog {
@@ -77,16 +73,6 @@ class DshHostSurfaceController(
         return client.workspaceShow(connection, workspaceId)
     }
 
-    suspend fun addWorkspaceFolder(workspaceId: String, path: String): DshWorkspaceValue {
-        requireMethod("workspace/addFolder")
-        return client.workspaceAddFolder(connection, workspaceId, path)
-    }
-
-    suspend fun removeWorkspaceFolder(workspaceId: String, path: String): DshWorkspaceValue {
-        requireMethod("workspace/removeFolder")
-        return client.workspaceRemoveFolder(connection, workspaceId, path)
-    }
-
     suspend fun listDirectory(path: String? = null): DshDirectoryListing {
         requireMethod("directoryPicker/list")
         return client.hostListDirectory(connection, path)
@@ -100,21 +86,6 @@ class DshHostSurfaceController(
     suspend fun skillList(sessionId: String): DshSkillListValue {
         requireMethod("skills/list")
         return client.skillList(connection, sessionId)
-    }
-
-    suspend fun gitDescribe(sessionId: String? = null, workspaceId: String? = null): DshSessionGitView {
-        requireMethod("git/describe")
-        return client.gitDescribe(connection, sessionId, workspaceId)
-    }
-
-    suspend fun gitCheckout(sessionId: String, branch: String): DshSessionGitView {
-        requireMethod("git/checkout")
-        return client.gitCheckout(connection, sessionId, branch)
-    }
-
-    suspend fun gitCreateBranch(sessionId: String, branch: String): DshSessionGitView {
-        requireMethod("git/createBranch")
-        return client.gitCreateBranch(connection, sessionId, branch)
     }
 
     suspend fun agentPresetList(): DshAgentPresetListValue {
@@ -150,26 +121,6 @@ class DshHostSurfaceController(
     suspend fun goalClear(sessionId: String, ref: DshGoalRef): DshGoalClearedValue {
         requireMethod("goals/clear")
         return client.goalClear(connection, sessionId, ref)
-    }
-
-    suspend fun automationList(): DshAutomationListValue {
-        requireMethod("automation/list")
-        return client.automationList(connection)
-    }
-
-    suspend fun automationCreate(payload: JsonObject): DshAutomationRuleValue {
-        requireMethod("automation/create")
-        return client.automationCreate(connection, payload)
-    }
-
-    suspend fun automationSetEnabled(id: String, enabled: Boolean): DshAutomationRuleValue {
-        requireMethod("automation/setEnabled")
-        return client.automationSetEnabled(connection, id, enabled)
-    }
-
-    suspend fun automationDelete(id: String): DshAutomationDeleteValue {
-        requireMethod("automation/delete")
-        return client.automationDelete(connection, id)
     }
 
     suspend fun settingsDescribe(): DshSettingsDescribeValue {
@@ -214,11 +165,6 @@ class DshHostSurfaceController(
         return client.llmModels(connection)
     }
 
-    suspend fun subagentList(parentSessionId: String): DshSubagentCatalog {
-        requireMethod("subagents/list")
-        return client.subagentList(connection, parentSessionId)
-    }
-
     suspend fun subagentPrompt(
         parentSessionId: String,
         childSessionId: String,
@@ -243,11 +189,6 @@ class DshHostSurfaceController(
     suspend fun subagentInterrupt(parentSessionId: String, childSessionId: String): DshAcceptedValue {
         requireMethod("subagents/interruptByParent")
         return client.subagentInterrupt(connection, parentSessionId, childSessionId)
-    }
-
-    suspend fun systemPromptList(): DshSystemPromptListValue {
-        requireMethod("systemPrompt/list")
-        return client.systemPromptList(connection)
     }
 
     private fun requireMethod(method: String) {
