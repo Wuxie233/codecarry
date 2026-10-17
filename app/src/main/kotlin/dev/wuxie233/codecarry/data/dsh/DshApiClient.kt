@@ -563,6 +563,26 @@ class DshApiClient(
             ),
         )
 
+    suspend fun commandList(connection: DshConnection, agentId: String): List<DshCommandDescriptor> =
+        decode(callValue(connection, "commands/list", buildJsonObject { put("agentId", agentId) }))
+
+    suspend fun commandExecute(
+        connection: DshConnection,
+        agentId: String,
+        line: String,
+        submittedAttachments: JsonArray = JsonArray(emptyList()),
+    ): DshCommandExecution? {
+        val response = call(connection, "commands/execute", buildJsonObject {
+            put("agentId", agentId)
+            put("line", line)
+            put("submittedAttachments", submittedAttachments)
+        })
+        if (!response.result.ok) {
+            throw DshRpcException(response.rpcId, response.result.error ?: DshRpcError("internal", "missing error"))
+        }
+        return response.result.value?.let { decode<DshCommandExecution?>(it) }
+    }
+
     suspend fun skillList(connection: DshConnection, sessionId: String): DshSkillListValue =
         decode(
             callValue(

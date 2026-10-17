@@ -1214,6 +1214,7 @@ fun ChatScreen(
 
     val filePreview by viewModel.filePreview.collectAsState()
     val dshPresets by viewModel.dshPresets.collectAsState()
+    val dshSkills by viewModel.dshSkills.collectAsState()
     val draftText by viewModel.draftText.collectAsState()
     val draftAttachmentUris by viewModel.draftAttachmentUris.collectAsState()
     var inputText by remember { mutableStateOf(TextFieldValue("")) }
@@ -2331,6 +2332,8 @@ fun ChatScreen(
                 variantNames = if (uiState.supportsThinkingSelection) uiState.variantNames else emptyList(),
                 selectedVariant = uiState.selectedVariant,
                 onVariantClick = { if (!dshPresets.selecting) showVariantPicker = true },
+                dshSkills = if (uiState.isDsh) dshSkills else null,
+                onDshSkillsRetry = viewModel::refreshDshSkills,
                 commands = if (uiState.supportsCommands) uiState.commands else emptyList(),
                 fileSearchResults = fileSearchResults,
                 confirmedFilePaths = confirmedFilePaths,
@@ -7249,6 +7252,8 @@ private fun ChatInputBar(
     variantNames: List<String> = emptyList(),
     selectedVariant: String? = null,
     onVariantClick: () -> Unit = {},
+    dshSkills: DshSkillCandidateState? = null,
+    onDshSkillsRetry: () -> Unit = {},
     commands: List<CommandInfo> = emptyList(),
     fileSearchResults: List<String> = emptyList(),
     confirmedFilePaths: Set<String> = emptySet(),
@@ -7299,7 +7304,7 @@ private fun ChatInputBar(
     }
 
     // Slash command suggestions
-    val showSlashSuggestions = !isShellMode && text.startsWith("/") && !text.contains(" ")
+    val showSlashSuggestions = dshSkills == null && !isShellMode && text.startsWith("/") && !text.contains(" ")
     val slashQuery = if (showSlashSuggestions) text.removePrefix("/").lowercase() else ""
     val filteredCommands = if (showSlashSuggestions) {
         allCommands.filter { cmd ->
@@ -7321,6 +7326,10 @@ private fun ChatInputBar(
             color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
             thickness = 0.5.dp
         )
+
+        if (dshSkills != null) {
+            DshSkillCandidates(textFieldValue, dshSkills, onTextFieldValueChange, onDshSkillsRetry)
+        }
 
         // Slash command suggestions popup (scrollable, max 40% screen height)
         AnimatedVisibility(

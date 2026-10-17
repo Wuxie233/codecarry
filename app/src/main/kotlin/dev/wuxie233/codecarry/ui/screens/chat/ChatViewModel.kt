@@ -72,6 +72,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -329,6 +331,9 @@ class ChatViewModel @Inject constructor(
     private val _dshPresets = MutableStateFlow(DshChatPresetState())
     val dshPresets: StateFlow<DshChatPresetState> = _dshPresets
     private var dshPresetLoadJob: Job? = null
+    private val _dshSkills = MutableStateFlow(DshSkillCandidateState())
+    val dshSkills: StateFlow<DshSkillCandidateState> = _dshSkills
+    private var dshSkillLoadJob: Job? = null
     private var dshSessionLoadJob: Job? = null
     private var dshModelCatalogDefault: DshModelSelection? = null
     private var dshModelCatalogGeneration: Long? = null
@@ -761,12 +766,15 @@ class ChatViewModel @Inject constructor(
                     // A known conversation can recover without waiting for the catalog RPC.
                     startDshFollow()
                     refreshDshPresets()
+                    refreshDshSkills()
                     dshSessionLoadJob?.cancel()
                     dshSessionLoadJob = launch { loadDshSession() }
                 } else {
                     dshFollowJob?.cancel()
                     dshSessionLoadJob?.cancel()
                     dshPresetLoadJob?.cancel()
+                    dshSkillLoadJob?.cancel()
+                    _dshSkills.value = DshSkillCandidateState()
                     _dshPresets.update { it.copy(loading = false, presets = emptyList()) }
                 }
             }
@@ -984,6 +992,36 @@ class ChatViewModel @Inject constructor(
         val prefix = "dsh-attachment:"
         if (url.isNullOrBlank() || !url.startsWith(prefix)) return null
         return url.removePrefix(prefix).takeIf { it.isNotBlank() }
+    }
+
+    fun refreshDshSkills() {
+        if (!isDsh) return
+        dshSkillLoadJob?.cancel()
+        val connection = dshConnectionManager.states.value[serverId]
+        if (sessionId.isBlank() || connection?.isReady != true) {
+            _dshSkills.value = DshSkillCandidateState()
+            return
+        }
+        fun isCurrent() = dshConnectionManager.states.value[serverId]?.let {
+            it.isReady && it.generation == connection.generation
+        } == true
+        _dshSkills.value = DshSkillCandidateState(available = true, loading = true)
+        dshSkillLoadJob = viewModelScope.launch {
+            try {
+                val skills = withContext(Dispatchers.IO) {
+                    kotlinx.coroutines.withTimeout(15_000) { dshApi.skillList(dshConn, sessionId).skills }
+                }
+                if (isCurrent()) {
+                    _dshSkills.value = DshSkillCandidateState(available = true, skills = skills)
+                }
+            } catch (error: kotlinx.coroutines.TimeoutCancellationException) {
+                if (isCurrent()) _dshSkills.value = DshSkillCandidateState(available = true, failed = true)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                if (isCurrent()) _dshSkills.value = DshSkillCandidateState(available = true, failed = true)
+            }
+        }
     }
 
     fun refreshDshPresets() {

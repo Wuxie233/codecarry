@@ -29,6 +29,37 @@ class DshApiClientTest {
     private val connection = DshConnection.from("http://192.168.1.8:3080")
 
     @Test
+    fun `command methods use agent arguments and decode host outcomes`() = runTest {
+        val captured = mutableListOf<HttpRequestData>()
+        var outcome = """{"commandId":"cmd-1","result":{"kind":"success","sourceEventSeq":42}}"""
+        val client = api(captured) { request ->
+            val envelope = json.parseToJsonElement((request.body as TextContent).text).jsonObject
+            val method = envelope.getValue("method").jsonPrimitive.content
+            val args = envelope.getValue("payload").jsonObject.getValue("args").jsonObject
+            assertEquals("child-1", args.getValue("agentId").jsonPrimitive.content)
+            val value = if (method == "commands/list") {
+                assertEquals(setOf("agentId"), args.keys)
+                """[{"name":"compact","description":"Compact history","definitionId":"compact-v1","input":{"hint":"Instructions","attachments":true}}]"""
+            } else {
+                assertEquals("commands/execute", method)
+                assertEquals(setOf("agentId", "line", "submittedAttachments"), args.keys)
+                assertEquals("/compact", args.getValue("line").jsonPrimitive.content)
+                assertEquals("[]", args.getValue("submittedAttachments").toString())
+                outcome
+            }
+            """{"type":"server-response","rpcId":"${envelope.getValue("rpcId").jsonPrimitive.content}","result":{"ok":true,"value":$value}}"""
+        }
+        assertEquals("compact", client.commandList(connection, "child-1").single().name)
+        assertEquals("/api/commands/list", captured.last().url.encodedPath)
+        assertEquals(42L, client.commandExecute(connection, "child-1", "/compact")?.result?.sourceEventSeq)
+        assertEquals("/api/commands/execute", captured.last().url.encodedPath)
+        outcome = """{"commandId":"cmd-2","result":{"kind":"error","text":"Busy"}}"""
+        assertEquals("Busy", client.commandExecute(connection, "child-1", "/compact")?.result?.text)
+        outcome = "null"
+        assertNull(client.commandExecute(connection, "child-1", "/compact"))
+    }
+
+    @Test
     fun `preset roster matches the host path free list contract`() = runTest {
         val captured = mutableListOf<HttpRequestData>()
         val client = api(captured) { request ->

@@ -36,6 +36,8 @@ object DshMethods {
         "workspace/addFolder",
         "workspace/removeFolder",
         "skills/list",
+        "commands/list",
+        "commands/execute",
         "git/describe",
         "git/checkout",
         "git/createBranch",
