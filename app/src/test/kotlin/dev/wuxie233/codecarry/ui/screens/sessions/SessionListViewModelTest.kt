@@ -807,6 +807,27 @@ class SessionListViewModelTest {
     }
 
     @Test
+    fun `dsh overall list excludes child sessions including unknown parents`() = runTest(dispatcher) {
+        val captured = Collections.synchronizedList(mutableListOf<String>())
+        val manager = readyDshManager()
+        val vm = newSessionListViewModel(
+            dshApi = dshSessionApi(captured),
+            dshConnectionManager = manager,
+            savedStateHandle = dshSavedStateHandle(),
+        )
+        collectUiState(vm)
+        advanceUntilIoSettles { "session/list" in captured && !vm.uiState.value.isLoading }
+        manager.reducer("srv-session-list").applySessionList(listOf(
+            DshSessionSummary(sessionId = "parent", updatedAt = 1L, running = false, blank = false, cwd = "/repo"),
+            DshSessionSummary(sessionId = "child", updatedAt = 1L, running = false, blank = false, cwd = "/repo", origin = "subagent", parentSessionId = "parent"),
+            DshSessionSummary(sessionId = "orphan", updatedAt = 1L, running = false, blank = false, cwd = "/child-only", origin = "subagent"),
+        ))
+        runCurrent()
+        assertEquals(listOf("parent"), vm.uiState.value.groups.flatMap { it.sessions }.map { it.session.id })
+        assertTrue(vm.uiState.value.groups.all { it.subagentRowsByParent.values.all { rows -> rows.running.isEmpty() && rows.historical.isEmpty() } })
+    }
+
+    @Test
     fun `dsh pins wait for confirmation reject safely and exclude archived and child sessions`() = runTest(dispatcher) {
         val captured = Collections.synchronizedList(mutableListOf<String>())
         val manager = readyDshManager()
