@@ -8,4 +8,5 @@
     <string name="dsh_compact_body">较早的历史将替换为摘要，输入框中的草稿保持不变。</string>
     <string name="dsh_compact_confirm">压缩</string>
     <string name="dsh_command_not_executed">命令未执行</string>
+    <string name="dsh_compact_archived">已归档，先恢复会话</string>
 </resources>

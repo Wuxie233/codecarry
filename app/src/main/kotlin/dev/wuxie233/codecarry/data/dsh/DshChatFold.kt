@@ -302,13 +302,6 @@ class DshHistoryFolder {
     }
 }
 
-fun dshQueueItemText(item: DshQueuedInboxItem): String {
-    val content = (item.message as? JsonObject)?.arr("content") ?: return ""
-    return content.mapNotNull { block ->
-        (block as? JsonObject)?.takeIf { it.str("type") == "text" }?.str("text")
-    }.joinToString("").trim()
-}
-
 fun dshProjectionTitle(projections: Map<String, Pair<Long, JsonElement?>>): String? {
     val value = projections["title"]?.second ?: return null
     return (value as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }

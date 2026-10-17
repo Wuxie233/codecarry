@@ -75,7 +75,9 @@ internal class ChatConfirmationGate {
     fun release(value: String) { if (owner == value) owner = null }
 }
 
-internal val LocalChatConfirmationGate = staticCompositionLocalOf<ChatConfirmationGate?> { null }
+internal val LocalChatConfirmationGate = staticCompositionLocalOf<ChatConfirmationGate> {
+    error("ChatConfirmationGate must be provided by the chat owner")
+}
 
 /** Presentation only: the ViewModel owns the session catalog and its request lifetime. */
 @Composable
@@ -86,7 +88,7 @@ internal fun DshSkillCandidates(
     onRetry: () -> Unit,
     onCompact: () -> Unit = {},
 ) {
-    val gate = LocalChatConfirmationGate.current ?: remember { ChatConfirmationGate() }
+    val gate = LocalChatConfirmationGate.current
     DisposableEffect(gate) { onDispose { gate.release("compact") } }
     val target = dshSkillTarget(value)
     var dismissed by remember(value) { mutableStateOf(false) }

@@ -646,7 +646,9 @@ class SessionListViewModel @Inject constructor(
         val sessionsById = serverScopedSessions.associateBy { it.id }
         val (rootSessions, childSessions) = serverScopedSessions.partition { it.parentId == null }
         val childBuckets = childSessions.groupBy { it.parentId!! }
-        val baseStatuses = statuses
+        val baseStatuses = if (isDsh) dshState.sessions.mapValues { (_, snapshot) ->
+            if (snapshot.running && snapshot.agentAvailable) SessionStatus.Busy else SessionStatus.Idle
+        } else statuses
         val effectiveStatuses = baseStatuses.toMutableMap().apply {
             for (root in rootSessions) {
                 val childStatuses = childBuckets[root.id]

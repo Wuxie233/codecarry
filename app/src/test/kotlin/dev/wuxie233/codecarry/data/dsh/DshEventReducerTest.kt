@@ -60,8 +60,6 @@ class DshEventReducerTest {
         }
         val session = reducer.state.value.sessions.getValue("s1")
         assertEquals(1, session.events.size)
-        assertTrue(session.queue.isEmpty())
-        assertTrue(session.jobs.isEmpty())
         assertNull(session.error)
     }
 
@@ -154,13 +152,8 @@ class DshEventReducerTest {
     }
 
     @Test
-    fun `control baseline seeds projections and clears retired surfaces`() {
-        val reducer = DshEventReducer(DshEventState(sessions = mapOf(
-            "s1" to DshSessionSnapshot("s1",
-                queue = listOf(DshQueuedInboxItem("q", "queue", JsonObject(emptyMap()))),
-                jobs = listOf(DshJobView("j", "tool", "work", "running")),
-            ),
-        )))
+    fun `control baseline seeds projections`() {
+        val reducer = DshEventReducer()
         reducer.applyControlFrame(
             DshControlFrame.Baseline(
                 projections = mapOf(
@@ -172,8 +165,6 @@ class DshEventReducerTest {
             ),
         )
         val session = reducer.state.value.sessions.getValue("s1")
-        assertTrue(session.queue.isEmpty())
-        assertTrue(session.jobs.isEmpty())
         assertEquals("hello", (session.projections.getValue("title").second as? JsonPrimitive)?.content)
     }
 

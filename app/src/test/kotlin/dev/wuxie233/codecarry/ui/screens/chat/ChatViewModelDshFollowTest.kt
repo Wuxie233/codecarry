@@ -885,6 +885,32 @@ class ChatViewModelDshFollowTest {
         assertEquals("keep this", vm.draftText.value)
     }
 
+    @Test fun `archived compact reports recovery action and hides candidate until restored`() = runTest(dispatcher) {
+        val mux = FakeDownlink()
+        val unary = CopyOnWriteArrayList<String>()
+        val harness = dshHarness(mux, unary)
+        val vm = newViewModel(harness.client, harness.manager)
+        collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
+        harness.manager.connect(SERVER_ID, DshConnection.from("http://127.0.0.1:3080", token = "launch-token"))
+        runCurrent(); pushBaselines(mux)
+        harness.manager.states.first { it[SERVER_ID]?.isReady == true }
+        vm.dshSkills.first { it.commands.isNotEmpty() }
+        runCurrent()
+        assertTrue(vm.dshSkills.value.matchesCompact("co"))
+        val reducer = harness.manager.reducer(SERVER_ID)
+        reducer.applyWorkspaceFrame(dev.wuxie233.codecarry.data.dsh.DshWorkspaceFrame.Archived(listOf(SESSION_ID)))
+        runCurrent()
+        vm.compactDshSession()
+        runCurrent()
+        assertEquals("Archived. Restore the session first.", vm.uiState.value.error)
+        assertFalse(vm.dshSkills.value.matchesCompact("co"))
+        assertTrue(vm.dshSkills.value.matching("").isNotEmpty())
+        assertFalse(unary.any { it.contains("commands/execute") })
+        reducer.applyWorkspaceFrame(dev.wuxie233.codecarry.data.dsh.DshWorkspaceFrame.Archived(emptyList()))
+        runCurrent()
+        assertTrue(vm.dshSkills.value.matchesCompact("co"))
+    }
+
     @Test fun `rewind entry follows capability archive origin and current model surface`() = runTest(dispatcher) {
         val mux = FakeDownlink()
         val unary = CopyOnWriteArrayList<String>()

@@ -23,22 +23,6 @@ data class DshSessionEvent(
     val raw: JsonObject = JsonObject(emptyMap()),
 )
 
-data class DshQueuedInboxItem(
-    val id: String,
-    val placement: String,
-    val message: JsonElement,
-)
-
-data class DshJobView(
-    val id: String,
-    val kind: String,
-    val label: String,
-    val status: String,
-    val detail: String? = null,
-    val startedAt: Long = 0,
-    val finishedAt: Long? = null,
-)
-
 data class DshQuestionIntent(
     val kind: String,
     val approve: String? = null,

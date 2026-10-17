@@ -8,4 +8,5 @@
     <string name="dsh_compact_body">Earlier history will be replaced with a summary. Your draft stays unchanged.</string>
     <string name="dsh_compact_confirm">Compact</string>
     <string name="dsh_command_not_executed">Command not executed</string>
+    <string name="dsh_compact_archived">Archived. Restore the session first.</string>
 </resources>
