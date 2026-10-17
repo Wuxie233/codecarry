@@ -1,0 +1,12 @@
+<resources>
+    <string name="dsh_skills_loading">Loading skills…</string>
+    <string name="dsh_skills_failed">Could not load skills</string>
+    <string name="dsh_skills_retry">Retry</string>
+    <string name="dsh_skills_no_match">No matching skills</string>
+    <string name="dsh_compact_description">Compact conversation history</string>
+    <string name="dsh_compact_title">Compact this conversation?</string>
+    <string name="dsh_compact_body">Earlier history will be replaced with a summary. Your draft stays unchanged.</string>
+    <string name="dsh_compact_confirm">Compact</string>
+    <string name="dsh_command_not_executed">Command not executed</string>
+    <string name="dsh_compact_archived">Archived. Restore the session first.</string>
+</resources>

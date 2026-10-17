@@ -34,6 +34,8 @@ import dev.wuxie233.codecarry.data.dsh.DshConnectionManager
 import dev.wuxie233.codecarry.data.dsh.DshEventState
 import dev.wuxie233.codecarry.data.dsh.DshFollowFrame
 import dev.wuxie233.codecarry.data.dsh.DshGenerationStatus
+import dev.wuxie233.codecarry.data.dsh.submitPrompt
+import dev.wuxie233.codecarry.data.dsh.isDshSlashCommand
 import dev.wuxie233.codecarry.data.dsh.DshSessionAddress
 import dev.wuxie233.codecarry.data.dsh.historyAddress
 import dev.wuxie233.codecarry.data.dsh.connectDshConversation
@@ -44,9 +46,12 @@ import dev.wuxie233.codecarry.data.dsh.DshRpcResult
 import dev.wuxie233.codecarry.data.dsh.dshQuestionAnswer
 import dev.wuxie233.codecarry.data.dsh.dshMessageSeq
 import dev.wuxie233.codecarry.data.dsh.dshPromptRequest
-import dev.wuxie233.codecarry.data.dsh.dshQueueItemText
+import dev.wuxie233.codecarry.data.dsh.DshSessionEvent
+import dev.wuxie233.codecarry.data.dsh.parseDshSurfaceOp
 import dev.wuxie233.codecarry.data.dsh.DshHistoryFolder
 import dev.wuxie233.codecarry.data.dsh.mapDshApproval
+import dev.wuxie233.codecarry.data.dsh.catalogAddress
+import dev.wuxie233.codecarry.data.dsh.directSubagentSessions
 import dev.wuxie233.codecarry.data.dsh.mapDshEventStateToSessions
 import dev.wuxie233.codecarry.data.dsh.mapDshQuestion
 import dev.wuxie233.codecarry.data.dsh.toSessionEvent
@@ -72,6 +77,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -329,6 +336,38 @@ class ChatViewModel @Inject constructor(
     private val _dshPresets = MutableStateFlow(DshChatPresetState())
     val dshPresets: StateFlow<DshChatPresetState> = _dshPresets
     private var dshPresetLoadJob: Job? = null
+    private val _dshSkills = MutableStateFlow(DshSkillCandidateState())
+    val dshSkills: StateFlow<DshSkillCandidateState> = combine(_dshSkills, dshReducer.state) { skills, state ->
+        if (sessionId in state.archivedSessionIds) {
+            skills.copy(commands = skills.commands.filterNot { it.name == "compact" })
+        } else skills
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, DshSkillCandidateState())
+    private val _dshRewindInFlight = MutableStateFlow(false)
+    // A marker can arrive before its command receipt (or after a timeout). Do not
+    // apply an unconfirmed local write to the displayed history or draft.
+    private val unconfirmedDshRewinds = mutableSetOf<Long>()
+    val dshRewind: StateFlow<DshRewindState> = combine(
+        dshReducer.state, _dshSkills, _dshRewindInFlight,
+    ) { state, skills, inFlight ->
+        DshRewindState(dshRewindTargets(state, skills), inFlight)
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, DshRewindState())
+
+    private fun dshRewindTargets(state: DshEventState, skills: DshSkillCandidateState): Set<Long> {
+        val session = state.sessions[sessionId] ?: return emptySet()
+        if (!isDsh || !skills.available || skills.loading || skills.failed ||
+            skills.commands.none { it.name == "rewind" } || session.origin == "subagent" ||
+            sessionId in state.archivedSessionIds || !session.historyOpened) return emptySet()
+        return dshRewindableSeqs(session.events)
+    }
+
+    private fun confirmedDshEvents(events: List<DshSessionEvent>): List<DshSessionEvent> =
+        if (unconfirmedDshRewinds.isEmpty()) events else events.filterNot { event ->
+            val source = (event.data as? JsonObject)?.get("source") as? JsonObject
+            source?.get("kind")?.jsonPrimitive?.content == "dsh-rewind" &&
+                parseDshSurfaceOp(event.surfaceOp)?.start in unconfirmedDshRewinds
+        }
+
+    private var dshSkillLoadJob: Job? = null
     private var dshSessionLoadJob: Job? = null
     private var dshModelCatalogDefault: DshModelSelection? = null
     private var dshModelCatalogGeneration: Long? = null
@@ -405,6 +444,7 @@ class ChatViewModel @Inject constructor(
 
     /** Draft attachment URIs (content:// URIs as strings) — survives navigation / app restart. */
     private val _draftAttachmentUris = MutableStateFlow<List<String>>(emptyList())
+    private var dshRewindImageUris: Set<String> = emptySet()
     val draftAttachmentUris: StateFlow<List<String>> = _draftAttachmentUris
 
     /** Set of file paths that have been confirmed by user selection from the popup */
@@ -449,8 +489,8 @@ class ChatViewModel @Inject constructor(
     private val _hasOlderMessages = MutableStateFlow(false)
     /** Whether a "load older" request is in flight. */
     private val _isLoadingOlder = MutableStateFlow(false)
-    private val _dshQueueTick = MutableStateFlow(0L)
     private val _questionUnlockEpoch = MutableStateFlow(0)
+    private val _dshSubagentSessions = MutableStateFlow<List<Session>>(emptyList())
     val uiState: StateFlow<ChatUiState> = combine(
         listOf(
             eventReducer.serverSessionDetails,
@@ -476,8 +516,8 @@ class ChatViewModel @Inject constructor(
             _commands,
             _hasOlderMessages,
             _isLoadingOlder,
-            _dshQueueTick,
             _questionUnlockEpoch,
+            _dshSubagentSessions,
         )
     ) { args ->
         @Suppress("UNCHECKED_CAST")
@@ -518,15 +558,15 @@ class ChatViewModel @Inject constructor(
         val commands = args[20] as List<CommandInfo>
         val hasOlderMessages = args[21] as Boolean
         val isLoadingOlder = args[22] as Boolean
-        @Suppress("UNUSED_VARIABLE")
-        val dshQueueTick = args[23] as Long
-        val questionUnlockEpoch = args[24] as Int
+        val questionUnlockEpoch = args[23] as Int
 
         val session = allSessions.find { it.id == sessionId && it.id in currentServerSessionIds }
+        @Suppress("UNCHECKED_CAST")
+        val subagentSessions = if (isDsh) args[24] as List<Session> else allSessions
         val subagents = buildDirectChatSubagents(
             parentSessionId = sessionId,
-            sessions = allSessions,
-            allowedSessionIds = currentServerSessionIds,
+            sessions = subagentSessions,
+            allowedSessionIds = if (isDsh) subagentSessions.mapTo(mutableSetOf()) { it.id } else currentServerSessionIds,
             statuses = statuses,
             questions = questions,
             permissions = permissions,
@@ -661,13 +701,7 @@ class ChatViewModel @Inject constructor(
             supportsRename = true,
             supportsSessionCreate = true,
             isDsh = isDsh,
-            queuedPrompts = if (isDsh) {
-                dshReducer.state.value.sessions[sessionId]?.queue.orEmpty().map { item ->
-                    ChatQueueItem(id = item.id, placement = item.placement, text = dshQueueItemText(item))
-                }
-            } else {
-                emptyList()
-            },
+            queuedPrompts = emptyList(),
             permissionAlwaysAvailable = !isDsh,
             supportsShell = dshCapabilities.shellAndTerminal,
             supportsTerminal = dshCapabilities.shellAndTerminal,
@@ -761,12 +795,15 @@ class ChatViewModel @Inject constructor(
                     // A known conversation can recover without waiting for the catalog RPC.
                     startDshFollow()
                     refreshDshPresets()
+                    refreshDshSkills()
                     dshSessionLoadJob?.cancel()
                     dshSessionLoadJob = launch { loadDshSession() }
                 } else {
                     dshFollowJob?.cancel()
                     dshSessionLoadJob?.cancel()
                     dshPresetLoadJob?.cancel()
+                    dshSkillLoadJob?.cancel()
+                    _dshSkills.value = DshSkillCandidateState()
                     _dshPresets.update { it.copy(loading = false, presets = emptyList()) }
                 }
             }
@@ -775,7 +812,7 @@ class ChatViewModel @Inject constructor(
 
     private fun dshHistoryAddress(): DshSessionAddress? {
         val snapshot = dshReducer.state.value.sessions[sessionId]
-        val resolved = snapshot?.historyAddress()
+        val resolved = dshReducer.state.value.catalogAddress(sessionId) ?: snapshot?.historyAddress()
         when (resolved) {
             is DshSessionAddress.Subagent -> {
                 dshKnownAddress = resolved
@@ -855,6 +892,10 @@ class ChatViewModel @Inject constructor(
 
     private fun applyDshState(state: DshEventState) {
         val mapped = mapDshEventStateToSessions(state)
+        _dshSubagentSessions.value = state.directSubagentSessions(
+            sessionId,
+            mapped.sessions.firstOrNull { it.id == sessionId }?.directory ?: sessionDirectory.orEmpty(),
+        )
         eventReducer.replaceSessions(serverId, mapped.sessions)
         mapped.statuses.forEach { (id, status) ->
             eventReducer.updateSessionStatus(serverId, id, status)
@@ -872,8 +913,8 @@ class ChatViewModel @Inject constructor(
         }
         // Reconnect first supplies catalog/control metadata with no history. Keep
         // the displayed messages until this generation opens the history stream.
-        if (snapshot?.historyOpened == true) {
-            val folded = dshHistoryFolder.fold(sessionId, snapshot.events)
+        if (snapshot?.historyOpened == true && !_dshRewindInFlight.value) {
+            val folded = dshHistoryFolder.fold(sessionId, confirmedDshEvents(snapshot.events))
             val lastSeq = snapshot.events.maxOfOrNull { it.seq } ?: -1L
             eventReducer.setMessages(serverId, sessionId, applyCachedDshAttachments(folded))
             sessionDirectory = snapshot.cwd?.takeIf { it.isNotBlank() } ?: sessionDirectory
@@ -890,10 +931,6 @@ class ChatViewModel @Inject constructor(
             sessionId,
             state.pendingQuestionsFor(sessionId).map(::mapDshQuestion),
         )
-        val queueTick = snapshot?.queue.orEmpty().hashCode().toLong()
-        if (_dshQueueTick.value != queueTick) {
-            _dshQueueTick.value = queueTick
-        }
     }
 
     private suspend fun loadDshSession() {
@@ -916,8 +953,8 @@ class ChatViewModel @Inject constructor(
     }
 
     private suspend fun loadDshOlderHistory() {
-        val snapshot = dshReducer.state.value.sessions[sessionId]
-        val address = snapshot?.historyAddress() ?: return
+        val snapshot = dshReducer.state.value.sessions[sessionId] ?: return
+        val address = dshHistoryAddress() ?: return
         val throughSeq = snapshot.pageThroughSeq ?: return
         val beforeSeq = snapshot.events.minOfOrNull { it.seq } ?: return
         try {
@@ -974,8 +1011,8 @@ class ChatViewModel @Inject constructor(
             }
             val current = dshReducer.state.value.sessions[sessionId] ?: return@launch
             val currentSeq = current.events.maxOfOrNull { it.seq } ?: -1L
-            if (currentSeq < foldSeq) return@launch
-            eventReducer.setMessages(serverId, sessionId, applyCachedDshAttachments(dshHistoryFolder.fold(sessionId, current.events)))
+            if (currentSeq < foldSeq || _dshRewindInFlight.value) return@launch
+            eventReducer.setMessages(serverId, sessionId, applyCachedDshAttachments(dshHistoryFolder.fold(sessionId, confirmedDshEvents(current.events))))
             dshAppliedEventSeq = currentSeq
         }
     }
@@ -984,6 +1021,158 @@ class ChatViewModel @Inject constructor(
         val prefix = "dsh-attachment:"
         if (url.isNullOrBlank() || !url.startsWith(prefix)) return null
         return url.removePrefix(prefix).takeIf { it.isNotBlank() }
+    }
+
+    fun refreshDshSkills() {
+        if (!isDsh) return
+        dshSkillLoadJob?.cancel()
+        val connection = dshConnectionManager.states.value[serverId]
+        if (sessionId.isBlank() || connection?.isReady != true) {
+            _dshSkills.value = DshSkillCandidateState()
+            return
+        }
+        fun isCurrent() = dshConnectionManager.states.value[serverId]?.let {
+            it.isReady && it.generation == connection.generation
+        } == true
+        _dshSkills.value = DshSkillCandidateState(available = true, loading = true)
+        dshSkillLoadJob = viewModelScope.launch {
+            try {
+                val catalog = withContext(Dispatchers.IO) {
+                    kotlinx.coroutines.withTimeout(15_000) {
+                        dshApi.skillList(dshConn, sessionId).skills to dshApi.commandList(dshConn, sessionId)
+                    }
+                }
+                if (isCurrent()) {
+                    _dshSkills.value = DshSkillCandidateState(available = true, skills = catalog.first, commands = catalog.second)
+                }
+            } catch (error: kotlinx.coroutines.TimeoutCancellationException) {
+                if (isCurrent()) _dshSkills.value = DshSkillCandidateState(available = true, failed = true)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                if (isCurrent()) _dshSkills.value = DshSkillCandidateState(available = true, failed = true)
+            }
+        }
+    }
+
+    private var dshCompactJob: Job? = null
+
+    fun rewindDshMessage(messageId: String) {
+        if (!isDsh || _dshRewindInFlight.value || dshCompactJob?.isActive == true) return
+        val connection = dshConnectionManager.states.value[serverId] ?: return
+        if (!connection.isReady) return
+        val targetSeq = dshMessageSeq(messageId) ?: return
+        val state = dshReducer.state.value
+        if (targetSeq !in dshRewindTargets(state, _dshSkills.value)) return
+        val target = uiState.value.messages
+            .firstOrNull { it.message.id == messageId && it.isUser } ?: return
+        val text = target.parts.filterIsInstance<Part.Text>().joinToString("\n") { it.text }
+        val targetContent = (state.sessions[sessionId]?.events?.firstOrNull { it.seq == targetSeq }
+            ?.data as? JsonObject)?.get("content") as? kotlinx.serialization.json.JsonArray
+        unconfirmedDshRewinds.add(targetSeq)
+        _error.value = null
+        _dshRewindInFlight.value = true
+        viewModelScope.launch {
+            fun isCurrent() = dshConnectionManager.states.value[serverId]?.let {
+                it.generation == connection.generation && it.isReady
+            } == true
+            try {
+                kotlinx.coroutines.withTimeout(30_000) {
+                    val result = dshApi.commandExecute(dshConn, sessionId, "/rewind @$targetSeq chat")?.result
+                    check(isCurrent() && result?.kind == "success")
+                    val markerSeq = checkNotNull(result?.sourceEventSeq)
+                    // Wait for the actual Host surface replacement, not a guessed range.
+                    dshReducer.state.first { current ->
+                        !isCurrent() || current.sessions[sessionId]?.events?.any {
+                            it.seq == markerSeq && parseDshSurfaceOp(it.surfaceOp)?.start == targetSeq
+                        } == true
+                    }
+                    check(isCurrent())
+                    unconfirmedDshRewinds.remove(targetSeq)
+                    restoreRevertedDraft(RevertedDraftPayload(text = text))
+                    saveDraft()
+                }
+                val restoredImages = mutableListOf<String>()
+                val missingImages = mutableListOf<String>()
+                val omittedFiles = mutableListOf<String>()
+                targetContent.orEmpty().forEachIndexed { index, content ->
+                    val block = content as? JsonObject ?: return@forEachIndexed
+                    val type = (block["type"] as? JsonPrimitive)?.contentOrNull
+                    if (type != "image" && type != "file") return@forEachIndexed
+                    val attachment = block["attachment"] as? JsonObject
+                    val attachmentId = (attachment?.get("attachmentId") as? JsonPrimitive)?.contentOrNull
+                    val name = (attachment?.get("name") as? JsonPrimitive)?.contentOrNull
+                        ?: (block["name"] as? JsonPrimitive)?.contentOrNull
+                        ?: attachmentId
+                        ?: appContext.getString(R.string.dsh_rewind_attachment_name, index + 1)
+                    if (type == "file") {
+                        omittedFiles.add(name)
+                        return@forEachIndexed
+                    }
+                    try {
+                        check(!attachmentId.isNullOrBlank() && isCurrent())
+                        val image = withContext(Dispatchers.IO) {
+                            kotlinx.coroutines.withTimeoutOrNull(15_000) {
+                                val fetched = dshApi.sessionAttachment(dshConn, sessionId, attachmentId)
+                                check(fetched.attachment.mediaType.startsWith("image/", ignoreCase = true))
+                                check(fetched.data.isNotBlank() && fetched.data.length.toLong() * 3 / 4 <= DSH_ATTACHMENT_MAX_BYTES)
+                                check(java.util.Base64.getDecoder().decode(fetched.data).isNotEmpty())
+                                "data:${fetched.attachment.mediaType};base64,${fetched.data}"
+                            }
+                        }
+                        check(image != null && isCurrent())
+                        restoredImages.add(image)
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (error: Exception) {
+                        missingImages.add(name)
+                    }
+                }
+                dshRewindImageUris = restoredImages.toSet()
+                _draftAttachmentUris.value = restoredImages
+                _error.value = listOfNotNull(
+                    missingImages.takeIf { it.isNotEmpty() }?.let {
+                        appContext.getString(R.string.dsh_rewind_images_missing, it.joinToString(", "))
+                    },
+                    omittedFiles.takeIf { it.isNotEmpty() }?.let {
+                        appContext.getString(R.string.dsh_rewind_files_omitted, it.joinToString(", "))
+                    },
+                ).takeIf { it.isNotEmpty() }?.joinToString("\n")
+            } catch (error: kotlinx.coroutines.TimeoutCancellationException) {
+                _error.value = appContext.getString(R.string.dsh_rewind_failed)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                _error.value = appContext.getString(R.string.dsh_rewind_failed)
+            } finally {
+                _dshRewindInFlight.value = false
+                applyDshState(dshReducer.state.value)
+            }
+        }
+    }
+
+    fun compactDshSession() {
+        if (!isDsh || dshCompactJob?.isActive == true || _dshRewindInFlight.value) return
+        if (sessionId in dshReducer.state.value.archivedSessionIds) {
+            _error.value = appContext.getString(R.string.dsh_compact_archived)
+            return
+        }
+        val connection = dshConnectionManager.states.value[serverId]
+        if (connection?.isReady != true || !_dshSkills.value.matchesCompact("")) return
+        dshCompactJob = viewModelScope.launch {
+            try {
+                val result = dshApi.commandExecute(dshConn, sessionId, "/compact")
+                if (dshConnectionManager.states.value[serverId]?.generation == connection.generation &&
+                    result?.result?.kind != "success") {
+                    _error.value = appContext.getString(R.string.dsh_command_not_executed)
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                if (dshConnectionManager.states.value[serverId]?.generation == connection.generation)
+                    _error.value = appContext.getString(R.string.dsh_command_not_executed)
+            }
+        }
     }
 
     fun refreshDshPresets() {
@@ -1628,7 +1817,7 @@ class ChatViewModel @Inject constructor(
         val agentPair = _selectedAgent.value
         val draft = dev.wuxie233.codecarry.data.repository.Draft(
             text = _draftText.value,
-            imageUris = _draftAttachmentUris.value,
+            imageUris = _draftAttachmentUris.value.filterNot { it in dshRewindImageUris },
             confirmedFilePaths = _confirmedFilePaths.value.toList(),
             selectedAgent = agentPair.first.takeIf { agentPair.second },
             selectedVariant = _selectedVariant.value
@@ -1799,18 +1988,8 @@ class ChatViewModel @Inject constructor(
         if (_pendingSendError.value == null) drainPendingDshSends()
     }
 
-    private suspend fun sendDshPrompt(mode: String, content: kotlinx.serialization.json.JsonArray) {
-        when (val address = dshHistoryAddress()) {
-            is DshSessionAddress.Subagent -> dshApi.subagentPrompt(
-                connection = dshConn,
-                parentSessionId = address.parentSessionId,
-                childSessionId = address.childSessionId,
-                content = content,
-            )
-            is DshSessionAddress.Session -> dshApi.sessionPrompt(dshConn, sessionId, mode, content)
-            null -> error("DSH session address is not ready")
-        }
-    }
+    private suspend fun sendDshPrompt(mode: String, content: kotlinx.serialization.json.JsonArray): Boolean =
+        dshApi.submitPrompt(dshConn, dshHistoryAddress() ?: error("DSH session address is not ready"), mode, content)
 
     private suspend fun abortDshSession(): Boolean {
         return when (val address = dshHistoryAddress()) {
@@ -1834,14 +2013,16 @@ class ChatViewModel @Inject constructor(
                     try {
                         val steer = uiState.value.sessionStatus is SessionStatus.Busy
                         val request = dshPromptRequest(head.parts, steer)
-                        sendDshPrompt(request.mode, request.content)
+                        val prompted = sendDshPrompt(request.mode, request.content)
                         pendingOpenCodeSends.removeFirst()
                         _pendingSendCount.value = pendingOpenCodeSends.size
                         _pendingSendError.value = null
-                        eventReducer.updateSessionStatus(serverId, sessionId, SessionStatus.Busy)
+                        if (prompted) eventReducer.updateSessionStatus(serverId, sessionId, SessionStatus.Busy)
                     } catch (error: Exception) {
                         Log.e(TAG, "Failed to send DSH prompt", error)
-                        _pendingSendError.value = error.message ?: "Failed to send queued message"
+                        _pendingSendError.value = if (isDshSlashCommand(dshPromptRequest(head.parts, false).content))
+                            appContext.getString(R.string.dsh_command_not_executed)
+                        else error.message ?: "Failed to send queued message"
                         _error.value = _pendingSendError.value
                         break
                     }

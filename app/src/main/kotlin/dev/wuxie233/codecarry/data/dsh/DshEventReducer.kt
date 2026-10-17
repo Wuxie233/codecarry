@@ -30,6 +30,8 @@ data class DshSessionSnapshot(
     val sessionId: String,
     val blank: Boolean = true,
     val running: Boolean = false,
+    val agentAvailable: Boolean = false,
+    val formatStatus: String? = null,
     val parentSessionId: String? = null,
     val origin: String? = null,
     val cwd: String? = null,
@@ -44,8 +46,6 @@ data class DshSessionSnapshot(
      */
     val historyOpened: Boolean = false,
     val events: List<DshSessionEvent> = emptyList(),
-    val queue: List<DshQueuedInboxItem> = emptyList(),
-    val jobs: List<DshJobView> = emptyList(),
     val projections: Map<String, Pair<Long, JsonElement?>> = emptyMap(),
     val error: String? = null,
     /** True after `session/list` or `api-session/added` supplied this identity. */
@@ -73,7 +73,8 @@ data class DshEventState(
     val home: String? = null,
     val sessions: Map<String, DshSessionSnapshot> = emptyMap(),
     val archivedSessionIds: Set<String> = emptySet(),
-    val hiddenWorkspaceIds: Set<String> = emptySet(),
+    val pinnedSessionIds: List<String> = emptyList(),
+    val pinRevision: Long = 0,
     val workspaceOrder: List<String> = emptyList(),
     val workspaces: Map<String, JsonObject> = emptyMap(),
     val pendingApprovals: Map<String, DshPendingApproval> = emptyMap(),
@@ -101,6 +102,14 @@ class DshEventReducer(
                 agentPreset = presetId,
                 presetSelectionReceipt = observedSeq to presetId,
             )))
+        }
+    }
+
+    /** A newer follow frame or connection always wins over a late command receipt. */
+    fun applyPinnedSessions(ids: List<String>, generation: Long, observedRevision: Long) {
+        _state.update {
+            if (it.generation != generation || it.pinRevision != observedRevision) it
+            else it.copy(pinnedSessionIds = ids, pinRevision = it.pinRevision + 1)
         }
     }
 
@@ -196,22 +205,10 @@ class DshEventReducer(
         when (frame) {
             is DshControlFrame.Baseline -> _state.update { current ->
                 var next = current
-                frame.queues.forEach { (sessionId, items) ->
-                    next = next.updateSession(sessionId) { it.copy(queue = items) }
-                }
-                frame.jobs.forEach { (sessionId, jobs) ->
-                    next = next.updateSession(sessionId) { it.copy(jobs = jobs) }
-                }
                 frame.projections.forEach { (sessionId, block) ->
                     next = applyProjections(next, sessionId, block)
                 }
                 next
-            }
-            is DshControlFrame.Queue -> _state.update { current ->
-                current.updateSession(frame.sessionId) { it.copy(queue = frame.items) }
-            }
-            is DshControlFrame.Jobs -> _state.update { current ->
-                current.updateSession(frame.sessionId) { it.copy(jobs = frame.jobs) }
             }
             is DshControlFrame.Projection -> _state.update { current ->
                 current.updateSession(frame.sessionId) { session ->
@@ -244,8 +241,8 @@ class DshEventReducer(
             is DshWorkspaceFrame.Archived -> _state.update {
                 it.copy(archivedSessionIds = frame.archivedSessionIds.toSet())
             }
-            is DshWorkspaceFrame.Hidden -> _state.update {
-                it.copy(hiddenWorkspaceIds = frame.hiddenWorkspaceIds.toSet())
+            is DshWorkspaceFrame.Pinned -> _state.update {
+                it.copy(pinnedSessionIds = frame.pinnedSessionIds, pinRevision = it.pinRevision + 1)
             }
         }
     }
@@ -368,11 +365,12 @@ class DshEventReducer(
                     session.copy(
                         blank = item.blank,
                         running = item.running,
+                        agentAvailable = item.agentAvailable,
+                        formatStatus = item.formatStatus,
                         updatedAt = item.updatedAt,
                         parentSessionId = item.parentSessionId ?: session.parentSessionId,
                         origin = item.origin ?: session.origin,
                         cwd = item.cwd ?: session.cwd,
-                        agentPreset = item.agentPreset ?: session.agentPreset,
                         projections = nextProjections,
                         listed = true,
                     )
@@ -388,7 +386,8 @@ class DshEventReducer(
                 workspaces = value.items.associate { item -> item.workspaceId to item.toJsonObject() },
                 workspaceOrder = value.items.map { it.workspaceId },
                 archivedSessionIds = value.archivedSessionIds.toSet(),
-                hiddenWorkspaceIds = value.hiddenWorkspaceIds.toSet(),
+                pinnedSessionIds = value.pinnedSessionIds,
+                pinRevision = current.pinRevision + 1,
             )
         }
     }
@@ -453,7 +452,8 @@ class DshEventReducer(
         parentSessionId = obj.strValue("parentSessionId"),
         origin = obj.strValue("origin"),
         cwd = obj.strValue("cwd"),
-        agentPreset = obj.strValue("agentPreset"),
+        agentAvailable = obj.strValue("agentAvailable") == "true",
+        formatStatus = obj.strValue("formatStatus"),
         projections = runCatching {
             val block = obj["projections"]?.jsonObject ?: return@runCatching null
             DshProjectionsBlock(

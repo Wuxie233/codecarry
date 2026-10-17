@@ -407,7 +407,6 @@
     <string name="chat_send_failed_draft_kept">Send failed. Draft kept.</string>
     <string name="chat_queue_steer">Steer</string>
     <string name="chat_queue_remove">Remove</string>
-    <string name="sessions_rehome_action">Move home</string>
     <string name="chat_loading_messages">Loading messages…</string>
     <string name="chat_status_edits">%1$d edit</string>
     <string name="chat_status_edits_plural">%1$d edits</string>
@@ -701,33 +700,22 @@
     <string name="server_settings_empty">No models found</string>
     <string name="server_settings_load_error">Failed to load models</string>
     <string name="dsh_host_surfaces_title">DSH host surfaces</string>
-    <string name="dsh_host_surfaces_desc">Workspaces, skills, git, presets, goals, automation, settings, and models for this DSH host</string>
+    <string name="dsh_host_surfaces_desc">Workspaces, skills, presets, goals, settings, and models for this DSH host</string>
     <string name="dsh_host_surfaces_available">Available methods</string>
     <string name="dsh_host_surfaces_hidden_loopback">Hidden on this non-loopback URL</string>
     <string name="dsh_host_surfaces_workspaces">Workspaces</string>
     <string name="dsh_host_surfaces_workspace_path">Existing directory path</string>
     <string name="dsh_host_surfaces_create_workspace">Create workspace</string>
-    <string name="dsh_host_surfaces_browse">Host directories</string>
-    <string name="dsh_host_surfaces_folder_name">New folder name</string>
-    <string name="dsh_host_surfaces_create_folder">Create folder</string>
     <string name="dsh_host_surfaces_skills">Skills</string>
-    <string name="dsh_host_surfaces_git">Git</string>
     <string name="dsh_host_surfaces_presets">Agent presets</string>
-    <string name="dsh_host_surfaces_automation">Automation</string>
     <string name="dsh_host_surfaces_settings">Host settings</string>
     <string name="dsh_host_surfaces_models">Providers and models</string>
-    <string name="dsh_host_surfaces_system_prompt">System prompt</string>
-    <string name="dsh_host_surfaces_subagents">Subagents</string>
-    <string name="dsh_host_surfaces_load_subagents">Load subagents</string>
     <string name="dsh_host_surfaces_select_preset">Select preset</string>
     <string name="dsh_host_surfaces_presets_applied">Applied preset: %1$s</string>
     <string name="dsh_host_surfaces_goals">Goals</string>
     <string name="dsh_host_surfaces_goal_objective">Objective</string>
     <string name="dsh_host_surfaces_create_goal">Create goal</string>
     <string name="dsh_host_surfaces_settings_patch">JSON patch</string>
-    <string name="dsh_host_surfaces_subagent_prompt">Prompt</string>
-    <string name="dsh_host_surfaces_send_prompt">Send to subagent</string>
-    <string name="dsh_host_surfaces_interrupt">Interrupt</string>
     <string name="dsh_host_surfaces_session_context">Session context · %1$s</string>
     <string name="dsh_host_surfaces_no_session_selected">No session selected — choose one above</string>
     <string name="dsh_host_surfaces_no_sessions">No sessions on this server</string>
@@ -1081,4 +1069,17 @@ Tokens: ~%4$d -&gt; ~%5$d</string>
         <item quantity="other">%1$d personas</item>
     </plurals>
 
+    <string name="sessions_migration_required">Migration required</string>
+    <string name="sessions_archive_running">This session is running. Stop it before archiving.</string>
+    <string name="sessions_pin">Pin</string>
+    <string name="sessions_unpin">Unpin</string>
+    <string name="sessions_pin_failed">Could not update pin. Try again.</string>
+    <string name="dsh_rewind_failed">Rewind did not complete. The conversation and draft have not been changed.</string>
+    <string name="dsh_rewind_images_missing">Rewind completed, but these images could not be restored: %1$s. Your text and readable images were kept.</string>
+    <string name="dsh_rewind_files_omitted">These files remain in the log and were not returned to the composer: %1$s.</string>
+    <string name="dsh_rewind_attachment_name">Attachment %1$d</string>
+    <string name="dsh_rewind_action">Rewind</string>
+    <string name="dsh_rewind_body">This message and the conversation after it will disappear from chat. The log is kept and files stay unchanged. This message’s text will replace your unsent draft without sending it. There is no undo.</string>
+    <string name="dsh_rewind_busy">The current reply will also be interrupted.</string>
+    <string name="dsh_rewind_confirm">Rewind conversation</string>
 </resources>

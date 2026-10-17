@@ -6,6 +6,16 @@ import org.junit.Test
 class SessionRowMenuActionsTest {
 
     @Test
+    fun `pin and unpin share one menu slot only on eligible active rows`() {
+        for (pinned in listOf(false, true)) {
+            val actions = sessionRowMenuActions(isArchived = false, pinState = pinned)
+            assertEquals(1, actions.count { it == SessionRowMenuAction.TOGGLE_PIN })
+        }
+        assertEquals(0, sessionRowMenuActions(isArchived = false).count { it == SessionRowMenuAction.TOGGLE_PIN })
+        assertEquals(0, sessionRowMenuActions(isArchived = true, pinState = true).count { it == SessionRowMenuAction.TOGGLE_PIN })
+    }
+
+    @Test
     fun `active session menu keeps archive and delete actions`() {
         assertEquals(
             listOf(
@@ -54,11 +64,10 @@ class SessionRowMenuActionsTest {
     }
 
     @Test
-    fun `dsh session menu includes rehome and hides delete`() {
+    fun `dsh session menu keeps rename and archive only`() {
         assertEquals(
             listOf(
                 SessionRowMenuAction.RENAME,
-                SessionRowMenuAction.REHOME,
                 SessionRowMenuAction.ARCHIVE,
             ),
             sessionRowMenuActions(
@@ -67,7 +76,6 @@ class SessionRowMenuActionsTest {
                 supportsArchive = true,
                 supportsRestore = true,
                 supportsDelete = false,
-                supportsRehome = true,
             ),
         )
     }

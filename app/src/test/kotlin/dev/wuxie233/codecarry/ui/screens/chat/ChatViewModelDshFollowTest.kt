@@ -98,6 +98,35 @@ class ChatViewModelDshFollowTest {
     }
 
     @Test
+    fun `skills retry and disconnect preserve session scoped request lifetime`() = runTest(dispatcher) {
+        val mux = FakeDownlink()
+        val unary = CopyOnWriteArrayList<String>()
+        var fail = true
+        val harness = dshHarness(mux, unary, beforeSkillList = {
+            if (fail) error("skills unavailable")
+        })
+        val vm = newViewModel(harness.client, harness.manager)
+        assertFalse(vm.dshSkills.value.available)
+        harness.manager.connect(SERVER_ID, DshConnection.from("http://127.0.0.1:3080", token = "launch-token"))
+        runCurrent()
+        pushBaselines(mux)
+        vm.dshSkills.first { it.failed }
+        fail = false
+        vm.refreshDshSkills()
+        assertEquals("grill", vm.dshSkills.first { it.skills.isNotEmpty() }.skills.single().name)
+        assertEquals("compact", vm.dshSkills.value.commands.single().name)
+        val commandRequest = json.parseToJsonElement(unary.last { it.contains("\"commands/list\"") }).jsonObject
+        assertEquals(SESSION_ID, commandRequest["payload"]!!.jsonObject["args"]!!.jsonObject["agentId"]!!.jsonPrimitive.content)
+        val request = json.parseToJsonElement(unary.last { it.contains("\"skills/list\"") }).jsonObject
+        assertEquals(SESSION_ID, request["payload"]!!.jsonObject["args"]!!.jsonObject["request"]!!.jsonObject["sessionId"]!!.jsonPrimitive.content)
+        harness.manager.disconnect(SERVER_ID)
+        runCurrent()
+        assertFalse(vm.dshSkills.value.available)
+        assertTrue(vm.dshSkills.value.skills.isEmpty())
+        assertTrue(vm.dshSkills.value.commands.isEmpty())
+    }
+
+    @Test
     fun `opening a DSH chat follows the snapshot and never pages with a sentinel`() = runTest(dispatcher) {
         val mux = FakeDownlink()
         val unary = CopyOnWriteArrayList<String>()
@@ -112,6 +141,7 @@ class ChatViewModelDshFollowTest {
         harness.manager.reducer(SERVER_ID).state.first { it.sessions.containsKey(SESSION_ID) }
         runCurrent()
 
+        assertTrue(vm.uiState.value.queuedPrompts.isEmpty())
         val followOpen = mux.sent.last { it.contains("\"session/follow\"") }
         val followId = json.parseToJsonElement(followOpen).jsonObject.getValue("streamId").jsonPrimitive.content
         mux.incoming.trySend(
@@ -207,6 +237,92 @@ class ChatViewModelDshFollowTest {
         assertEquals(PARENT_ID, pageAddress.getValue("parentSessionId").jsonPrimitive.content)
         assertEquals(SESSION_ID, pageAddress.getValue("childSessionId").jsonPrimitive.content)
         assertEquals("continuable", pageAddress.getValue("mode").jsonPrimitive.content)
+    }
+
+    @Test
+    fun `parent catalog opens unlisted child and control updates its drawer`() = runTest(dispatcher) {
+        val mux = FakeDownlink()
+        val unary = CopyOnWriteArrayList<String>()
+        val compactRequested = CompletableDeferred<Unit>()
+        val harness = dshHarness(mux, unary, onCommandExecute = { compactRequested.complete(Unit) })
+        val parent = newViewModel(harness.client, harness.manager)
+        collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { parent.uiState.collect {} }
+        harness.manager.connect(SERVER_ID, DshConnection.from("http://127.0.0.1:3080", token = "launch-token"))
+        runCurrent()
+        pushBaselines(mux)
+        harness.manager.states.first { it[SERVER_ID]?.isReady == true }
+        harness.manager.reducer(SERVER_ID).state.first { it.sessions.containsKey(SESSION_ID) }
+        runCurrent()
+        val follow = json.parseToJsonElement(mux.sent.last { it.contains("\"session/follow\"") }).jsonObject
+        val streamId = follow.getValue("streamId").jsonPrimitive.content
+        mux.incoming.trySend(item(streamId, """{"type":"snapshot","header":{},"cursor":10,"records":[],"hasMore":false,"projections":{"asOfSeq":10,"values":{"subagentCatalog":[{"id":"child","createdAt":1,"mode":"continuable","label":"Worker"}]}}}"""))
+        runCurrent()
+        assertEquals(listOf("child"), parent.uiState.value.subagents.map { it.id })
+        assertEquals("Worker", parent.uiState.value.subagents.single().title)
+
+        val child = newViewModel(harness.client, harness.manager, "child")
+        collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { child.uiState.collect {} }
+        runCurrent()
+        val childOpen = json.parseToJsonElement(mux.sent.last { it.contains("\"session/follow\"") }).jsonObject
+        val address = childOpen.getValue("payload").jsonObject.getValue("args").jsonObject
+            .getValue("request").jsonObject.getValue("address").jsonObject
+        assertEquals("subagent", address.getValue("kind").jsonPrimitive.content)
+        assertEquals(SESSION_ID, address.getValue("parentSessionId").jsonPrimitive.content)
+        assertEquals("child", address.getValue("childSessionId").jsonPrimitive.content)
+        assertEquals("continuable", address.getValue("mode").jsonPrimitive.content)
+        assertEquals("compact", child.dshSkills.first { it.commands.isNotEmpty() }.commands.single().name)
+        assertEquals("grill", child.dshSkills.first { it.skills.isNotEmpty() }.skills.single().name)
+        child.compactDshSession()
+        compactRequested.await()
+        runCurrent()
+        val compact = json.parseToJsonElement(unary.single { it.contains("\"commands/execute\"") }).jsonObject
+            .getValue("payload").jsonObject.getValue("args").jsonObject
+        assertEquals("child", compact.getValue("agentId").jsonPrimitive.content)
+        assertEquals("/compact", compact.getValue("line").jsonPrimitive.content)
+        assertNull(child.uiState.value.error)
+
+        mux.incoming.trySend(item("st-1", """{"type":"projection","sessionId":"$SESSION_ID","key":"subagentCatalog","seq":11,"value":[{"id":"second","createdAt":2,"mode":"one-shot","label":"Second"}]}"""))
+        runCurrent()
+        assertEquals(listOf("second"), parent.uiState.value.subagents.map { it.id })
+        assertFalse(unary.any { it.contains("subagents/list") })
+    }
+
+    @Test
+    fun `idle child send uses queue delivery`() = childSendDelivery(false, "queue")
+
+    @Test
+    fun `busy child send uses steer delivery`() = childSendDelivery(true, "steer")
+
+    private fun childSendDelivery(running: Boolean, delivery: String) = runTest(dispatcher) {
+        val mux = FakeDownlink()
+        val unary = CopyOnWriteArrayList<String>()
+        val harness = dshHarness(
+            mux,
+            unary,
+            listItem = """{"sessionId":"$SESSION_ID","updatedAt":2,"running":$running,"blank":false,"cwd":"/root/CODE/Minecraft","origin":"subagent","parentSessionId":"$PARENT_ID"}""",
+        )
+        val vm = newViewModel(harness.client, harness.manager)
+        collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
+        harness.manager.connect(SERVER_ID, DshConnection.from("http://127.0.0.1:3080", token = "launch-token"))
+        runCurrent()
+        pushBaselines(mux)
+        harness.manager.states.first { it[SERVER_ID]?.isReady == true }
+        harness.manager.reducer(SERVER_ID).state.first { it.sessions.containsKey(SESSION_ID) }
+        runCurrent()
+
+        var sent: Boolean? = null
+        vm.sendMessage("continue") { sent = it }
+        runCurrent()
+
+        assertEquals(true, sent)
+        val body = unary.single { it.contains("\"subagents/prompt\"") }
+        val request = json.parseToJsonElement(body).jsonObject.getValue("payload").jsonObject
+            .getValue("args").jsonObject.getValue("request").jsonObject
+        assertEquals(delivery, request.getValue("delivery").jsonPrimitive.content)
+        assertEquals("continuable", request.getValue("mode").jsonPrimitive.content)
+        assertEquals(PARENT_ID, request.getValue("parentSessionId").jsonPrimitive.content)
+        assertEquals(SESSION_ID, request.getValue("childSessionId").jsonPrimitive.content)
+        assertFalse(unary.any { it.contains("\"session/prompt\"") })
     }
 
     @Test
@@ -527,12 +643,56 @@ class ChatViewModelDshFollowTest {
         harness.manager.states.first { it[SERVER_ID]?.muxOpen == true && opens == 2 }
         val ids = secondMux.sent.map { json.parseToJsonElement(it).jsonObject.getValue("streamId").jsonPrimitive.content }
         secondMux.incoming.trySend(item(ids[0], """{"type":"ready","clientId":"client-2","host":{"home":"/root"}}"""))
-        secondMux.incoming.trySend(item(ids[1], """{"type":"baseline","value":{"queues":{},"jobs":{},"projections":{}}}"""))
-        secondMux.incoming.trySend(item(ids[2], """{"type":"baseline","value":{"items":[],"archivedSessionIds":[],"hiddenWorkspaceIds":[]}}"""))
+        secondMux.incoming.trySend(item(ids[1], """{"type":"baseline","value":{"projections":{}}}"""))
+        secondMux.incoming.trySend(item(ids[2], """{"type":"baseline","value":{"items":[],"archivedSessionIds":[],"pinnedSessionIds":[]}}"""))
         listFailed.await()
         runCurrent()
         assertTrue("Known conversation history must not depend on catalog recovery",
             secondMux.sent.any { it.contains("\"session/follow\"") })
+    }
+
+    @Test
+    fun `preset selection waits for host confirmation`() = runTest(dispatcher) {
+        val started = CompletableDeferred<Unit>()
+        val response = CompletableDeferred<Unit>()
+        val mux = FakeDownlink()
+        val harness = dshHarness(mux, CopyOnWriteArrayList(), beforePresetSelect = {
+            started.complete(Unit)
+            response.await()
+        }, listItem = """{"sessionId":"$SESSION_ID","updatedAt":2,"running":false,"blank":false,"projections":{"asOfSeq":10,"values":{"agentPreset":"old"}}}""")
+        val vm = newViewModel(harness.client, harness.manager)
+        harness.manager.connect(SERVER_ID, DshConnection.from("http://127.0.0.1:3080", token = "launch-token"))
+        runCurrent()
+        pushBaselines(mux)
+        vm.dshPresets.first { it.currentId == "old" && !it.loading }
+        val result = CompletableDeferred<Boolean>()
+        vm.selectDshPreset("standard") { result.complete(it) }
+        started.await()
+        assertTrue(vm.dshPresets.value.selecting)
+        assertEquals("old", vm.dshPresets.value.currentId)
+        assertFalse(result.isCompleted)
+        response.complete(Unit)
+        assertTrue(result.await())
+        vm.dshPresets.first { it.currentId == "standard" && !it.selecting }
+    }
+
+    @Test
+    fun `rejected preset selection retains the original preset and reports failure`() = runTest(dispatcher) {
+        val mux = FakeDownlink()
+        val harness = dshHarness(mux, CopyOnWriteArrayList(), presetSelectResult =
+            """{"ok":false,"error":{"message":"Preset rejected","code":"preset/rejected"}}""",
+            listItem = """{"sessionId":"$SESSION_ID","updatedAt":2,"running":false,"blank":false,"projections":{"asOfSeq":10,"values":{"agentPreset":"old"}}}""")
+        val vm = newViewModel(harness.client, harness.manager)
+        harness.manager.connect(SERVER_ID, DshConnection.from("http://127.0.0.1:3080", token = "launch-token"))
+        runCurrent()
+        pushBaselines(mux)
+        vm.dshPresets.first { it.currentId == "old" && !it.loading }
+        val result = CompletableDeferred<Boolean>()
+        vm.selectDshPreset("standard") { result.complete(it) }
+        assertFalse(result.await())
+        val failed = vm.dshPresets.first { it.error != null && !it.selecting }
+        assertEquals("old", failed.currentId)
+        assertTrue(failed.error!!.contains("Preset rejected"))
     }
 
     private data class DshHarness(
@@ -540,11 +700,301 @@ class ChatViewModelDshFollowTest {
         val manager: DshConnectionManager,
     )
 
+    @Test
+    fun `rewind waits for success then restores text and can rewind earlier messages`() = runTest(dispatcher) {
+        val mux = FakeDownlink()
+        val unary = CopyOnWriteArrayList<String>()
+        val receipt = CompletableDeferred<String>()
+        val earlierReceipt = CompletableDeferred<String>()
+        var executions = 0
+        val harness = dshHarness(mux, unary,
+            commandList = """[{"name":"rewind","description":"Rewind","input":{"hint":"@<seq> chat|both"}}]""",
+            executeCommand = { if (executions++ == 0) receipt.await() else earlierReceipt.await() })
+        val vm = newViewModel(harness.client, harness.manager)
+        collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
+        harness.manager.connect(SERVER_ID, DshConnection.from("http://127.0.0.1:3080", token = "launch-token"))
+        runCurrent()
+        pushBaselines(mux)
+        harness.manager.states.first { it[SERVER_ID]?.isReady == true }
+        vm.dshSkills.first { it.commands.any { command -> command.name == "rewind" } }
+        runCurrent()
+        val reducer = harness.manager.reducer(SERVER_ID)
+        reducer.applyFollowSnapshot(SESSION_ID, dev.wuxie233.codecarry.data.dsh.DshFollowFrame.Snapshot(
+            header = null, cursor = 3, records = emptyList(), hasMore = false,
+        ))
+        reducer.mergeHistory(SESSION_ID, listOf(rewindUser(1), rewindUser(2), rewindUser(3)))
+        runCurrent()
+        vm.updateDraftText("unsent")
+        val target = vm.uiState.value.messages[1].message.id
+        assertTrue(vm.dshRewind.value.messageSeqs.contains(2))
+        vm.rewindDshMessage(target)
+        vm.rewindDshMessage(target)
+        runCurrent()
+        assertTrue(vm.dshRewind.value.inFlight)
+        assertEquals(3, vm.uiState.value.messages.size)
+        assertEquals("unsent", vm.draftText.value)
+        reducer.mergeHistory(SESSION_ID, listOf(rewindMarker(4, 2, 3)))
+        runCurrent()
+        assertEquals(3, vm.uiState.value.messages.size)
+        receipt.complete("""{"commandId":"cmd-1","result":{"kind":"success","sourceEventSeq":4}}""")
+        vm.draftText.first { it == "prompt 2" }
+        runCurrent()
+        assertFalse(vm.dshRewind.value.inFlight)
+        assertEquals(1, vm.uiState.value.messages.size)
+        assertEquals("prompt 2", vm.draftText.value)
+        assertEquals(setOf(1L), vm.dshRewind.value.messageSeqs)
+        val calls = unary.filter { it.contains("\"commands/execute\"") }
+        assertEquals(1, calls.size)
+        val args = json.parseToJsonElement(calls.single()).jsonObject["payload"]!!.jsonObject["args"]!!.jsonObject
+        assertEquals("/rewind @2 chat", args["line"]!!.jsonPrimitive.content)
+        assertEquals(SESSION_ID, args["agentId"]!!.jsonPrimitive.content)
+        assertFalse(unary.any { it.contains("session/prompt") || it.contains("session/cancel") })
+        vm.rewindDshMessage(vm.uiState.value.messages.single().message.id)
+        runCurrent()
+        reducer.mergeHistory(SESSION_ID, listOf(rewindMarker(5, 1, 4)))
+        earlierReceipt.complete("""{"commandId":"cmd-2","result":{"kind":"success","sourceEventSeq":5}}""")
+        vm.draftText.first { it == "prompt 1" }
+        runCurrent()
+        assertTrue(vm.uiState.value.messages.isEmpty())
+        assertTrue(vm.dshRewind.value.messageSeqs.isEmpty())
+        assertEquals(2, unary.count { it.contains("\"commands/execute\"") })
+    }
+
+    @Test
+    fun `rewind restores ordered images only for the open conversation`() = checkRewindImages()
+
+    @Test
+    fun `rewind keeps readable images and names failed images and omitted files`() = checkRewindImages(
+        extraContent = """,{"type":"image","attachment":{"attachmentId":"missing","name":"missing.png"}},
+            {"type":"image","attachment":{"attachmentId":"transport","name":"transport.png"}},
+            {"type":"image","attachment":{"attachmentId":"invalid","name":"invalid.png"}},
+            {"type":"image","attachment":{"attachmentId":"slow","name":"slow.png"}},
+            {"type":"image","attachment":{"name":"no-id.png"}},
+            {"type":"file","attachment":{"attachmentId":"document","mediaType":"application/pdf","name":"notes.pdf"}}""",
+        notices = listOf("missing.png", "transport.png", "invalid.png", "slow.png", "no-id.png", "notes.pdf"),
+    )
+
+    @Test
+    fun `image only rewind replaces unsent text with empty text`() = checkRewindImages(text = "")
+
+    private fun checkRewindImages(
+        text: String = "pictures",
+        extraContent: String = "",
+        notices: List<String> = emptyList(),
+    ) = runTest(dispatcher) {
+        val mux = FakeDownlink()
+        val unary = CopyOnWriteArrayList<String>()
+        val drafts = draftRepository()
+        val harness = dshHarness(mux, unary,
+            commandList = """[{"name":"rewind","description":"Rewind"}]""",
+            executeCommand = { """{"commandId":"rewind","result":{"kind":"success","sourceEventSeq":2}}""" },
+            readAttachment = { attachmentId ->
+                when (attachmentId) {
+                    "missing" -> return@dshHarness "null"
+                    "transport" -> throw java.io.IOException("attachment transport failed")
+                    "slow" -> kotlinx.coroutines.delay(16_000)
+                }
+                val data = if (attachmentId == "second") "Yg==" else "YQ=="
+                """{"attachment":{"attachmentId":"$attachmentId","mediaType":"image/png","bytes":1,"width":1,"height":1},"data":"${if (attachmentId == "invalid") "%%%" else data}"}"""
+            })
+        val vm = newViewModel(harness.client, harness.manager, drafts = drafts)
+        collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
+        harness.manager.connect(SERVER_ID, DshConnection.from("http://127.0.0.1:3080", token = "launch-token"))
+        runCurrent()
+        pushBaselines(mux)
+        harness.manager.states.first { it[SERVER_ID]?.isReady == true }
+        vm.dshSkills.first { it.commands.any { command -> command.name == "rewind" } }
+        runCurrent()
+        val reducer = harness.manager.reducer(SERVER_ID)
+        reducer.applyFollowSnapshot(SESSION_ID, dev.wuxie233.codecarry.data.dsh.DshFollowFrame.Snapshot(
+            header = null, cursor = 1, records = emptyList(), hasMore = false,
+        ))
+        reducer.mergeHistory(SESSION_ID, listOf(rewindUser(1).copy(data = json.parseToJsonElement(
+            """{"source":{"kind":"user"},"content":[${if (text.isEmpty()) "" else """{"type":"text","text":"$text"},"""}{"type":"image","attachment":{"attachmentId":"second","mediaType":"image/png","name":"second.png"}}$extraContent,{"type":"image","attachment":{"attachmentId":"first","mediaType":"image/png","name":"first.png"}}]}"""
+        ))))
+        runCurrent()
+        vm.updateDraftText("unsent")
+        vm.addDraftAttachment("content://old")
+        vm.rewindDshMessage(vm.uiState.value.messages.single().message.id)
+        reducer.mergeHistory(SESSION_ID, listOf(rewindMarker(2, 1, 1)))
+        runCurrent()
+        vm.draftText.first { it == text }
+        vm.dshRewind.first { !it.inFlight }
+        runCurrent()
+        assertEquals(listOf("data:image/png;base64,Yg==", "data:image/png;base64,YQ=="), vm.draftAttachmentUris.value)
+        assertTrue(vm.uiState.value.messages.isEmpty())
+        notices.forEach { name -> assertTrue("Missing notice for $name: ${vm.uiState.value.error}", vm.uiState.value.error.orEmpty().contains(name)) }
+        if (notices.isEmpty()) assertNull(vm.uiState.value.error)
+        vm.updateDraftText("edited pictures")
+        vm.selectAgent("test")
+        val reopened = newViewModel(harness.client, harness.manager, drafts = drafts)
+        assertEquals("edited pictures", reopened.draftText.value)
+        assertTrue(reopened.draftAttachmentUris.value.isEmpty())
+    }
+
+    @Test fun `unmatched rewind keeps conversation and draft`() = checkRewindFailure { "null" }
+    @Test fun `rejected rewind keeps conversation and draft`() = checkRewindFailure {
+        """{"commandId":"cmd","result":{"kind":"error","text":"rejected"}}"""
+    }
+    @Test fun `uncompleted rewind times out without changing conversation or draft`() = checkRewindFailure {
+        kotlinx.coroutines.awaitCancellation()
+    }
+    @Test fun `success without history marker does not change conversation or draft`() = checkRewindFailure {
+        """{"commandId":"cmd","result":{"kind":"success","sourceEventSeq":4}}"""
+    }
+
+    private fun checkRewindFailure(execute: suspend () -> String) = runTest(dispatcher) {
+        val mux = FakeDownlink()
+        val unary = CopyOnWriteArrayList<String>()
+        val commandStarted = CompletableDeferred<Unit>()
+        val harness = dshHarness(mux, unary,
+            commandList = """[{"name":"rewind","description":"Rewind"}]""", executeCommand = {
+                commandStarted.complete(Unit)
+                execute()
+            })
+        val vm = newViewModel(harness.client, harness.manager)
+        collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
+        harness.manager.connect(SERVER_ID, DshConnection.from("http://127.0.0.1:3080", token = "launch-token"))
+        runCurrent(); pushBaselines(mux)
+        harness.manager.states.first { it[SERVER_ID]?.isReady == true }
+        vm.dshSkills.first { it.commands.any { command -> command.name == "rewind" } }
+        runCurrent()
+        val reducer = harness.manager.reducer(SERVER_ID)
+        reducer.applyFollowSnapshot(SESSION_ID, dev.wuxie233.codecarry.data.dsh.DshFollowFrame.Snapshot(
+            header = null, cursor = 3, records = emptyList(), hasMore = false,
+        ))
+        reducer.mergeHistory(SESSION_ID, listOf(rewindUser(1), rewindUser(2)))
+        runCurrent()
+        vm.updateDraftText("keep this")
+        val before = vm.uiState.value.messages
+        vm.rewindDshMessage(before.last().message.id)
+        // Ktor's MockEngine runs on IO: wait for dispatch before advancing the
+        // virtual deadline, otherwise the timeout can precede the fake request.
+        commandStarted.await()
+        advanceUntilIdle()
+        assertEquals(before, vm.uiState.value.messages)
+        assertEquals("keep this", vm.draftText.value)
+        assertFalse(vm.dshRewind.value.inFlight)
+        assertEquals(org.robolectric.RuntimeEnvironment.getApplication().getString(
+            dev.wuxie233.codecarry.R.string.dsh_rewind_failed), vm.uiState.value.error)
+        assertEquals(1, unary.count { it.contains("\"commands/execute\"") })
+        reducer.mergeHistory(SESSION_ID, listOf(rewindMarker(4, 2, 2)))
+        runCurrent()
+        assertEquals(setOf(1L), vm.dshRewind.value.messageSeqs)
+        assertEquals(before, vm.uiState.value.messages)
+        assertEquals("keep this", vm.draftText.value)
+    }
+
+    @Test fun `archived compact reports recovery action and hides candidate until restored`() = runTest(dispatcher) {
+        val mux = FakeDownlink()
+        val unary = CopyOnWriteArrayList<String>()
+        val harness = dshHarness(mux, unary)
+        val vm = newViewModel(harness.client, harness.manager)
+        collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
+        harness.manager.connect(SERVER_ID, DshConnection.from("http://127.0.0.1:3080", token = "launch-token"))
+        runCurrent(); pushBaselines(mux)
+        harness.manager.states.first { it[SERVER_ID]?.isReady == true }
+        vm.dshSkills.first { it.commands.isNotEmpty() }
+        runCurrent()
+        assertTrue(vm.dshSkills.value.matchesCompact("co"))
+        val reducer = harness.manager.reducer(SERVER_ID)
+        reducer.applyWorkspaceFrame(dev.wuxie233.codecarry.data.dsh.DshWorkspaceFrame.Archived(listOf(SESSION_ID)))
+        runCurrent()
+        vm.compactDshSession()
+        runCurrent()
+        assertEquals("Archived. Restore the session first.", vm.uiState.value.error)
+        assertFalse(vm.dshSkills.value.matchesCompact("co"))
+        assertTrue(vm.dshSkills.value.matching("").isNotEmpty())
+        assertFalse(unary.any { it.contains("commands/execute") })
+        reducer.applyWorkspaceFrame(dev.wuxie233.codecarry.data.dsh.DshWorkspaceFrame.Archived(emptyList()))
+        runCurrent()
+        assertTrue(vm.dshSkills.value.matchesCompact("co"))
+    }
+
+    @Test fun `rewind entry follows capability archive origin and current model surface`() = runTest(dispatcher) {
+        val mux = FakeDownlink()
+        val unary = CopyOnWriteArrayList<String>()
+        val harness = dshHarness(mux, unary,
+            commandList = """[{"name":"rewind","description":"Rewind"}]""")
+        val vm = newViewModel(harness.client, harness.manager)
+        collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
+        harness.manager.connect(SERVER_ID, DshConnection.from("http://127.0.0.1:3080", token = "launch-token"))
+        runCurrent(); pushBaselines(mux)
+        harness.manager.states.first { it[SERVER_ID]?.isReady == true }
+        vm.dshSkills.first { it.commands.any { command -> command.name == "rewind" } }
+        runCurrent()
+        val reducer = harness.manager.reducer(SERVER_ID)
+        reducer.applyFollowSnapshot(SESSION_ID, dev.wuxie233.codecarry.data.dsh.DshFollowFrame.Snapshot(
+            header = null, cursor = 3, records = emptyList(), hasMore = false,
+        ))
+        reducer.mergeHistory(SESSION_ID, listOf(rewindUser(1), rewindUser(2), rewindUser(3)))
+        runCurrent()
+        assertEquals(setOf(1L, 2L, 3L), vm.dshRewind.value.messageSeqs)
+        // A compaction replacement shadows old human prompts even though their log is retained.
+        reducer.mergeHistory(SESSION_ID, listOf(rewindMarker(4, 1, 2).copy(
+            data = json.parseToJsonElement("""{"source":{"kind":"compaction"},"content":[]}"""))))
+        runCurrent()
+        assertEquals(setOf(3L), vm.dshRewind.value.messageSeqs)
+        reducer.applyWorkspaceFrame(dev.wuxie233.codecarry.data.dsh.DshWorkspaceFrame.Archived(listOf(SESSION_ID)))
+        runCurrent()
+        assertTrue(vm.dshRewind.value.messageSeqs.isEmpty())
+        reducer.applyWorkspaceFrame(dev.wuxie233.codecarry.data.dsh.DshWorkspaceFrame.Archived(emptyList()))
+        runCurrent()
+        assertEquals(setOf(3L), vm.dshRewind.value.messageSeqs)
+        reducer.applySessionList(listOf(dev.wuxie233.codecarry.data.dsh.DshSessionSummary(
+            SESSION_ID, 5, false, false, origin = "subagent", parentSessionId = "parent")))
+        runCurrent()
+        assertTrue(vm.dshRewind.value.messageSeqs.isEmpty())
+        vm.rewindDshMessage(vm.uiState.value.messages.last().message.id)
+        assertFalse(unary.any { it.contains("commands/execute") })
+    }
+
+    @Test fun `missing rewind command leaves all loaded prompts without an entry`() = runTest(dispatcher) {
+        val mux = FakeDownlink()
+        val unary = CopyOnWriteArrayList<String>()
+        val harness = dshHarness(mux, unary)
+        val vm = newViewModel(harness.client, harness.manager)
+        collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
+        harness.manager.connect(SERVER_ID, DshConnection.from("http://127.0.0.1:3080", token = "launch-token"))
+        runCurrent(); pushBaselines(mux)
+        harness.manager.states.first { it[SERVER_ID]?.isReady == true }
+        vm.dshSkills.first { it.commands.isNotEmpty() }
+        runCurrent()
+        val reducer = harness.manager.reducer(SERVER_ID)
+        reducer.applyFollowSnapshot(SESSION_ID, dev.wuxie233.codecarry.data.dsh.DshFollowFrame.Snapshot(
+            header = null, cursor = 1, records = emptyList(), hasMore = false))
+        reducer.mergeHistory(SESSION_ID, listOf(rewindUser(1)))
+        runCurrent()
+        assertTrue(vm.dshRewind.value.messageSeqs.isEmpty())
+        vm.rewindDshMessage(vm.uiState.value.messages.single().message.id)
+        runCurrent()
+        assertFalse(unary.any { it.contains("commands/execute") })
+    }
+
+    private fun rewindUser(seq: Long) = dev.wuxie233.codecarry.data.dsh.DshSessionEvent(
+        type = "user/message", seq = seq, time = seq,
+        data = json.parseToJsonElement("""{"source":{"kind":"user"},"content":[{"type":"text","text":"prompt $seq"}]}"""),
+        surfaceOp = kotlinx.serialization.json.JsonPrimitive("append"),
+    )
+
+    private fun rewindMarker(seq: Long, start: Long, end: Long) = dev.wuxie233.codecarry.data.dsh.DshSessionEvent(
+        type = "user/message", seq = seq, time = seq,
+        data = json.parseToJsonElement("""{"source":{"kind":"dsh-rewind"},"content":[{"type":"text","text":"(empty message)"}]}"""),
+        surfaceOp = json.parseToJsonElement("""{"op":"replace","startSeq":$start,"endSeq":$end}"""),
+    )
+
     private fun dshHarness(
         mux: FakeDownlink,
         unary: MutableList<String>,
         beforeSessionList: suspend () -> Unit = {},
         beforePresetList: suspend () -> Unit = {},
+        beforeSkillList: suspend () -> Unit = {},
+        beforePresetSelect: suspend () -> Unit = {},
+        onCommandExecute: () -> Unit = {},
+        commandList: String = """[{"name":"compact","description":"Compact history"}]""",
+        executeCommand: suspend () -> String = { """{"commandId":"compact","result":{"kind":"success"}}""" },
+        readAttachment: suspend (String) -> String = { error("attachment unavailable") },
+        presetSelectResult: String = """{"ok":true,"value":"standard"}""",
         openMux: () -> DshDownlink = { mux },
         listItem: String = """{"sessionId":"$SESSION_ID","updatedAt":2,"running":false,"blank":false,"cwd":"/root/CODE/Minecraft"}""",
     ): DshHarness {
@@ -571,11 +1021,52 @@ class ChatViewModelDshFollowTest {
                         headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
                     )
                 }
+                "/api/commands/list" -> {
+                    unary += (request.body as TextContent).text
+                    respond(
+                        content = """{"type":"server-response","rpcId":"fixed","result":{"ok":true,"value":$commandList}}""",
+                        headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
+                    )
+                }
+                "/api/commands/execute" -> {
+                    unary += (request.body as TextContent).text
+                    onCommandExecute()
+                    respond(
+                        content = """{"type":"server-response","rpcId":"fixed","result":{"ok":true,"value":${executeCommand()}}}""",
+                        headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
+                    )
+                }
+                "/api/session/attachment" -> {
+                    val body = (request.body as TextContent).text
+                    unary += body
+                    val args = json.parseToJsonElement(body).jsonObject["payload"]!!.jsonObject["args"]!!.jsonObject["request"]!!.jsonObject
+                    assertEquals(SESSION_ID, args["sessionId"]!!.jsonPrimitive.content)
+                    respond(
+                        content = """{"type":"server-response","rpcId":"fixed","result":{"ok":true,"value":${readAttachment(args["attachmentId"]!!.jsonPrimitive.content)}}}""",
+                        headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
+                    )
+                }
+                "/api/skills/list" -> {
+                    unary += (request.body as TextContent).text
+                    beforeSkillList()
+                    respond(
+                        content = """{"type":"server-response","rpcId":"fixed","result":{"ok":true,"value":{"skills":[{"name":"grill","description":"Discuss","modelInvocable":true}]}}}""",
+                        headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
+                    )
+                }
                 "/api/agentPresets/list" -> {
                     unary += (request.body as TextContent).text
                     beforePresetList()
                     respond(
-                        content = """{"type":"server-response","rpcId":"fixed","result":{"ok":true,"value":{"presets":[{"id":"standard","trust":"system","isDefault":true}],"authorable":true}}}""",
+                        content = """{"type":"server-response","rpcId":"fixed","result":{"ok":true,"value":{"presets":[{"id":"standard","isDefault":true}]}}}""",
+                        headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
+                    )
+                }
+                "/api/agentPresets/select" -> {
+                    unary += (request.body as TextContent).text
+                    beforePresetSelect()
+                    respond(
+                        content = """{"type":"server-response","rpcId":"fixed","result":$presetSelectResult}""",
                         headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
                     )
                 }
@@ -586,6 +1077,13 @@ class ChatViewModelDshFollowTest {
                             """{"type":"server-response","rpcId":"fixed","result":{"ok":true,"value":{"default":{"provider":"p","model":"m"},"groups":[]}}}""",
                         ),
                         status = HttpStatusCode.OK,
+                        headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
+                    )
+                }
+                "/api/subagents/prompt" -> {
+                    unary += (request.body as TextContent).text
+                    respond(
+                        content = """{"type":"server-response","rpcId":"fixed","result":{"ok":true,"value":{"messageId":"child-message"}}}""",
                         headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
                     )
                 }
@@ -622,9 +1120,9 @@ class ChatViewModelDshFollowTest {
         return DshHarness(client, manager)
     }
 
-    private fun newViewModel(dshApi: DshApiClient, manager: DshConnectionManager): ChatViewModel {
+    private fun newViewModel(dshApi: DshApiClient, manager: DshConnectionManager, sessionId: String = SESSION_ID, drafts: DraftRepository = draftRepository()): ChatViewModel {
         return ChatViewModel(
-            appContext = object : ContextWrapper(null) {},
+            appContext = org.robolectric.RuntimeEnvironment.getApplication(),
             savedStateHandle = SavedStateHandle(
                 mapOf(
                     "serverUrl" to "http://127.0.0.1:3080",
@@ -632,7 +1130,7 @@ class ChatViewModelDshFollowTest {
                     "password" to "",
                     "serverName" to "DSH",
                     "serverId" to SERVER_ID,
-                    "sessionId" to SESSION_ID,
+                    "sessionId" to sessionId,
                     "directory" to "/root/CODE/Minecraft",
                     "serverType" to ServerType.DSH.name,
                     "token" to "launch-token",
@@ -641,7 +1139,7 @@ class ChatViewModelDshFollowTest {
             eventReducer = EventReducer(),
             api = unusedOpenCodeApi(),
             json = json,
-            draftRepository = draftRepository(),
+            draftRepository = drafts,
             sessionListPreferencesRepository = sessionListPreferencesRepository(),
             settingsRepository = settingsRepository(),
             dshApi = dshApi,
@@ -680,9 +1178,9 @@ class ChatViewModelDshFollowTest {
 
     private fun pushBaselines(mux: FakeDownlink) {
         mux.incoming.trySend(item("st-0", """{"type":"ready","clientId":"client-1","host":{"home":"/root"}}"""))
-        mux.incoming.trySend(item("st-1", """{"type":"baseline","value":{"queues":{},"jobs":{},"projections":{}}}"""))
+        mux.incoming.trySend(item("st-1", """{"type":"baseline","value":{"projections":{}}}"""))
         mux.incoming.trySend(
-            item("st-2", """{"type":"baseline","value":{"items":[],"archivedSessionIds":[],"hiddenWorkspaceIds":[]}}"""),
+            item("st-2", """{"type":"baseline","value":{"items":[],"archivedSessionIds":[],"pinnedSessionIds":[]}}"""),
         )
     }
 

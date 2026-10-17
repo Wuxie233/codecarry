@@ -23,9 +23,6 @@ object DshRpc {
 
     val LOOPBACK_ONLY_METHODS: Set<String> = setOf(
         "agentPresets/read",
-        "agentPresets/copy",
-        "agentPresets/deletePreset",
-        "settings/openAgentPresetDirectory",
         "directoryPicker/pick",
         "session/openWorkspacePath",
         "settings/openSettingsDocument",

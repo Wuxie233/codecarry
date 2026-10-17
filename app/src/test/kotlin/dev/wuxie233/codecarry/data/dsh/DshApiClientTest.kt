@@ -19,6 +19,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -29,17 +30,113 @@ class DshApiClientTest {
     private val connection = DshConnection.from("http://192.168.1.8:3080")
 
     @Test
+    fun `slash submission resolves once and only unresolved commands fall back`() = runTest {
+        val captured = mutableListOf<HttpRequestData>()
+        var outcome = """{"commandId":"compact","result":{"kind":"success"}}"""
+        var fail = false
+        val client = api(captured) { request ->
+            if (fail) throw java.io.IOException("offline")
+            val envelope = json.parseToJsonElement((request.body as TextContent).text).jsonObject
+            val value = if (request.url.encodedPath == "/api/commands/execute") outcome else """{"accepted":true}"""
+            """{"type":"server-response","rpcId":"${envelope.getValue("rpcId").jsonPrimitive.content}","result":{"ok":true,"value":$value}}"""
+        }
+        val content = buildJsonArray { add(buildJsonObject { put("type", "text"); put("text", "/compact") }) }
+        val address = DshSessionAddress.Session("s1")
+        assertFalse(client.submitPrompt(connection, address, "queue", content))
+        assertEquals(listOf("/api/commands/execute"), captured.map { it.url.encodedPath })
+        captured.clear()
+        outcome = "null"
+        assertTrue(client.submitPrompt(connection, address, "steer", content))
+        assertEquals(listOf("/api/commands/execute", "/api/session/prompt"), captured.map { it.url.encodedPath })
+        for (networkFailure in listOf(false, true)) {
+            captured.clear()
+            outcome = """{"commandId":"compact","result":{"kind":"error","text":"Busy"}}"""
+            fail = networkFailure
+            assertTrue(runCatching { client.submitPrompt(connection, address, "queue", content) }.isFailure)
+            assertEquals(listOf("/api/commands/execute"), captured.map { it.url.encodedPath })
+        }
+    }
+
+    @Test
+    fun `current session rows decode availability and optional format without legacy fields`() = runTest {
+        val client = api(mutableListOf()) { request ->
+            val envelope = json.parseToJsonElement((request.body as TextContent).text).jsonObject
+            """{"type":"server-response","rpcId":"${envelope.getValue("rpcId").jsonPrimitive.content}","result":{"ok":true,"value":{"items":[{"sessionId":"old","updatedAt":1,"running":false,"blank":false,"agentAvailable":false,"formatStatus":"migration-required","projections":{"asOfSeq":1,"values":{"agentPreset":"chosen"}}},{"sessionId":"live","updatedAt":2,"running":true,"blank":false,"agentAvailable":true,"formatStatus":"current"},{"sessionId":"optional","updatedAt":3,"running":false,"blank":false,"agentAvailable":false}]}}}"""
+        }
+        val rows = client.sessionList(connection).items
+        assertEquals("migration-required", rows[0].formatStatus)
+        assertFalse(rows[0].agentAvailable)
+        assertTrue(rows[1].agentAvailable)
+        assertEquals("current", rows[1].formatStatus)
+        assertNull(rows[2].formatStatus)
+        val reducer = DshEventReducer()
+        reducer.applySessionList(rows)
+        assertEquals("chosen", reducer.state.value.sessions.getValue("old").currentAgentPreset)
+        assertEquals("migration-required", reducer.state.value.sessions.getValue("old").formatStatus)
+        assertTrue(reducer.state.value.sessions.getValue("live").agentAvailable)
+        assertEquals(3, mapDshEventStateToSessions(reducer.state.value).sessions.size)
+    }
+
+    @Test
+    fun `pin and unpin use session request and retain host order`() = runTest {
+        val captured = mutableListOf<HttpRequestData>()
+        val client = api(captured) { request ->
+            val envelope = json.parseToJsonElement((request.body as TextContent).text).jsonObject
+            val args = envelope.getValue("payload").jsonObject.getValue("args").jsonObject
+            assertEquals("s1", args.getValue("request").jsonObject.getValue("sessionId").jsonPrimitive.content)
+            """{"type":"server-response","rpcId":"${envelope.getValue("rpcId").jsonPrimitive.content}","result":{"ok":true,"value":{"pinnedSessionIds":["s2","s1"]}}}"""
+        }
+        assertEquals(listOf("s2", "s1"), client.workspacePinSession(connection, "s1").pinnedSessionIds)
+        assertEquals(listOf("s2", "s1"), client.workspaceUnpinSession(connection, "s1").pinnedSessionIds)
+        assertEquals(listOf("/api/workspace/pinSession", "/api/workspace/unpinSession"), captured.map { it.url.encodedPath })
+    }
+
+    @Test
+    fun `command methods use agent arguments and decode host outcomes`() = runTest {
+        val captured = mutableListOf<HttpRequestData>()
+        var outcome = """{"commandId":"cmd-1","result":{"kind":"success","sourceEventSeq":42}}"""
+        val client = api(captured) { request ->
+            val envelope = json.parseToJsonElement((request.body as TextContent).text).jsonObject
+            val method = envelope.getValue("method").jsonPrimitive.content
+            val args = envelope.getValue("payload").jsonObject.getValue("args").jsonObject
+            assertEquals("child-1", args.getValue("agentId").jsonPrimitive.content)
+            val value = if (method == "commands/list") {
+                assertEquals(setOf("agentId"), args.keys)
+                """[{"name":"compact","description":"Compact history","definitionId":"compact-v1","input":{"hint":"Instructions","attachments":true}}]"""
+            } else {
+                assertEquals("commands/execute", method)
+                assertEquals(setOf("agentId", "line", "submittedAttachments"), args.keys)
+                assertEquals("/compact", args.getValue("line").jsonPrimitive.content)
+                assertEquals("[]", args.getValue("submittedAttachments").toString())
+                outcome
+            }
+            """{"type":"server-response","rpcId":"${envelope.getValue("rpcId").jsonPrimitive.content}","result":{"ok":true,"value":$value}}"""
+        }
+        assertEquals("compact", client.commandList(connection, "child-1").single().name)
+        assertEquals("/api/commands/list", captured.last().url.encodedPath)
+        assertEquals(42L, client.commandExecute(connection, "child-1", "/compact")?.result?.sourceEventSeq)
+        assertEquals("/api/commands/execute", captured.last().url.encodedPath)
+        outcome = """{"commandId":"cmd-2","result":{"kind":"error","text":"Busy"}}"""
+        assertEquals("Busy", client.commandExecute(connection, "child-1", "/compact")?.result?.text)
+        outcome = "null"
+        assertNull(client.commandExecute(connection, "child-1", "/compact"))
+    }
+
+    @Test
     fun `preset roster matches the host path free list contract`() = runTest {
         val captured = mutableListOf<HttpRequestData>()
         val client = api(captured) { request ->
             val envelope = json.parseToJsonElement((request.body as TextContent).text).jsonObject
             assertEquals("agentPresets/list", envelope.getValue("method").jsonPrimitive.content)
             assertTrue(envelope.getValue("payload").jsonObject.getValue("args").jsonObject.isEmpty())
-            """{"type":"server-response","rpcId":"${envelope.getValue("rpcId").jsonPrimitive.content}","result":{"ok":true,"value":{"presets":[{"id":"standard","trust":"system","isDefault":true},{"id":"custom","trust":"user","isDefault":false,"name":"Custom","description":"My preset","broken":"Missing plugin"}],"authorable":true}}}"""
+            """{"type":"server-response","rpcId":"${envelope.getValue("rpcId").jsonPrimitive.content}","result":{"ok":true,"value":{"presets":[{"id":"standard","isDefault":true},{"id":"custom","isDefault":false,"name":"Custom","description":"My preset","broken":"Missing plugin"}]}}}"""
         }
         val roster = client.agentPresetList(connection)
         assertEquals(listOf("standard", "custom"), roster.presets.map { it.id })
-        assertTrue(roster.authorable)
+        assertTrue(roster.presets[0].isDefault)
+        assertNull(roster.presets[0].name)
+        assertEquals("Custom", roster.presets[1].name)
+        assertEquals("My preset", roster.presets[1].description)
         assertEquals("Missing plugin", roster.presets[1].broken)
         assertEquals("/api/agentPresets/list", captured.single().url.encodedPath)
     }
@@ -341,7 +438,12 @@ class DshApiClientTest {
     }
 
     @Test
-    fun `subagent prompt includes mode continuable`() = runTest {
+    fun `subagent prompt includes queue delivery and mode continuable`() = subagentPromptDelivery("queue")
+
+    @Test
+    fun `subagent prompt includes steer delivery and mode continuable`() = subagentPromptDelivery("steer")
+
+    private fun subagentPromptDelivery(delivery: String) = runTest {
         val captured = mutableListOf<HttpRequestData>()
         val client = api(captured) { request ->
             val envelope = json.parseToJsonElement((request.body as TextContent).text).jsonObject
@@ -350,12 +452,19 @@ class DshApiClientTest {
             assertEquals("parent-1", requestArgs.getValue("parentSessionId").jsonPrimitive.content)
             assertEquals("child-1", requestArgs.getValue("childSessionId").jsonPrimitive.content)
             assertEquals("continuable", requestArgs.getValue("mode").jsonPrimitive.content)
+            assertEquals(delivery, requestArgs.getValue("delivery").jsonPrimitive.content)
+            assertEquals("request-1", requestArgs.getValue("requestId").jsonPrimitive.content)
+            assertEquals("Asia/Shanghai", requestArgs.getValue("clientTimeZone").jsonPrimitive.content)
+            assertEquals(json.parseToJsonElement("""[{"type":"text","text":"hello"}]"""), requestArgs.getValue("content"))
             """{"type":"server-response","rpcId":"${envelope.getValue("rpcId").jsonPrimitive.content}","result":{"ok":true,"value":{"messageId":"m-1"}}}"""
         }
         val receipt = client.subagentPrompt(
             connection,
             parentSessionId = "parent-1",
             childSessionId = "child-1",
+            delivery = delivery,
+            requestId = "request-1",
+            clientTimeZone = "Asia/Shanghai",
             content = buildJsonArray { add(buildJsonObject { put("type", "text"); put("text", "hello") }) },
         )
         assertEquals("m-1", receipt.messageId)

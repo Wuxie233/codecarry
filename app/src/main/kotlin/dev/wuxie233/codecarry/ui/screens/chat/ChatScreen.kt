@@ -1214,6 +1214,9 @@ fun ChatScreen(
 
     val filePreview by viewModel.filePreview.collectAsState()
     val dshPresets by viewModel.dshPresets.collectAsState()
+    val dshSkills by viewModel.dshSkills.collectAsState()
+    val dshRewind by viewModel.dshRewind.collectAsState()
+    val confirmationGate = remember(viewModel) { ChatConfirmationGate() }
     val draftText by viewModel.draftText.collectAsState()
     val draftAttachmentUris by viewModel.draftAttachmentUris.collectAsState()
     var inputText by remember { mutableStateOf(TextFieldValue("")) }
@@ -1520,9 +1523,8 @@ fun ChatScreen(
     // Rebuild attachment objects from persisted draft URIs on first composition
     LaunchedEffect(draftAttachmentUris, compressImageAttachments, imageAttachmentMaxLongSide, imageAttachmentWebpQuality) {
         // Only rebuild if attachments list doesn't match URIs (e.g. on session restore)
-        val currentUris = attachments.map { it.uri.toString() }.toSet()
-        val draftUriSet = draftAttachmentUris.toSet()
-        if (currentUris == draftUriSet) return@LaunchedEffect
+        val currentUris = attachments.map { it.uri.toString() }
+        if (currentUris == draftAttachmentUris) return@LaunchedEffect
 
         val restored = mutableListOf<ImageAttachment>()
         for (uriStr in draftAttachmentUris) {
@@ -1811,6 +1813,7 @@ fun ChatScreen(
     }
 
     CompositionLocalProvider(
+        LocalChatConfirmationGate provides confirmationGate,
         LocalChatFontSize provides chatFontSize,
         LocalCodeWordWrap provides codeWordWrap,
         LocalCompactMessages provides compactMessages,
@@ -2331,6 +2334,9 @@ fun ChatScreen(
                 variantNames = if (uiState.supportsThinkingSelection) uiState.variantNames else emptyList(),
                 selectedVariant = uiState.selectedVariant,
                 onVariantClick = { if (!dshPresets.selecting) showVariantPicker = true },
+                dshSkills = if (uiState.isDsh) dshSkills else null,
+                onDshSkillsRetry = viewModel::refreshDshSkills,
+                onDshCompact = viewModel::compactDshSession,
                 commands = if (uiState.supportsCommands) uiState.commands else emptyList(),
                 fileSearchResults = fileSearchResults,
                 confirmedFilePaths = confirmedFilePaths,
@@ -2945,8 +2951,8 @@ fun ChatScreen(
                                 return@itemsIndexed
                             }
 
-                            Box(
-                                modifier = Modifier.padding(
+                            Column(
+                                modifier = Modifier.fillMaxWidth().padding(
                                     bottom = if (nextBelongsToSameMessage) 1.dp else messageSpacing,
                                 ),
                             ) {
@@ -2979,7 +2985,7 @@ fun ChatScreen(
                                             is ChatMessageRow.Whole -> chatMessage.isAssistant
                                             else -> false
                                         },
-                                        onRevert = if (chatMessage.isUser) {
+                                        onRevert = if (chatMessage.isUser && !uiState.isDsh) {
                                             {
                                                 val revertText = chatMessage.parts
                                                     .filterIsInstance<Part.Text>()
@@ -3009,6 +3015,14 @@ fun ChatScreen(
                                         },
                                         onMessageActionsRequested = { actionMenuMessage = it }
                                     )
+                                }
+                                if (isFirstMessageRow && chatMessage.isUser &&
+                                    dev.wuxie233.codecarry.data.dsh.dshMessageSeq(chatMessage.message.id) in dshRewind.messageSeqs) {
+                                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                                        DshRewindAction(chatMessage.message.id, dshRewind.inFlight, isBusy) {
+                                            viewModel.rewindDshMessage(chatMessage.message.id)
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -7249,6 +7263,9 @@ private fun ChatInputBar(
     variantNames: List<String> = emptyList(),
     selectedVariant: String? = null,
     onVariantClick: () -> Unit = {},
+    dshSkills: DshSkillCandidateState? = null,
+    onDshSkillsRetry: () -> Unit = {},
+    onDshCompact: () -> Unit = {},
     commands: List<CommandInfo> = emptyList(),
     fileSearchResults: List<String> = emptyList(),
     confirmedFilePaths: Set<String> = emptySet(),
@@ -7299,7 +7316,7 @@ private fun ChatInputBar(
     }
 
     // Slash command suggestions
-    val showSlashSuggestions = !isShellMode && text.startsWith("/") && !text.contains(" ")
+    val showSlashSuggestions = dshSkills == null && !isShellMode && text.startsWith("/") && !text.contains(" ")
     val slashQuery = if (showSlashSuggestions) text.removePrefix("/").lowercase() else ""
     val filteredCommands = if (showSlashSuggestions) {
         allCommands.filter { cmd ->
@@ -7321,6 +7338,10 @@ private fun ChatInputBar(
             color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
             thickness = 0.5.dp
         )
+
+        if (dshSkills != null) {
+            DshSkillCandidates(textFieldValue, dshSkills, onTextFieldValueChange, onDshSkillsRetry, onDshCompact)
+        }
 
         // Slash command suggestions popup (scrollable, max 40% screen height)
         AnimatedVisibility(

@@ -126,10 +126,10 @@ class DshRpcTest {
         listOf(
             "session/list", "session/prompt", "session/page", "session/modelCatalog",
             "session/updateQueue", "workspace/create",
-            "goals/create", "automation/list", "subagents/prompt", "skills/list", "git/describe",
+            "goals/create", "subagents/prompt", "skills/list",
             "directoryPicker/list", "directoryPicker/createDirectory", "settings/mutate",
             "llm/listProviders", "session/modelCatalog",
-            "systemPrompt/list", "agentPresets/list", "agentPresets/select", "\$events/result",
+            "agentPresets/list", "agentPresets/select", "\$events/result",
         ).forEach { method -> assertTrue(method in methods) }
         DshRpc.LOOPBACK_ONLY_METHODS.forEach { method -> assertTrue(method in methods) }
         assertFalse("host.describe" in methods)

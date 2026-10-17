@@ -295,7 +295,6 @@
     <string name="chat_send_failed_draft_kept">发送失败，草稿已保留</string>
     <string name="chat_queue_steer">插入本轮</string>
     <string name="chat_queue_remove">移除</string>
-    <string name="sessions_rehome_action">移动主目录</string>
     <string name="chat_loading_messages">正在加载消息…</string>
     <string name="chat_status_edits">%1$d 次编辑</string>
     <string name="chat_status_edits_plural">%1$d 次编辑</string>
@@ -575,33 +574,22 @@
     <string name="about_license_value">MIT</string>
     <string name="server_settings_title">服务器设置</string>
     <string name="dsh_host_surfaces_title">DSH 宿主面</string>
-    <string name="dsh_host_surfaces_desc">此 DSH 宿主的工作区、技能、Git、预设、目标、自动化、设置和模型</string>
+    <string name="dsh_host_surfaces_desc">此 DSH 宿主的工作区、技能、预设、目标、设置和模型</string>
     <string name="dsh_host_surfaces_available">可用方法</string>
     <string name="dsh_host_surfaces_hidden_loopback">非回环地址上已隐藏</string>
     <string name="dsh_host_surfaces_workspaces">工作区</string>
     <string name="dsh_host_surfaces_workspace_path">已有目录路径</string>
     <string name="dsh_host_surfaces_create_workspace">创建工作区</string>
-    <string name="dsh_host_surfaces_browse">宿主目录</string>
-    <string name="dsh_host_surfaces_folder_name">新文件夹名</string>
-    <string name="dsh_host_surfaces_create_folder">创建文件夹</string>
     <string name="dsh_host_surfaces_skills">技能</string>
-    <string name="dsh_host_surfaces_git">Git</string>
     <string name="dsh_host_surfaces_presets">智能体预设</string>
-    <string name="dsh_host_surfaces_automation">自动化</string>
     <string name="dsh_host_surfaces_settings">宿主设置</string>
     <string name="dsh_host_surfaces_models">提供方与模型</string>
-    <string name="dsh_host_surfaces_system_prompt">系统提示</string>
-    <string name="dsh_host_surfaces_subagents">子智能体</string>
-    <string name="dsh_host_surfaces_load_subagents">加载子智能体</string>
     <string name="dsh_host_surfaces_select_preset">选择预设</string>
     <string name="dsh_host_surfaces_presets_applied">已应用预设：%1$s</string>
     <string name="dsh_host_surfaces_goals">目标</string>
     <string name="dsh_host_surfaces_goal_objective">目标内容</string>
     <string name="dsh_host_surfaces_create_goal">创建目标</string>
     <string name="dsh_host_surfaces_settings_patch">JSON 补丁</string>
-    <string name="dsh_host_surfaces_subagent_prompt">提示</string>
-    <string name="dsh_host_surfaces_send_prompt">发给子智能体</string>
-    <string name="dsh_host_surfaces_interrupt">中断</string>
     <string name="dsh_host_surfaces_session_context">会话上下文 · %1$s</string>
     <string name="dsh_host_surfaces_no_session_selected">未选择会话——请先在上方选择</string>
     <string name="dsh_host_surfaces_no_sessions">此服务器暂无会话</string>
@@ -1010,4 +998,17 @@
         <item quantity="other">%1$d 个角色</item>
     </plurals>
 
+    <string name="sessions_migration_required">需要迁移</string>
+    <string name="sessions_archive_running">会话仍在运行，请先停止再归档。</string>
+    <string name="sessions_pin">置顶</string>
+    <string name="sessions_unpin">取消置顶</string>
+    <string name="sessions_pin_failed">置顶状态更新失败，请重试。</string>
+    <string name="dsh_rewind_failed">回退未完成，对话和草稿均未更改。</string>
+    <string name="dsh_rewind_images_missing">回退已完成，但这些图片未能放回：%1$s。文字与可读图片已保留。</string>
+    <string name="dsh_rewind_files_omitted">这些文件仍留在日志中，未放回输入框：%1$s。</string>
+    <string name="dsh_rewind_attachment_name">附件 %1$d</string>
+    <string name="dsh_rewind_action">回退</string>
+    <string name="dsh_rewind_body">这条消息及其后的对话将从界面消失，日志保留，文件不动。这条消息的文字会替换未发送草稿，不会自动发送。回退后无法撤销。</string>
+    <string name="dsh_rewind_busy">当前回复也会被打断。</string>
+    <string name="dsh_rewind_confirm">回退对话</string>
 </resources>

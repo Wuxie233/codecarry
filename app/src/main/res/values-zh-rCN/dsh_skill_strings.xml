@@ -1,0 +1,12 @@
+<resources>
+    <string name="dsh_skills_loading">正在加载技能…</string>
+    <string name="dsh_skills_failed">技能加载失败</string>
+    <string name="dsh_skills_retry">重试</string>
+    <string name="dsh_skills_no_match">无匹配技能</string>
+    <string name="dsh_compact_description">压缩会话历史</string>
+    <string name="dsh_compact_title">压缩此会话？</string>
+    <string name="dsh_compact_body">较早的历史将替换为摘要，输入框中的草稿保持不变。</string>
+    <string name="dsh_compact_confirm">压缩</string>
+    <string name="dsh_command_not_executed">命令未执行</string>
+    <string name="dsh_compact_archived">已归档，先恢复会话</string>
+</resources>

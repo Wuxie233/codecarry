@@ -83,7 +83,7 @@ fun DshPresetPickerSheet(
                         onClick = { onSelect(preset.id) },
                     )
                 }
-                if (!loading && filtered.isEmpty()) item {
+                if (!loading && error == null && filtered.isEmpty()) item {
                     Text(stringResource(if (presets.isEmpty()) R.string.dsh_preset_empty else R.string.dsh_preset_no_match), Modifier.padding(vertical = 16.dp))
                 }
             }

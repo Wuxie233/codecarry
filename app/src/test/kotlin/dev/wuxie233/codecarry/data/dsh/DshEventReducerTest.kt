@@ -13,19 +13,54 @@ import org.junit.Test
 
 class DshEventReducerTest {
     @Test
-    fun `follow event appends and control queue snapshot replaces`() {
+    fun `workspace wire decodes ordered pins from baseline and increments`() {
+        val json = kotlinx.serialization.json.Json
+        val baseline = parseWorkspaceFrame(json.parseToJsonElement(
+            """{"type":"baseline","value":{"items":[],"archivedSessionIds":[],"pinnedSessionIds":["b","a"]}}""",
+        )) as DshWorkspaceFrame.Baseline
+        assertEquals(listOf("b", "a"), baseline.value.pinnedSessionIds)
+        val update = parseWorkspaceFrame(json.parseToJsonElement(
+            """{"type":"pinned","pinnedSessionIds":["a","b"]}""",
+        )) as DshWorkspaceFrame.Pinned
+        assertEquals(listOf("a", "b"), update.pinnedSessionIds)
+    }
+
+    @Test
+    fun `pin order follows host and stale receipts cannot replace live or reconnect state`() {
+        val reducer = DshEventReducer()
+        reducer.resetGeneration(1)
+        reducer.applyWorkspaceFrame(DshWorkspaceFrame.Baseline(
+            DshWorkspaceListValue(pinnedSessionIds = listOf("b", "a")),
+        ))
+        assertEquals(listOf("b", "a"), reducer.state.value.pinnedSessionIds)
+        val revision = reducer.state.value.pinRevision
+        reducer.applyWorkspaceFrame(DshWorkspaceFrame.Pinned(listOf("c", "b", "a")))
+        reducer.applyPinnedSessions(listOf("b"), 1, revision)
+        assertEquals(listOf("c", "b", "a"), reducer.state.value.pinnedSessionIds)
+        reducer.applyPinnedSessions(listOf("c", "a"), 1, reducer.state.value.pinRevision)
+        assertEquals(listOf("c", "a"), reducer.state.value.pinnedSessionIds)
+        reducer.resetGeneration(2)
+        reducer.applyPinnedSessions(listOf("stale"), 1, 0)
+        assertTrue(reducer.state.value.pinnedSessionIds.isEmpty())
+        reducer.applyWorkspaceFrame(DshWorkspaceFrame.Baseline(
+            DshWorkspaceListValue(pinnedSessionIds = listOf("a", "c")),
+        ))
+        assertEquals(listOf("a", "c"), reducer.state.value.pinnedSessionIds)
+    }
+
+    @Test
+    fun `retired queue and job frames no longer parse`() {
         val reducer = DshEventReducer()
         reducer.applyFollowEvent("s1", DshSessionEvent(type = "user/message", seq = 1, time = 10))
-        reducer.applyControlFrame(
-            DshControlFrame.Queue(
-                sessionId = "s1",
-                items = listOf(DshQueuedInboxItem("m1", "queued", JsonObject(emptyMap()))),
-            ),
-        )
-        reducer.applyControlFrame(DshControlFrame.Queue(sessionId = "s1", items = emptyList()))
+        for (type in listOf("queue", "jobs")) {
+            assertNull(parseControlFrame(buildJsonObject {
+                put("type", type)
+                put("sessionId", "s1")
+            }))
+        }
         val session = reducer.state.value.sessions.getValue("s1")
         assertEquals(1, session.events.size)
-        assertTrue(session.queue.isEmpty())
+        assertNull(session.error)
     }
 
     @Test
@@ -89,11 +124,15 @@ class DshEventReducerTest {
                         put("running", false)
                         put("blank", true)
                         put("cwd", "/tmp")
+                        put("agentAvailable", true)
+                        put("formatStatus", "current")
                     },
                 ),
             ),
         )
         assertTrue(reducer.state.value.sessions.containsKey("s1"))
+        assertTrue(reducer.state.value.sessions.getValue("s1").agentAvailable)
+        assertEquals("current", reducer.state.value.sessions.getValue("s1").formatStatus)
         reducer.applyEventsFrame(
             DshEventsFrame.Emit(event = "api-session/status", args = listOf(JsonPrimitive("s1"), JsonPrimitive(true))),
         )
@@ -113,16 +152,10 @@ class DshEventReducerTest {
     }
 
     @Test
-    fun `control baseline seeds queues jobs and projections`() {
+    fun `control baseline seeds projections`() {
         val reducer = DshEventReducer()
         reducer.applyControlFrame(
             DshControlFrame.Baseline(
-                queues = mapOf(
-                    "s1" to listOf(DshQueuedInboxItem("m1", "queued", JsonObject(emptyMap()))),
-                ),
-                jobs = mapOf(
-                    "s1" to listOf(DshJobView(id = "j1", kind = "automation", label = "run", status = "running")),
-                ),
                 projections = mapOf(
                     "s1" to DshProjectionsBlock(
                         asOfSeq = 3,
@@ -132,8 +165,6 @@ class DshEventReducerTest {
             ),
         )
         val session = reducer.state.value.sessions.getValue("s1")
-        assertEquals(1, session.queue.size)
-        assertEquals(1, session.jobs.size)
         assertEquals("hello", (session.projections.getValue("title").second as? JsonPrimitive)?.content)
     }
 
@@ -153,13 +184,13 @@ class DshEventReducerTest {
                 value = DshWorkspaceListValue(
                     items = listOf(view),
                     archivedSessionIds = listOf("old"),
-                    hiddenWorkspaceIds = listOf("w0"),
+                    pinnedSessionIds = listOf("w0"),
                 ),
             ),
         )
         assertEquals(listOf("w1"), reducer.state.value.workspaceOrder)
         assertEquals(setOf("old"), reducer.state.value.archivedSessionIds)
-        assertEquals(setOf("w0"), reducer.state.value.hiddenWorkspaceIds)
+        assertEquals(listOf("w0"), reducer.state.value.pinnedSessionIds)
         reducer.applyWorkspaceFrame(DshWorkspaceFrame.Remove("w1"))
         assertTrue(reducer.state.value.workspaces.isEmpty())
     }

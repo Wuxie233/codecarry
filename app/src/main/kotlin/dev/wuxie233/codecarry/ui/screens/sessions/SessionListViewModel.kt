@@ -49,6 +49,8 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
@@ -93,6 +95,8 @@ private fun logErrorCompat(tag: String, message: String, throwable: Throwable) {
 }
 
 data class SessionListUiState(
+    val pinnedSessionIds: Set<String> = emptySet(),
+    val pinnableSessionIds: Set<String> = emptySet(),
     val serverName: String = "",
     val isLoading: Boolean = true,
     val error: String? = null,
@@ -136,7 +140,6 @@ data class SessionListUiState(
     val supportsDirectorySearch: Boolean = true,
     val supportsDirectoryCreation: Boolean = true,
     val supportsMcp: Boolean = true,
-    val supportsRehome: Boolean = false,
     val supportsNoRepoCreate: Boolean = false,
     val isDsh: Boolean = false,
 )
@@ -346,6 +349,7 @@ data class SessionItem(
     val status: SessionStatus = SessionStatus.Idle,
     val isUnread: Boolean = false,
     val backendState: BackendSessionState = BackendSessionState.IDLE,
+    val requiresMigration: Boolean = false,
 )
 
 internal fun matchesSessionFilter(item: SessionItem, filter: SessionFilter): Boolean {
@@ -431,13 +435,13 @@ data class DshCreationPresetState(
  * Carries its parameters so a surfaced failure can re-run the exact request.
  */
 sealed interface SessionListOperation {
+    data class Pin(val sessionId: String) : SessionListOperation
     data class Rename(val sessionId: String, val newTitle: String) : SessionListOperation
     data class ArchiveProject(val directory: String) : SessionListOperation
     data class Archive(val sessionId: String) : SessionListOperation
     data class Restore(val sessionId: String) : SessionListOperation
     data class Delete(val sessionId: String) : SessionListOperation
     data class DeleteSelected(val sessionIds: Set<String>) : SessionListOperation
-    data class Rehome(val sessionId: String, val path: String) : SessionListOperation
     data object Refresh : SessionListOperation
 }
 
@@ -595,6 +599,7 @@ class SessionListViewModel @Inject constructor(
             _serverConnected,
             _pendingOperation,
             _operationError,
+            dshReducer.state,
         )
     ) { values ->
         val sessionsByServer = values[0] as Map<String, Map<String, Session>>
@@ -621,17 +626,29 @@ class SessionListViewModel @Inject constructor(
         val serverConnected = values[18] as Boolean?
         val pendingOperation = values[19] as SessionListOperation?
         val operationError = values[20] as SessionListOperationError?
+        val dshState = values[21] as DshEventState
+        val migrationRequiredIds = dshState.sessions.filterValues { it.formatStatus == "migration-required" }.keys
+        val pinnableIds = if (isDsh) dshState.sessions.values.filter {
+            it.origin != "subagent" && it.parentSessionId == null && it.sessionId !in dshState.archivedSessionIds
+        }.map { it.sessionId }.toSet() else emptySet()
+        val pinRanks = if (isDsh) dshState.pinnedSessionIds.withIndex()
+            .associate { it.value to it.index } else emptyMap()
+
         // Unknown (null) connection state keeps operations enabled until a load proves otherwise.
         val serverOperationsAvailable = serverConnected ?: true
 
-        val serverScopedSessions = sessionsByServer[serverId].orEmpty().values.toList()
+        val serverScopedSessions = sessionsByServer[serverId].orEmpty().values.filter { session ->
+            !isDsh || (session.parentId == null && dshState.sessions[session.id]?.origin != "subagent")
+        }
         val rootPendingQuestions = aggregateSessionRequestsByRoot(serverScopedSessions, pendingQuestions)
         val rootPendingPermissions = aggregateSessionRequestsByRoot(serverScopedSessions, pendingPermissions)
         val archivedCount = serverScopedSessions.count { it.parentId == null && it.isArchived }
         val sessionsById = serverScopedSessions.associateBy { it.id }
         val (rootSessions, childSessions) = serverScopedSessions.partition { it.parentId == null }
         val childBuckets = childSessions.groupBy { it.parentId!! }
-        val baseStatuses = statuses
+        val baseStatuses = if (isDsh) dshState.sessions.mapValues { (_, snapshot) ->
+            if (snapshot.running && snapshot.agentAvailable) SessionStatus.Busy else SessionStatus.Idle
+        } else statuses
         val effectiveStatuses = baseStatuses.toMutableMap().apply {
             for (root in rootSessions) {
                 val childStatuses = childBuckets[root.id]
@@ -647,6 +664,7 @@ class SessionListViewModel @Inject constructor(
         val itemsById = serverScopedSessions.associate { session ->
             session.id to SessionItem(
                 session = session,
+                requiresMigration = isDsh && session.id in migrationRequiredIds,
                 status = effectiveStatuses[session.id] ?: SessionStatus.Idle,
                 isUnread = session.parentId == null && session.id in unreadMainSessionIds,
                 backendState = backendStates[session.id] ?: when (effectiveStatuses[session.id]) {
@@ -696,7 +714,8 @@ class SessionListViewModel @Inject constructor(
                         query = searchQuery,
                     )
                 }
-                .sortedWith(rootSessionComparator(prefs.sort))
+                .sortedWith(compareBy<Session> { if (it.id in pinnableIds) pinRanks[it.id] ?: Int.MAX_VALUE else Int.MAX_VALUE }
+                    .then(rootSessionComparator(prefs.sort)))
 
             val filteredRootItems = filteredRoots.map { itemsById.getValue(it.id) }
             val subagentRowsByParent = filteredRoots.associate { root ->
@@ -794,6 +813,8 @@ class SessionListViewModel @Inject constructor(
             serverOperationsAvailable = serverOperationsAvailable,
             pendingOperation = pendingOperation,
             operationError = operationError,
+            pinnedSessionIds = pinRanks.keys,
+            pinnableSessionIds = pinnableIds,
             supportsSessionManagement = supportsSessionRename || supportsSessionArchive || supportsSessionRestore || supportsSessionDelete,
             supportsSessionRename = supportsSessionRename,
             supportsSessionArchive = supportsSessionArchive,
@@ -804,7 +825,6 @@ class SessionListViewModel @Inject constructor(
             supportsDirectorySearch = !isDsh,
             supportsDirectoryCreation = true,
             supportsMcp = !isDsh,
-            supportsRehome = isDsh,
             supportsNoRepoCreate = isDsh,
             isDsh = isDsh,
         )
@@ -855,7 +875,7 @@ class SessionListViewModel @Inject constructor(
             eventReducer.setQuestions(serverId, session.id, state.pendingQuestionsFor(session.id).map(::mapDshQuestion))
         }
         _projects.value = mapped.sessions
-            .filter { it.parentId == null }
+            .filter { it.parentId == null && state.sessions[it.id]?.origin != "subagent" }
             .map { it.directory }
             .distinct()
             .map { directory ->
@@ -1087,23 +1107,6 @@ class SessionListViewModel @Inject constructor(
         }
     }
 
-    fun rehomeSession(sessionId: String, path: String) {
-        if (!isDsh) return
-        val operation = SessionListOperation.Rehome(sessionId, path)
-        if (!beginOperation(operation)) return
-        viewModelScope.launch {
-            try {
-                dshApi.sessionRehome(dshConn, sessionId, path)
-                loadSessions()
-            } catch (e: Exception) {
-                logErrorCompat(TAG, "Failed to rehome session $sessionId", e)
-                reportOperationFailure(operation, "Failed to move session", e)
-            } finally {
-                endOperation()
-            }
-        }
-    }
-
     fun renameSession(sessionId: String, newTitle: String) {
         val operation = SessionListOperation.Rename(sessionId, newTitle)
         if (!beginOperation(operation)) return
@@ -1234,6 +1237,7 @@ class SessionListViewModel @Inject constructor(
                     normalizeDirectory = ::normalizeDirectory,
                 )
                 if (targetIds.isEmpty()) return@launch
+                if (rejectRunningDshArchive(targetIds)) return@launch
 
                 coroutineScope {
                     targetIds.map { sessionId ->
@@ -1253,12 +1257,46 @@ class SessionListViewModel @Inject constructor(
         }
     }
 
+    private suspend fun rejectRunningDshArchive(sessionIds: List<String>): Boolean {
+        if (!isDsh || sessionIds.none { dshReducer.state.value.sessions[it]?.running == true }) return false
+        _undoState.send(UndoAction.Failure(messageResId = R.string.sessions_archive_running))
+        return true
+    }
+
+    fun toggleSessionPin(sessionId: String) {
+        if (!isDsh) return
+        val state = dshReducer.state.value
+        val session = state.sessions[sessionId] ?: return
+        if (session.origin == "subagent" || session.parentSessionId != null ||
+            sessionId in state.archivedSessionIds) return
+        val generation = dshConnectionManager.states.value[serverId]?.generation ?: return
+        if (!isDshGenerationReady(generation)) return
+        if (!beginOperation(SessionListOperation.Pin(sessionId))) return
+        viewModelScope.launch {
+            try {
+                val receipt = if (sessionId in state.pinnedSessionIds)
+                    dshApi.workspaceUnpinSession(dshConn, sessionId)
+                else dshApi.workspacePinSession(dshConn, sessionId)
+                if (isDshGenerationReady(generation)) {
+                    dshReducer.applyPinnedSessions(receipt.pinnedSessionIds, state.generation, state.pinRevision)
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _undoState.send(UndoAction.Failure(messageResId = R.string.sessions_pin_failed))
+            } finally {
+                endOperation()
+            }
+        }
+    }
+
     fun archiveSession(sessionId: String) {
         val operation = SessionListOperation.Archive(sessionId)
         if (!beginOperation(operation)) return
         viewModelScope.launch {
             val title = serverScopedSessions().firstOrNull { it.id == sessionId }?.title.orEmpty()
             try {
+                if (rejectRunningDshArchive(listOf(sessionId))) return@launch
                 if (isDsh) dshApi.workspaceArchiveSession(dshConn, sessionId)
                 else api.archiveSession(conn, sessionId)
                 loadSessions()
@@ -1340,13 +1378,13 @@ class SessionListViewModel @Inject constructor(
     /** Re-run the operation whose failure is currently surfaced. */
     fun retryOperationError() {
         when (val operation = _operationError.value?.operation ?: return) {
+            is SessionListOperation.Pin -> toggleSessionPin(operation.sessionId)
             is SessionListOperation.Rename -> renameSession(operation.sessionId, operation.newTitle)
             is SessionListOperation.ArchiveProject -> archiveProjectSessions(operation.directory)
             is SessionListOperation.Archive -> archiveSession(operation.sessionId)
             is SessionListOperation.Restore -> restoreSession(operation.sessionId)
             is SessionListOperation.Delete -> deleteSession(operation.sessionId)
             is SessionListOperation.DeleteSelected -> deleteSessions(operation.sessionIds)
-            is SessionListOperation.Rehome -> rehomeSession(operation.sessionId, operation.path)
             SessionListOperation.Refresh -> loadSessions()
         }
     }

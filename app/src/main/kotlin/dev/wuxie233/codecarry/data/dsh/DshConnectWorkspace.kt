@@ -46,7 +46,6 @@ fun reusableBlankSessionId(
         val snapshot = state.sessions[sessionId] ?: return@firstOrNull false
         snapshot.blank &&
             !snapshot.running &&
-            snapshot.queue.isEmpty() &&
             snapshot.origin != "subagent" &&
             snapshot.parentSessionId == null &&
             snapshot.cwd == path

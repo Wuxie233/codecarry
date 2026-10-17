@@ -42,7 +42,6 @@ fun DshHostSurfacesScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     var workspacePath by remember { mutableStateOf("") }
-    var folderName by remember { mutableStateOf("") }
     var goalObjective by remember { mutableStateOf("") }
     var settingsNs by remember { mutableStateOf("") }
     var settingsPatch by remember { mutableStateOf("[]") }
@@ -147,37 +146,6 @@ fun DshHostSurfacesScreen(
                 }
             }
 
-            if (catalog?.canBrowseHost == true) {
-                DshSurfaceSection(stringResource(R.string.dsh_host_surfaces_browse)) {
-                    if (DshModuleReady(uiState.directory, { viewModel.retry(DshHostModule.DIRECTORY) })) {
-                        val listing = uiState.directory.data
-                        if (listing != null) {
-                            Text(listing.path, style = MaterialTheme.typography.bodyMedium)
-                            listing.entries.forEach { entry ->
-                                TextButton(onClick = { viewModel.browse(entry.path) }) {
-                                    Text(entry.name)
-                                }
-                            }
-                        }
-                    }
-                    OutlinedTextField(
-                        value = folderName,
-                        onValueChange = { folderName = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text(stringResource(R.string.dsh_host_surfaces_folder_name)) },
-                    )
-                    TextButton(
-                        onClick = {
-                            val parent = uiState.directory.data?.path ?: return@TextButton
-                            viewModel.createDirectory(parent, folderName.trim())
-                        },
-                        enabled = folderName.isNotBlank() && uiState.directory.data != null,
-                    ) {
-                        Text(stringResource(R.string.dsh_host_surfaces_create_folder))
-                    }
-                }
-            }
-
             if (catalog?.canListSkills == true) {
                 DshSurfaceSection(stringResource(R.string.dsh_host_surfaces_skills)) {
                     DshSessionTargetLine(uiState)
@@ -199,20 +167,6 @@ fun DshHostSurfacesScreen(
                         } else {
                             skills.forEach { skill ->
                                 Text("/${skill.name} — ${skill.description}", style = MaterialTheme.typography.bodyMedium)
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (catalog?.canDescribeGit == true) {
-                DshSurfaceSection(stringResource(R.string.dsh_host_surfaces_git)) {
-                    if (DshModuleReady(uiState.git, { viewModel.retry(DshHostModule.GIT) })) {
-                        val git = uiState.git.data
-                        if (git != null) {
-                            Text("${git.currentBranch} · ${git.worktreePath}", style = MaterialTheme.typography.bodyMedium)
-                            git.branches.take(8).forEach { branch ->
-                                Text(branch.name, style = MaterialTheme.typography.bodySmall)
                             }
                         }
                     }
@@ -260,16 +214,6 @@ fun DshHostSurfacesScreen(
                     }
                     uiState.lastGoal?.let { goal ->
                         Text("${goal.ref.id} r${goal.ref.revision}", style = MaterialTheme.typography.bodySmall)
-                    }
-                }
-            }
-
-            if (catalog?.canManageAutomation == true) {
-                DshSurfaceSection(stringResource(R.string.dsh_host_surfaces_automation)) {
-                    if (DshModuleReady(uiState.automation, { viewModel.retry(DshHostModule.AUTOMATION) })) {
-                        uiState.automation.data?.items.orEmpty().forEach { rule ->
-                            Text("${rule.name} · ${rule.state}", style = MaterialTheme.typography.bodyMedium)
-                        }
                     }
                 }
             }
@@ -391,51 +335,6 @@ fun DshHostSurfacesScreen(
                 }
             }
 
-            if (catalog?.canListSystemPrompt == true) {
-                DshSurfaceSection(stringResource(R.string.dsh_host_surfaces_system_prompt)) {
-                    if (DshModuleReady(uiState.systemPrompt, { viewModel.retry(DshHostModule.SYSTEM_PROMPT) })) {
-                        uiState.systemPrompt.data?.sections.orEmpty().forEach { section ->
-                            Text(section.name, style = MaterialTheme.typography.bodyMedium)
-                        }
-                    }
-                }
-            }
-
-            if (catalog?.canListSubagents == true) {
-                DshSurfaceSection(stringResource(R.string.dsh_host_surfaces_subagents)) {
-                    DshSessionTargetLine(uiState)
-                    var subagentPrompt by remember { mutableStateOf("") }
-                    TextButton(
-                        onClick = { viewModel.loadSubagents() },
-                        enabled = uiState.selectedSessionId != null,
-                    ) {
-                        Text(stringResource(R.string.dsh_host_surfaces_load_subagents))
-                    }
-                    OutlinedTextField(
-                        value = subagentPrompt,
-                        onValueChange = { subagentPrompt = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text(stringResource(R.string.dsh_host_surfaces_subagent_prompt)) },
-                    )
-                    if (DshModuleReady(uiState.subagents, { viewModel.retry(DshHostModule.SUBAGENTS) })) {
-                        uiState.subagents.data?.entries.orEmpty().forEach { entry ->
-                            Text("${entry.id} · ${entry.mode ?: entry.reason.orEmpty()}", style = MaterialTheme.typography.bodySmall)
-                            TextButton(
-                                onClick = { viewModel.promptSubagent(entry.id, subagentPrompt.trim()) },
-                                enabled = uiState.selectedSessionId != null && subagentPrompt.isNotBlank(),
-                            ) {
-                                Text(stringResource(R.string.dsh_host_surfaces_send_prompt))
-                            }
-                            TextButton(
-                                onClick = { viewModel.interruptSubagent(entry.id) },
-                                enabled = uiState.selectedSessionId != null,
-                            ) {
-                                Text(stringResource(R.string.dsh_host_surfaces_interrupt))
-                            }
-                        }
-                    }
-                }
-            }
         }
     }
 }

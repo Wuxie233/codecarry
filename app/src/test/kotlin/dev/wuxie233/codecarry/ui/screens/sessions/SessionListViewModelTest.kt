@@ -1,5 +1,7 @@
 package dev.wuxie233.codecarry.ui.screens.sessions
 
+import dev.wuxie233.codecarry.R
+import kotlinx.coroutines.flow.first
 import android.content.ContextWrapper
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.lifecycle.SavedStateHandle
@@ -612,6 +614,87 @@ class SessionListViewModelTest {
     }
 
     @Test
+    fun `dsh row requires a live agent to display running without changing host state`() = runTest(dispatcher) {
+        val manager = readyDshManager()
+        val vm = newSessionListViewModel(
+            dshApi = dshSessionApi(Collections.synchronizedList(mutableListOf())),
+            dshConnectionManager = manager, savedStateHandle = dshSavedStateHandle(),
+        )
+        collectUiState(vm)
+        advanceUntilIdle()
+        val reducer = manager.reducer("srv-session-list")
+        for ((running, available, expected) in listOf(
+            Triple(true, false, SessionStatus.Idle),
+            Triple(true, true, SessionStatus.Busy),
+            Triple(false, true, SessionStatus.Idle),
+            Triple(false, false, SessionStatus.Idle),
+        )) {
+            reducer.applySessionList(listOf(DshSessionSummary("s", 1, running, false,
+                agentAvailable = available, cwd = "/work")))
+            advanceUntilIdle()
+            val row = vm.uiState.value.sessionGroups.flatMap { it.sessions }.single { it.session.id == "s" }
+            assertEquals(expected, row.status)
+            assertEquals(running, reducer.state.value.sessions.getValue("s").running)
+            assertEquals(available, reducer.state.value.sessions.getValue("s").agentAvailable)
+        }
+    }
+
+    @Test
+    fun `dsh migration hint follows current catalog metadata`() = runTest(dispatcher) {
+        val manager = readyDshManager()
+        val vm = newSessionListViewModel(
+            dshApi = dshSessionApi(Collections.synchronizedList(mutableListOf())),
+            dshConnectionManager = manager,
+            savedStateHandle = dshSavedStateHandle(),
+        )
+        collectUiState(vm)
+        advanceUntilIdle()
+        val reducer = manager.reducer("srv-session-list")
+        for (format in listOf("migration-required", "current", null)) {
+            reducer.applySessionList(listOf(DshSessionSummary("s", 1, false, false,
+                agentAvailable = false, formatStatus = format, cwd = "/work")))
+            advanceUntilIdle()
+            val row = vm.uiState.value.sessionGroups.flatMap { it.sessions }.single { it.session.id == "s" }
+            assertEquals(format == "migration-required", row.requiresMigration)
+        }
+    }
+
+    @Test
+    fun `dsh running archive refuses single and project actions without stopping work`() = runTest(dispatcher) {
+        val captured = Collections.synchronizedList(mutableListOf<String>())
+        val manager = readyDshManager()
+        val vm = newSessionListViewModel(
+            dshApi = dshSessionApi(captured), dshConnectionManager = manager,
+            savedStateHandle = dshSavedStateHandle(),
+        )
+        collectUiState(vm)
+        advanceUntilIdle()
+        val reducer = manager.reducer("srv-session-list")
+        reducer.applySessionList(listOf(
+            DshSessionSummary("busy", 1, true, false, agentAvailable = true, cwd = "/work"),
+            DshSessionSummary("idle", 1, false, false, agentAvailable = true, cwd = "/work"),
+        ))
+        advanceUntilIdle()
+        captured.clear()
+        vm.archiveSession("busy")
+        advanceUntilIdle()
+        assertEquals(UndoAction.Failure(R.string.sessions_archive_running), vm.undoState.first())
+        vm.archiveProjectSessions("/work")
+        advanceUntilIdle()
+        assertEquals(UndoAction.Failure(R.string.sessions_archive_running), vm.undoState.first())
+        assertTrue(captured.isEmpty())
+        assertTrue(reducer.state.value.sessions.getValue("busy").running)
+        assertTrue(reducer.state.value.archivedSessionIds.isEmpty())
+        assertEquals(null, vm.uiState.value.pendingOperation)
+
+        vm.archiveSession("idle")
+        advanceUntilIoSettles { "workspace/archiveSession" in captured }
+        advanceUntilIdle()
+        assertTrue(vm.undoState.first() is UndoAction.Archive)
+        assertFalse(captured.any { it.contains("interrupt") || it.contains("stop") })
+    }
+
+    @Test
     fun `dsh new conversation registers workspace then creates with workspaceId`() = runTest(dispatcher) {
         val captured = Collections.synchronizedList(mutableListOf<String>())
         val eventReducer = EventReducer()
@@ -749,6 +832,80 @@ class SessionListViewModelTest {
         vm.createWithDshPreset(null)
     }
 
+    @Test
+    fun `dsh overall list excludes child sessions including unknown parents`() = runTest(dispatcher) {
+        val captured = Collections.synchronizedList(mutableListOf<String>())
+        val manager = readyDshManager()
+        val vm = newSessionListViewModel(
+            dshApi = dshSessionApi(captured),
+            dshConnectionManager = manager,
+            savedStateHandle = dshSavedStateHandle(),
+        )
+        collectUiState(vm)
+        advanceUntilIoSettles { "session/list" in captured && !vm.uiState.value.isLoading }
+        manager.reducer("srv-session-list").applySessionList(listOf(
+            DshSessionSummary(sessionId = "parent", updatedAt = 1L, running = false, blank = false, cwd = "/repo"),
+            DshSessionSummary(sessionId = "child", updatedAt = 1L, running = false, blank = false, cwd = "/repo", origin = "subagent", parentSessionId = "parent"),
+            DshSessionSummary(sessionId = "orphan", updatedAt = 1L, running = false, blank = false, cwd = "/child-only", origin = "subagent"),
+        ))
+        runCurrent()
+        assertEquals(listOf("parent"), vm.uiState.value.groups.flatMap { it.sessions }.map { it.session.id })
+        assertTrue(vm.uiState.value.groups.all { it.subagentRowsByParent.values.all { rows -> rows.running.isEmpty() && rows.historical.isEmpty() } })
+    }
+
+    @Test
+    fun `dsh pins wait for confirmation reject safely and exclude archived and child sessions`() = runTest(dispatcher) {
+        val captured = Collections.synchronizedList(mutableListOf<String>())
+        val manager = readyDshManager()
+        val reducer = manager.reducer("srv-session-list")
+        var reject = false
+        var unpin = false
+        val confirmation = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val vm = newSessionListViewModel(
+            dshApi = dshSessionApi(captured, onPin = {
+                confirmation.await()
+                if (reject) null else if (unpin) """{"pinnedSessionIds":["b"]}""" else """{"pinnedSessionIds":["b","a"]}"""
+            }),
+            dshConnectionManager = manager,
+            savedStateHandle = dshSavedStateHandle(),
+        )
+        collectUiState(vm)
+        advanceUntilIoSettles { "session/list" in captured && !vm.uiState.value.isLoading }
+        reducer.applySessionList(listOf(
+            DshSessionSummary(sessionId = "a", updatedAt = 1L, running = false, blank = false, cwd = "/repo"),
+            DshSessionSummary(sessionId = "b", updatedAt = 1L, running = false, blank = false, cwd = "/repo"),
+            DshSessionSummary(sessionId = "child", updatedAt = 1L, running = false, blank = false, cwd = "/repo", origin = "subagent"),
+            DshSessionSummary(sessionId = "old", updatedAt = 1L, running = false, blank = false, cwd = "/repo"),
+        ))
+        reducer.applyWorkspaceFrame(dev.wuxie233.codecarry.data.dsh.DshWorkspaceFrame.Baseline(
+            dev.wuxie233.codecarry.data.dsh.DshWorkspaceListValue(archivedSessionIds = listOf("old")),
+        ))
+        advanceUntilIoSettles { vm.uiState.value.pinnableSessionIds == setOf("a", "b") }
+        vm.toggleSessionPin("child")
+        vm.toggleSessionPin("old")
+        assertFalse(captured.any { it == "workspace/pinSession" })
+        vm.toggleSessionPin("a")
+        advanceUntilIoSettles { "workspace/pinSession" in captured }
+        assertTrue(reducer.state.value.pinnedSessionIds.isEmpty())
+        confirmation.complete(Unit)
+        advanceUntilIoSettles { vm.uiState.value.pinnedSessionIds == setOf("a", "b") }
+        assertEquals(listOf("b", "a"), vm.uiState.value.groups.single().sessions.take(2).map { it.session.id })
+        reject = true
+        val failures = mutableListOf<UndoAction>()
+        collectJobs += testScope.backgroundScope.launch(UnconfinedTestDispatcher(scheduler)) {
+            vm.undoState.collect { failures += it }
+        }
+        vm.toggleSessionPin("a")
+        advanceUntilIoSettles { failures.isNotEmpty() }
+        assertTrue(failures.single() is UndoAction.Failure)
+        assertEquals(listOf("b", "a"), reducer.state.value.pinnedSessionIds)
+        assertTrue("workspace/unpinSession" in captured)
+        reject = false
+        unpin = true
+        vm.toggleSessionPin("a")
+        advanceUntilIoSettles { reducer.state.value.pinnedSessionIds == listOf("b") }
+    }
+
     private fun readyDshManager(): DshConnectionManager =
         unusedDshConnectionManager(testScope.backgroundScope, json).also { setDshGeneration(it, 1) }
 
@@ -847,6 +1004,7 @@ class SessionListViewModelTest {
         captured: MutableList<String>,
         reuseBlank: Boolean = false,
         onCreate: () -> Unit = {},
+        onPin: suspend (String) -> String? = { """{"pinnedSessionIds":[]}""" },
     ): DshApiClient {
         val engine = MockEngine { request ->
             val body = (request.body as TextContent).text
@@ -856,6 +1014,11 @@ class SessionListViewModelTest {
             captured += method
             val payload = envelope.getValue("payload").jsonObject
             val value = when (method) {
+                "workspace/pinSession", "workspace/unpinSession" -> onPin(method) ?: return@MockEngine respond(
+                    content = """{"type":"server-response","rpcId":"$rpcId","result":{"ok":false,"error":{"code":"workspace/rejected","message":"host rejected"}}}""",
+                    status = HttpStatusCode.OK,
+                    headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
+                )
                 "session/list" -> """{"items":[]}"""
                 "agentPresets/list" -> """{"presets":[]}"""
                 "directoryPicker/list" -> """{"path":"/root","home":"/root","crumbs":[],"entries":[],"truncated":false}"""
@@ -891,6 +1054,7 @@ class SessionListViewModelTest {
         createFailure: Throwable? = null,
         createDirectoryHeaders: MutableList<String?> = Collections.synchronizedList(mutableListOf()),
         onCreate: () -> Unit = {},
+        onPin: suspend (String) -> String? = { """{"pinnedSessionIds":[]}""" },
     ): OpenCodeApi {
         val engine = MockEngine { request ->
             val body = when (request.url.encodedPath) {

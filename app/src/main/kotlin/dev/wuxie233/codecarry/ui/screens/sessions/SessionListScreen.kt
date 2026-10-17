@@ -151,6 +151,7 @@ fun SessionListScreen(
     val archiveSuccessFmt = stringResource(R.string.sessions_archive_success)
     val restoreSuccessFmt = stringResource(R.string.sessions_restore_success)
     val undoLabel = stringResource(R.string.sessions_undo_action)
+    val archiveRunningMsg = stringResource(R.string.sessions_archive_running)
     val archiveFailedMsg = stringResource(R.string.sessions_archive_failed)
     val restoreFailedMsg = stringResource(R.string.sessions_restore_failed)
     val untitledLabel = stringResource(R.string.session_untitled)
@@ -199,6 +200,7 @@ fun SessionListScreen(
                 }
                 is UndoAction.Failure -> {
                     val msg = when (event.messageResId) {
+                        R.string.sessions_archive_running -> archiveRunningMsg
                         R.string.sessions_archive_failed -> archiveFailedMsg
                         R.string.sessions_restore_failed -> restoreFailedMsg
                         else -> archiveFailedMsg
@@ -218,8 +220,6 @@ fun SessionListScreen(
     var showRenameDialog by remember { mutableStateOf(false) }
     var renameSessionId by remember { mutableStateOf("") }
     var renameText by remember { mutableStateOf("") }
-    var showRehomeDialog by remember { mutableStateOf(false) }
-    var rehomeSessionId by remember { mutableStateOf("") }
 
     // Delete confirmation dialog state
     var showDeleteDialog by remember { mutableStateOf(false) }
@@ -651,16 +651,14 @@ fun SessionListScreen(
                                             onSubagentClick = { sessionId, directory ->
                                                 onNavigateToChat(sessionId, false, directory)
                                             },
-                                            onRehome = {
-                                                rehomeSessionId = item.session.id
-                                                showRehomeDialog = true
-                                            },
                                             supportsManagement = uiState.supportsSessionManagement,
                                             supportsRename = uiState.supportsSessionRename,
                                             supportsArchive = uiState.supportsSessionArchive,
                                             supportsRestore = uiState.supportsSessionRestore,
                                             supportsDelete = uiState.supportsSessionDelete,
-                                            supportsRehome = uiState.supportsRehome,
+                                            pinState = if (item.session.id in uiState.pinnableSessionIds)
+                                                item.session.id in uiState.pinnedSessionIds else null,
+                                            onTogglePin = { viewModel.toggleSessionPin(item.session.id) },
                                             operationsEnabled = operationsEnabled,
                                         )
                              }
@@ -832,19 +830,6 @@ fun SessionListScreen(
         }
     }
 
-    if (showRehomeDialog) {
-        OpenProjectDialog(
-            viewModel = viewModel,
-            projects = uiState.projects,
-            allowNoRepo = false,
-            onSelect = { directory ->
-                showRehomeDialog = false
-                viewModel.rehomeSession(rehomeSessionId, directory)
-            },
-            onDismiss = { showRehomeDialog = false },
-        )
-    }
-
     // Delete confirmation dialog
     if (showDeleteDialog) {
         BasicAlertDialog(onDismissRequest = { showDeleteDialog = false }) {
@@ -960,13 +945,13 @@ private fun SessionRowWithSubagents(
     onRestore: () -> Unit,
     onDelete: () -> Unit,
     onSubagentClick: (sessionId: String, directory: String) -> Unit,
-    onRehome: () -> Unit = {},
+    onTogglePin: () -> Unit = {},
     supportsManagement: Boolean = true,
     supportsRename: Boolean = true,
     supportsArchive: Boolean = true,
     supportsRestore: Boolean = true,
     supportsDelete: Boolean = true,
-    supportsRehome: Boolean = false,
+    pinState: Boolean? = null,
     operationsEnabled: Boolean = true,
 ) {
     val hasRunning = subagents.running.isNotEmpty()
@@ -990,13 +975,13 @@ private fun SessionRowWithSubagents(
             onArchive = onArchive,
             onRestore = onRestore,
             onDelete = onDelete,
-            onRehome = onRehome,
+            onTogglePin = onTogglePin,
+            pinState = pinState,
             supportsManagement = supportsManagement,
             supportsRename = supportsRename,
             supportsArchive = supportsArchive,
             supportsRestore = supportsRestore,
             supportsDelete = supportsDelete,
-            supportsRehome = supportsRehome,
             operationsEnabled = operationsEnabled,
         )
 
@@ -1811,8 +1796,8 @@ private fun NewSessionQuickDialog(
 }
 
 internal enum class SessionRowMenuAction {
+    TOGGLE_PIN,
     RENAME,
-    REHOME,
     ARCHIVE,
     RESTORE,
     DELETE,
@@ -1824,11 +1809,11 @@ internal fun sessionRowMenuActions(
     supportsArchive: Boolean = true,
     supportsRestore: Boolean = true,
     supportsDelete: Boolean = true,
-    supportsRehome: Boolean = false,
+    pinState: Boolean? = null,
 ): List<SessionRowMenuAction> {
     return buildList {
+        if (!isArchived && pinState != null) add(SessionRowMenuAction.TOGGLE_PIN)
         if (supportsRename) add(SessionRowMenuAction.RENAME)
-        if (supportsRehome) add(SessionRowMenuAction.REHOME)
         if (isArchived && supportsRestore) add(SessionRowMenuAction.RESTORE)
         if (!isArchived && supportsArchive) add(SessionRowMenuAction.ARCHIVE)
         if (supportsDelete) add(SessionRowMenuAction.DELETE)
@@ -1858,13 +1843,13 @@ private fun SessionRow(
     onArchive: () -> Unit,
     onRestore: () -> Unit,
     onDelete: () -> Unit,
-    onRehome: () -> Unit = {},
+    onTogglePin: () -> Unit = {},
     supportsManagement: Boolean = true,
     supportsRename: Boolean = true,
     supportsArchive: Boolean = true,
     supportsRestore: Boolean = true,
     supportsDelete: Boolean = true,
-    supportsRehome: Boolean = false,
+    pinState: Boolean? = null,
     operationsEnabled: Boolean = true,
 ) {
     val isAmoled = isAmoledTheme()
@@ -1972,6 +1957,14 @@ private fun SessionRow(
                     )
 
                     Spacer(modifier = Modifier.height(2.dp))
+
+                    if (item.requiresMigration) {
+                        Text(
+                            text = stringResource(R.string.sessions_migration_required),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
 
                     // Date + status + diff summary row
                     Row(
@@ -2082,28 +2075,25 @@ private fun SessionRow(
                             onDismissRequest = { menuExpanded = false },
                         ) {
                             sessionRowMenuActions(
+                                pinState = pinState,
                                 isArchived = item.session.isArchived,
                                 supportsRename = supportsRename,
                                 supportsArchive = supportsArchive,
                                 supportsRestore = supportsRestore,
                                 supportsDelete = supportsDelete,
-                                supportsRehome = supportsRehome,
                             ).forEach { action ->
                                 when (action) {
+                                    SessionRowMenuAction.TOGGLE_PIN -> DropdownMenuItem(
+                                        text = { Text(stringResource(if (pinState == true) R.string.sessions_unpin else R.string.sessions_pin)) },
+                                        onClick = { menuExpanded = false; onTogglePin() },
+                                        enabled = operationsEnabled,
+                                    )
                                     SessionRowMenuAction.RENAME -> DropdownMenuItem(
                                         text = { Text(stringResource(R.string.session_rename)) },
                                         enabled = operationsEnabled,
                                         onClick = {
                                             menuExpanded = false
                                             onRename()
-                                        },
-                                    )
-                                    SessionRowMenuAction.REHOME -> DropdownMenuItem(
-                                        text = { Text(stringResource(R.string.sessions_rehome_action)) },
-                                        enabled = operationsEnabled,
-                                        onClick = {
-                                            menuExpanded = false
-                                            onRehome()
                                         },
                                     )
                                     SessionRowMenuAction.ARCHIVE -> DropdownMenuItem(
