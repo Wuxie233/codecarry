@@ -45,6 +45,9 @@ import dev.wuxie233.codecarry.data.dsh.DshRpcException
 import dev.wuxie233.codecarry.data.dsh.DshRpcResult
 import dev.wuxie233.codecarry.data.dsh.dshQuestionAnswer
 import dev.wuxie233.codecarry.data.dsh.dshMessageSeq
+import dev.wuxie233.codecarry.data.dsh.dshSkillPromptParts
+import dev.wuxie233.codecarry.data.dsh.isDshSkillName
+import dev.wuxie233.codecarry.data.dsh.DshRpc
 import dev.wuxie233.codecarry.data.dsh.dshPromptRequest
 import dev.wuxie233.codecarry.data.dsh.DshSessionEvent
 import dev.wuxie233.codecarry.data.dsh.parseDshSurfaceOp
@@ -367,6 +370,35 @@ class ChatViewModel @Inject constructor(
                 parseDshSurfaceOp(event.surfaceOp)?.start in unconfirmedDshRewinds
         }
 
+    private val _dshSelectedSkillNames = MutableStateFlow<List<String>>(emptyList())
+    val dshSelectedSkillNames: StateFlow<List<String>> = _dshSelectedSkillNames
+    private var dshSkillCatalogGeneration: Long? = null
+
+    private fun canEditDshSkills(): Boolean = isDsh && !_isSending.value &&
+        !_dshRewindInFlight.value && !_dshPresets.value.selecting &&
+        !dshModelMutationPending && dshCompactJob?.isActive != true &&
+        sessionId !in dshReducer.state.value.archivedSessionIds
+
+    fun selectDshSkill(name: String): Boolean {
+        val connection = dshConnectionManager.states.value[serverId]
+        val catalog = _dshSkills.value
+        if (!canEditDshSkills() || connection?.isReady != true ||
+            connection.generation != dshSkillCatalogGeneration || !catalog.available ||
+            catalog.loading || catalog.failed || !isDshSkillName(name) ||
+            catalog.skills.none { it.name == name }) return false
+        if (name !in _dshSelectedSkillNames.value) {
+            _dshSelectedSkillNames.value += name
+            saveDraft()
+        }
+        return true
+    }
+
+    fun removeDshSkill(name: String) {
+        if (!canEditDshSkills()) return
+        _dshSelectedSkillNames.value = _dshSelectedSkillNames.value.filterNot { it == name }
+        saveDraft()
+    }
+
     private var dshSkillLoadJob: Job? = null
     private var dshSessionLoadJob: Job? = null
     private var dshModelCatalogDefault: DshModelSelection? = null
@@ -398,6 +430,8 @@ class ChatViewModel @Inject constructor(
         val model: ModelSelection?,
         val agent: String,
         val variant: String?,
+        val dshSkillNames: List<String> = emptyList(),
+        val dshRequestId: String? = null,
     )
     private val pendingOpenCodeSends = ArrayDeque<PendingOpenCodeSend>()
     private var pendingOpenCodeDrain: Job? = null
@@ -1026,6 +1060,7 @@ class ChatViewModel @Inject constructor(
     fun refreshDshSkills() {
         if (!isDsh) return
         dshSkillLoadJob?.cancel()
+        dshSkillCatalogGeneration = null
         val connection = dshConnectionManager.states.value[serverId]
         if (sessionId.isBlank() || connection?.isReady != true) {
             _dshSkills.value = DshSkillCandidateState()
@@ -1043,6 +1078,7 @@ class ChatViewModel @Inject constructor(
                     }
                 }
                 if (isCurrent()) {
+                    dshSkillCatalogGeneration = connection.generation
                     _dshSkills.value = DshSkillCandidateState(available = true, skills = catalog.first, commands = catalog.second)
                 }
             } catch (error: kotlinx.coroutines.TimeoutCancellationException) {
@@ -1364,8 +1400,17 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    private val draftKey: String get() = if (isDsh) "dsh:${serverId.length}:$serverId:$sessionId" else sessionId
+
     private fun restoreDraft() {
-        val draft = draftRepository.getDraft(sessionId) ?: return
+        val draft = draftRepository.getDraft(draftKey) ?: if (isDsh) {
+            draftRepository.getDraft(sessionId)?.also {
+                draftRepository.saveDraft(draftKey, it)
+                draftRepository.clearDraft(sessionId)
+            }
+        } else null
+        if (draft == null) return
+        if (isDsh) _dshSelectedSkillNames.value = draft.dshSelectedSkillNames.filter(::isDshSkillName).distinct()
         _draftText.value = draft.text
         _draftAttachmentUris.value = draft.imageUris
         if (draft.confirmedFilePaths.isNotEmpty()) {
@@ -1809,7 +1854,8 @@ class ChatViewModel @Inject constructor(
     fun clearDraft() {
         _draftText.value = ""
         _draftAttachmentUris.value = emptyList()
-        draftRepository.clearDraft(sessionId)
+        _dshSelectedSkillNames.value = emptyList()
+        draftRepository.clearDraft(draftKey)
     }
 
     /** Persist current draft to disk. */
@@ -1820,9 +1866,10 @@ class ChatViewModel @Inject constructor(
             imageUris = _draftAttachmentUris.value.filterNot { it in dshRewindImageUris },
             confirmedFilePaths = _confirmedFilePaths.value.toList(),
             selectedAgent = agentPair.first.takeIf { agentPair.second },
-            selectedVariant = _selectedVariant.value
+            selectedVariant = _selectedVariant.value,
+            dshSelectedSkillNames = if (isDsh) _dshSelectedSkillNames.value else emptyList(),
         )
-        draftRepository.saveDraft(sessionId, draft)
+        draftRepository.saveDraft(draftKey, draft)
     }
 
     override fun onCleared() {
@@ -1909,7 +1956,7 @@ class ChatViewModel @Inject constructor(
     }
 
     fun sendMessage(text: String, attachments: List<PromptPart> = emptyList(), onResult: (Boolean) -> Unit = {}) {
-        if (text.isBlank() && attachments.isEmpty()) {
+        if (text.isBlank() && attachments.isEmpty() && (!isDsh || _dshSelectedSkillNames.value.isEmpty())) {
             onResult(false)
             return
         }
@@ -1924,7 +1971,7 @@ class ChatViewModel @Inject constructor(
     /** Send pre-built prompt parts (used when @-file mentions need structured parts). */
     fun sendMessage(promptParts: List<PromptPart>, attachments: List<PromptPart>, onResult: (Boolean) -> Unit = {}) {
         val parts = promptParts + attachments
-        if (parts.isEmpty()) {
+        if (parts.isEmpty() && (!isDsh || _dshSelectedSkillNames.value.isEmpty())) {
             onResult(false)
             return
         }
@@ -1933,7 +1980,7 @@ class ChatViewModel @Inject constructor(
 
     private fun sendParts(parts: List<PromptPart>, onResult: (Boolean) -> Unit = {}) {
         if (isDsh) {
-            if (_dshPresets.value.selecting) {
+            if (_dshPresets.value.selecting || _dshRewindInFlight.value || dshCompactJob?.isActive == true) {
                 onResult(false)
                 return
             }
@@ -1977,7 +2024,9 @@ class ChatViewModel @Inject constructor(
     private fun enqueueDshSend(parts: List<PromptPart>, onResult: (Boolean) -> Unit = {}) {
         pendingOpenCodeSends.addLast(
             PendingOpenCodeSend(
-                parts = parts.toList(),
+                parts = dshSkillPromptParts(parts, _dshSelectedSkillNames.value),
+                dshSkillNames = _dshSelectedSkillNames.value.toList(),
+                dshRequestId = DshRpc.mintRequestId(),
                 model = null,
                 agent = uiState.value.selectedAgent,
                 variant = _selectedVariant.value,
@@ -1988,8 +2037,11 @@ class ChatViewModel @Inject constructor(
         if (_pendingSendError.value == null) drainPendingDshSends()
     }
 
-    private suspend fun sendDshPrompt(mode: String, content: kotlinx.serialization.json.JsonArray): Boolean =
-        dshApi.submitPrompt(dshConn, dshHistoryAddress() ?: error("DSH session address is not ready"), mode, content)
+    private suspend fun sendDshPrompt(
+        mode: String, content: kotlinx.serialization.json.JsonArray,
+        explicitSkillPrompt: Boolean = false, requestId: String = DshRpc.mintRequestId(),
+    ): Boolean =
+        dshApi.submitPrompt(dshConn, dshHistoryAddress() ?: error("DSH session address is not ready"), mode, content, explicitSkillPrompt, requestId)
 
     private suspend fun abortDshSession(): Boolean {
         return when (val address = dshHistoryAddress()) {
@@ -2013,14 +2065,14 @@ class ChatViewModel @Inject constructor(
                     try {
                         val steer = uiState.value.sessionStatus is SessionStatus.Busy
                         val request = dshPromptRequest(head.parts, steer)
-                        val prompted = sendDshPrompt(request.mode, request.content)
+                        val prompted = sendDshPrompt(request.mode, request.content, head.dshSkillNames.isNotEmpty(), requireNotNull(head.dshRequestId))
                         pendingOpenCodeSends.removeFirst()
                         _pendingSendCount.value = pendingOpenCodeSends.size
                         _pendingSendError.value = null
                         if (prompted) eventReducer.updateSessionStatus(serverId, sessionId, SessionStatus.Busy)
                     } catch (error: Exception) {
                         Log.e(TAG, "Failed to send DSH prompt", error)
-                        _pendingSendError.value = if (isDshSlashCommand(dshPromptRequest(head.parts, false).content))
+                        _pendingSendError.value = if (head.dshSkillNames.isEmpty() && isDshSlashCommand(dshPromptRequest(head.parts, false).content))
                             appContext.getString(R.string.dsh_command_not_executed)
                         else error.message ?: "Failed to send queued message"
                         _error.value = _pendingSendError.value
@@ -2423,6 +2475,7 @@ class ChatViewModel @Inject constructor(
     }
 
     private fun restoreRevertedDraft(payload: RevertedDraftPayload) {
+        if (isDsh) _dshSelectedSkillNames.value = emptyList()
         _draftText.value = payload.text
         _draftAttachmentUris.value = payload.attachmentUris
         _confirmedFilePaths.value = emptySet()
