@@ -23,13 +23,14 @@ data class Draft(
     val confirmedFilePaths: List<String> = emptyList(),
     val selectedAgent: String? = null,
     val selectedVariant: String? = null,
+    val dshSelectedSkillNames: List<String> = emptyList(),
 ) {
     val isEmpty: Boolean
         get() = text.isBlank() &&
                 imageUris.isEmpty() &&
                 confirmedFilePaths.isEmpty() &&
                 selectedAgent.isNullOrBlank() &&
-                selectedVariant.isNullOrBlank()
+                selectedVariant.isNullOrBlank() && dshSelectedSkillNames.isEmpty()
 }
 
 /**

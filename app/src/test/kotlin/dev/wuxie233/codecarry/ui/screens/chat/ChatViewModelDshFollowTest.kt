@@ -4,6 +4,7 @@ import android.content.ContextWrapper
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
+import dev.wuxie233.codecarry.data.api.PromptPart
 import dev.wuxie233.codecarry.data.api.OpenCodeApi
 import dev.wuxie233.codecarry.data.dsh.DshApiClient
 import dev.wuxie233.codecarry.data.dsh.DshConnection
@@ -29,6 +30,7 @@ import io.ktor.http.content.TextContent
 import io.ktor.http.headersOf
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.utils.io.ByteReadChannel
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -48,6 +50,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.After
@@ -124,6 +127,152 @@ class ChatViewModelDshFollowTest {
         assertFalse(vm.dshSkills.value.available)
         assertTrue(vm.dshSkills.value.skills.isEmpty())
         assertTrue(vm.dshSkills.value.commands.isEmpty())
+    }
+
+    @Test
+    fun `skill selection validates deduplicates removes and persists without sending`() = runTest(dispatcher) {
+        val mux = FakeDownlink()
+        val unary = CopyOnWriteArrayList<String>()
+        val harness = dshHarness(mux, unary, skillList = """[
+            {"name":"grill","description":"Discuss","modelInvocable":false},
+            {"name":"compact","description":"Skill","modelInvocable":true},
+            {"name":"bad\nname","description":"Bad","modelInvocable":true}]
+        """)
+        val files = tmpFolder.newFolder()
+        val context = object : ContextWrapper(null) { override fun getFilesDir() = files }
+        val vm = newViewModel(harness.client, harness.manager, drafts = DraftRepository(context))
+        assertFalse(vm.selectDshSkill("grill"))
+        harness.manager.connect(SERVER_ID, DshConnection.from("http://127.0.0.1:3080", token = "launch-token"))
+        runCurrent(); pushBaselines(mux)
+        vm.dshSkills.first { it.skills.isNotEmpty() }
+        vm.updateDraftText("before /query after")
+        assertTrue(vm.selectDshSkill("grill"))
+        assertTrue(vm.selectDshSkill("grill"))
+        assertTrue(vm.selectDshSkill("compact"))
+        assertFalse(vm.selectDshSkill("missing"))
+        assertFalse(vm.selectDshSkill("bad\nname"))
+        assertFalse(vm.selectDshSkill("/compact"))
+        assertEquals(listOf("grill", "compact"), vm.dshSelectedSkillNames.value)
+        vm.removeDshSkill("grill")
+        assertEquals(listOf("compact"), vm.dshSelectedSkillNames.value)
+        val restored = newViewModel(harness.client, harness.manager, drafts = DraftRepository(context))
+        assertEquals("before /query after", restored.draftText.value)
+        assertEquals(listOf("compact"), restored.dshSelectedSkillNames.value)
+        val other = newViewModel(harness.client, harness.manager, sessionId = "other", drafts = DraftRepository(context))
+        assertTrue(other.dshSelectedSkillNames.value.isEmpty())
+        val otherServer = newViewModel(harness.client, harness.manager, serverId = "other-server", drafts = DraftRepository(context))
+        assertTrue(otherServer.dshSelectedSkillNames.value.isEmpty())
+        assertEquals("", otherServer.draftText.value)
+        assertFalse(unary.any { it.contains("commands/execute") || it.contains("session/prompt") })
+        harness.manager.disconnect(SERVER_ID)
+        assertFalse(vm.selectDshSkill("grill"))
+        restored.clearDraft()
+        assertTrue(newViewModel(harness.client, harness.manager, drafts = DraftRepository(context)).dshSelectedSkillNames.value.isEmpty())
+    }
+
+    @Test
+    fun `legacy draft restores and chip-only draft survives reload`() = runTest(dispatcher) {
+        val mux = FakeDownlink()
+        val harness = dshHarness(mux, CopyOnWriteArrayList())
+        val files = tmpFolder.newFolder()
+        val context = object : ContextWrapper(null) { override fun getFilesDir() = files }
+        java.io.File(files, "session_drafts.json").writeText("""{"$SESSION_ID":{"text":"legacy"}}""")
+        val vm = newViewModel(harness.client, harness.manager, drafts = DraftRepository(context))
+        assertEquals("legacy", vm.draftText.value)
+        assertTrue(vm.dshSelectedSkillNames.value.isEmpty())
+        harness.manager.connect(SERVER_ID, DshConnection.from("http://127.0.0.1:3080", token = "launch-token"))
+        runCurrent(); pushBaselines(mux)
+        vm.dshSkills.first { it.skills.isNotEmpty() }
+        vm.updateDraftText("")
+        assertTrue(vm.selectDshSkill("grill"))
+        val restored = newViewModel(harness.client, harness.manager, drafts = DraftRepository(context))
+        assertEquals("", restored.draftText.value)
+        assertEquals(listOf("grill"), restored.dshSelectedSkillNames.value)
+    }
+
+    @Test
+    fun `skill-only compact is a retryable prompt snapshot and compact action keeps draft`() = runTest(dispatcher) {
+        val mux = FakeDownlink()
+        val unary = CopyOnWriteArrayList<String>()
+        var fail = true
+        val attempted = CompletableDeferred<Unit>()
+        val command = Channel<Unit>(Channel.UNLIMITED)
+        val harness = dshHarness(mux, unary,
+            skillList = """[{"name":"compact","description":"Skill","modelInvocable":false}]""",
+            beforePrompt = { attempted.complete(Unit); if (fail) error("offline") },
+            onCommandExecute = { command.trySend(Unit) })
+        val vm = newViewModel(harness.client, harness.manager)
+        collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
+        harness.manager.connect(SERVER_ID, DshConnection.from("http://127.0.0.1:3080", token = "launch-token"))
+        runCurrent(); pushBaselines(mux)
+        vm.dshSkills.first { it.skills.isNotEmpty() }
+        harness.manager.reducer(SERVER_ID).state.first { it.sessions.containsKey(SESSION_ID) }
+        assertTrue(vm.selectDshSkill("compact"))
+        vm.sendMessage("") { accepted -> assertTrue(accepted); vm.clearDraft() }
+        attempted.await()
+        vm.uiState.first { it.pendingSendError != null }
+        assertTrue(vm.dshSelectedSkillNames.value.isEmpty())
+        assertTrue(vm.selectDshSkill("compact"))
+        vm.removeDshSkill("compact")
+        fail = false
+        vm.retryPendingSend()
+        vm.uiState.first { it.pendingSendCount == 0 }
+        val requests = unary.filter { it.contains("\"session/prompt\"") }.map {
+            json.parseToJsonElement(it).jsonObject["payload"]!!.jsonObject["args"]!!.jsonObject["request"]!!.jsonObject
+        }
+        assertEquals(2, requests.size)
+        assertEquals(requests[0]["requestId"], requests[1]["requestId"])
+        requests.forEach { assertEquals("/compact", it["content"]!!.jsonArray.single().jsonObject["text"]!!.jsonPrimitive.content) }
+        assertEquals(0, unary.count { it.contains("commands/execute") })
+        vm.sendMessage("/compact")
+        command.receive()
+        vm.uiState.first { it.pendingSendCount == 0 && !it.isSending }
+        assertEquals(1, unary.count { it.contains("commands/execute") })
+        assertTrue(vm.selectDshSkill("compact"))
+        vm.updateDraftText("keep me")
+        vm.compactDshSession()
+        command.receive()
+        assertEquals("keep me", vm.draftText.value)
+        assertEquals(listOf("compact"), vm.dshSelectedSkillNames.value)
+        assertEquals(2, unary.count { it.contains("commands/execute") })
+        assertEquals(2, unary.count { it.contains("\"session/prompt\"") })
+    }
+
+    @Test
+    fun `structured send freezes skills and preserves text and image`() = runTest(dispatcher) {
+        val mux = FakeDownlink()
+        val unary = CopyOnWriteArrayList<String>()
+        val gate = CompletableDeferred<Unit>()
+        val attempted = Channel<Unit>(Channel.UNLIMITED)
+        val harness = dshHarness(mux, unary, beforePrompt = { attempted.send(Unit); gate.await() })
+        val vm = newViewModel(harness.client, harness.manager)
+        collectJobs += backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.collect {} }
+        harness.manager.connect(SERVER_ID, DshConnection.from("http://127.0.0.1:3080", token = "launch-token"))
+        runCurrent(); pushBaselines(mux)
+        vm.dshSkills.first { it.skills.isNotEmpty() }
+        harness.manager.reducer(SERVER_ID).state.first { it.sessions.containsKey(SESSION_ID) }
+        assertTrue(vm.selectDshSkill("grill"))
+        vm.sendMessage(listOf(PromptPart(type = "text", text = " exact text ")),
+            listOf(PromptPart(type = "file", mime = "image/png", url = "data:image/png;base64,YWJj"))) {
+            assertTrue(it); vm.clearDraft()
+        }
+        attempted.receive()
+        assertFalse(vm.selectDshSkill("grill"))
+        gate.complete(Unit)
+        vm.uiState.first { it.pendingSendCount == 0 }
+        val request = json.parseToJsonElement(unary.single { it.contains("\"session/prompt\"") }).jsonObject["payload"]!!.jsonObject["args"]!!.jsonObject["request"]!!.jsonObject
+        val content = request["content"]!!.jsonArray
+        assertEquals(3, content.size)
+        assertEquals(" exact text ", content[0].jsonObject["text"]!!.jsonPrimitive.content)
+        assertEquals("image", content[1].jsonObject["type"]!!.jsonPrimitive.content)
+        assertEquals("YWJj", content[1].jsonObject["data"]!!.jsonPrimitive.content)
+        assertEquals("image/png", content[1].jsonObject["mediaType"]!!.jsonPrimitive.content)
+        assertEquals("/grill", content[2].jsonObject["text"]!!.jsonPrimitive.content)
+        assertTrue(vm.selectDshSkill("grill"))
+        vm.sendMessage(emptyList(), emptyList()) { assertTrue(it); vm.clearDraft() }
+        attempted.receive()
+        vm.uiState.first { it.pendingSendCount == 0 }
+        assertEquals(2, unary.count { it.contains("\"session/prompt\"") })
     }
 
     @Test
@@ -311,6 +460,8 @@ class ChatViewModelDshFollowTest {
         runCurrent()
 
         var sent: Boolean? = null
+        vm.dshSkills.first { it.skills.isNotEmpty() }
+        assertTrue(vm.selectDshSkill("grill"))
         vm.sendMessage("continue") { sent = it }
         runCurrent()
 
@@ -318,6 +469,7 @@ class ChatViewModelDshFollowTest {
         val body = unary.single { it.contains("\"subagents/prompt\"") }
         val request = json.parseToJsonElement(body).jsonObject.getValue("payload").jsonObject
             .getValue("args").jsonObject.getValue("request").jsonObject
+        assertEquals("/grill", request.getValue("content").jsonArray.last().jsonObject["text"]!!.jsonPrimitive.content)
         assertEquals(delivery, request.getValue("delivery").jsonPrimitive.content)
         assertEquals("continuable", request.getValue("mode").jsonPrimitive.content)
         assertEquals(PARENT_ID, request.getValue("parentSessionId").jsonPrimitive.content)
@@ -725,12 +877,16 @@ class ChatViewModelDshFollowTest {
         reducer.mergeHistory(SESSION_ID, listOf(rewindUser(1), rewindUser(2), rewindUser(3)))
         runCurrent()
         vm.updateDraftText("unsent")
+        assertTrue(vm.selectDshSkill("grill"))
         val target = vm.uiState.value.messages[1].message.id
         assertTrue(vm.dshRewind.value.messageSeqs.contains(2))
         vm.rewindDshMessage(target)
         vm.rewindDshMessage(target)
         runCurrent()
         assertTrue(vm.dshRewind.value.inFlight)
+        assertFalse(vm.selectDshSkill("grill"))
+        vm.removeDshSkill("grill")
+        assertEquals(listOf("grill"), vm.dshSelectedSkillNames.value)
         assertEquals(3, vm.uiState.value.messages.size)
         assertEquals("unsent", vm.draftText.value)
         reducer.mergeHistory(SESSION_ID, listOf(rewindMarker(4, 2, 3)))
@@ -742,6 +898,7 @@ class ChatViewModelDshFollowTest {
         assertFalse(vm.dshRewind.value.inFlight)
         assertEquals(1, vm.uiState.value.messages.size)
         assertEquals("prompt 2", vm.draftText.value)
+        assertTrue(vm.dshSelectedSkillNames.value.isEmpty())
         assertEquals(setOf(1L), vm.dshRewind.value.messageSeqs)
         val calls = unary.filter { it.contains("\"commands/execute\"") }
         assertEquals(1, calls.size)
@@ -989,6 +1146,8 @@ class ChatViewModelDshFollowTest {
         beforeSessionList: suspend () -> Unit = {},
         beforePresetList: suspend () -> Unit = {},
         beforeSkillList: suspend () -> Unit = {},
+        beforePrompt: suspend () -> Unit = {},
+        skillList: String = """[{"name":"grill","description":"Discuss","modelInvocable":true}]""",
         beforePresetSelect: suspend () -> Unit = {},
         onCommandExecute: () -> Unit = {},
         commandList: String = """[{"name":"compact","description":"Compact history"}]""",
@@ -1050,7 +1209,7 @@ class ChatViewModelDshFollowTest {
                     unary += (request.body as TextContent).text
                     beforeSkillList()
                     respond(
-                        content = """{"type":"server-response","rpcId":"fixed","result":{"ok":true,"value":{"skills":[{"name":"grill","description":"Discuss","modelInvocable":true}]}}}""",
+                        content = """{"type":"server-response","rpcId":"fixed","result":{"ok":true,"value":{"skills":$skillList}}}""",
                         headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
                     )
                 }
@@ -1077,6 +1236,14 @@ class ChatViewModelDshFollowTest {
                             """{"type":"server-response","rpcId":"fixed","result":{"ok":true,"value":{"default":{"provider":"p","model":"m"},"groups":[]}}}""",
                         ),
                         status = HttpStatusCode.OK,
+                        headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
+                    )
+                }
+                "/api/session/prompt" -> {
+                    unary += (request.body as TextContent).text
+                    beforePrompt()
+                    respond(
+                        content = """{"type":"server-response","rpcId":"fixed","result":{"ok":true,"value":{"accepted":true}}}""",
                         headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
                     )
                 }
@@ -1120,7 +1287,7 @@ class ChatViewModelDshFollowTest {
         return DshHarness(client, manager)
     }
 
-    private fun newViewModel(dshApi: DshApiClient, manager: DshConnectionManager, sessionId: String = SESSION_ID, drafts: DraftRepository = draftRepository()): ChatViewModel {
+    private fun newViewModel(dshApi: DshApiClient, manager: DshConnectionManager, sessionId: String = SESSION_ID, drafts: DraftRepository = draftRepository(), serverId: String = SERVER_ID): ChatViewModel {
         return ChatViewModel(
             appContext = org.robolectric.RuntimeEnvironment.getApplication(),
             savedStateHandle = SavedStateHandle(
@@ -1129,7 +1296,7 @@ class ChatViewModelDshFollowTest {
                     "username" to "",
                     "password" to "",
                     "serverName" to "DSH",
-                    "serverId" to SERVER_ID,
+                    "serverId" to serverId,
                     "sessionId" to sessionId,
                     "directory" to "/root/CODE/Minecraft",
                     "serverType" to ServerType.DSH.name,
