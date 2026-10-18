@@ -1215,6 +1215,7 @@ fun ChatScreen(
     val filePreview by viewModel.filePreview.collectAsState()
     val dshPresets by viewModel.dshPresets.collectAsState()
     val dshSkills by viewModel.dshSkills.collectAsState()
+    val dshSelectedSkills by viewModel.dshSelectedSkillNames.collectAsState()
     val dshRewind by viewModel.dshRewind.collectAsState()
     val confirmationGate = remember(viewModel) { ChatConfirmationGate() }
     val draftText by viewModel.draftText.collectAsState()
@@ -2335,6 +2336,10 @@ fun ChatScreen(
                 selectedVariant = uiState.selectedVariant,
                 onVariantClick = { if (!dshPresets.selecting) showVariantPicker = true },
                 dshSkills = if (uiState.isDsh) dshSkills else null,
+                dshSelectedSkills = if (uiState.isDsh) dshSelectedSkills else emptyList(),
+                onDshSkillSelected = viewModel::selectDshSkill,
+                onDshSkillRemoved = viewModel::removeDshSkill,
+                dshSkillsEnabled = !composerIsSending && !dshRewind.inFlight && !dshPresets.selecting,
                 onDshSkillsRetry = viewModel::refreshDshSkills,
                 onDshCompact = viewModel::compactDshSession,
                 commands = if (uiState.supportsCommands) uiState.commands else emptyList(),
@@ -7264,6 +7269,10 @@ private fun ChatInputBar(
     selectedVariant: String? = null,
     onVariantClick: () -> Unit = {},
     dshSkills: DshSkillCandidateState? = null,
+    dshSelectedSkills: List<String> = emptyList(),
+    onDshSkillSelected: (String) -> Boolean = { false },
+    onDshSkillRemoved: (String) -> Unit = {},
+    dshSkillsEnabled: Boolean = true,
     onDshSkillsRetry: () -> Unit = {},
     onDshCompact: () -> Unit = {},
     commands: List<CommandInfo> = emptyList(),
@@ -7295,7 +7304,7 @@ private fun ChatInputBar(
     }
 
     val text = textFieldValue.text
-    val hasSendContent = text.isNotBlank() || attachments.isNotEmpty()
+    val hasSendContent = text.isNotBlank() || attachments.isNotEmpty() || dshSelectedSkills.isNotEmpty()
     val hasBlockingReason = sendDisabledReasonResId != null
     val canSend = hasSendContent && !isSending && (!isShellMode || !isBusy) && !hasBlockingReason
     val sendDisabledReasonText = sendDisabledReasonResId
@@ -7340,7 +7349,14 @@ private fun ChatInputBar(
         )
 
         if (dshSkills != null) {
-            DshSkillCandidates(textFieldValue, dshSkills, onTextFieldValueChange, onDshSkillsRetry, onDshCompact)
+            Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
+                if (dshSelectedSkills.isNotEmpty()) {
+                    DshSelectedSkillChips(dshSelectedSkills, dshSkillsEnabled, onDshSkillRemoved)
+                }
+                DshSkillCandidates(textFieldValue, dshSkills, onTextFieldValueChange, onDshSkillsRetry,
+                    onCompact = onDshCompact, onSelectSkill = { onDshSkillSelected(it.name) },
+                    enabled = dshSkillsEnabled)
+            }
         }
 
         // Slash command suggestions popup (scrollable, max 40% screen height)

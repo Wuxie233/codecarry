@@ -1,4 +1,6 @@
 <resources>
+    <string name="dsh_skills_title">Skills</string>
+    <string name="dsh_skill_remove">Remove skill %1$s</string>
     <string name="dsh_skills_loading">Loading skills…</string>
     <string name="dsh_skills_failed">Could not load skills</string>
     <string name="dsh_skills_retry">Retry</string>

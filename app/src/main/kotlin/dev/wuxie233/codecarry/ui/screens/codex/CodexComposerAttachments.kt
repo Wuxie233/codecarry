@@ -32,6 +32,7 @@ import dev.wuxie233.codecarry.R
 import dev.wuxie233.codecarry.data.codex.CodexFileMatch
 import dev.wuxie233.codecarry.data.codex.CodexSkill
 import dev.wuxie233.codecarry.data.codex.CodexUserInput
+import dev.wuxie233.codecarry.ui.components.SelectedSkillChip
 import dev.wuxie233.codecarry.ui.screens.chat.ImagePreviewDialog
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -236,7 +237,14 @@ fun CodexAttachmentChips(
         attachments.forEach { attachment ->
             key(attachment.id) {
                 val label = attachment.label.ifBlank { stringResource(R.string.codex_attachment_image) }
-                InputChip(selected = false, enabled = enabled, onClick = {
+                if (attachment.input is CodexUserInput.Skill) {
+                    SelectedSkillChip(
+                        label, enabled, stringResource(R.string.codex_attachment_remove),
+                        { onRemove(attachment.id) },
+                        modifier = Modifier.testTag("codex_attachment:${attachment.id}"),
+                        removeModifier = Modifier.testTag("codex_attachment_remove:${attachment.id}"),
+                    )
+                } else InputChip(selected = false, enabled = enabled, onClick = {
                     if (attachment.previewBytes != null) previewId = attachment.id
                     else onRemove(attachment.id)
                 },
