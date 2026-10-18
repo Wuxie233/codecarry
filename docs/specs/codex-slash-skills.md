@@ -38,3 +38,23 @@ Vocabulary: [conversation inputs](../../CONTEXT.md).
 Evidence: [client behavior investigation](../research/codex-skill-completion-behavior.md).
 Tickets: [#50](https://github.com/Wuxie233/codecarry/issues/50),
 [#51](https://github.com/Wuxie233/codecarry/issues/51).
+
+## DSH control-surface parity
+
+As of 1.18.1, DSH reuses this inline candidate panel, cursor parsing, search
+ranking, and removable skill-chip presentation. This replaces the independent
+floating popup and literal insertion shipped in 1.18.0. Selecting a skill consumes
+only the query, keeps surrounding prose, and prepares a selected skill for Send.
+Selected DSH skill names persist with the server/session draft and are copied into
+the pending submission before the composer is cleared.
+
+Only presentation is shared. DSH serializes selected skills as standalone `/name`
+text in its native human prompt; it does not send Codex skill input objects. An
+explicitly selected skill named `compact` remains a skill prompt, not a command.
+The separate `/compact` candidate opens a confirmation and sends only the command
+without changing the draft or selected skills. Hand-typed slash commands retain
+the existing host-command routing.
+
+Parity checks cover the previously failing Codex scenarios, in-layout geometry,
+scrolling, removable selection, draft persistence, and native prompt serialization.
+Native Robolectric renders are component evidence, not physical-device screenshots.

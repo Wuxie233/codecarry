@@ -2339,7 +2339,7 @@ fun ChatScreen(
                 dshSelectedSkills = if (uiState.isDsh) dshSelectedSkills else emptyList(),
                 onDshSkillSelected = viewModel::selectDshSkill,
                 onDshSkillRemoved = viewModel::removeDshSkill,
-                dshSkillsEnabled = !composerIsSending && !dshRewind.inFlight && !dshPresets.selecting,
+                dshSkillsEnabled = !uiState.isSending && !dshRewind.inFlight && !dshPresets.selecting && !showSendConfirmDialog,
                 onDshSkillsRetry = viewModel::refreshDshSkills,
                 onDshCompact = viewModel::compactDshSession,
                 commands = if (uiState.supportsCommands) uiState.commands else emptyList(),
