@@ -874,13 +874,7 @@ class SessionListViewModel @Inject constructor(
             eventReducer.setPermissions(serverId, session.id, state.pendingApprovalsFor(session.id).map(::mapDshApproval))
             eventReducer.setQuestions(serverId, session.id, state.pendingQuestionsFor(session.id).map(::mapDshQuestion))
         }
-        _projects.value = mapped.sessions
-            .filter { it.parentId == null && state.sessions[it.id]?.origin != "subagent" }
-            .map { it.directory }
-            .distinct()
-            .map { directory ->
-                Project(id = directory, worktree = directory, name = directory.substringAfterLast('/').ifBlank { directory })
-            }
+        _projects.value = mapped.projects
         val home = dshConnectionManager.states.value[serverId]?.describe?.home
         if (!home.isNullOrBlank()) _homeDir.value = home
     }

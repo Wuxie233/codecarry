@@ -614,6 +614,50 @@ class SessionListViewModelTest {
     }
 
     @Test
+    fun `dsh project groups follow workspace membership and title instead of historical no-repo cwd`() = runTest(dispatcher) {
+        val manager = readyDshManager()
+        val vm = newSessionListViewModel(
+            dshApi = dshSessionApi(Collections.synchronizedList(mutableListOf())),
+            dshConnectionManager = manager, savedStateHandle = dshSavedStateHandle(),
+        )
+        collectUiState(vm)
+        advanceUntilIdle()
+        val reducer = manager.reducer("srv-session-list")
+        val oldRows = listOf(
+            DshSessionSummary("a", 1, false, false, cwd = "/root/.dsh/no-repo"),
+            DshSessionSummary("b", 1, false, false, cwd = "/root/.dsh/no-repo"),
+            DshSessionSummary("unassigned", 1, false, false, cwd = "/root/.dsh/no-repo"),
+        )
+        val first = dev.wuxie233.codecarry.data.dsh.DshWorkspaceView(
+            workspaceId = "w-a", path = "/repos/a", title = "Project A", sessionIds = listOf("a"),
+            createdAt = "2026-10-17T00:00:00Z", updatedAt = "2026-10-17T00:00:00Z",
+        )
+        val second = first.copy(workspaceId = "w-b", path = "/repos/b", title = "Project B", sessionIds = listOf("b"))
+        reducer.applySessionList(oldRows)
+        advanceUntilIdle()
+        assertEquals(setOf("/root/.dsh/no-repo"), vm.uiState.value.groups.map { it.directory }.toSet())
+        reducer.applyWorkspaceList(dev.wuxie233.codecarry.data.dsh.DshWorkspaceListValue(items = listOf(first, second)))
+        advanceUntilIdle()
+        val groups = vm.uiState.value.groups.associateBy { it.directory }
+        assertEquals(setOf("/repos/a", "/repos/b", "/root/.dsh/no-repo"), groups.keys)
+        assertEquals("Project A", groups.getValue("/repos/a").projectName)
+        assertEquals("w-a", groups.getValue("/repos/a").projectId)
+        assertEquals(listOf("a"), groups.getValue("/repos/a").sessions.map { it.session.id })
+        assertEquals(listOf("b"), groups.getValue("/repos/b").sessions.map { it.session.id })
+        assertEquals(listOf("unassigned"), groups.getValue("/root/.dsh/no-repo").sessions.map { it.session.id })
+        // A later list response still carries the immutable creation directory.
+        reducer.applySessionList(oldRows)
+        reducer.applyWorkspaceFrame(dev.wuxie233.codecarry.data.dsh.DshWorkspaceFrame.Upsert(first.copy(title = "Renamed A")))
+        advanceUntilIdle()
+        assertEquals("Renamed A", vm.uiState.value.groups.single { it.projectId == "w-a" }.projectName)
+        assertEquals("/root/.dsh/no-repo", reducer.state.value.sessions.getValue("a").cwd)
+        reducer.applyWorkspaceFrame(dev.wuxie233.codecarry.data.dsh.DshWorkspaceFrame.Upsert(first.copy(sessionIds = emptyList())))
+        reducer.applyWorkspaceFrame(dev.wuxie233.codecarry.data.dsh.DshWorkspaceFrame.Upsert(second.copy(sessionIds = listOf("b", "a"))))
+        advanceUntilIdle()
+        assertEquals(setOf("a", "b"), vm.uiState.value.groups.single { it.projectId == "w-b" }.sessions.map { it.session.id }.toSet())
+    }
+
+    @Test
     fun `dsh row requires a live agent to display running without changing host state`() = runTest(dispatcher) {
         val manager = readyDshManager()
         val vm = newSessionListViewModel(

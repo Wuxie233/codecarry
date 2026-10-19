@@ -1,5 +1,6 @@
 package dev.wuxie233.codecarry.data.dsh
 
+import dev.wuxie233.codecarry.domain.model.Project
 import dev.wuxie233.codecarry.domain.model.Session
 import dev.wuxie233.codecarry.domain.model.SessionStatus
 import dev.wuxie233.codecarry.domain.model.SseEvent
@@ -10,6 +11,7 @@ import kotlinx.serialization.json.contentOrNull
 data class DshMappedSessions(
     val sessions: List<Session>,
     val statuses: Map<String, SessionStatus>,
+    val projects: List<Project> = emptyList(),
 )
 
 fun mapDshEventStateToSessions(state: DshEventState): DshMappedSessions {
@@ -33,8 +35,9 @@ fun mapDshEventStateToSessions(state: DshEventState): DshMappedSessions {
         val snapshot = state.sessions[sessionId]
         val workspaceId = membership[sessionId].orEmpty()
         val workspace = workspaceById[workspaceId]
-        val directory = snapshot?.cwd?.takeIf { it.isNotBlank() }
-            ?: workspace?.let(::dshWorkspacePath).orEmpty()
+        // Workspace membership is authoritative; an attached session can retain its creation-time no-repo cwd.
+        val directory = workspace?.let(::dshWorkspacePath)?.takeIf { it.isNotBlank() }
+            ?: snapshot?.cwd.orEmpty()
         val title = snapshot?.let { dshProjectionTitle(it.projections) }
             ?: workspace?.let(::dshWorkspaceTitle)
         val created = parseInstant(workspace?.get("createdAt"))
@@ -58,7 +61,21 @@ fun mapDshEventStateToSessions(state: DshEventState): DshMappedSessions {
     val statuses = state.sessions.mapValues { (_, snapshot) ->
         if (snapshot.running) SessionStatus.Busy else SessionStatus.Idle
     }
-    return DshMappedSessions(sessions = sessions, statuses = statuses)
+    val workspacesByPath = workspaceById.entries.associateBy { dshWorkspacePath(it.value) }
+    val projects = sessions
+        .filter { it.parentId == null && state.sessions[it.id]?.origin != "subagent" }
+        .map { it.directory }
+        .distinct()
+        .map { directory ->
+            val workspace = workspacesByPath[directory]
+            Project(
+                id = workspace?.key ?: directory,
+                worktree = directory,
+                name = workspace?.value?.let(::dshWorkspaceTitle)
+                    ?: directory.trimEnd('/').substringAfterLast('/').ifBlank { directory },
+            )
+        }
+    return DshMappedSessions(sessions = sessions, statuses = statuses, projects = projects)
 }
 
 fun mapDshApproval(approval: DshPendingApproval): SseEvent.PermissionAsked =
